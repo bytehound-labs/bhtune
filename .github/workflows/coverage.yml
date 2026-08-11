@@ -1,0 +1,41 @@
+name: Coverage
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Generate coverage
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      # fail_ci_if_error is false until this repo is activated on codecov.io
+      # (sign in with GitHub, add bytehound-labs/bhtune) and, if tokenless
+      # upload isn't enabled for it, a CODECOV_TOKEN secret is added — see
+      # AGENTS.md. Until then, Codecov itself rejects the upload
+      # ("Token required - not valid tokenless upload"), which is an
+      # activation gap, not a real coverage failure, so it shouldn't fail
+      # this workflow.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

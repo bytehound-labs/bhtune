@@ -1,0 +1,9 @@
+[package]
+name = "bhtune-core"
+description = "Pure domain logic for BHTune: the MRFT tuning state machine, PID math, and data model. No I/O, no async, no clock reads — see AGENTS.md."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/bhtune-core",
+  "crates/bhtune-backend",
+  "crates/bhtune-db",
+  "crates/bhtune-cli",
+  "crates/bhtune-desktop",
+  "crates/bhtune-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/bytehound-labs/bhtune"
+
+# Pinned once here so every crate that needs a given dependency uses the same
+# version workspace-wide. Populated as later phases add real dependencies;
+# empty is a valid, intentional starting point for a scaffolding-only commit.
+[workspace.dependencies]

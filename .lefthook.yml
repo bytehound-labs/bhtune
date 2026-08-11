@@ -1,0 +1,53 @@
+glob_matcher: doublestar
+
+pre-commit:
+  parallel: true
+  skip:
+    - rebase
+  commands:
+    rustfmt-format:
+      glob: '**/*.rs'
+      run: |
+        echo "Formatting Rust files with rustfmt..."
+        rustfmt {staged_files}
+      stage_fixed: true
+
+    clippy-lint:
+      glob: '**/*.rs'
+      run: |
+        echo "Linting Rust files with clippy..."
+        cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+    check-release:
+      glob: '**/*.rs'
+      run: |
+        echo "Checking release profile..."
+        cargo check --workspace --release
+
+    taplo-format:
+      glob: '**/*.toml'
+      run: |
+        echo "Formatting TOML files with taplo..."
+        taplo fmt {staged_files}
+      stage_fixed: true
+
+    prettier-format:
+      glob: '**/*.{md,yaml,yml,json}'
+      run: |
+        echo "Formatting files with prettier..."
+        npx prettier --write {staged_files}
+      stage_fixed: true
+
+    shfmt-format:
+      glob: '**/*.{sh,bash}'
+      run: |
+        echo "Formatting shell scripts with shfmt..."
+        shfmt --apply-ignore -w {staged_files}
+      stage_fixed: true
+
+# No .envsync.yaml / dotenv-sync (`ds`) hooks yet, unlike opcda-bridge. There is
+# no real secret or test-env value to manage until a phase needs a live OPC
+# test target (mirroring opcda-bridge's OPC_TEST_HOST/OPC_TEST_SERVER/
+# OPC_TEST_TAG pattern) — see AGENTS.md. Add the ds-sync pre-commit command and
+# a post-merge ds-sync-pull command (see opcda-bridge's .lefthook.yml for the
+# exact shape) at that point, not before.

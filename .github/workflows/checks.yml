@@ -1,0 +1,42 @@
+name: Checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete
+
+      - name: Check formatting
+        run: cargo fmt --check --all
+
+      - name: Lint with clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Run cargo-deny
+        run: cargo deny check
+
+      - name: Check for unused dependencies
+        run: cargo machete
+
+      - name: Build workspace
+        run: cargo build --workspace

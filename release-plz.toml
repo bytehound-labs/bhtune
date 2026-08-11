@@ -1,0 +1,9 @@
+# Configures release-plz's changelog/version automation. The companion
+# `.github/workflows/release-plz.yml` + `auto-merge.yml` pair (see
+# opcda-bridge for the exact shape) is deliberately deferred until a
+# `RELEASE_PLZ_TOKEN` secret is provisioned for this repo — see AGENTS.md.
+# Shipping the workflow now, without that secret, would produce a failing
+# Actions run on every push to main.
+[workspace]
+publish = false
+git_only = true

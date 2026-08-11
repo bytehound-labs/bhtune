@@ -1,0 +1,12 @@
+[package]
+name = "bhtune-db"
+description = "SQLite persistence (sqlx, WAL mode) for BHTune: DCS/PLC templates, loops, tune runs, samples, and results. A single, un-encrypted, open database file."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# bhtune-core will be added here once this crate actually defines the
+# schema against core types (see the `db-schema` phase in AGENTS.md) —
+# cargo-machete flags unused path deps, so this stays empty until then.
+[dependencies]

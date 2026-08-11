@@ -1,0 +1,28 @@
+[advisories]
+version = 2
+
+[licenses]
+version = 2
+# This allow-list is the machine-enforced half of the "no proprietary/licensed
+# dependencies" promise (see AGENTS.md). `cargo deny check` fails CI if any
+# dependency (including transitive ones) carries a license not on this list.
+# AGPL-3.0-or-later is our own crates' license; the rest are the permissive
+# licenses used by the FOSS crates we depend on. If `cargo deny check` fails
+# on a new dependency, the fix is almost always to find an alternative crate,
+# not to widen this list — widening it should be a deliberate, reviewed
+# decision, never a reflex to unblock CI.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unlicense",
+  "CC0-1.0",
+  "Zlib",
+  "0BSD",
+  "Unicode-3.0",
+  "AGPL-3.0-or-later",
+  "MPL-2.0",
+]

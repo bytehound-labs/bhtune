@@ -1,0 +1,16 @@
+[package]
+name = "bhtune-desktop"
+description = "Tauri v2 desktop GUI runner for BHTune (placeholder — real Tauri wiring lands in the tauri-runner phase, see AGENTS.md)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# bhtune-core will be added here once the tauri-runner phase actually wires
+# commands to it (see AGENTS.md) — cargo-machete flags unused path deps.
+[dependencies]
+
+[[bin]]
+name = "bhtune-desktop"
+path = "src/main.rs"

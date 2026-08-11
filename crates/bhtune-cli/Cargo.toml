@@ -1,0 +1,16 @@
+[package]
+name = "bhtune-cli"
+description = "Headless command-line adapter for BHTune: run MRFT tunes from scripts and schedulers with no GUI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bhtune"
+path = "src/main.rs"
+
+# bhtune-core/-backend/-db will be added here once real subcommands are
+# implemented (see the `cli-commands` phase in AGENTS.md) — cargo-machete
+# flags unused path deps, so this stays empty until then.
+[dependencies]

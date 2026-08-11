@@ -1,0 +1,13 @@
+[package]
+name = "bhtune-backend"
+description = "The Backend trait (tag read/write/browse) and its implementations: OPC DA (via opcda-bridge), an in-process FOPDT simulator, and a golden-trace replay backend for testing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# bhtune-core will be added here once this crate actually defines the
+# `Backend` trait against core types (see the `backend-trait` phase in
+# AGENTS.md) — cargo-machete flags unused path deps, so this stays empty
+# until there's real code to justify it.
+[dependencies]

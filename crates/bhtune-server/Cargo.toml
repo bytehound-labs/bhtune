@@ -1,0 +1,16 @@
+[package]
+name = "bhtune-server"
+description = "Axum HTTP/REST adapter for BHTune (roadmap stub — not part of the v1 scope, see AGENTS.md)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# bhtune-core will be added here once this roadmap stub is actually
+# implemented (see AGENTS.md) — cargo-machete flags unused path deps.
+[dependencies]
+
+[[bin]]
+name = "bhtune-server"
+path = "src/main.rs"
