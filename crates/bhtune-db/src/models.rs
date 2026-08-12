@@ -114,6 +114,87 @@ impl DcsTemplateRow {
             .map_err(DbError::Query)?;
         row.map(row_to_dcs_template).transpose()
     }
+
+    /// Fetches one row by its (unique) `name`, or `None` if it doesn't exist. Used by
+    /// [`crate::seed::seed_builtin_templates`] to find any existing row before deciding
+    /// whether to insert or update.
+    pub async fn get_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<DcsTemplateRow>> {
+        let row = sqlx::query("SELECT * FROM dcs_templates WHERE name = ?")
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .map_err(DbError::Query)?;
+        row.map(row_to_dcs_template).transpose()
+    }
+
+    /// Lists every row, ordered by `name`, for the loop-editor's template picker.
+    pub async fn list(pool: &SqlitePool) -> DbResult<Vec<DcsTemplateRow>> {
+        let rows = sqlx::query("SELECT * FROM dcs_templates ORDER BY name")
+            .fetch_all(pool)
+            .await
+            .map_err(DbError::Query)?;
+        rows.into_iter().map(row_to_dcs_template).collect()
+    }
+
+    /// Overwrites every template field of the row at `id` with `template`'s, bumping
+    /// `updated_at` to `now`. Deliberately does not touch `name` (the match key callers
+    /// already looked the row up by) or `is_builtin` (ownership of a row never changes after
+    /// creation) — only [`Self::insert`] sets those.
+    pub async fn update(
+        pool: &SqlitePool,
+        id: i64,
+        template: &DcsTemplate,
+        now: DateTime<Utc>,
+    ) -> DbResult<DcsTemplateRow> {
+        let row = sqlx::query(
+            r#"
+            UPDATE dcs_templates SET
+                revert_mode = ?, proportional_type = ?, integral_type = ?,
+                integral_unit = ?, derivative_type = ?, derivative_unit = ?,
+                process_variable_suffix = ?, manipulated_variable_suffix = ?,
+                setpoint_variable_suffix = ?, controller_direction_suffix = ?,
+                controller_mode_suffix = ?, mode_attribute_suffix = ?,
+                upper_pv_range_suffix = ?, lower_pv_range_suffix = ?,
+                upper_mv_range_suffix = ?, lower_mv_range_suffix = ?,
+                proportional_constant_suffix = ?, integral_constant_suffix = ?,
+                derivative_constant_suffix = ?, mode_manual_value = ?, mode_auto_value = ?,
+                mode_attribute_program_value = ?, controller_action_direct_value = ?,
+                updated_at = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(template.revert_mode)
+        .bind(enum_to_text(&template.proportional_type))
+        .bind(enum_to_text(&template.integral_type))
+        .bind(enum_to_text(&template.integral_unit))
+        .bind(enum_to_text(&template.derivative_type))
+        .bind(enum_to_text(&template.derivative_unit))
+        .bind(&template.process_variable_suffix)
+        .bind(&template.manipulated_variable_suffix)
+        .bind(&template.setpoint_variable_suffix)
+        .bind(&template.controller_direction_suffix)
+        .bind(&template.controller_mode_suffix)
+        .bind(&template.mode_attribute_suffix)
+        .bind(&template.upper_pv_range_suffix)
+        .bind(&template.lower_pv_range_suffix)
+        .bind(&template.upper_mv_range_suffix)
+        .bind(&template.lower_mv_range_suffix)
+        .bind(&template.proportional_constant_suffix)
+        .bind(&template.integral_constant_suffix)
+        .bind(&template.derivative_constant_suffix)
+        .bind(&template.mode_manual_value)
+        .bind(&template.mode_auto_value)
+        .bind(&template.mode_attribute_program_value)
+        .bind(&template.controller_action_direct_value)
+        .bind(now)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_dcs_template(row)
+    }
 }
 
 fn row_to_dcs_template(row: SqliteRow) -> DbResult<DcsTemplateRow> {

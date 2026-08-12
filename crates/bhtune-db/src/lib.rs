@@ -10,6 +10,7 @@
 //! - [`convert`] — maps `bhtune-core`'s `serde`-tagged enums to/from the `TEXT` columns
 //!   SQLite stores them as.
 //! - [`models`] — row types for every table in `migrations/0001_initial_schema.sql`.
+//! - [`seed`] — upserts the built-in DCS/PLC templates on startup.
 //! - [`error`] — the crate's error type, [`error::DbError`].
 //!
 //! Tables: `dcs_templates`, `loops`, `tune_runs`, `tune_samples`, `tune_results`,
@@ -20,6 +21,8 @@ pub mod convert;
 pub mod error;
 pub mod models;
 pub mod pool;
+pub mod seed;
 
 pub use error::{DbError, DbResult};
 pub use pool::{connect, connect_in_memory};
+pub use seed::{SeedOutcome, SeedResult, seed_builtin_templates};

@@ -10,9 +10,10 @@ Tauri desktop GUI.
 Early. Workspace and CI are in place. `bhtune-core`'s data model (`core-model`), MRFT
 relay-switching engine (`core-mrft`), and tuning-constant math (`core-tuning-math`) are
 implemented and unit-tested. `bhtune-db`'s SQLite schema (`db-schema`) is implemented and
-tested — all 7 tables, migrations, and connection/pragma setup — but not yet seeded with the
-built-in DCS templates or wired into a backend/CLI. The replay harness, backends beyond the
-DB layer, CLI, and GUI are not yet. See "Phases and todos" below for what's next.
+tested — all 7 tables, migrations, and connection/pragma setup — and the four built-in DCS
+templates now seed themselves on startup (`db-seed-templates`), but the database isn't yet
+wired into a backend/CLI. The replay harness, backends, CLI, and GUI are not yet. See "Phases
+and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -108,6 +109,12 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   commonly single-precision (`REAL4`/`VT_R4`) over OPC DA, and don't need more precision than
   `f32` provides. Using a fixed, narrower width consistently — rather than mixing `f32` OPC values
   into `f64` math — avoids conversion noise and keeps golden-master replay comparisons exact.
+- **Seeding built-in templates is an upsert, keyed on ownership, not a one-time insert.**
+  `bhtune_db::seed_builtin_templates` runs on every startup: it inserts any missing built-in
+  template, overwrites existing `is_builtin = 1` rows to match the current shipped definition
+  (so a suffix/unit fix in a later release reaches existing installs automatically), and never
+  touches a row whose name collides with a built-in's but which isn't itself `is_builtin` — a
+  user's own template is never silently overwritten just because it shares a name with a preset.
 
 ## OPC DA integration reference (`backend-opcda`)
 
@@ -325,7 +332,7 @@ that binary does something real and gains its own targeted tests.
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | Scaffolded, no `Backend` trait yet                                           |
-| `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | `db-schema` done (7 tables, tested); seeding/CRUD pending                    |
+| `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | Both done (7 tables, tested; 4 templates auto-seed on startup)               |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
 | `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet                                  |
 | `bhtune-server`  | roadmap only                                                            | Placeholder binary, not part of v1                                           |
@@ -348,8 +355,10 @@ that binary does something real and gains its own targeted tests.
    implementations.
 5. **Persistence** — SQLite schema (`db-schema`, done: `dcs_templates`, `loops`, `tune_runs`,
    `tune_samples`, `tune_results`, `tune_writes`, `settings`, all migrated/tested in
-   `crates/bhtune-db`), seeding the four DCS/PLC template presets (`db-seed-templates`,
-   pending), establishing platform-standard data directories for the database.
+   `crates/bhtune-db`) and startup seeding of the four DCS/PLC template presets
+   (`db-seed-templates`, done: `bhtune_db::seed_builtin_templates` upserts `built_in_templates()`
+   on every startup). Remaining: establishing platform-standard data directories for the
+   database file itself (part of `db-drop-legacy`).
 6. **Headless CLI** — `tune`/`template`/`history`/`export`/`simulate` subcommands, CLI > env >
    TOML > default config precedence, non-interactive automation mode, safety guardrails
    (mandatory timeout + auto-restore, explicit opt-in for unattended PID writes), structured
