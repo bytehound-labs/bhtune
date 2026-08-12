@@ -7,8 +7,9 @@ Tauri desktop GUI.
 
 ## Status
 
-Early scaffolding. Workspace and CI are in place; no domain logic implemented yet. See "Phases and
-todos" below for what's next.
+Early. Workspace and CI are in place. `bhtune-core`'s data model (`core-model`) and MRFT
+relay-switching engine (`core-mrft`) are implemented and unit-tested; tuning-constant math,
+backends, persistence, CLI, and GUI are not yet. See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -44,6 +45,10 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
 - **Zero Windows/COM dependency in this application.** All OPC DA communication is delegated to
   the sibling project [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) over the
   network. bhtune itself builds and runs on Linux, macOS, and Windows identically.
+- **The OPC DA client is a crates.io dependency.** The future `bhtune-backend` OPC DA
+  implementation consumes the published `opcda-bridge` library with
+  `opcda-bridge = "0.2"`; it must not use a Git dependency or a local path checkout. The
+  Windows-side `opcda-bridge-gateway` remains a separate process.
 - **`Backend` trait is the extensibility seam.** A single async trait abstracts all tag I/O so
   the tuning engine never knows what it's talking to:
 
@@ -226,14 +231,14 @@ that binary does something real and gains its own targeted tests.
 
 ## Crate map and phase status
 
-| Crate            | Phase                                                                   | Status                                      |
-| ---------------- | ----------------------------------------------------------------------- | ------------------------------------------- |
-| `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | Scaffolded, no domain logic yet             |
-| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | Scaffolded, no `Backend` trait yet          |
-| `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | Scaffolded, no schema yet                   |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only  |
-| `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet |
-| `bhtune-server`  | roadmap only                                                            | Placeholder binary, not part of v1          |
+| Crate            | Phase                                                                   | Status                                        |
+| ---------------- | ------------------------------------------------------------------------ | ---------------------------------------------- |
+| `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` done, rest pending  |
+| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | Scaffolded, no `Backend` trait yet             |
+| `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | Scaffolded, no schema yet                      |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only     |
+| `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet    |
+| `bhtune-server`  | roadmap only                                                            | Placeholder binary, not part of v1             |
 
 ## Phases and todos (roadmap order)
 
@@ -242,8 +247,10 @@ that binary does something real and gains its own targeted tests.
    from the simulator and, later, real field use; build the trace fixture normalizer.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
    `cargo-deny` FOSS gate.
-2. **`opcda-bridge` reusable client library** (upstream work in the sibling repo) — extract a real
-   library API out of what is currently a CLI-only `commands.rs`; then consume it here.
+2. **`opcda-bridge` reusable client library** (published upstream) — consume the
+   `opcda-bridge` crate from crates.io (`opcda-bridge = "0.2"`) when implementing
+   `backend-opcda`. Keep the dependency out of the workspace until that implementation has real
+   code to use it.
 3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, tuning math, and the
    replay harness, with the correctness-critical details above baked in and unit-tested directly.
 4. **Backends** — the `Backend` trait; OPC DA, simulator (Rust FOPDT process model), and replay

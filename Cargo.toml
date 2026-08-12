@@ -19,3 +19,9 @@ repository = "https://github.com/bytehound-labs/bhtune"
 # version workspace-wide. Populated as later phases add real dependencies;
 # empty is a valid, intentional starting point for a scaffolding-only commit.
 [workspace.dependencies]
+# Deliberately does NOT enable the "clock"/"now" features: bhtune-core must never be able
+# to call `Utc::now()`, since the MRFT engine's determinism guarantee (see AGENTS.md) is
+# that all timestamps come in as `Tick` data, never read from the wall clock internally.
+# Disabling the feature at the Cargo level makes that a compile-time guarantee, not just a
+# code-review convention.
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "serde"] }
