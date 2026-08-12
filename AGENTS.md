@@ -11,9 +11,10 @@ Early. Workspace and CI are in place. `bhtune-core`'s data model (`core-model`),
 relay-switching engine (`core-mrft`), and tuning-constant math (`core-tuning-math`) are
 implemented and unit-tested. `bhtune-db`'s SQLite schema (`db-schema`) is implemented and
 tested — all 7 tables, migrations, and connection/pragma setup — and the four built-in DCS
-templates now seed themselves on startup (`db-seed-templates`), but the database isn't yet
-wired into a backend/CLI. The replay harness, backends, CLI, and GUI are not yet. See "Phases
-and todos" below for what's next.
+templates now seed themselves on startup (`db-seed-templates`). `bhtune-backend`'s `Backend`
+trait and error model (`backend-trait`) are defined and tested, but have no real
+implementation yet. The replay harness, `backend-opcda`/`backend-simulator`/`backend-replay`,
+CLI, and GUI are not yet. See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -53,20 +54,43 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   implementation consumes the published `opcda-bridge` library with
   `opcda-bridge = "0.2"`; it must not use a Git dependency or a local path checkout. The
   Windows-side `opcda-bridge-gateway` remains a separate process.
-- **`Backend` trait is the extensibility seam.** A single async trait abstracts all tag I/O so
-  the tuning engine never knows what it's talking to:
+- **`Backend` trait is the extensibility seam, and deliberately has zero `bhtune-core`
+  dependency.** A single async trait in `bhtune-backend` abstracts all tag I/O so the tuning
+  engine never knows what it's talking to:
 
   ```rust
   #[async_trait]
-  pub trait Backend {
-      async fn read(&self, tags: &[TagId]) -> Result<Vec<TagValue>>;
-      async fn write(&self, tag: &TagId, value: TagValue) -> Result<()>;
-      async fn browse(&self, path: &str) -> Result<Vec<TagNode>>;
+  pub trait Backend: Send + Sync {
+      async fn read(&self, tags: &[TagId]) -> BackendResult<Vec<TagValue>>;
+      async fn write(&self, tag: &TagId, value: TagWrite) -> BackendResult<WriteOutcome>;
+      async fn browse(&self, path: &str) -> BackendResult<Vec<TagNode>>;
   }
   ```
 
+  `TagId` is a plain `String` alias (no invariant worth a newtype). `TagValue.value` is a raw
+  string, not a parsed `f32` — not every tag is numeric (mode/direction/attribute tags hold
+  raw codes like `"MAN"`/`"0"` that `bhtune_core::ControllerDirection::from_raw_tag_value`
+  interprets directly), so parsing is the caller's job, not this trait's. `TagWrite` is
+  `Float(f32) | Raw(String)` — bhtune only ever writes numeric process values or a raw mode
+  code (reverting Auto/Manual after a test). `write` returns `Ok(WriteOutcome { success,
+  error_message })` even when the backend *rejects* the write (read-only tag, out of range) —
+  that's a normal outcome of the call reaching the backend, not a `BackendError`; the shape
+  matches `bhtune_db::models::TuneWriteRow`'s columns exactly so a caller can copy it straight
+  into an audit row with no translation. `BackendError` splits `Connect` (nothing was
+  attempted) from `Operation` (reached the backend, failed there) from `Unsupported` (this
+  backend has no such capability, e.g. `browse` on the simulator/replay backends) so callers
+  like the planned `cli-safety` guardrails can react differently to each. The trait never
+  references a `bhtune-core` type: reading/writing named string tags has no domain meaning by
+  itself — gluing `Backend` to `LoopTags`/`ControllerDirection`/etc. is each concrete
+  backend's own job (`backend-opcda`, `backend-simulator`), not this trait's.
+
   `OpcDaBackend` (via `opcda-bridge`) is the primary/only driver for v1. `OpcUaBackend` and
   `ModbusBackend` are roadmap items that must slot in without touching `bhtune-core`.
+  Connecting/constructing a specific backend is deliberately *not* part of the trait — each
+  implementation's own inherent constructor takes whatever it individually needs (gateway
+  host/port + OPC DA server name, a trace file path, simulator parameters), since one uniform
+  `connect()` signature across such different backends would leak one implementation's
+  parameters into the trait every other implementation would have to ignore.
 
 - **AGPL-3.0-or-later + CLA.** FOSS for everyone now; the CLA (see `CLA.md`, currently a draft —
   not yet in force) is what would let ByteHound also offer separate commercial licensing terms to
@@ -331,7 +355,7 @@ that binary does something real and gains its own targeted tests.
 | Crate            | Phase                                                                   | Status                                                                       |
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
-| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | Scaffolded, no `Backend` trait yet                                           |
+| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` done (trait + error model, tested); implementations pending  |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | Both done (7 tables, tested; 4 templates auto-seed on startup)               |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
 | `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet                                  |
@@ -351,8 +375,10 @@ that binary does something real and gains its own targeted tests.
 3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, and tuning math are
    done; the replay harness remains, with the correctness-critical details above baked in and
    unit-tested directly.
-4. **Backends** — the `Backend` trait; OPC DA, simulator (Rust FOPDT process model), and replay
-   implementations.
+4. **Backends** — the `Backend` trait (`backend-trait`, done: `read`/`write`/`browse` plus
+   `TagId`/`TagValue`/`TagWrite`/`WriteOutcome`/`TagNode`/`BackendError` in `crates/
+   bhtune-backend`); OPC DA, simulator (Rust FOPDT process model), and replay implementations
+   remain.
 5. **Persistence** — SQLite schema (`db-schema`, done: `dcs_templates`, `loops`, `tune_runs`,
    `tune_samples`, `tune_results`, `tune_writes`, `settings`, all migrated/tested in
    `crates/bhtune-db`) and startup seeding of the four DCS/PLC template presets

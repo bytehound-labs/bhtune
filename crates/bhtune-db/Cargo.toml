@@ -11,7 +11,7 @@ bhtune-core = { path = "../bhtune-core" }
 chrono.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "2"
+thiserror.workspace = true
 # Only bhtune-db needs sqlx today, so — matching the existing convention of
 # keeping single-consumer dependencies local rather than in
 # `[workspace.dependencies]` (see the root `Cargo.toml`) — it's pinned here,

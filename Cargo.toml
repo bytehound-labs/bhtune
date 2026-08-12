@@ -25,3 +25,8 @@ repository = "https://github.com/bytehound-labs/bhtune"
 # Disabling the feature at the Cargo level makes that a compile-time guarantee, not just a
 # code-review convention.
 chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "serde"] }
+# A single pin so `bhtune-db` and `bhtune-backend` (and any future crate needing fallible
+# I/O) always agree on the same version — library-appropriate error handling (typed,
+# matchable variants) as opposed to `anyhow`, which is reserved for binary crates that only
+# need to propagate/print errors, never match on them.
+thiserror = "2"
