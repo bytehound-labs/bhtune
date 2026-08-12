@@ -197,13 +197,6 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state â
 - **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft; it does not bind anyone until the
   legal-entity question is resolved, the text has had a legal review, and a CLA-assistant check is
   added to the PR checks.
-- **Codecov isn't activated for this repo yet.** `.github/workflows/coverage.yml` runs
-  `cargo llvm-cov` and uploads to Codecov with `fail_ci_if_error: false`, because a brand-new
-  repo's tokenless upload is rejected ("Token required - not valid tokenless upload") until
-  someone signs in at codecov.io with GitHub and adds `bytehound-labs/bhtune`. Once activated
-  (and a `CODECOV_TOKEN` repo secret added, if tokenless upload still isn't enabled for it), flip
-  `fail_ci_if_error` back to `true` â€” the local coverage numbers are already accurate and 100%;
-  this gap is only about the upload/PR-status integration, not the measurement itself.
 - **No `frontend/` (pnpm workspace) yet.** Nothing consumes it until the `frontend-shell` phase.
 - **`bhtune-desktop` has no real `tauri` dependency yet**, and `bhtune-server` has no `axum`
   dependency yet. Both are placeholder binaries only. Adding real Tauri deps prematurely would
