@@ -5,8 +5,8 @@
 //! what it is talking to. Three implementations are planned:
 //!
 //! - `opcda`: the primary driver for v1, over a reusable client library
-//!   extracted from the sibling `opcda-bridge` project (Windows OPC DA via a
-//!   network gateway — no COM/DCOM dependency in this process).
+//!   published as the `opcda-bridge` crates.io dependency (Windows OPC DA via
+//!   a network gateway — no COM/DCOM dependency in this process).
 //! - `simulator`: an in-process FOPDT (first-order-plus-dead-time) process
 //!   model with a virtual PID controller, used for fully automated E2E tests
 //!   on CI (no Windows, no Kepware, no external process) and as a demo mode.

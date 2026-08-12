@@ -54,6 +54,21 @@ A Cargo workspace of small, single-purpose crates:
 The frontend (React + TypeScript + Vite, for `bhtune-desktop`) lives under `frontend/` once that
 phase begins; it does not exist yet in this early scaffold.
 
+### OPC DA bridge
+
+The OPC DA backend uses the reusable [`opcda-bridge`](https://crates.io/crates/opcda-bridge)
+library from crates.io:
+
+```toml
+[dependencies]
+opcda-bridge = "0.2"
+```
+
+The library communicates with the separate Windows-side
+[`opcda-bridge-gateway`](https://crates.io/crates/opcda-bridge-gateway) process over the network.
+The dependency is added to `bhtune-backend` when its OPC DA implementation is introduced; the
+scaffolding workspace intentionally does not declare unused dependencies.
+
 ## Installation
 
 Not yet released. Once tagged, prebuilt binaries will be attached to the

@@ -72,9 +72,11 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   stub, intentionally not implemented yet.
 - **Step Test is deferred**, not part of v1 (MRFT only). Step Test is an alternative, simpler
   manual tuning method that observes PV changes via an OPC DA _subscription_ rather than polling
-  reads, and the bridge's protocol currently only offers unary `ListServers`/`Browse`/`Read`/
-  `Write`. MRFT itself only needs unary polling reads, so this doesn't block v1 — Step Test is
-  blocked on adding a subscription/streaming RPC to `opcda-bridge`.
+  reads, and the bridge's protocol has no such push/subscription RPC yet — `ListServers`/`Read`/
+  `Write` are unary and `Browse` is a bounded, one-shot server-streaming call (the facade drains it
+  into a single `Vec` before returning). MRFT itself only needs unary polling reads, so this
+  doesn't block v1 — Step Test is blocked on adding a live push/subscription RPC to
+  `opcda-bridge`, distinct from `Browse`'s existing bounded stream.
 - **Plain, open SQLite. No encryption, no licensing, no loop-locking, no login gate.** All tune
   history lives in a single, plain, open SQLite database anyone can inspect with any SQLite
   browser. This is a deliberate simplicity choice: a free, open-source tool has no reason to
@@ -83,6 +85,71 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   commonly single-precision (`REAL4`/`VT_R4`) over OPC DA, and don't need more precision than
   `f32` provides. Using a fixed, narrower width consistently — rather than mixing `f32` OPC values
   into `f64` math — avoids conversion noise and keeps golden-master replay comparisons exact.
+
+## OPC DA integration reference (`backend-opcda`)
+
+When implementing `backend-opcda`, consume the published `opcda-bridge` facade crate from
+crates.io. Do not add a Git dependency, a local path dependency, or the CLI crate
+`opcda-bridge-client`:
+
+```toml
+# Root Cargo.toml
+[workspace.dependencies]
+opcda-bridge = "0.2"
+
+# crates/bhtune-backend/Cargo.toml
+[dependencies]
+opcda-bridge.workspace = true
+```
+
+The facade intentionally hides generated gRPC details and exposes the typed API needed by a
+`Backend` adapter:
+
+```rust
+use opcda_bridge::{Client, Value};
+
+let mut client = Client::connect("192.168.1.50:7600").await?;
+let servers = client.list_servers().await?;
+let nodes = client
+    .browse(servers[0].clone(), false, String::new(), 1_000)
+    .await?;
+let values = client
+    .read(servers[0].clone(), vec!["Area.Loop.PV".into()])
+    .await?;
+let result = client
+    .write(
+        servers[0].clone(),
+        "Area.Loop.MV".into(),
+        Value::Float(f64::from(42.0_f32)),
+    )
+    .await?;
+```
+
+Integration rules:
+
+- Pass `host:port` to `Client::connect`; it adds the plaintext `http://` scheme itself. The
+  default gateway port is `opcda_bridge::DEFAULT_BRIDGE_PORT` (`7600`).
+- Keep one `Client` and reuse it across ticks; its methods require `&mut self` and the underlying
+  channel is designed to be reused.
+- `read` returns `TagValue` fields as strings (`value`, `quality`, and `timestamp`). Parse the
+  numeric value into `f32` at the adapter boundary and surface parse or bad-quality errors; never
+  silently substitute defaults.
+- `write` accepts `Value::{String, Int, Float, Bool}`. Convert bhtune's `f32` analog values with
+  `f64::from(value)` and inspect `WriteResult.success`; a gateway-level rejected write is a normal
+  result with `success == false`, not necessarily an RPC error.
+- Propagate or wrap `opcda_bridge::Error` while preserving its source. It distinguishes connection
+  failures (`Error::Connect`) from gateway RPC failures (`Error::Rpc`).
+- Use `opcda-bridge-proto = "0.2"` only if raw generated gRPC messages are genuinely required;
+  ordinary BHTune code should depend on the facade alone.
+
+The gateway is a separate Windows process installed with `cargo install opcda-bridge-gateway` or
+downloaded from the upstream releases page. It runs beside the OPC DA server, listens on port
+`7600` by default, and requires the firewall to allow the client-to-gateway connection. The
+current protocol offers `ListServers`/`Read`/`Write` (unary) and `Browse` (server-streaming, but
+drained into one `Vec<BrowseNode>` by this facade so callers never see the stream) — MRFT polling
+only needs the unary calls, while subscription-driven Step Test remains deferred until the bridge
+exposes a live push/subscription RPC (a different kind of stream than `Browse`'s bounded one-shot
+listing).
 
 ## Validation strategy: golden-master replay
 
