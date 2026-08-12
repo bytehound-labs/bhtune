@@ -19,7 +19,7 @@ BHTune is designed around a few core principles:
 
 - **Runs anywhere.** No Windows or COM/DCOM dependency in this application. Communication with
   OPC DA systems goes over the network to a small Windows-side gateway,
-  [`opcda-bridge`](https://github.com/mikeboiko/opcda-bridge) — BHTune itself runs on Linux,
+  [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) — BHTune itself runs on Linux,
   macOS, or Windows.
 - **Has no proprietary dependencies.** Every dependency is FOSS, machine-enforced in CI via
   `cargo deny` (see [`deny.toml`](deny.toml)). There is no licensed UI toolkit, no licensed OPC
@@ -81,7 +81,6 @@ deferred, and what's deliberately not planned — lives at
 - OPC UA and Modbus `Backend` implementations, alongside OPC DA.
 - An HTTP/REST adapter (`bhtune-server`) and Docker image, for driving BHTune without a local
   Tauri install.
-- Step Test (a simpler, manual alternative to MRFT that observes PV changes via an OPC DA
   subscription rather than polling). This is blocked on adding a subscription/streaming RPC to
   `opcda-bridge`.
 - Multi-loop and batch tuning campaigns.
@@ -94,6 +93,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). Contributions require signing the
 ## License
 
 [GNU AGPL v3.0-or-later](LICENSE). BHTune is free software: free to use, study, modify, and
-redistribute under the AGPL's terms. ByteHound may separately offer proprietary/commercial
-licensing terms to enterprise customers who need different terms than the AGPL provides; this
-does not change the terms available to everyone else under this license.
+redistribute under the AGPL's terms.

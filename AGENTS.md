@@ -42,7 +42,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   fails CI on any dependency license not on the allow-list. This is not aspirational — if it
   fails on a new dependency, find a FOSS alternative; don't widen the allow-list reflexively.
 - **Zero Windows/COM dependency in this application.** All OPC DA communication is delegated to
-  the sibling project [`opcda-bridge`](https://github.com/mikeboiko/opcda-bridge) over the
+  the sibling project [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) over the
   network. bhtune itself builds and runs on Linux, macOS, and Windows identically.
 - **`Backend` trait is the extensibility seam.** A single async trait abstracts all tag I/O so
   the tuning engine never knows what it's talking to:
