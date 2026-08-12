@@ -13,9 +13,9 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
-# ctags
-/tags
-tags.*
+# ctags (matches only a bare "tags" file, not source files that happen to be named
+# "tags.<ext>" — e.g. crates/bhtune-core/src/tags.rs)
+**/tags
 
 # Local env files (secrets restored via `ds`); keep the committed template
 .env
