@@ -7,9 +7,10 @@ Tauri desktop GUI.
 
 ## Status
 
-Early. Workspace and CI are in place. `bhtune-core`'s data model (`core-model`) and MRFT
-relay-switching engine (`core-mrft`) are implemented and unit-tested; tuning-constant math,
-backends, persistence, CLI, and GUI are not yet. See "Phases and todos" below for what's next.
+Early. Workspace and CI are in place. `bhtune-core`'s data model (`core-model`), MRFT
+relay-switching engine (`core-mrft`), and tuning-constant math (`core-tuning-math`) are
+implemented and unit-tested; the replay harness, backends, persistence, CLI, and GUI are not
+yet. See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -298,14 +299,14 @@ that binary does something real and gains its own targeted tests.
 
 ## Crate map and phase status
 
-| Crate            | Phase                                                                   | Status                                        |
-| ---------------- | ------------------------------------------------------------------------ | ---------------------------------------------- |
-| `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` done, rest pending  |
-| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | Scaffolded, no `Backend` trait yet             |
-| `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | Scaffolded, no schema yet                      |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only     |
-| `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet    |
-| `bhtune-server`  | roadmap only                                                            | Placeholder binary, not part of v1             |
+| Crate            | Phase                                                                   | Status                                                                       |
+| ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
+| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | Scaffolded, no `Backend` trait yet                                           |
+| `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | Scaffolded, no schema yet                                                    |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
+| `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet                                  |
+| `bhtune-server`  | roadmap only                                                            | Placeholder binary, not part of v1                                           |
 
 ## Phases and todos (roadmap order)
 
@@ -318,8 +319,9 @@ that binary does something real and gains its own targeted tests.
    `opcda-bridge` crate from crates.io (`opcda-bridge = "0.2"`) when implementing
    `backend-opcda`. Keep the dependency out of the workspace until that implementation has real
    code to use it.
-3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, tuning math, and the
-   replay harness, with the correctness-critical details above baked in and unit-tested directly.
+3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, and tuning math are
+   done; the replay harness remains, with the correctness-critical details above baked in and
+   unit-tested directly.
 4. **Backends** — the `Backend` trait; OPC DA, simulator (Rust FOPDT process model), and replay
    implementations.
 5. **Persistence** — SQLite schema, seeding the four DCS/PLC template presets, establishing

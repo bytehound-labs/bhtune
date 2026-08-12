@@ -26,6 +26,19 @@ impl ControllerDirection {
             ControllerDirection::Reverse
         }
     }
+
+    /// The sign flip applied throughout the relay-feedback math (`SetActionMultiplier` in
+    /// the legacy app): `-1` for Direct-acting loops, `1` for Reverse-acting. Used both by
+    /// [`crate::mrft::MrftEngine`] (to decide which way the relay steps) and
+    /// `core-tuning-math` (to interpret `mv_sign_init` when deciding which of a completed
+    /// run's peaks/troughs is the "extra" one) — kept as one method rather than duplicated
+    /// in both modules so the mapping can't silently drift between them.
+    pub fn action_multiplier(self) -> i8 {
+        match self {
+            ControllerDirection::Direct => -1,
+            ControllerDirection::Reverse => 1,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -38,6 +51,12 @@ mod tests {
             ControllerDirection::from_raw_tag_value("0", "0"),
             ControllerDirection::Direct
         );
+    }
+
+    #[test]
+    fn action_multiplier_is_negative_one_for_direct_and_one_for_reverse() {
+        assert_eq!(ControllerDirection::Direct.action_multiplier(), -1);
+        assert_eq!(ControllerDirection::Reverse.action_multiplier(), 1);
     }
 
     #[test]

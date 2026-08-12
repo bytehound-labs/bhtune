@@ -164,10 +164,7 @@ impl MrftEngine {
         start_time: DateTime<Utc>,
         compat: MrftCompat,
     ) -> MrftEngine {
-        let action_multiplier = match direction {
-            ControllerDirection::Direct => -1,
-            ControllerDirection::Reverse => 1,
-        };
+        let action_multiplier = direction.action_multiplier();
 
         let relay_amp_raw = clamp_relay_amplitude(
             config.relay_amp_percent,
