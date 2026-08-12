@@ -6,7 +6,40 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# bhtune-core will be added here once this crate actually defines the
-# schema against core types (see the `db-schema` phase in AGENTS.md) —
-# cargo-machete flags unused path deps, so this stays empty until then.
 [dependencies]
+bhtune-core = { path = "../bhtune-core" }
+chrono.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# Only bhtune-db needs sqlx today, so — matching the existing convention of
+# keeping single-consumer dependencies local rather than in
+# `[workspace.dependencies]` (see the root `Cargo.toml`) — it's pinned here,
+# not promoted to the workspace level. "macros" is only for the
+# compile-time `sqlx::migrate!` path-embedding macro (it just reads the
+# `migrations/` directory at build time); this crate deliberately does not
+# use the `query!`/`query_as!` compile-time-checked-SQL macros, which would
+# require either a live database or a committed `.sqlx` offline cache at
+# build time — plain `sqlx::query`/`query_as` keeps `cargo build`/`cargo
+# test` working with zero extra setup for every contributor.
+# The "sqlite" feature enables "sqlite-bundled" by default, which statically
+# compiles SQLite from vendored source (`libsqlite3-sys/bundled`) rather
+# than linking a system SQLite. Deliberate: the Tauri desktop build matrix
+# already spans Linux/macOS/Windows (`build-matrix`), and requiring a
+# system `libsqlite3-dev`-equivalent on every one of those, for every
+# contributor and CI runner, is exactly the kind of environment-specific
+# setup friction this project avoids elsewhere (see AGENTS.md's "Zero
+# Windows/COM dependency" reasoning). No direct `libsqlite3-sys` dependency
+# is needed to get this — it would only be required to opt into
+# `sqlite-unbundled` instead.
+sqlx = { version = "0.9", default-features = false, features = [
+  "sqlite",
+  "runtime-tokio",
+  "chrono",
+  "migrate",
+  "macros",
+] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+tempfile = "3"

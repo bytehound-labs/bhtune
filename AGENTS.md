@@ -9,8 +9,10 @@ Tauri desktop GUI.
 
 Early. Workspace and CI are in place. `bhtune-core`'s data model (`core-model`), MRFT
 relay-switching engine (`core-mrft`), and tuning-constant math (`core-tuning-math`) are
-implemented and unit-tested; the replay harness, backends, persistence, CLI, and GUI are not
-yet. See "Phases and todos" below for what's next.
+implemented and unit-tested. `bhtune-db`'s SQLite schema (`db-schema`) is implemented and
+tested — all 7 tables, migrations, and connection/pragma setup — but not yet seeded with the
+built-in DCS templates or wired into a backend/CLI. The replay harness, backends beyond the
+DB layer, CLI, and GUI are not yet. See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -82,6 +84,26 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   history lives in a single, plain, open SQLite database anyone can inspect with any SQLite
   browser. This is a deliberate simplicity choice: a free, open-source tool has no reason to
   obfuscate its own data or gate its own usage.
+- **`bhtune-core` enums are mapped to SQLite `TEXT` columns without giving `bhtune-core` a
+  `sqlx` dependency.** `bhtune-core` must stay dependency-free (see below), and Rust's orphan
+  rule blocks implementing the foreign `sqlx::Type` trait for a foreign enum type from
+  `bhtune-db` either. `bhtune_db::convert::{enum_to_text, text_to_enum}` solves this generically,
+  by round-tripping through each enum's existing, already-tested `#[serde(rename_all =
+  "snake_case")]` implementation (`serde_json::Value::String`) instead of a second, hand-written,
+  drift-prone string-mapping table per enum. Every enum-shaped column has a matching `CHECK (...
+  IN (...))` constraint using the exact same literals, so an invalid value can never be written
+  even by something other than this crate.
+- **Schema rule of thumb: flatten stable/filterable data into columns, keep nested/evolving data
+  as validated JSON.** `bhtune_core::loop_config::LoopConfig` (flat, stable, and something
+  `history-query-api` must filter on) is flattened into real columns on `loops`/`tune_runs`.
+  `bhtune_core::tags::LoopTags` (nested, template-conditional, no stated SQL-filtering need) is
+  stored as one `CHECK (json_valid(...))`-constrained JSON column, reusing its `serde` impl
+  verbatim. Apply this same test to any future domain type that needs a place in the schema,
+  rather than deciding case-by-case.
+- **`tune_results` (calculated) and `tune_writes` (actually written to the DCS) are separate
+  tables.** A run can produce three calculated candidate results and zero or more writes;
+  conflating "the tool suggested this" with "this went into the controller" would lose the one
+  fact the legacy CSV logs never captured — see `history-writeback-audit`.
 - **`f32` in the tuning engine, not `f64`.** Industrial analog tags (PV/MV/tuning constants) are
   commonly single-precision (`REAL4`/`VT_R4`) over OPC DA, and don't need more precision than
   `f32` provides. Using a fixed, narrower width consistently — rather than mixing `f32` OPC values
@@ -303,7 +325,7 @@ that binary does something real and gains its own targeted tests.
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | Scaffolded, no `Backend` trait yet                                           |
-| `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | Scaffolded, no schema yet                                                    |
+| `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | `db-schema` done (7 tables, tested); seeding/CRUD pending                    |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
 | `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet                                  |
 | `bhtune-server`  | roadmap only                                                            | Placeholder binary, not part of v1                                           |
@@ -324,8 +346,10 @@ that binary does something real and gains its own targeted tests.
    unit-tested directly.
 4. **Backends** — the `Backend` trait; OPC DA, simulator (Rust FOPDT process model), and replay
    implementations.
-5. **Persistence** — SQLite schema, seeding the four DCS/PLC template presets, establishing
-   platform-standard data directories for the database.
+5. **Persistence** — SQLite schema (`db-schema`, done: `dcs_templates`, `loops`, `tune_runs`,
+   `tune_samples`, `tune_results`, `tune_writes`, `settings`, all migrated/tested in
+   `crates/bhtune-db`), seeding the four DCS/PLC template presets (`db-seed-templates`,
+   pending), establishing platform-standard data directories for the database.
 6. **Headless CLI** — `tune`/`template`/`history`/`export`/`simulate` subcommands, CLI > env >
    TOML > default config precedence, non-interactive automation mode, safety guardrails
    (mandatory timeout + auto-restore, explicit opt-in for unattended PID writes), structured
