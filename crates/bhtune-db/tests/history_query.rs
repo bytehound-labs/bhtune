@@ -1,0 +1,934 @@
+//! Integration tests for `history-query-api`: the typed repository/query layer models.rs
+//! builds on top of the raw schema `tests/schema.rs` already proves. These tests cover run
+//! lifecycle transitions, filter/pagination correctness, and the samples/results/writes
+//! `list_for_run` helpers — the actual query patterns the CLI and GUI history explorer will
+//! depend on.
+
+use bhtune_core::{
+    ControllerDirection, ControllerType, LoopConfig, MrftState, ProcessType, ResponseLevel, Tick,
+    built_in_templates,
+    tuning_math::{OpcWriteValues, PidParameters, TuningResult},
+};
+use bhtune_db::{
+    connect_in_memory,
+    models::{
+        DcsTemplateRow, Pagination, TuneBackend, TuneOutcome, TuneResultRow, TuneRunFilter,
+        TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
+    },
+};
+use chrono::{DateTime, Duration, Utc};
+use sqlx::Row;
+
+// Fixture helpers {{{1
+
+/// Inserts one built-in template and returns its id. Mirrors `tests/schema.rs`'s helper of
+/// the same name; duplicated rather than shared, matching that file's existing lack of a
+/// `tests/common` module.
+async fn seed_template(pool: &sqlx::SqlitePool) -> i64 {
+    let template = built_in_templates().remove(0);
+    DcsTemplateRow::insert(pool, &template, true, Utc::now())
+        .await
+        .unwrap()
+        .id
+}
+
+/// Inserts a loop named `name`, owned by `template_id`, and returns its id. Takes an
+/// already-seeded `template_id` (rather than seeding its own, like `tests/schema.rs`'s
+/// `seed_loop`) so a single test can create more than one loop without colliding on
+/// `dcs_templates.name`'s uniqueness constraint.
+async fn seed_loop_named(pool: &sqlx::SqlitePool, template_id: i64, name: &str) -> i64 {
+    let now = Utc::now();
+    sqlx::query(
+        r#"
+        INSERT INTO loops (
+            name, dcs_template_id, tags_json, process_type, controller_type,
+            relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
+            mrft_delay_secs, created_at, updated_at
+        ) VALUES (?, ?, '{}', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
+        RETURNING id
+        "#,
+    )
+    .bind(name)
+    .bind(template_id)
+    .bind(now)
+    .bind(now)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+    .try_get("id")
+    .unwrap()
+}
+
+fn sample_config() -> LoopConfig {
+    LoopConfig {
+        process_type: ProcessType::Flow,
+        controller_type: ControllerType::Pi,
+        relay_amp_percent: 5.0,
+        num_cycles_skip: 1,
+        num_cycles_count: 2,
+        noise_protection_secs: 3,
+        mrft_delay_secs: 0,
+    }
+}
+
+fn sample_initial_readings() -> TuneRunInitialReadings {
+    TuneRunInitialReadings {
+        pv_ini: 50.0,
+        mv_ini: 45.0,
+        mv_range_low: 0.0,
+        mv_range_high: 100.0,
+        pv_range_high: 100.0,
+        pv_range_low: 0.0,
+        controller_direction: ControllerDirection::Direct,
+    }
+}
+
+/// Starts a run and immediately drives it to `outcome`, for filter/pagination tests that
+/// only care about the resulting row shape, not the transition itself (covered separately by
+/// the lifecycle tests below).
+async fn seed_run(
+    pool: &sqlx::SqlitePool,
+    loop_id: Option<i64>,
+    backend: TuneBackend,
+    config: LoopConfig,
+    outcome: TuneOutcome,
+    started_at: DateTime<Utc>,
+) -> TuneRunRow {
+    let started = TuneRunRow::start(pool, loop_id, "LIC-X", backend, config, started_at)
+        .await
+        .unwrap();
+    match outcome {
+        TuneOutcome::Running => started,
+        TuneOutcome::Completed => TuneRunRow::complete(pool, started.id, started_at)
+            .await
+            .unwrap(),
+        TuneOutcome::Failed => TuneRunRow::fail(pool, started.id, started_at, "seeded failure")
+            .await
+            .unwrap(),
+        TuneOutcome::Aborted => TuneRunRow::abort(pool, started.id, started_at)
+            .await
+            .unwrap(),
+    }
+}
+// }}}1
+
+// Lifecycle transitions {{{1
+
+#[tokio::test]
+async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
+    let pool = connect_in_memory().await.unwrap();
+    let template_id = seed_template(&pool).await;
+    let loop_id = seed_loop_named(&pool, template_id, "LIC101").await;
+    let now = Utc::now();
+
+    let started = TuneRunRow::start(
+        &pool,
+        Some(loop_id),
+        "LIC101",
+        TuneBackend::Simulator,
+        sample_config(),
+        now,
+    )
+    .await
+    .unwrap();
+    assert!(started.id > 0);
+    assert_eq!(started.outcome, TuneOutcome::Running);
+    assert_eq!(started.loop_id, Some(loop_id));
+    assert_eq!(started.loop_name, "LIC101");
+    assert_eq!(started.config, sample_config());
+    assert!(started.initial_readings.is_none());
+    assert!(started.completed_at.is_none());
+    assert_eq!(started.started_at, now);
+    assert_eq!(started.created_at, now);
+
+    let readings = sample_initial_readings();
+    let with_readings = TuneRunRow::record_initial_readings(&pool, started.id, readings)
+        .await
+        .unwrap();
+    assert_eq!(with_readings.initial_readings, Some(readings));
+    assert_eq!(
+        with_readings.outcome,
+        TuneOutcome::Running,
+        "recording readings must not itself change the outcome"
+    );
+
+    let completed_at = now + Duration::minutes(5);
+    let completed = TuneRunRow::complete(&pool, started.id, completed_at)
+        .await
+        .unwrap();
+    assert_eq!(completed.outcome, TuneOutcome::Completed);
+    assert_eq!(completed.completed_at, Some(completed_at));
+    assert_eq!(
+        completed.initial_readings,
+        Some(readings),
+        "completing a run must not clear readings recorded earlier"
+    );
+
+    let fetched = TuneRunRow::get(&pool, started.id).await.unwrap().unwrap();
+    assert_eq!(fetched, completed);
+}
+
+#[tokio::test]
+async fn run_can_fail_before_initial_readings_are_ever_recorded() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+
+    let started = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC102",
+        TuneBackend::Opcda,
+        sample_config(),
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        started.loop_id, None,
+        "an ad-hoc run with no saved loop stays loop_id = NULL"
+    );
+
+    let failed = TuneRunRow::fail(
+        &pool,
+        started.id,
+        now + Duration::seconds(2),
+        "InvalidCastException reading initial values",
+    )
+    .await
+    .unwrap();
+    assert_eq!(failed.outcome, TuneOutcome::Failed);
+    assert_eq!(
+        failed.failure_reason.as_deref(),
+        Some("InvalidCastException reading initial values")
+    );
+    assert!(failed.initial_readings.is_none());
+}
+
+#[tokio::test]
+async fn run_can_fail_after_initial_readings_were_recorded() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let started = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC103",
+        TuneBackend::Opcda,
+        sample_config(),
+        now,
+    )
+    .await
+    .unwrap();
+    TuneRunRow::record_initial_readings(&pool, started.id, sample_initial_readings())
+        .await
+        .unwrap();
+
+    let failed = TuneRunRow::fail(&pool, started.id, now, "backend disconnected mid-test")
+        .await
+        .unwrap();
+    assert_eq!(failed.outcome, TuneOutcome::Failed);
+    assert!(
+        failed.initial_readings.is_some(),
+        "readings recorded before the failure must survive it"
+    );
+}
+
+#[tokio::test]
+async fn run_can_be_aborted() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let started = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC104",
+        TuneBackend::Simulator,
+        sample_config(),
+        now,
+    )
+    .await
+    .unwrap();
+
+    let aborted = TuneRunRow::abort(&pool, started.id, now + Duration::seconds(30))
+        .await
+        .unwrap();
+    assert_eq!(aborted.outcome, TuneOutcome::Aborted);
+    assert!(aborted.failure_reason.is_none());
+}
+
+#[tokio::test]
+async fn get_returns_none_for_missing_id() {
+    let pool = connect_in_memory().await.unwrap();
+    assert!(TuneRunRow::get(&pool, 999).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn lifecycle_transition_on_missing_run_id_is_an_error_not_a_silent_noop() {
+    let pool = connect_in_memory().await.unwrap();
+    let result = TuneRunRow::complete(&pool, 999, Utc::now()).await;
+    assert!(
+        result.is_err(),
+        "completing a run that doesn't exist must error, not silently succeed with nothing updated"
+    );
+}
+// }}}1
+
+// Filtering {{{1
+
+#[tokio::test]
+async fn list_filters_by_process_type_controller_type_outcome_and_backend() {
+    let pool = connect_in_memory().await.unwrap();
+    let t0 = Utc::now();
+
+    let flow_pi_completed_opcda = seed_run(
+        &pool,
+        None,
+        TuneBackend::Opcda,
+        LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            ..sample_config()
+        },
+        TuneOutcome::Completed,
+        t0,
+    )
+    .await;
+    let level_p_failed_simulator = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        LoopConfig {
+            process_type: ProcessType::Level,
+            controller_type: ControllerType::P,
+            ..sample_config()
+        },
+        TuneOutcome::Failed,
+        t0 + Duration::seconds(1),
+    )
+    .await;
+    let flow_pid_running_replay = seed_run(
+        &pool,
+        None,
+        TuneBackend::Replay,
+        LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pid,
+            ..sample_config()
+        },
+        TuneOutcome::Running,
+        t0 + Duration::seconds(2),
+    )
+    .await;
+
+    let flow_only = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_process_type(ProcessType::Flow),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        flow_only.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![flow_pid_running_replay.id, flow_pi_completed_opcda.id],
+        "newest-started first"
+    );
+
+    let pi_only = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_controller_type(ControllerType::Pi),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(pi_only.len(), 1);
+    assert_eq!(pi_only[0].id, flow_pi_completed_opcda.id);
+
+    let completed_only = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_outcome(TuneOutcome::Completed),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(completed_only.len(), 1);
+    assert_eq!(completed_only[0].id, flow_pi_completed_opcda.id);
+
+    let simulator_only = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_backend(TuneBackend::Simulator),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(simulator_only.len(), 1);
+    assert_eq!(simulator_only[0].id, level_p_failed_simulator.id);
+
+    let combined = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default()
+            .with_process_type(ProcessType::Flow)
+            .with_outcome(TuneOutcome::Running),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(combined.len(), 1);
+    assert_eq!(combined[0].id, flow_pid_running_replay.id);
+}
+
+#[tokio::test]
+async fn list_filters_by_loop_id() {
+    let pool = connect_in_memory().await.unwrap();
+    let template_id = seed_template(&pool).await;
+    let loop_a = seed_loop_named(&pool, template_id, "LIC-A").await;
+    let loop_b = seed_loop_named(&pool, template_id, "LIC-B").await;
+    let t0 = Utc::now();
+
+    let run_a = seed_run(
+        &pool,
+        Some(loop_a),
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0,
+    )
+    .await;
+    seed_run(
+        &pool,
+        Some(loop_b),
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0 + Duration::seconds(1),
+    )
+    .await;
+    seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0 + Duration::seconds(2),
+    )
+    .await;
+
+    let for_loop_a = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_loop_id(loop_a),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(for_loop_a.len(), 1);
+    assert_eq!(for_loop_a[0].id, run_a.id);
+}
+
+#[tokio::test]
+async fn list_filters_by_started_at_range() {
+    let pool = connect_in_memory().await.unwrap();
+    let t0 = Utc::now();
+    let early = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0 - Duration::days(2),
+    )
+    .await;
+    let middle = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0 - Duration::days(1),
+    )
+    .await;
+    let late = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0,
+    )
+    .await;
+
+    let after_early = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_started_after(t0 - Duration::hours(36)),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        after_early.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![late.id, middle.id]
+    );
+
+    let before_late = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_started_before(t0 - Duration::hours(12)),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        before_late.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![middle.id, early.id]
+    );
+
+    let between = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default()
+            .with_started_after(t0 - Duration::hours(36))
+            .with_started_before(t0 - Duration::hours(12)),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(between.len(), 1);
+    assert_eq!(between[0].id, middle.id);
+}
+
+#[tokio::test]
+async fn list_and_count_with_no_matches_returns_empty() {
+    let pool = connect_in_memory().await.unwrap();
+    seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        Utc::now(),
+    )
+    .await;
+
+    let filter = TuneRunFilter::default().with_outcome(TuneOutcome::Aborted);
+    assert_eq!(TuneRunRow::count(&pool, &filter).await.unwrap(), 0);
+    assert!(
+        TuneRunRow::list(&pool, &filter, Pagination::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+// }}}1
+
+// Pagination {{{1
+
+#[tokio::test]
+async fn list_paginates_and_count_matches_total_regardless_of_page_size() {
+    let pool = connect_in_memory().await.unwrap();
+    let t0 = Utc::now();
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        let run = seed_run(
+            &pool,
+            None,
+            TuneBackend::Simulator,
+            sample_config(),
+            TuneOutcome::Completed,
+            t0 + Duration::seconds(i),
+        )
+        .await;
+        ids.push(run.id);
+    }
+    // `list` orders newest-started first, the reverse of insertion order here.
+    ids.reverse();
+
+    let total = TuneRunRow::count(&pool, &TuneRunFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(total, 5);
+
+    let page1 = TuneRunRow::list(&pool, &TuneRunFilter::default(), Pagination::new(2, 0))
+        .await
+        .unwrap();
+    assert_eq!(
+        page1.iter().map(|r| r.id).collect::<Vec<_>>(),
+        ids[0..2].to_vec()
+    );
+
+    let page2 = TuneRunRow::list(&pool, &TuneRunFilter::default(), Pagination::new(2, 2))
+        .await
+        .unwrap();
+    assert_eq!(
+        page2.iter().map(|r| r.id).collect::<Vec<_>>(),
+        ids[2..4].to_vec()
+    );
+
+    let page3 = TuneRunRow::list(&pool, &TuneRunFilter::default(), Pagination::new(2, 4))
+        .await
+        .unwrap();
+    assert_eq!(
+        page3.iter().map(|r| r.id).collect::<Vec<_>>(),
+        ids[4..5].to_vec()
+    );
+
+    let page4_empty = TuneRunRow::list(&pool, &TuneRunFilter::default(), Pagination::new(2, 6))
+        .await
+        .unwrap();
+    assert!(page4_empty.is_empty());
+}
+
+#[tokio::test]
+async fn pagination_default_is_50_rows_from_the_start() {
+    let default = Pagination::default();
+    assert_eq!(default.limit, 50);
+    assert_eq!(default.offset, 0);
+    assert_eq!(Pagination::first(10), Pagination::new(10, 0));
+}
+// }}}1
+
+// tune_samples {{{1
+
+#[tokio::test]
+async fn tune_sample_insert_and_list_for_run_orders_by_tick() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC105",
+        TuneBackend::Simulator,
+        sample_config(),
+        now,
+    )
+    .await
+    .unwrap();
+
+    for tick in 0..3i64 {
+        let sample = Tick {
+            time: now + Duration::milliseconds(tick * 800),
+            pv: 50.0 + tick as f32,
+        };
+        let state = MrftState {
+            hysteresis: 1.0,
+            mv_value_current: 55.0,
+            mv_sign_next_step: 1,
+            counter_all_switches: tick as u32,
+            cycles_completed: 0,
+            cycles_remaining: 2,
+        };
+        let inserted = TuneSampleRow::insert(&pool, run.id, tick, sample, state)
+            .await
+            .unwrap();
+        assert_eq!(inserted.tick_index, tick);
+        assert_eq!(inserted.sample, sample);
+        assert_eq!(inserted.state, state);
+        assert_eq!(inserted.run_id, run.id);
+    }
+
+    let samples = TuneSampleRow::list_for_run(&pool, run.id).await.unwrap();
+    assert_eq!(
+        samples.iter().map(|s| s.tick_index).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+}
+
+#[tokio::test]
+async fn tune_sample_list_for_run_is_empty_for_a_run_with_no_samples() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC106",
+        TuneBackend::Simulator,
+        sample_config(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        TuneSampleRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn tune_sample_rejects_duplicate_tick_for_the_same_run() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC107",
+        TuneBackend::Simulator,
+        sample_config(),
+        now,
+    )
+    .await
+    .unwrap();
+    let sample = Tick {
+        time: now,
+        pv: 50.0,
+    };
+    let state = MrftState {
+        hysteresis: 1.0,
+        mv_value_current: 55.0,
+        mv_sign_next_step: 1,
+        counter_all_switches: 0,
+        cycles_completed: 0,
+        cycles_remaining: 2,
+    };
+    TuneSampleRow::insert(&pool, run.id, 0, sample, state)
+        .await
+        .unwrap();
+    let dup = TuneSampleRow::insert(&pool, run.id, 0, sample, state).await;
+    assert!(dup.is_err(), "duplicate (run_id, tick) must be rejected");
+}
+// }}}1
+
+// tune_results {{{1
+
+fn sample_tuning_result(level: ResponseLevel) -> TuningResult {
+    TuningResult {
+        response_level: level,
+        kp: 1.5,
+        ti_minutes: 2.5,
+        td_minutes: 0.0,
+    }
+}
+
+fn sample_pid_parameters(level: ResponseLevel) -> PidParameters {
+    PidParameters {
+        response_level: level,
+        proportional: 66.7,
+        integral: 2.5,
+        derivative: 0.0,
+    }
+}
+
+#[tokio::test]
+async fn tune_result_insert_and_list_for_run_orders_by_response_level() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC108",
+        TuneBackend::Simulator,
+        sample_config(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    for level in [
+        ResponseLevel::Sluggish,
+        ResponseLevel::Aggressive,
+        ResponseLevel::Moderate,
+    ] {
+        let row = TuneResultRow::from_calculated(
+            run.id,
+            sample_tuning_result(level),
+            sample_pid_parameters(level),
+        );
+        let inserted = TuneResultRow::insert(&pool, &row).await.unwrap();
+        assert!(inserted.id > 0);
+        assert_eq!(inserted.response_level, level);
+        assert_eq!(inserted.run_id, run.id);
+    }
+
+    let results = TuneResultRow::list_for_run(&pool, run.id).await.unwrap();
+    assert_eq!(
+        results.iter().map(|r| r.response_level).collect::<Vec<_>>(),
+        vec![
+            ResponseLevel::Aggressive,
+            ResponseLevel::Moderate,
+            ResponseLevel::Sluggish,
+        ],
+        "must match bhtune_core::constants::ResponseLevel::ALL's order"
+    );
+}
+
+#[tokio::test]
+async fn tune_result_rejects_duplicate_response_level_for_the_same_run() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC109",
+        TuneBackend::Simulator,
+        sample_config(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let row = TuneResultRow::from_calculated(
+        run.id,
+        sample_tuning_result(ResponseLevel::Aggressive),
+        sample_pid_parameters(ResponseLevel::Aggressive),
+    );
+    TuneResultRow::insert(&pool, &row).await.unwrap();
+    let dup = TuneResultRow::insert(&pool, &row).await;
+    assert!(
+        dup.is_err(),
+        "duplicate (run_id, response_level) must be rejected"
+    );
+}
+
+#[tokio::test]
+async fn tune_result_list_for_run_is_empty_for_an_incomplete_run() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC110",
+        TuneBackend::Simulator,
+        sample_config(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        TuneResultRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+// }}}1
+
+// tune_writes {{{1
+
+#[tokio::test]
+async fn tune_write_insert_success_records_readback_and_no_error() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC111",
+        TuneBackend::Simulator,
+        sample_config(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let written = OpcWriteValues {
+        response_level: ResponseLevel::Moderate,
+        proportional: 66.7,
+        integral: 2.5,
+        derivative: 0.0,
+    };
+    let readback = WriteReadback {
+        proportional: 66.7,
+        integral: 2.5,
+        derivative: 0.0,
+    };
+
+    let row = TuneWriteRow::insert_success(&pool, run.id, written, readback, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(row.run_id, run.id);
+    assert_eq!(row.response_level, ResponseLevel::Moderate);
+    assert!(row.success);
+    assert_eq!(row.proportional_written, 66.7);
+    assert_eq!(row.proportional_readback, Some(66.7));
+    assert_eq!(row.integral_readback, Some(2.5));
+    assert_eq!(row.derivative_readback, Some(0.0));
+    assert!(row.error_message.is_none());
+}
+
+#[tokio::test]
+async fn tune_write_insert_failure_records_error_and_no_readback() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC112",
+        TuneBackend::Simulator,
+        sample_config(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let written = OpcWriteValues {
+        response_level: ResponseLevel::Aggressive,
+        proportional: 40.0,
+        integral: 1.0,
+        derivative: 0.0,
+    };
+
+    let row =
+        TuneWriteRow::insert_failure(&pool, run.id, written, Utc::now(), "write rejected by DCS")
+            .await
+            .unwrap();
+    assert!(!row.success);
+    assert_eq!(row.error_message.as_deref(), Some("write rejected by DCS"));
+    assert!(row.proportional_readback.is_none());
+    assert!(row.integral_readback.is_none());
+    assert!(row.derivative_readback.is_none());
+}
+
+#[tokio::test]
+async fn tune_write_list_for_run_orders_oldest_first() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC113",
+        TuneBackend::Simulator,
+        sample_config(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let t0 = Utc::now();
+    let written = OpcWriteValues {
+        response_level: ResponseLevel::Aggressive,
+        proportional: 1.0,
+        integral: 1.0,
+        derivative: 0.0,
+    };
+    let readback = WriteReadback {
+        proportional: 1.0,
+        integral: 1.0,
+        derivative: 0.0,
+    };
+
+    let second = TuneWriteRow::insert_success(
+        &pool,
+        run.id,
+        OpcWriteValues {
+            response_level: ResponseLevel::Moderate,
+            ..written
+        },
+        readback,
+        t0 + Duration::seconds(5),
+    )
+    .await
+    .unwrap();
+    let first = TuneWriteRow::insert_success(&pool, run.id, written, readback, t0)
+        .await
+        .unwrap();
+
+    let writes = TuneWriteRow::list_for_run(&pool, run.id).await.unwrap();
+    assert_eq!(
+        writes.iter().map(|w| w.id).collect::<Vec<_>>(),
+        vec![first.id, second.id]
+    );
+}
+
+#[tokio::test]
+async fn tune_write_list_for_run_is_empty_when_nothing_was_written() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC114",
+        TuneBackend::Simulator,
+        sample_config(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        TuneWriteRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+// }}}1

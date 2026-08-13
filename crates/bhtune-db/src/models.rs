@@ -10,20 +10,27 @@
 //! instead, matching the table exactly and avoiding a redundant, only-sometimes-consistent
 //! duplicate field.
 //!
-//! Only [`DcsTemplateRow`] has `insert`/`get` methods so far — enough to unblock
-//! `db-seed-templates`, which needs exactly this. Full repository behavior (filtering,
-//! pagination, updates, deletes) for the other tables is intentionally deferred to the todos
-//! that actually need it (`history-query-api`, `db-seed-templates`'s later loop-CRUD
-//! follow-ups, `backend-opcda`/`cli-commands` for writing `tune_runs`/`tune_samples`/
-//! `tune_results`/`tune_writes`), so the API shape gets decided by its real call sites
-//! instead of being guessed at here.
+//! [`DcsTemplateRow`] and [`TuneRunRow`]/[`TuneSampleRow`]/[`TuneResultRow`]/[`TuneWriteRow`]
+//! have full repository methods (insert, lifecycle transitions, filtering, pagination) —
+//! covering `db-seed-templates` and `history-query-api`. [`LoopRow`] deliberately has none
+//! yet: full CRUD for saved loops (list/update/delete) is a separate "loop management"
+//! concern from history (which is about *runs*, not the loops they reference), left to
+//! whichever future todo actually needs it. Until then, tests construct `loops` rows with
+//! raw SQL (see `tests/schema.rs`'s `seed_loop` helper) purely as foreign-key setup.
+//!
+//! [`TuneRunRow::list`]/[`TuneRunRow::count`] build their `WHERE` clause dynamically with
+//! `sqlx::QueryBuilder`, since [`TuneRunFilter`]'s fields are all optional and the set of
+//! active conditions varies per call — a fixed `query!` string can't express that, and
+//! `bhtune-db` uses runtime `query`/`query_as` throughout anyway (see `Cargo.toml`), so this
+//! doesn't introduce a new query style, just the first dynamic one.
 
 use bhtune_core::{
-    ControllerDirection, DcsTemplate, LoopConfig, LoopTags, MrftState, ResponseLevel, Tick,
-    tuning_math::{PidParameters, TuningResult},
+    ControllerDirection, ControllerType, DcsTemplate, LoopConfig, LoopTags, MrftState, ProcessType,
+    ResponseLevel, Tick,
+    tuning_math::{OpcWriteValues, PidParameters, TuningResult},
 };
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
+use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, sqlite::SqliteRow};
 
 use crate::{
     convert::{enum_to_text, text_to_enum},
@@ -342,6 +349,366 @@ pub struct TuneRunRow {
     pub initial_readings: Option<TuneRunInitialReadings>,
     pub created_at: DateTime<Utc>,
 }
+
+/// Filter criteria for [`TuneRunRow::list`]/[`TuneRunRow::count`]. Every field is optional;
+/// the all-`None` default matches every run. Build one with [`TuneRunFilter::default`] and
+/// the `with_*` methods, e.g. `TuneRunFilter::default().with_outcome(TuneOutcome::Failed)`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TuneRunFilter {
+    pub loop_id: Option<i64>,
+    pub process_type: Option<ProcessType>,
+    pub controller_type: Option<ControllerType>,
+    pub outcome: Option<TuneOutcome>,
+    pub backend: Option<TuneBackend>,
+    /// Matches runs with `started_at >= started_after` (inclusive).
+    pub started_after: Option<DateTime<Utc>>,
+    /// Matches runs with `started_at <= started_before` (inclusive).
+    pub started_before: Option<DateTime<Utc>>,
+}
+
+impl TuneRunFilter {
+    pub fn with_loop_id(mut self, loop_id: i64) -> TuneRunFilter {
+        self.loop_id = Some(loop_id);
+        self
+    }
+
+    pub fn with_process_type(mut self, process_type: ProcessType) -> TuneRunFilter {
+        self.process_type = Some(process_type);
+        self
+    }
+
+    pub fn with_controller_type(mut self, controller_type: ControllerType) -> TuneRunFilter {
+        self.controller_type = Some(controller_type);
+        self
+    }
+
+    pub fn with_outcome(mut self, outcome: TuneOutcome) -> TuneRunFilter {
+        self.outcome = Some(outcome);
+        self
+    }
+
+    pub fn with_backend(mut self, backend: TuneBackend) -> TuneRunFilter {
+        self.backend = Some(backend);
+        self
+    }
+
+    pub fn with_started_after(mut self, started_after: DateTime<Utc>) -> TuneRunFilter {
+        self.started_after = Some(started_after);
+        self
+    }
+
+    pub fn with_started_before(mut self, started_before: DateTime<Utc>) -> TuneRunFilter {
+        self.started_before = Some(started_before);
+        self
+    }
+}
+
+/// A page of [`TuneRunRow::list`] results: `limit` rows starting at `offset`, ordered newest
+/// first.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pagination {
+    pub limit: i64,
+    pub offset: i64,
+}
+
+impl Pagination {
+    pub fn new(limit: i64, offset: i64) -> Pagination {
+        Pagination { limit, offset }
+    }
+
+    /// The first `limit` rows.
+    pub fn first(limit: i64) -> Pagination {
+        Pagination { limit, offset: 0 }
+    }
+}
+
+impl Default for Pagination {
+    /// 50 rows, offset 0 — a reasonable default page size for a CLI/GUI run list.
+    fn default() -> Pagination {
+        Pagination {
+            limit: 50,
+            offset: 0,
+        }
+    }
+}
+
+impl TuneRunRow {
+    /// Starts a new run: inserts a `tune_runs` row with `outcome = 'running'` and no initial
+    /// readings yet (see [`Self::record_initial_readings`]). `now` is used for both
+    /// `started_at` and `created_at`, which are naturally the same instant for a run that's
+    /// only just begun. `loop_id` may be `None` for an ad-hoc run against tags that were
+    /// never saved as a reusable [`LoopRow`].
+    pub async fn start(
+        pool: &SqlitePool,
+        loop_id: Option<i64>,
+        loop_name: &str,
+        backend: TuneBackend,
+        config: LoopConfig,
+        now: DateTime<Utc>,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO tune_runs (
+                loop_id, loop_name, backend, started_at, outcome,
+                process_type, controller_type, relay_amp_percent, num_cycles_skip,
+                num_cycles_count, noise_protection_secs, mrft_delay_secs, created_at
+            ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING *
+            "#,
+        )
+        .bind(loop_id)
+        .bind(loop_name)
+        .bind(enum_to_text(&backend))
+        .bind(now)
+        .bind(enum_to_text(&config.process_type))
+        .bind(enum_to_text(&config.controller_type))
+        .bind(config.relay_amp_percent)
+        .bind(config.num_cycles_skip)
+        .bind(config.num_cycles_count)
+        .bind(config.noise_protection_secs)
+        .bind(config.mrft_delay_secs)
+        .bind(now)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Records the backend's initial-readings snapshot (`ReadInitialOPCvalues` in the legacy
+    /// app) for an already-started run. Called at most once per run, right after that read
+    /// succeeds; a run that fails before or during it instead goes straight to [`Self::fail`]
+    /// with `initial_readings` left `None`.
+    pub async fn record_initial_readings(
+        pool: &SqlitePool,
+        run_id: i64,
+        readings: TuneRunInitialReadings,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs SET
+                pv_ini = ?, mv_ini = ?, mv_range_low = ?, mv_range_high = ?,
+                pv_range_high = ?, pv_range_low = ?, controller_direction = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(readings.pv_ini)
+        .bind(readings.mv_ini)
+        .bind(readings.mv_range_low)
+        .bind(readings.mv_range_high)
+        .bind(readings.pv_range_high)
+        .bind(readings.pv_range_low)
+        .bind(enum_to_text(&readings.controller_direction))
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Marks a run `completed` — a full MRFT test that ran to its natural end. The calculated
+    /// results themselves are recorded separately via [`TuneResultRow::insert`].
+    pub async fn complete(
+        pool: &SqlitePool,
+        run_id: i64,
+        completed_at: DateTime<Utc>,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            "UPDATE tune_runs SET outcome = 'completed', completed_at = ? WHERE id = ? RETURNING *",
+        )
+        .bind(completed_at)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Marks a run `failed`, recording why. Valid whether or not
+    /// [`Self::record_initial_readings`] was ever called for this run — a run can fail before,
+    /// during, or after the initial read.
+    pub async fn fail(
+        pool: &SqlitePool,
+        run_id: i64,
+        completed_at: DateTime<Utc>,
+        failure_reason: &str,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs SET outcome = 'failed', completed_at = ?, failure_reason = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(completed_at)
+        .bind(failure_reason)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Marks a run `aborted` — stopped deliberately (by a human, or `cli-safety`'s
+    /// wall-clock timeout guardrail) rather than failing on its own.
+    pub async fn abort(
+        pool: &SqlitePool,
+        run_id: i64,
+        completed_at: DateTime<Utc>,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            "UPDATE tune_runs SET outcome = 'aborted', completed_at = ? WHERE id = ? RETURNING *",
+        )
+        .bind(completed_at)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Fetches one row by id, or `None` if it doesn't exist.
+    pub async fn get(pool: &SqlitePool, id: i64) -> DbResult<Option<TuneRunRow>> {
+        let row = sqlx::query("SELECT * FROM tune_runs WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .map_err(DbError::Query)?;
+        row.map(row_to_tune_run).transpose()
+    }
+
+    /// Lists runs matching `filter`, newest-started first, one `pagination` page at a time.
+    /// See [`Self::count`] for the total number of rows `filter` matches across all pages.
+    pub async fn list(
+        pool: &SqlitePool,
+        filter: &TuneRunFilter,
+        pagination: Pagination,
+    ) -> DbResult<Vec<TuneRunRow>> {
+        let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT * FROM tune_runs");
+        push_filter(&mut builder, filter);
+        builder.push(" ORDER BY started_at DESC LIMIT ");
+        builder.push_bind(pagination.limit);
+        builder.push(" OFFSET ");
+        builder.push_bind(pagination.offset);
+
+        let rows = builder
+            .build()
+            .fetch_all(pool)
+            .await
+            .map_err(DbError::Query)?;
+        rows.into_iter().map(row_to_tune_run).collect()
+    }
+
+    /// Counts every run matching `filter`, ignoring pagination — the total [`Self::list`]
+    /// would page through.
+    pub async fn count(pool: &SqlitePool, filter: &TuneRunFilter) -> DbResult<i64> {
+        let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT COUNT(*) FROM tune_runs");
+        push_filter(&mut builder, filter);
+        builder
+            .build_query_scalar::<i64>()
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)
+    }
+}
+
+/// Appends `WHERE <conditions>` to `builder` for every `Some` field in `filter`, or nothing
+/// at all if every field is `None`. Shared by [`TuneRunRow::list`]/[`TuneRunRow::count`] so
+/// the two can never disagree about which rows match a given filter.
+fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) {
+    // `1=1` makes every real condition an unconditional `AND`, rather than needing to track
+    // whether it's the first one (and therefore needs `WHERE` instead of `AND`).
+    builder.push(" WHERE 1=1");
+
+    if let Some(loop_id) = filter.loop_id {
+        builder.push(" AND loop_id = ").push_bind(loop_id);
+    }
+    if let Some(process_type) = filter.process_type {
+        builder
+            .push(" AND process_type = ")
+            .push_bind(enum_to_text(&process_type));
+    }
+    if let Some(controller_type) = filter.controller_type {
+        builder
+            .push(" AND controller_type = ")
+            .push_bind(enum_to_text(&controller_type));
+    }
+    if let Some(outcome) = filter.outcome {
+        builder
+            .push(" AND outcome = ")
+            .push_bind(enum_to_text(&outcome));
+    }
+    if let Some(backend) = filter.backend {
+        builder
+            .push(" AND backend = ")
+            .push_bind(enum_to_text(&backend));
+    }
+    if let Some(started_after) = filter.started_after {
+        builder.push(" AND started_at >= ").push_bind(started_after);
+    }
+    if let Some(started_before) = filter.started_before {
+        builder
+            .push(" AND started_at <= ")
+            .push_bind(started_before);
+    }
+}
+
+fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
+    let pv_ini: Option<f32> = row.try_get("pv_ini").map_err(DbError::Query)?;
+    let initial_readings = match pv_ini {
+        Some(pv_ini) => {
+            let controller_direction: String = row
+                .try_get("controller_direction")
+                .map_err(DbError::Query)?;
+            Some(TuneRunInitialReadings {
+                pv_ini,
+                mv_ini: row.try_get("mv_ini").map_err(DbError::Query)?,
+                mv_range_low: row.try_get("mv_range_low").map_err(DbError::Query)?,
+                mv_range_high: row.try_get("mv_range_high").map_err(DbError::Query)?,
+                pv_range_high: row.try_get("pv_range_high").map_err(DbError::Query)?,
+                pv_range_low: row.try_get("pv_range_low").map_err(DbError::Query)?,
+                controller_direction: text_to_enum("controller_direction", &controller_direction)?,
+            })
+        }
+        None => None,
+    };
+
+    let process_type: String = row.try_get("process_type").map_err(DbError::Query)?;
+    let controller_type: String = row.try_get("controller_type").map_err(DbError::Query)?;
+    let config = LoopConfig {
+        process_type: text_to_enum("process_type", &process_type)?,
+        controller_type: text_to_enum("controller_type", &controller_type)?,
+        relay_amp_percent: row.try_get("relay_amp_percent").map_err(DbError::Query)?,
+        num_cycles_skip: row.try_get("num_cycles_skip").map_err(DbError::Query)?,
+        num_cycles_count: row.try_get("num_cycles_count").map_err(DbError::Query)?,
+        noise_protection_secs: row
+            .try_get("noise_protection_secs")
+            .map_err(DbError::Query)?,
+        mrft_delay_secs: row.try_get("mrft_delay_secs").map_err(DbError::Query)?,
+    };
+
+    let backend: String = row.try_get("backend").map_err(DbError::Query)?;
+    let outcome: String = row.try_get("outcome").map_err(DbError::Query)?;
+
+    Ok(TuneRunRow {
+        id: row.try_get("id").map_err(DbError::Query)?,
+        loop_id: row.try_get("loop_id").map_err(DbError::Query)?,
+        loop_name: row.try_get("loop_name").map_err(DbError::Query)?,
+        backend: text_to_enum("backend", &backend)?,
+        started_at: row.try_get("started_at").map_err(DbError::Query)?,
+        completed_at: row.try_get("completed_at").map_err(DbError::Query)?,
+        outcome: text_to_enum("outcome", &outcome)?,
+        failure_reason: row.try_get("failure_reason").map_err(DbError::Query)?,
+        config,
+        initial_readings,
+        created_at: row.try_get("created_at").map_err(DbError::Query)?,
+    })
+}
 // }}}1
 
 // tune_samples {{{1
@@ -356,6 +723,78 @@ pub struct TuneSampleRow {
     pub tick_index: i64,
     pub sample: Tick,
     pub state: MrftState,
+}
+
+impl TuneSampleRow {
+    /// Records one tick of a run, taking the exact [`Tick`]/[`MrftState`] pair
+    /// [`bhtune_core::mrft::MrftEngine::step`] produced. `(run_id, tick_index)` is unique
+    /// (see the migration), so re-recording the same tick twice is a caller bug, not a
+    /// silent overwrite.
+    pub async fn insert(
+        pool: &SqlitePool,
+        run_id: i64,
+        tick_index: i64,
+        sample: Tick,
+        state: MrftState,
+    ) -> DbResult<TuneSampleRow> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO tune_samples (
+                run_id, tick, time, pv, hysteresis, mv_value_current, mv_sign_next_step,
+                counter_all_switches, cycles_completed, cycles_remaining
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING *
+            "#,
+        )
+        .bind(run_id)
+        .bind(tick_index)
+        .bind(sample.time)
+        .bind(sample.pv)
+        .bind(state.hysteresis)
+        .bind(state.mv_value_current)
+        .bind(state.mv_sign_next_step)
+        .bind(state.counter_all_switches)
+        .bind(state.cycles_completed)
+        .bind(state.cycles_remaining)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_sample(row)
+    }
+
+    /// Lists every sample of `run_id`, ordered by tick — the full per-tick trend the history
+    /// explorer's chart (`history-explorer-ui`) plots.
+    pub async fn list_for_run(pool: &SqlitePool, run_id: i64) -> DbResult<Vec<TuneSampleRow>> {
+        let rows = sqlx::query("SELECT * FROM tune_samples WHERE run_id = ? ORDER BY tick")
+            .bind(run_id)
+            .fetch_all(pool)
+            .await
+            .map_err(DbError::Query)?;
+        rows.into_iter().map(row_to_tune_sample).collect()
+    }
+}
+
+fn row_to_tune_sample(row: SqliteRow) -> DbResult<TuneSampleRow> {
+    Ok(TuneSampleRow {
+        id: row.try_get("id").map_err(DbError::Query)?,
+        run_id: row.try_get("run_id").map_err(DbError::Query)?,
+        tick_index: row.try_get("tick").map_err(DbError::Query)?,
+        sample: Tick {
+            time: row.try_get("time").map_err(DbError::Query)?,
+            pv: row.try_get("pv").map_err(DbError::Query)?,
+        },
+        state: MrftState {
+            hysteresis: row.try_get("hysteresis").map_err(DbError::Query)?,
+            mv_value_current: row.try_get("mv_value_current").map_err(DbError::Query)?,
+            mv_sign_next_step: row.try_get("mv_sign_next_step").map_err(DbError::Query)?,
+            counter_all_switches: row
+                .try_get("counter_all_switches")
+                .map_err(DbError::Query)?,
+            cycles_completed: row.try_get("cycles_completed").map_err(DbError::Query)?,
+            cycles_remaining: row.try_get("cycles_remaining").map_err(DbError::Query)?,
+        },
+    })
 }
 // }}}1
 
@@ -408,6 +847,64 @@ impl TuneResultRow {
             derivative: pid.derivative,
         }
     }
+
+    /// Inserts `row` (typically built via [`Self::from_calculated`]), returning the persisted
+    /// copy with its assigned `id`. `(run_id, response_level)` is unique (see the migration)
+    /// — a successfully completed run writes exactly the 3 [`ResponseLevel`] rows once, at
+    /// completion.
+    pub async fn insert(pool: &SqlitePool, row: &TuneResultRow) -> DbResult<TuneResultRow> {
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO tune_results (
+                run_id, response_level, kp, ti_minutes, td_minutes,
+                proportional, integral, derivative
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING *
+            "#,
+        )
+        .bind(row.run_id)
+        .bind(enum_to_text(&row.response_level))
+        .bind(row.kp)
+        .bind(row.ti_minutes)
+        .bind(row.td_minutes)
+        .bind(row.proportional)
+        .bind(row.integral)
+        .bind(row.derivative)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_result(inserted)
+    }
+
+    /// Lists every calculated result of `run_id`, ordered by [`ResponseLevel`] (which sorts
+    /// alphabetically as Aggressive, Moderate, Sluggish — the same order
+    /// [`bhtune_core::constants::ResponseLevel::ALL`] enumerates them in). 0 rows for a run
+    /// that never completed, up to 3 for one that did.
+    pub async fn list_for_run(pool: &SqlitePool, run_id: i64) -> DbResult<Vec<TuneResultRow>> {
+        let rows =
+            sqlx::query("SELECT * FROM tune_results WHERE run_id = ? ORDER BY response_level")
+                .bind(run_id)
+                .fetch_all(pool)
+                .await
+                .map_err(DbError::Query)?;
+        rows.into_iter().map(row_to_tune_result).collect()
+    }
+}
+
+fn row_to_tune_result(row: SqliteRow) -> DbResult<TuneResultRow> {
+    let response_level: String = row.try_get("response_level").map_err(DbError::Query)?;
+    Ok(TuneResultRow {
+        id: row.try_get("id").map_err(DbError::Query)?,
+        run_id: row.try_get("run_id").map_err(DbError::Query)?,
+        response_level: text_to_enum("response_level", &response_level)?,
+        kp: row.try_get("kp").map_err(DbError::Query)?,
+        ti_minutes: row.try_get("ti_minutes").map_err(DbError::Query)?,
+        td_minutes: row.try_get("td_minutes").map_err(DbError::Query)?,
+        proportional: row.try_get("proportional").map_err(DbError::Query)?,
+        integral: row.try_get("integral").map_err(DbError::Query)?,
+        derivative: row.try_get("derivative").map_err(DbError::Query)?,
+    })
 }
 // }}}1
 
@@ -432,6 +929,121 @@ pub struct TuneWriteRow {
     pub derivative_readback: Option<f32>,
     pub success: bool,
     pub error_message: Option<String>,
+}
+
+/// The proportional/integral/derivative values read back from the backend immediately after
+/// a [`TuneWriteRow::insert_success`] write, to confirm the DCS actually accepted them. Not a
+/// `bhtune-core` type like [`OpcWriteValues`]: this isn't a calculated/intended value, just
+/// raw floats the caller read back from the backend after writing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WriteReadback {
+    pub proportional: f32,
+    pub integral: f32,
+    pub derivative: f32,
+}
+
+impl TuneWriteRow {
+    /// Records a successful PID write-back, including what was read back afterward to
+    /// confirm the DCS accepted it. `written`'s own `response_level` becomes the row's
+    /// `response_level` — one source of truth, rather than a second field that could
+    /// disagree with it.
+    pub async fn insert_success(
+        pool: &SqlitePool,
+        run_id: i64,
+        written: OpcWriteValues,
+        readback: WriteReadback,
+        written_at: DateTime<Utc>,
+    ) -> DbResult<TuneWriteRow> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO tune_writes (
+                run_id, response_level, written_at, proportional_written, integral_written,
+                derivative_written, proportional_readback, integral_readback,
+                derivative_readback, success
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            RETURNING *
+            "#,
+        )
+        .bind(run_id)
+        .bind(enum_to_text(&written.response_level))
+        .bind(written_at)
+        .bind(written.proportional)
+        .bind(written.integral)
+        .bind(written.derivative)
+        .bind(readback.proportional)
+        .bind(readback.integral)
+        .bind(readback.derivative)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_write(row)
+    }
+
+    /// Records a PID write-back that failed — the DCS rejected the value, or the write
+    /// itself errored — before any readback was possible. Readback columns are left `NULL`.
+    pub async fn insert_failure(
+        pool: &SqlitePool,
+        run_id: i64,
+        written: OpcWriteValues,
+        written_at: DateTime<Utc>,
+        error_message: &str,
+    ) -> DbResult<TuneWriteRow> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO tune_writes (
+                run_id, response_level, written_at, proportional_written, integral_written,
+                derivative_written, success, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+            RETURNING *
+            "#,
+        )
+        .bind(run_id)
+        .bind(enum_to_text(&written.response_level))
+        .bind(written_at)
+        .bind(written.proportional)
+        .bind(written.integral)
+        .bind(written.derivative)
+        .bind(error_message)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_write(row)
+    }
+
+    /// Lists every write-back attempt for `run_id`, oldest first — the full "who changed this
+    /// loop and when" audit trail `history-writeback-audit` exists to provide.
+    pub async fn list_for_run(pool: &SqlitePool, run_id: i64) -> DbResult<Vec<TuneWriteRow>> {
+        let rows = sqlx::query("SELECT * FROM tune_writes WHERE run_id = ? ORDER BY written_at")
+            .bind(run_id)
+            .fetch_all(pool)
+            .await
+            .map_err(DbError::Query)?;
+        rows.into_iter().map(row_to_tune_write).collect()
+    }
+}
+
+fn row_to_tune_write(row: SqliteRow) -> DbResult<TuneWriteRow> {
+    let response_level: String = row.try_get("response_level").map_err(DbError::Query)?;
+    Ok(TuneWriteRow {
+        id: row.try_get("id").map_err(DbError::Query)?,
+        run_id: row.try_get("run_id").map_err(DbError::Query)?,
+        response_level: text_to_enum("response_level", &response_level)?,
+        written_at: row.try_get("written_at").map_err(DbError::Query)?,
+        proportional_written: row
+            .try_get("proportional_written")
+            .map_err(DbError::Query)?,
+        integral_written: row.try_get("integral_written").map_err(DbError::Query)?,
+        derivative_written: row.try_get("derivative_written").map_err(DbError::Query)?,
+        proportional_readback: row
+            .try_get("proportional_readback")
+            .map_err(DbError::Query)?,
+        integral_readback: row.try_get("integral_readback").map_err(DbError::Query)?,
+        derivative_readback: row.try_get("derivative_readback").map_err(DbError::Query)?,
+        success: row.try_get("success").map_err(DbError::Query)?,
+        error_message: row.try_get("error_message").map_err(DbError::Query)?,
+    })
 }
 // }}}1
 
