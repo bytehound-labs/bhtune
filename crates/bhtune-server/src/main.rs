@@ -1,14 +1,16 @@
-//! `bhtune-server` — roadmap stub for an HTTP/REST adapter.
+//! `bhtune-server` — placeholder for the primary v1 GUI adapter.
 //!
-//! Not part of v1 scope (see the locked decisions in AGENTS.md: v1 adapters
-//! are the CLI and the Tauri desktop GUI only). This crate is a placeholder
-//! so the roadmap item — an Axum-based server exposing the same
-//! `bhtune-core`/`bhtune-backend`/`bhtune-db` stack over HTTP, so a browser
-//! or a remote `httpClient` frontend build can drive BHTune without a local
-//! Tauri install — has a home in the workspace when it is prioritized.
+//! BHTune's only GUI is a browser-based web app: this crate will become an
+//! Axum server exposing `bhtune-core`/`bhtune-backend`/`bhtune-db` over an
+//! OpenAPI-described HTTP API (`server-http-api`), embedding the built React
+//! SPA into the binary (`server-embed-spa`) so a target host needs no Node,
+//! nginx, or WebView runtime — see "Key architectural decisions" in
+//! AGENTS.md. This crate is a placeholder until that phase starts; it
+//! intentionally has no `axum` dependency yet (see AGENTS.md's "Deferred
+//! setup" section for why adding it prematurely is avoided).
 
 fn main() {
-    println!("bhtune-server: roadmap stub, not implemented (see AGENTS.md)");
+    println!("bhtune-server: not implemented yet (see AGENTS.md, server-http-api phase)");
 }
 
 #[cfg(test)]

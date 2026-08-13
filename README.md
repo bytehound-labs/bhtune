@@ -24,8 +24,8 @@ BHTune is designed around a few core principles:
 - **Has no proprietary dependencies.** Every dependency is FOSS, machine-enforced in CI via
   `cargo deny` (see [`deny.toml`](deny.toml)). There is no licensed UI toolkit, no licensed OPC
   SDK, and no hardware/software dongle.
-- **Has two faces, one engine.** A headless CLI for scheduled/scripted tuning and a desktop GUI
-  (Tauri) for interactive use, both built on the same tuning engine and the same SQLite database.
+- **Has two faces, one engine.** A headless CLI for scheduled/scripted tuning and a browser-based
+  web GUI for interactive use, both built on the same tuning engine and the same SQLite database.
 - **Stores everything in a plain, open SQLite database.** No encryption, no usage gating, no
   license dongle — just a single database anyone can inspect.
 - **Is built to be extended.** OPC DA is the primary, supported driver for v1. The tag-I/O
@@ -47,11 +47,10 @@ A Cargo workspace of small, single-purpose crates:
 | `bhtune-core`    | Pure domain logic: the MRFT state machine, tuning math, and data model. No I/O, no async, no clock reads — this is what makes deterministic, replayable testing possible.                              |
 | `bhtune-backend` | The `Backend` trait (`read`/`write`/`browse`) and its implementations: OPC DA (via `opcda-bridge`), an in-process process simulator, and a golden-trace replay backend used for regression validation. |
 | `bhtune-db`      | SQLite persistence (`sqlx`, WAL mode): DCS/PLC templates, loops, tune runs, samples, and results.                                                                                                      |
-| `bhtune-cli`     | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                        |
-| `bhtune-desktop` | The Tauri v2 desktop GUI.                                                                                                                                                                              |
-| `bhtune-server`  | An HTTP/REST adapter. Roadmap only — not part of v1.                                                                                                                                                   |
+| `bhtune-cli`     | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                       |
+| `bhtune-server`  | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                            |
 
-The frontend (React + TypeScript + Vite, for `bhtune-desktop`) lives under `frontend/` once that
+The frontend (React + TypeScript + Vite, for `bhtune-server`) lives under `frontend/` once that
 phase begins; it does not exist yet in this early scaffold.
 
 ### OPC DA bridge
@@ -94,11 +93,14 @@ deferred, and what's deliberately not planned — lives at
 ## Roadmap
 
 - OPC UA and Modbus `Backend` implementations, alongside OPC DA.
-- An HTTP/REST adapter (`bhtune-server`) and Docker image, for driving BHTune without a local
-  Tauri install.
-  subscription rather than polling). This is blocked on adding a subscription/streaming RPC to
-  `opcda-bridge`.
+- Free remote/multi-user access to the web GUI: authentication, TLS, and an audit log of
+  who ran/wrote what. Free, like every other feature — there is no paid tier planned.
+- Step Test, a simpler alternative manual tuning method. Blocked on adding a
+  push/subscription RPC to `opcda-bridge`, since Step Test observes PV changes via an OPC DA
+  subscription rather than polling reads.
 - Multi-loop and batch tuning campaigns.
+- A history explorer: browsing/trend view over past runs, configurable retention, and
+  cross-run comparison/overlay.
 
 ## Contributing
 

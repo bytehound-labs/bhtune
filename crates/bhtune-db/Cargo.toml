@@ -24,7 +24,7 @@ thiserror.workspace = true
 # test` working with zero extra setup for every contributor.
 # The "sqlite" feature enables "sqlite-bundled" by default, which statically
 # compiles SQLite from vendored source (`libsqlite3-sys/bundled`) rather
-# than linking a system SQLite. Deliberate: the Tauri desktop build matrix
+# than linking a system SQLite. Deliberate: the release build matrix
 # already spans Linux/macOS/Windows (`build-matrix`), and requiring a
 # system `libsqlite3-dev`-equivalent on every one of those, for every
 # contributor and CI runner, is exactly the kind of environment-specific

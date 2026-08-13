@@ -43,7 +43,7 @@ reflected in code and docs, not just here).
 
 ## 3. UI surface → screens
 
-BHTune's Tauri frontend screens (`frontend-screens` phase) and equivalent CLI
+BHTune's web GUI frontend screens (`frontend-screens` phase) and equivalent CLI
 subcommands/flags (`cli-commands` phase) need to cover the following capability groups. The UI
 does not need matching widgets to any particular layout, only equivalent capability plus real
 validation.
@@ -72,7 +72,7 @@ validation.
       editing (see §7).
 - [ ] NOT PLANNED — any licensing/loop-status UI. BHTune has no license gating of any kind.
 - [ ] REQUIRED — Help — offline/online help content.
-- [ ] REQUIRED — a live PV/MV trend chart in the desktop GUI (`frontend-live-stream` phase,
+- [ ] REQUIRED — a live PV/MV trend chart in the web GUI (`frontend-live-stream` phase,
       `uPlot` per `AGENTS.md`), handling high-rate streaming updates (multiple times per second).
 
 ## 4. MRFT lifecycle

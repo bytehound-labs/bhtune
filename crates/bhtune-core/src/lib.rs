@@ -14,7 +14,7 @@
 //! Deliberately has zero non-`serde` dependencies. Anything else added here
 //! must be justified by the pure domain logic itself, not by a consumer's
 //! I/O or presentation needs — those belong in `bhtune-backend`,
-//! `bhtune-db`, `bhtune-cli`, or `bhtune-desktop`.
+//! `bhtune-db`, `bhtune-cli`, or `bhtune-server`.
 
 pub mod constants;
 pub mod controller_type;

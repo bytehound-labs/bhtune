@@ -5,7 +5,6 @@ members = [
   "crates/bhtune-backend",
   "crates/bhtune-db",
   "crates/bhtune-cli",
-  "crates/bhtune-desktop",
   "crates/bhtune-server",
 ]
 

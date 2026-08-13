@@ -10,7 +10,7 @@ repository.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 # Only this crate needs async-trait so far (the `Backend` trait's methods must be async and
-# object-safe -- `Box<dyn Backend>`/`Arc<dyn Backend>` -- so a `bhtune-cli`/`bhtune-desktop`
+# object-safe -- `Box<dyn Backend>`/`Arc<dyn Backend>` -- so a `bhtune-cli`/`bhtune-server`
 # session can pick an implementation at runtime from config; native `async fn` in traits is
 # not yet dyn-compatible), so it stays local rather than promoted to `[workspace.dependencies]`.
 async-trait = "0.1"

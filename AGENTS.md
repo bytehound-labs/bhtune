@@ -3,7 +3,7 @@
 A free, open-source Rust PID control-loop auto-tuner for industrial DCS/PLC systems (Yokogawa
 CentumVP, Honeywell Experion, Schneider Modicon, Allen-Bradley PlantPAx). Runs a Modified Relay
 Feedback Test (MRFT) against a live loop and calculates/writes back PID constants, via a CLI or a
-Tauri desktop GUI.
+browser-based web GUI.
 
 ## Status
 
@@ -21,8 +21,9 @@ defined and tested, its OPC DA implementation (`backend-opcda`, `OpcDaBackend`) 
 done — the primary v1 driver, over the published `opcda-bridge` crate — and its in-Rust
 FOPDT process simulator (`backend-simulator`, `SimulatorBackend`) is done, giving CI a
 fully synthetic, wall-clock-free way to drive a real `MrftEngine` end to end. `backend-replay`,
-the replay harness, CLI, and GUI are not yet. See "Phases and todos" below
-for what's next.
+the replay harness, CLI, and web GUI are not yet — the GUI plan reversed from a Tauri desktop
+app to a browser UI served by `bhtune-server` before any Tauri code was written (see "Key
+architectural decisions"). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -41,7 +42,7 @@ the ground up to avoid all of that:
   match exactly, so behavior changes are always deliberate, never silent regressions (see
   "Validation strategy" below).
 
-Scope is deliberately bounded for v1: MRFT tuning over OPC DA only, with a CLI and a desktop GUI
+Scope is deliberately bounded for v1: MRFT tuning over OPC DA only, with a CLI and a web GUI
 sharing one engine. Resist expanding to other protocols or major new features (multi-loop batch
 tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the roadmap, not v1.
 
@@ -108,8 +109,54 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   not yet in force) is what would let ByteHound also offer separate commercial licensing terms to
   enterprise customers later, without taking anything away from AGPL users. The CLA's legal
   entity name is an open question — see "Open questions".
-- **v1 adapters: CLI + Tauri desktop only.** `bhtune-server` (HTTP/REST via Axum) is a roadmap
-  stub, intentionally not implemented yet.
+- **v1 adapters: CLI + browser-based web GUI, served by `bhtune-server`.** There is no desktop
+  app. The original plan called for a Tauri v2 desktop shell (see the deleted `bhtune-desktop`
+  placeholder crate in git history) with a Dockerized web server as a possible future add-on;
+  that was reversed before any Tauri code was written; `bhtune-desktop` had zero dependencies and
+  was never built against, so nothing was lost in the reversal. `bhtune-server` (Axum) is
+  promoted from roadmap stub to the primary v1 GUI adapter instead, serving both the HTTP API and
+  the built React SPA (embedded via `rust-embed`) from one binary. Reasons: the intended
+  deployment shape is a shared, always-on host near the OPC DA gateway that engineers connect
+  to — a desktop app fundamentally can't serve that; WebView2 is genuinely missing on air-gapped/
+  imaged OT hosts and stale WebKitGTK on LTS Linux breaks charting libraries, which matters
+  because a live PV/MV trend chart is a headline feature (see below); and Playwright E2E against
+  a real browser is markedly more reliable in CI than `tauri-driver`/WebDriver for a project with
+  a 100%-coverage, golden-master validation posture. Nothing here reduces to "just add Docker" —
+  a plain installer (`pkg-windows-installer`) is the primary distribution artifact precisely
+  because Docker is frequently banned or unavailable on OT networks; the Docker image
+  (`pkg-docker`) is a secondary channel for IT-managed Linux hosts, not the deployment path this
+  decision was optimized for.
+- **One API surface, described by OpenAPI, with no client-side transport abstraction.** Handlers/
+  DTOs are annotated with `utoipa` to emit an OpenAPI 3.1 spec; `openapi-typescript` generates the
+  TypeScript client consumed by the frontend, gated by a `git diff --exit-code` CI check so
+  spec/client drift is impossible (`openapi-contract`). There is exactly one transport — `fetch`
+  over HTTP — so no `ApiClient`-style interface with swappable backends is warranted; adding one
+  would be pure ceremony with a single implementation. The same OpenAPI spec renders interactive
+  docs (Scalar) at `/api/docs`, doubling as the reference for third-party scripting against the
+  HTTP API.
+- **Live tick streaming uses Server-Sent Events, not WebSocket.** The flow is strictly
+  server→client (engine state out, never commands in over the same channel), and SSE
+  auto-reconnects natively, survives ordinary HTTP proxies, and is trivially inspectable with
+  `curl` — all wins over WebSocket for a stream with no client→server traffic.
+- **No built-in scheduler, permanently — this is a deliberate, settled decision, not a gap.**
+  Scheduled/unattended tuning is driven by external schedulers (cron, Windows Task Scheduler)
+  invoking the CLI directly; the CLI never requires `bhtune-server` to be running. Building a
+  scheduler into the product would duplicate what every target OS already provides reliably.
+- **v1 binds to `127.0.0.1` by default; no authentication ships in v1.** Binding off-loopback
+  (e.g. to a LAN interface so multiple engineers can reach a shared host) is an explicit,
+  loud opt-in, not a default, and the Windows installer never opens a firewall port unless that
+  opt-in is chosen. Authentication, TLS, and audit logging are real, planned, **free** features
+  (not paywalled) deferred to post-v1 remote-access work (`server-remote-auth`, `server-tls`,
+  `server-audit-log`, `server-oidc`) rather than blocking v1. This is a judgement call worth
+  re-examining before that host is ever reachable off a trusted OT network: the precedent that
+  makes it defensible in the meantime is that `opcda-bridge-gateway` is *already* an
+  unauthenticated network service in this exact topology, and it is strictly more dangerous than
+  an unauthenticated bhtune (it can read/write any tag, whereas bhtune only ever writes the PID
+  constants of one user-selected loop).
+- **Nothing is paywalled, now or on the current roadmap.** The CLA exists solely to keep
+  relicensing *possible* in the future without taking anything from AGPL users today — it is not
+  evidence of a planned paid tier, and no roadmap item (including the post-v1 remote-access work
+  above) is scoped as enterprise-only.
 - **Step Test is deferred**, not part of v1 (MRFT only). Step Test is an alternative, simpler
   manual tuning method that observes PV changes via an OPC DA _subscription_ rather than polling
   reads, and the bridge's protocol has no such push/subscription RPC yet — `ListServers`/`Read`/
@@ -473,7 +520,7 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state �
     formatting matters for a given field or whether straightforward rounding is an acceptable,
     documented simplification for display-only purposes — don't assume the two are
     interchangeable.
-16. **A live PV/MV trend chart is a core UX expectation for the desktop GUI** — plan for high-rate
+16. **A live PV/MV trend chart is a core UX expectation for the web GUI** — plan for high-rate
     streaming updates (multiple times per second) from the start; see "Chart library" below.
 
 ## Conventions
@@ -485,7 +532,7 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state �
 - **Formatting/linting**: `cargo fmt --check --all` and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
 - **No unused dependencies**: `cargo machete` runs in CI. Placeholder crates
-  (`bhtune-desktop`, `bhtune-server`, and any stub not yet consuming a path dependency)
+  (`bhtune-server` and any stub not yet consuming a path dependency)
   deliberately carry **no** dependency on other workspace crates until they actually use one —
   don't add `bhtune-core` etc. back as a path dependency just to "wire up the graph"; add it when
   real code needs it.
@@ -514,10 +561,9 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state �
   legal-entity question is resolved, the text has had a legal review, and a CLA-assistant check is
   added to the PR checks.
 - **No `frontend/` (pnpm workspace) yet.** Nothing consumes it until the `frontend-shell` phase.
-- **`bhtune-desktop` has no real `tauri` dependency yet**, and `bhtune-server` has no `axum`
-  dependency yet. Both are placeholder binaries only. Adding real Tauri deps prematurely would
-  need system GTK/WebKit packages not assumed present and risks breaking `cargo build --workspace`
-  before those phases are ready to use them.
+- **`bhtune-server` has no `axum`, `utoipa`, or `rust-embed` dependency yet.** It remains a
+  placeholder binary until `server-http-api` starts. Adding real deps prematurely risks breaking
+  `cargo build --workspace` before that phase is ready to use them, for no benefit.
 - **A cross-project CI/CD audit against `opcda-bridge` hasn't happened yet.** See
   `cross-project-ci-audit` in "Phases and todos" — worth doing once both projects have settled a
   bit, not urgent.
@@ -548,8 +594,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
-| `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet                                  |
-| `bhtune-server`  | roadmap only                                                            | Placeholder binary, not part of v1                                           |
+| `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
 
@@ -589,16 +634,36 @@ that binary does something real and gains its own targeted tests.
    TOML > default config precedence, non-interactive automation mode, safety guardrails
    (mandatory timeout + auto-restore, explicit opt-in for unattended PID writes), structured
    logging.
-7. **Tauri desktop GUI** — Tauri v2 runner with typed command bindings; React + TS + Vite +
-   Tailwind frontend; Connection/Tag-mapping/Test-parameters/Results/History/Template-editor/
-   Simulator screens plus a live PV/MV trend chart; live per-tick streaming to the UI.
+7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
+   server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
+   `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS
+   + Vite + Tailwind frontend using TanStack Query against the generated client
+   (`frontend-shell`); Connection/Tag-mapping/Test-parameters/Results/History/Template-editor/
+   Simulator screens plus a live PV/MV trend chart (`frontend-screens`); live per-tick streaming
+   to the UI over SSE (`frontend-live-stream`); running as a proper platform service
+   (`server-windows-service`). Replaces the earlier Tauri desktop GUI phase — see "Key
+   architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — fully automated E2E tune on Linux CI via CLI + simulator
-   backend (no Windows, no external DCS dependency); golden replay suite in CI; Tauri
-   build/bundle matrix for Linux/macOS/Windows.
+   backend (no Windows, no external DCS dependency); Playwright E2E against the real web UI
+   (`e2e-playwright`); golden replay suite in CI; release build matrix for Linux/macOS/Windows
+   (`build-matrix`, via `cargo-dist`, embedding the built SPA — no Tauri bundler or WebView
+   runtime to manage).
 9. **Documentation and release** — README/usage docs and a getting-started guide, published
-   roadmap (OPC UA/Modbus backends, HTTP adapter + Docker image, Step Test pending the bridge
-   `Subscribe` RPC, multi-loop/batch tuning), v0.1.0 with per-platform binaries.
-10. **Cross-project CI/CD audit** (`cross-project-ci-audit`, not urgent/blocking) — compare
+   roadmap (OPC UA/Modbus backends, free remote/multi-user access, Step Test pending the bridge
+   `Subscribe` RPC, multi-loop/batch tuning), v0.1.0 with per-platform binaries, a Windows MSI
+   installer (`pkg-windows-installer`, the primary distribution artifact), and a secondary Docker
+   image (`pkg-docker`).
+10. **History explorer** (low priority, post-v1) — a filterable/sortable run list and PV/MV
+    trend view over already-recorded history (`history-explorer-ui`), age-based retention
+    disabled by default (`history-retention`), and headless parity via `bhtune history
+    list`/`show`/`prune` (`history-cli`). A reader of data earlier phases already write, so
+    deliberately scheduled after v1.
+11. **Remote and multi-user access** (post-v1, free like everything else) — local accounts with
+    session cookies and revocable API tokens (`server-remote-auth`), TLS (`server-tls`), an
+    audit log of who ran/wrote what (`server-audit-log`), and OIDC for SSO-managed orgs
+    (`server-oidc`). Deferred, not blocking v1's `127.0.0.1`-by-default posture — see "Key
+    architectural decisions" above.
+12. **Cross-project CI/CD audit** (`cross-project-ci-audit`, not urgent/blocking) — compare
     `bhtune`'s CI/CD, lefthook, release-plz, and repo-hygiene setup against the sibling
     `opcda-bridge` project in both directions: pull over anything `opcda-bridge` has that
     `bhtune` is missing, and separately propose anything `bhtune` ended up doing differently

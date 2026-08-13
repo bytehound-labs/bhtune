@@ -8,8 +8,8 @@
 //! every `bhtune-core` enum (eight of them, and rising), these two functions reuse each
 //! enum's existing `#[serde(rename_all = "snake_case")]` implementation as the single source
 //! of truth for its wire form — the same string a `ProcessType` would serialize to over the
-//! CLI's `--output json` or a Tauri command already matches what gets stored in a `TEXT`
-//! column.
+//! CLI's `--output json` or the web GUI's HTTP API already matches what gets stored in a
+//! `TEXT` column.
 
 use serde::{Serialize, de::DeserializeOwned};
 

@@ -157,10 +157,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bhtune-desktop"
-version = "0.1.0"
-
-[[package]]
 name = "bhtune-server"
 version = "0.1.0"
 
