@@ -20,10 +20,18 @@ place. `bhtune-backend`'s `Backend` trait and error model (`backend-trait`) are
 defined and tested, its OPC DA implementation (`backend-opcda`, `OpcDaBackend`) is
 done — the primary v1 driver, over the published `opcda-bridge` crate — and its in-Rust
 FOPDT process simulator (`backend-simulator`, `SimulatorBackend`) is done, giving CI a
-fully synthetic, wall-clock-free way to drive a real `MrftEngine` end to end. `backend-replay`,
-the replay harness, CLI, and web GUI are not yet — the GUI plan reversed from a Tauri desktop
-app to a browser UI served by `bhtune-server` before any Tauri code was written (see "Key
-architectural decisions"). See "Phases and todos" below for what's next.
+fully synthetic, wall-clock-free way to drive a real `MrftEngine` end to end. `bhtune-cli`'s
+core subcommand set (`cli-commands`) is done: `tune`/`simulate` (drive a real MRFT run against
+either `OpcDaBackend` or `SimulatorBackend`, persisting the full lifecycle through
+`bhtune-db`), `template` (`list`/`show`/`import`/`export`), `history` (`list`/`show`), `export`
+(CSV/JSON of one run's samples), and `opc` (low-level `read`/`write`/`browse` passthrough to
+the bridge, bypassing the tuning engine). Config precedence, non-interactive automation flags,
+unattended-operation safety guardrails, and structured logging remain separate, not-yet-started
+phases (`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`) — `cli-commands` is the
+subcommands and orchestration only. `backend-replay`, the replay harness, and the web GUI are
+not yet — the GUI plan reversed from a Tauri desktop app to a browser UI served by
+`bhtune-server` before any Tauri code was written (see "Key architectural decisions"). See
+"Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -439,6 +447,72 @@ legacy C# app's hidden `OPCClass.Python` debug branch actually shells out to), n
 from a textbook formula — see "Key architectural decisions" above for the closed-form
 discretization and its numerical cross-check against that reference.
 
+## CLI reference (`cli-commands`)
+
+`bhtune-cli` (binary name `bhtune`) is a thin `clap`-derive orchestration layer over
+`bhtune-core`/`bhtune-db`/`bhtune-backend` — every subcommand opens the same SQLite database
+(`crate::db::open`, which also seeds the four built-in templates) and shares one dispatcher in
+`lib.rs::run_with_cli`.
+
+- **`bhtune tune`** — runs a full MRFT test against a named template: resolves the template,
+  derives the tag set (`build_loop_tags`, in `commands/tune.rs`), selects a backend
+  (`crate::backend::build`, `--backend opcda|simulator`), transitions the loop to Manual, polls
+  at `--poll-interval-ms` driving a real `MrftEngine`, persists every tick
+  (`TuneSampleRow::insert`) and the final per-response-level results
+  (`TuneResultRow::insert`), restores the loop's original mode, and optionally writes back one
+  response level's PID constants with a stdin confirmation prompt (`maybe_write_back`) —
+  audited via `TuneWriteRow`. `--mrft-delay <seconds>` pads the run with pre-/post-test
+  recording-only ticks (PV still read and logged; no switch evaluation), mirroring the legacy
+  `--mrftDelayTime` flag. A run's outcome (`Completed`/`Aborted` on Ctrl+C/`Failed` on any
+  setup or mid-poll error) is always recorded in `tune_runs` before the process returns, even
+  on failure.
+- **`bhtune simulate`** — a zero-configuration wrapper around `tune` that forces
+  `--backend simulator` against a synthetic FOPDT process (`SIMULATOR_PV_TAG`/
+  `SIMULATOR_MV_TAG`), for a demo/smoke-test run with no real DCS/PLC needed.
+  `SimulateArgs::into_tune_args` converts to the same `TuneArgs` `tune` uses, so the two share
+  every code path below template resolution.
+- **`bhtune template list|show|import|export`** — inspect and manage `dcs_templates` rows
+  (built-in and user-imported) as JSON, via `DcsTemplateRow`.
+- **`bhtune history list|show`** — list past runs (optional `--outcome` filter, `--limit`/
+  `--offset` pagination) and show one run's full detail (config, initial readings, calculated
+  results, write-back audit rows), via `history-query-api`'s `TuneRunRow`/`TuneResultRow`/
+  `TuneWriteRow` queries.
+- **`bhtune export <run_id>`** — exports one run's recorded samples as CSV or JSON
+  (`--format`), to stdout or `--output <path>`.
+- **`bhtune opc read|write|browse`** — low-level passthrough straight to the `opcda-bridge`
+  gateway (via `opcda_bridge::Client`, bypassing the tuning engine entirely) for diagnostics —
+  the CLI equivalent of the legacy app's ad-hoc tag testing.
+
+**What `cli-commands` deliberately does not cover** — each is its own later phase, not an
+oversight: platform-standard config file/data-directory precedence (`cli-config`), non-
+interactive automation flags like `--yes`/`--write-pid`/`--output json` and exit codes
+(`cli-automation`), mandatory unattended-run timeouts and auto-abort-and-restore
+(`cli-safety`), and `tracing`-based structured logging (`cli-logging`). `--db <path>` is
+today's only configuration knob, by design (see `args.rs`'s doc comment on `Cli::db`).
+
+**Testing approach.** `commands/tune.rs`'s tests use a `MockBackend` (an in-memory
+`Backend` impl with canned/erroring responses) for setup-and-validation-error paths, a real
+`SimulatorBackend` for full happy-path runs (including the `--mrft-delay` padding test, which
+necessarily costs a couple of real wall-clock seconds — `chrono::Utc::now()`, which
+`pre_delay_end`/`post_delay_end` are computed from, is unaffected by tokio's pausable test
+clock), and a shared test-only mock gRPC `Bridge` service (`crate::test_support`, used by both
+`backend.rs` and `tune.rs`) to prove the OPC DA path — connect, initial reads, and a mid-poll
+failure — actually works end-to-end without a real gateway or OPC DA server. A single canned
+mock read response satisfies every setup read regardless of which tag was requested (see
+`OpcDaBackend::read`'s positional, not tag-matched, mapping), which is what makes it possible
+to calibrate exactly which call number a mock failure should start on.
+
+One coverage gap is accepted permanently, not chased further: `run_polling_loop`'s
+`tokio::signal::ctrl_c()` select arm (and the `Aborted`-outcome branches downstream of it in
+`run`/`execute`) cannot safely be exercised by raising a real process signal inside `cargo
+test`'s shared, multi-threaded test binary — a race between signal delivery and tokio's
+handler registration could terminate the entire test process, not just one test, and signal
+handling is process-global rather than per-runtime. Injecting a fake cancellation source
+instead would mean refactoring safety-critical shutdown/restore logic for marginal coverage
+gain. This matches the project's existing precedent for `main.rs`, `lib.rs::run()`, and
+`args.rs`'s let-else panic branches — genuinely hard-to-test lines are named and accepted
+rather than either skipped silently or chased at disproportionate risk.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -593,7 +667,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | `cli-commands` done (`tune`/`simulate`/`template`/`history`/`export`/`opc` subcommands, see "CLI reference" above); config precedence, automation flags, safety guardrails, and structured logging pending |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -630,10 +704,11 @@ that binary does something real and gains its own targeted tests.
    platform-standard data directories for the database file itself, once there's an actual
    application entry point to wire it into (part of `bhtune-cli`'s `cli-config`, not a
    `bhtune-db` concern).
-6. **Headless CLI** — `tune`/`template`/`history`/`export`/`simulate` subcommands, CLI > env >
-   TOML > default config precedence, non-interactive automation mode, safety guardrails
-   (mandatory timeout + auto-restore, explicit opt-in for unattended PID writes), structured
-   logging.
+6. **Headless CLI** — `tune`/`simulate`/`template`/`history`/`export`/`opc` subcommands
+   (`cli-commands`, done — see "CLI reference" above), CLI > env > TOML > default config
+   precedence (`cli-config`), non-interactive automation mode (`cli-automation`), safety
+   guardrails (`cli-safety`: mandatory timeout + auto-restore, explicit opt-in for unattended
+   PID writes), structured logging (`cli-logging`).
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS

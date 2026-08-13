@@ -300,6 +300,12 @@ pub fn opc_write_values(
 /// [`calculate_tuning_result`] and [`calculate_pid_parameters`] (once per [`ResponseLevel`]).
 /// Pure port of `MRFTcompletionActions`'s call into `TuningConstantsCalc` +
 /// `CalculatePIDparameters`.
+///
+/// Returns both the intermediate [`TuningResult`] (Kp/Ti/Td, DCS-unit-independent) and the
+/// final [`PidParameters`] (in the template's own units) for each response level, since
+/// callers that persist a run (e.g. `bhtune-cli`'s `tune` command, via
+/// `bhtune_db::TuneResultRow::from_calculated`) need both — the schema records the
+/// control-theory result alongside the exact values it derived for the connected DCS.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_all(
     peaks: &[f32],
@@ -311,7 +317,7 @@ pub fn calculate_all(
     pv_range: PvRange,
     template: &DcsTemplate,
     compat: TuningMathCompat,
-) -> [PidParameters; 3] {
+) -> [(TuningResult, PidParameters); 3] {
     let osc = measure_oscillation(
         peaks,
         troughs,
@@ -324,7 +330,8 @@ pub fn calculate_all(
     );
     ResponseLevel::ALL.map(|level| {
         let result = calculate_tuning_result(osc, config, level);
-        calculate_pid_parameters(result, template)
+        let pid = calculate_pid_parameters(result, template);
+        (result, pid)
     })
 }
 
@@ -734,14 +741,17 @@ mod tests {
             TuningMathCompat::default(),
         );
 
-        assert_eq!(results[0].response_level, ResponseLevel::Aggressive);
-        assert_eq!(results[1].response_level, ResponseLevel::Moderate);
-        assert_eq!(results[2].response_level, ResponseLevel::Sluggish);
-        assert!(results[0].proportional > results[1].proportional);
-        assert!(results[1].proportional > results[2].proportional);
+        assert_eq!(results[0].1.response_level, ResponseLevel::Aggressive);
+        assert_eq!(results[1].1.response_level, ResponseLevel::Moderate);
+        assert_eq!(results[2].1.response_level, ResponseLevel::Sluggish);
+        assert!(results[0].1.proportional > results[1].1.proportional);
+        assert!(results[1].1.proportional > results[2].1.proportional);
         // Ti (here: `integral`, since Honeywell uses ResetTime/Minutes) is shared.
-        assert_eq!(results[0].integral, results[1].integral);
-        assert_eq!(results[1].integral, results[2].integral);
+        assert_eq!(results[0].1.integral, results[1].1.integral);
+        assert_eq!(results[1].1.integral, results[2].1.integral);
+        // The intermediate TuningResult (Kp/Ti/Td) is also present alongside PidParameters.
+        assert_eq!(results[0].0.response_level, ResponseLevel::Aggressive);
+        assert!(results[0].0.kp > 0.0);
     }
 
     /// Fields unpacked from a real engine's `Action::Complete`, named here purely to keep
@@ -841,7 +851,8 @@ mod tests {
 
         // Just confirm the pipeline produced finite, sane-signed output — the precise
         // numeric values are already covered by the synthetic-array tests above.
-        for pid in &results {
+        for (tuning, pid) in &results {
+            assert!(tuning.kp.is_finite() && tuning.kp > 0.0);
             assert!(pid.proportional.is_finite() && pid.proportional > 0.0);
             assert!(pid.integral.is_finite() && pid.integral > 0.0);
         }

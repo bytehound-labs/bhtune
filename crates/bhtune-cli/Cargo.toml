@@ -6,11 +6,49 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "bhtune_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "bhtune"
 path = "src/main.rs"
 
-# bhtune-core/-backend/-db will be added here once real subcommands are
-# implemented (see the `cli-commands` phase in AGENTS.md) — cargo-machete
-# flags unused path deps, so this stays empty until then.
 [dependencies]
+bhtune-core = { path = "../bhtune-core" }
+bhtune-backend = { path = "../bhtune-backend" }
+bhtune-db = { path = "../bhtune-db" }
+anyhow = "1"
+chrono.workspace = true
+# `derive` for the `Cli`/`Command` structs; only this crate parses CLI args, so it stays
+# local rather than promoted to `[workspace.dependencies]`, matching the project's
+# single-consumer-dependency convention (see the root `Cargo.toml`).
+clap = { version = "4", features = ["derive"] }
+# CSV export (`bhtune export`) generates its header row from the same `#[derive(Serialize)]`
+# struct as its data rows, making the legacy app's MV/SV column-transposition bug (see
+# AGENTS.md's bug register) structurally impossible to reintroduce.
+csv = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `rt-multi-thread`/`macros` to run as an async binary; `time` for the tune command's
+# polling-interval ticker; `signal` for Ctrl+C-triggered graceful abort (the CLI's one
+# concession to interactivity — see AGENTS.md's `cli-commands`/`cli-safety` scope split).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Pinned to the same versions `opcda-bridge` (and `bhtune-backend`'s own tests) use, so the
+# `opc` subcommand's tests can stand up a mock `Bridge` gRPC service and get wire-compatible
+# generated types to test `OpcDaBackend`-backed commands end-to-end.
+opcda-bridge-proto = "0.2"
+tonic = "0.14"
+tokio-stream = "0.1"
+# Test-only: `tune.rs`'s tests implement `bhtune_backend::Backend` for a local in-memory mock
+# to exercise the opcda-style mode-transition/restore/write-back logic (which the simulator
+# backend's tag-less design never exercises) without a real gRPC gateway.
+async-trait = "0.1"
+# `test-util` (on top of the regular dependency's features, unified by Cargo for test
+# builds only) so mode-transition/restore tests can run under `#[tokio::test(start_paused =
+# true)]` and skip past the code's real `tokio::time::sleep(1000ms)` calls instantly, rather
+# than making the test suite spend several real wall-clock seconds sleeping.
+tokio = { version = "1", features = ["test-util"] }
