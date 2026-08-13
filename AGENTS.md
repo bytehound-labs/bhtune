@@ -25,13 +25,16 @@ core subcommand set (`cli-commands`) is done: `tune`/`simulate` (drive a real MR
 either `OpcDaBackend` or `SimulatorBackend`, persisting the full lifecycle through
 `bhtune-db`), `template` (`list`/`show`/`import`/`export`), `history` (`list`/`show`), `export`
 (CSV/JSON of one run's samples), and `opc` (low-level `read`/`write`/`browse` passthrough to
-the bridge, bypassing the tuning engine). Config precedence, non-interactive automation flags,
-unattended-operation safety guardrails, and structured logging remain separate, not-yet-started
-phases (`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`) — `cli-commands` is the
-subcommands and orchestration only. `backend-replay`, the replay harness, and the web GUI are
-not yet — the GUI plan reversed from a Tauri desktop app to a browser UI served by
-`bhtune-server` before any Tauri code was written (see "Key architectural decisions"). See
-"Phases and todos" below for what's next.
+the bridge, bypassing the tuning engine). `cli-config` is done: `CLI flag > env var > TOML
+config file > platform default` precedence for the database path, opcda-bridge gateway
+address, and default OPC server, mirroring `opcda-bridge-client`'s own config conventions
+(see "Config precedence" below). Non-interactive automation flags, unattended-operation
+safety guardrails, and structured logging remain separate, not-yet-started phases
+(`cli-automation`/`cli-safety`/`cli-logging`) — `cli-commands` is the subcommands and
+orchestration only. `backend-replay`, the replay harness, and the web GUI are not yet — the
+GUI plan reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before
+any Tauri code was written (see "Key architectural decisions"). See "Phases and todos" below
+for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -484,11 +487,11 @@ discretization and its numerical cross-check against that reference.
   the CLI equivalent of the legacy app's ad-hoc tag testing.
 
 **What `cli-commands` deliberately does not cover** — each is its own later phase, not an
-oversight: platform-standard config file/data-directory precedence (`cli-config`), non-
-interactive automation flags like `--yes`/`--write-pid`/`--output json` and exit codes
-(`cli-automation`), mandatory unattended-run timeouts and auto-abort-and-restore
-(`cli-safety`), and `tracing`-based structured logging (`cli-logging`). `--db <path>` is
-today's only configuration knob, by design (see `args.rs`'s doc comment on `Cli::db`).
+oversight: non-interactive automation flags like `--yes`/`--write-pid`/`--output json` and
+exit codes (`cli-automation`), mandatory unattended-run timeouts and auto-abort-and-restore
+(`cli-safety`), and `tracing`-based structured logging (`cli-logging`). Platform-standard
+config file/data-directory precedence shipped separately as `cli-config` — see "Config
+precedence" below.
 
 **Testing approach.** `commands/tune.rs`'s tests use a `MockBackend` (an in-memory
 `Backend` impl with canned/erroring responses) for setup-and-validation-error paths, a real
@@ -535,6 +538,60 @@ of files that `--show-missing-lines`'s per-line annotations and `lcov` both agre
 hit); no gap is accepted or left permanently unaddressed in this phase.
 `args.rs`'s let-else panic branches — genuinely hard-to-test lines are named and accepted
 rather than either skipped silently or chased at disproportionate risk.
+
+## Config precedence (`cli-config`)
+
+`crates/bhtune-cli/src/config.rs` resolves every global setting with `CLI flag > env var >
+TOML config file > built-in default` precedence, deliberately mirroring
+`opcda-bridge-client`'s own `config.rs` so both projects' configuration surfaces stay
+recognizable to the same user. `bhtune --config <path>` loads an explicit TOML file (a
+missing explicit path is a hard error); omitting `--config` auto-discovers one from a
+platform-standard location, where a missing file silently resolves to all-defaults rather
+than erroring (it may simply not have been created yet). A file that exists but fails to
+parse as TOML is always a hard error in either case — a config typo should never be
+silently ignored. See
+[`crates/bhtune-cli/bhtune.example.toml`](crates/bhtune-cli/bhtune.example.toml) for every
+available key.
+
+Auto-discovered config file location (first one found wins):
+
+- Linux/macOS: `$XDG_CONFIG_HOME/bhtune/bhtune.toml`, falling back to
+  `$HOME/.config/bhtune/bhtune.toml`.
+- Windows: `%APPDATA%\bhtune\bhtune.toml`.
+
+| Setting               | CLI flag        | Env var             | Config key    | Default                                                                                                                                    |
+| --------------------- | --------------- | -------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Database path         | `--db`          | `BHTUNE_DB`          | `db`           | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (falls back to `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db` |
+| opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host`  | `localhost:7600`                                                                                                                            |
+| Default OPC DA server | `--server`      | —                    | `server`       | none — must be set one way or another for `tune --backend opcda` and the `opc` subcommands                                                 |
+
+`resolve_db_path`/`resolve_bridge_host` fold the env var into the CLI value already (via
+clap's `env` attribute on `Cli::db`/`TuneArgs::bridge_host`/`OpcCommand`'s per-variant
+`bridge_host`), so each `resolve_*` function itself only has two tiers left to arbitrate:
+the (already env-merged) CLI value versus the config file. `resolve_server` errors if
+neither the CLI nor the config file supplies a value — there's no sensible default OPC
+server to fall back to — and is applied only for the `Opcda` backend inside
+`commands::tune::run` (never for `simulate`, which has no OPC server concept at all; a
+config-file `server` key is simply not consulted for a simulator run rather than causing an
+unrelated error).
+
+`db::open` gained `ensure_parent_dir`, creating the database path's parent directory tree
+(`std::fs::create_dir_all`) before connecting — needed once the default database path could
+be a nested, not-yet-existing platform directory (e.g. a fresh install's
+`~/.local/share/bhtune/`) rather than always a path the caller already ensured existed.
+`Path::parent()` returns `Some("")` for a bare filename with no directory component, and
+`create_dir_all("")` is a documented no-op success, so no special-casing is needed for that
+degenerate input.
+
+**Coverage note.** `db.rs`'s `ensure_parent_dir` shows one line as "missed" in
+`--summary-only` (the closing `}` of its `if let Some(parent) = ...` block) — cross-checked
+directly against the annotated per-line report and confirmed as the same harmless
+`cargo-llvm-cov` line-attribution quirk noted elsewhere in this file (a bare closing brace
+with no executable content of its own, reported separately from the block's own hit count).
+The block's actual branches are both genuinely exercised: the success path 13 times and the
+`map_err`/`?` failure path exactly once, via the existing
+`run_with_cli_config_load_failure_is_exit_failure` test's unwritable `/nonexistent-dir/`
+database path — not a real gap.
 
 ## Validation strategy: golden-master replay
 
@@ -690,7 +747,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | `cli-commands` done (`tune`/`simulate`/`template`/`history`/`export`/`opc` subcommands, see "CLI reference" above); config precedence, automation flags, safety guardrails, and structured logging pending |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | `cli-commands` + `cli-config` done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above); automation flags, safety guardrails, and structured logging pending |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -723,15 +780,15 @@ that binary does something real and gains its own targeted tests.
    (`db-backup-restore`, done: `backup_to`/`restore_from` in `crates/bhtune-db/src/backup.rs` —
    see "Key architectural decisions" above). `db-drop-legacy` needed no work of its own: bhtune
    never had licensing/loop-locking/log-encryption to remove in the first place, since
-   `db-schema` designed plain SQLite storage in from the start. Remaining: wiring up
-   platform-standard data directories for the database file itself, once there's an actual
-   application entry point to wire it into (part of `bhtune-cli`'s `cli-config`, not a
-   `bhtune-db` concern).
+   `db-schema` designed plain SQLite storage in from the start. Platform-standard data
+   directories for the database file are wired up in `bhtune-cli`'s `cli-config`
+   (`resolve_db_path`/`default_db_path_from`, see "Config precedence" above), not a
+   `bhtune-db` concern.
 6. **Headless CLI** — `tune`/`simulate`/`template`/`history`/`export`/`opc` subcommands
-   (`cli-commands`, done — see "CLI reference" above), CLI > env > TOML > default config
-   precedence (`cli-config`), non-interactive automation mode (`cli-automation`), safety
-   guardrails (`cli-safety`: mandatory timeout + auto-restore, explicit opt-in for unattended
-   PID writes), structured logging (`cli-logging`).
+   (`cli-commands`, done — see "CLI reference" above), `CLI > env > TOML > default` config
+   precedence (`cli-config`, done — see "Config precedence" above), non-interactive automation
+   mode (`cli-automation`), safety guardrails (`cli-safety`: mandatory timeout + auto-restore,
+   explicit opt-in for unattended PID writes), structured logging (`cli-logging`).
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS

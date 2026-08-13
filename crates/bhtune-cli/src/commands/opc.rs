@@ -6,24 +6,36 @@ use bhtune_backend::{Backend, OpcDaBackend, TagWrite};
 
 use crate::args::OpcCommand;
 
-pub async fn run(command: OpcCommand) -> anyhow::Result<()> {
+pub async fn run(command: OpcCommand, config: &crate::config::BhtuneConfig) -> anyhow::Result<()> {
     match command {
         OpcCommand::Read {
             bridge_host,
             server,
             tags,
-        } => read(&bridge_host, &server, &tags).await,
+        } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            let server = crate::config::resolve_server(server, config)?;
+            read(&bridge_host, &server, &tags).await
+        }
         OpcCommand::Write {
             bridge_host,
             server,
             tag,
             value,
-        } => write(&bridge_host, &server, &tag, &value).await,
+        } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            let server = crate::config::resolve_server(server, config)?;
+            write(&bridge_host, &server, &tag, &value).await
+        }
         OpcCommand::Browse {
             bridge_host,
             server,
             path,
-        } => browse(&bridge_host, &server, &path).await,
+        } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            let server = crate::config::resolve_server(server, config)?;
+            browse(&bridge_host, &server, &path).await
+        }
     }
 }
 
@@ -243,32 +255,91 @@ mod tests {
             ..Default::default()
         })
         .await;
+        let config = crate::config::BhtuneConfig::default();
 
-        run(OpcCommand::Read {
-            bridge_host: host.clone(),
-            server: "Sim.Server".to_string(),
-            tags: vec!["Unit1.LIC101.PV".to_string()],
-        })
+        run(
+            OpcCommand::Read {
+                bridge_host: Some(host.clone()),
+                server: Some("Sim.Server".to_string()),
+                tags: vec!["Unit1.LIC101.PV".to_string()],
+            },
+            &config,
+        )
         .await
         .unwrap();
 
-        run(OpcCommand::Write {
-            bridge_host: host.clone(),
-            server: "Sim.Server".to_string(),
-            tag: "Unit1.LIC101.OP".to_string(),
-            value: "55.0".to_string(),
-        })
+        run(
+            OpcCommand::Write {
+                bridge_host: Some(host.clone()),
+                server: Some("Sim.Server".to_string()),
+                tag: "Unit1.LIC101.OP".to_string(),
+                value: "55.0".to_string(),
+            },
+            &config,
+        )
         .await
         .unwrap();
 
-        run(OpcCommand::Browse {
-            bridge_host: host,
-            server: "Sim.Server".to_string(),
-            path: String::new(),
-        })
+        run(
+            OpcCommand::Browse {
+                bridge_host: Some(host),
+                server: Some("Sim.Server".to_string()),
+                path: String::new(),
+            },
+            &config,
+        )
         .await
         .unwrap();
 
         server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn run_resolves_bridge_host_and_server_from_config_when_cli_flags_are_unset() {
+        let (host, server) = start_mock_server(MockBridgeService {
+            read_response: ReadResponse {
+                values: vec![ProtoTagValue {
+                    tag_id: "Unit1.LIC101.PV".to_string(),
+                    value: "42.5".to_string(),
+                    quality: "Good".to_string(),
+                    timestamp: "2024-01-15 10:23:45".to_string(),
+                }],
+            },
+            ..Default::default()
+        })
+        .await;
+        let config = crate::config::BhtuneConfig {
+            bridge_host: Some(host),
+            server: Some("Sim.Server".to_string()),
+            ..Default::default()
+        };
+
+        run(
+            OpcCommand::Read {
+                bridge_host: None,
+                server: None,
+                tags: vec!["Unit1.LIC101.PV".to_string()],
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn run_errors_when_server_is_unset_in_both_cli_and_config() {
+        let err = run(
+            OpcCommand::Read {
+                bridge_host: None,
+                server: None,
+                tags: vec!["Unit1.LIC101.PV".to_string()],
+            },
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("no OPC server specified"));
     }
 }

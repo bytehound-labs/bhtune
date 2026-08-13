@@ -82,6 +82,32 @@ cd bhtune
 cargo build --workspace
 ```
 
+## Configuration
+
+Every setting resolves with the same precedence, highest first:
+
+**CLI flag > environment variable > config file > built-in default**
+
+A config file (or an individual key within it) is entirely optional — anything not set falls
+back through the rest of the chain. If `--config` is omitted, `bhtune` looks for a config file
+in a platform-specific location:
+
+- Linux/macOS: `$XDG_CONFIG_HOME/bhtune/bhtune.toml`, falling back to
+  `$HOME/.config/bhtune/bhtune.toml`.
+- Windows: `%APPDATA%\bhtune\bhtune.toml`.
+
+A missing file there is not an error, since it may simply not have been created yet. A file
+that _does_ exist but fails to parse as TOML is always a hard error, pointing at the file and
+the parse problem. See
+[`crates/bhtune-cli/bhtune.example.toml`](crates/bhtune-cli/bhtune.example.toml) for every
+available key.
+
+| Setting               | CLI flag        | Env var              | Config key    | Default                                                                                   |
+| --------------------- | --------------- | -------------------- | ------------- | ------------------------------------------------------------------------------------------ |
+| Database path         | `--db`          | `BHTUNE_DB`          | `db`          | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (or `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db` |
+| opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host` | `localhost:7600`                                                                            |
+| Default OPC DA server | `--server`      | —                    | `server`      | none — must be set one way or another                                                      |
+
 ## Validation
 
 BHTune's tuning engine is validated by golden-master replay: recorded input/output traces are

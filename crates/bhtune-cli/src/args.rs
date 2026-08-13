@@ -14,13 +14,15 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser, Debug)]
 #[command(name = "bhtune", version, about = "Headless MRFT auto-tuner")]
 pub struct Cli {
-    /// Path to the SQLite database file.
-    ///
-    /// A simple, hardcoded-default placeholder — platform-standard data directories and
-    /// CLI > env > TOML > default precedence land with the separate `cli-config` phase; this
-    /// flag is the only way to configure the DB path until then.
-    #[arg(long, global = true, default_value = "bhtune.db")]
-    pub db: PathBuf,
+    /// Path to a TOML config file (default: platform-specific, see `crate::config`).
+    #[arg(long, global = true, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Path to the SQLite database file (default: a platform-standard data directory, see
+    /// `crate::config::default_db_path_from`). CLI > `BHTUNE_DB` env var > `db` in the
+    /// config file > platform default -- see `crate::config::resolve_db_path`.
+    #[arg(long, global = true, env = "BHTUNE_DB", value_name = "PATH")]
+    pub db: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -167,10 +169,11 @@ pub struct TuneArgs {
     pub backend: BackendKindArg,
 
     /// opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a
-    /// DCOM host directly — see AGENTS.md's OPC DA integration notes. Required (and only
-    /// meaningful) with `--backend opcda`.
-    #[arg(long, default_value = "localhost:7600")]
-    pub bridge_host: String,
+    /// DCOM host directly — see AGENTS.md's OPC DA integration notes. Only meaningful with
+    /// `--backend opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the
+    /// `BHTUNE_BRIDGE_HOST` env var or the config file's `bridge_host` key).
+    #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+    pub bridge_host: Option<String>,
 
     /// OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--backend opcda`.
     #[arg(long)]
@@ -289,7 +292,7 @@ impl SimulateArgs {
             noise_protection_secs: self.noise_protection_secs,
             mrft_delay: self.mrft_delay,
             backend: BackendKindArg::Simulator,
-            bridge_host: String::new(),
+            bridge_host: None,
             server: None,
             sim_gain: self.sim_gain,
             sim_tau: self.sim_tau,
@@ -381,27 +384,30 @@ pub enum ExportFormat {
 pub enum OpcCommand {
     /// Read one or more tags.
     Read {
-        #[arg(long, default_value = "localhost:7600")]
-        bridge_host: String,
+        /// (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST`
+        /// or the config file's `bridge_host` key.)
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+        /// (default: the config file's `server` key; errors if neither is set.)
         #[arg(long)]
-        server: String,
+        server: Option<String>,
         tags: Vec<String>,
     },
     /// Write a value to one tag.
     Write {
-        #[arg(long, default_value = "localhost:7600")]
-        bridge_host: String,
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
         #[arg(long)]
-        server: String,
+        server: Option<String>,
         tag: String,
         value: String,
     },
     /// Browse tags under a path (empty for the top level).
     Browse {
-        #[arg(long, default_value = "localhost:7600")]
-        bridge_host: String,
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
         #[arg(long)]
-        server: String,
+        server: Option<String>,
         #[arg(default_value = "")]
         path: String,
     },
@@ -580,5 +586,61 @@ mod tests {
     fn cli_rejects_missing_required_tune_flags() {
         let result = Cli::try_parse_from(["bhtune", "tune"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_db_and_config_default_to_none() {
+        let cli = Cli::parse_from(["bhtune", "simulate"]);
+        assert_eq!(cli.db, None);
+        assert_eq!(cli.config, None);
+    }
+
+    #[test]
+    fn cli_parses_explicit_db_and_config_flags() {
+        let cli = Cli::parse_from([
+            "bhtune",
+            "--db",
+            "/data/bhtune.db",
+            "--config",
+            "/etc/bhtune.toml",
+            "simulate",
+        ]);
+        assert_eq!(cli.db, Some(PathBuf::from("/data/bhtune.db")));
+        assert_eq!(cli.config, Some(PathBuf::from("/etc/bhtune.toml")));
+    }
+
+    #[test]
+    fn tune_args_bridge_host_defaults_to_none() {
+        let cli = Cli::parse_from([
+            "bhtune",
+            "tune",
+            "-t",
+            "Unit1.LIC101.PV",
+            "--template",
+            "Yokogawa CentumVP",
+            "--process-type",
+            "flow",
+            "--controller-type",
+            "pi",
+            "--relay-amp",
+            "5.0",
+            "--backend",
+            "simulator",
+        ]);
+        let args = expect_variant!(cli.command, Command::Tune(a) => a, "Tune");
+        assert_eq!(args.bridge_host, None);
+    }
+
+    #[test]
+    fn opc_read_bridge_host_and_server_default_to_none() {
+        let cli = Cli::parse_from(["bhtune", "opc", "read", "Unit1.LIC101.PV"]);
+        let command = expect_variant!(cli.command, Command::Opc { command } => command, "Opc");
+        let (bridge_host, server) = expect_variant!(
+            command,
+            OpcCommand::Read { bridge_host, server, .. } => (bridge_host, server),
+            "Read"
+        );
+        assert_eq!(bridge_host, None);
+        assert_eq!(server, None);
     }
 }

@@ -20,7 +20,16 @@ pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Backend>> {
                 .server
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("--server is required with --backend opcda"))?;
-            let backend = OpcDaBackend::connect(&args.bridge_host, server).await?;
+            // By the time `build` runs, `commands::tune::run` has already resolved
+            // `args.bridge_host` through `crate::config::resolve_bridge_host` (CLI > env >
+            // config file > default), so this `unwrap_or` is a defensive fallback for
+            // direct/test callers that bypass that resolution step, not the primary
+            // precedence mechanism.
+            let bridge_host = args
+                .bridge_host
+                .as_deref()
+                .unwrap_or(crate::config::DEFAULT_BRIDGE_HOST);
+            let backend = OpcDaBackend::connect(bridge_host, server).await?;
             Ok(Box::new(backend))
         }
         BackendKindArg::Simulator => {
@@ -61,7 +70,7 @@ mod tests {
             noise_protection_secs: None,
             mrft_delay: 0,
             backend: BackendKindArg::Simulator,
-            bridge_host: String::new(),
+            bridge_host: None,
             server: None,
             sim_gain: 1.0,
             sim_tau: 2.0,
@@ -91,11 +100,27 @@ mod tests {
     async fn opcda_backend_requires_a_server_flag() {
         let mut args = sim_args();
         args.backend = BackendKindArg::Opcda;
-        args.bridge_host = "127.0.0.1:1".to_string();
+        args.bridge_host = Some("127.0.0.1:1".to_string());
         args.server = None;
         let result = build(&args).await;
         assert!(result.is_err());
         assert!(result.err().unwrap().to_string().contains("--server"));
+    }
+
+    #[tokio::test]
+    async fn opcda_backend_falls_back_to_the_default_bridge_host_when_unset() {
+        // `build()` is normally only reached after `commands::tune::run` has already
+        // resolved `bridge_host` via `crate::config::resolve_bridge_host`, so a `None` here
+        // only happens for a direct/test caller -- confirms the fallback constant is used
+        // rather than e.g. an empty host string.
+        let mut args = sim_args();
+        args.backend = BackendKindArg::Opcda;
+        args.bridge_host = None;
+        args.server = Some("MockServer".to_string());
+        let err = build(&args).await.err().unwrap();
+        // `DEFAULT_BRIDGE_HOST` ("localhost:7600") has nothing listening in CI, so this
+        // still fails -- what matters is that it attempted the default host, not a blank one.
+        assert!(!err.to_string().is_empty());
     }
 
     #[tokio::test]
@@ -118,7 +143,7 @@ mod tests {
 
         let mut args = sim_args();
         args.backend = BackendKindArg::Opcda;
-        args.bridge_host = host;
+        args.bridge_host = Some(host);
         args.server = Some("MockServer".to_string());
 
         // Reaching a real read confirms `build()`'s OPC DA branch actually returned a

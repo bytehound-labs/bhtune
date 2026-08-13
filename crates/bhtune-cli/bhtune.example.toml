@@ -1,0 +1,39 @@
+# Example configuration for the bhtune CLI.
+#
+# Copy this file to one of the locations below (or pass a path explicitly
+# with --config) to have it picked up automatically. Every key is
+# optional — anything left out (or the whole file, if it doesn't exist)
+# falls back to its environment variable or built-in default.
+#
+# Precedence for every setting: CLI flag > environment variable > config
+# file > built-in default.
+#
+# Default file locations (first one found wins):
+#   Linux/macOS: $XDG_CONFIG_HOME/bhtune/bhtune.toml
+#                (falls back to $HOME/.config/bhtune/bhtune.toml)
+#   Windows:     %APPDATA%\bhtune\bhtune.toml
+
+# SQLite database path. Relative paths are resolved against the current
+# working directory when the process starts. Missing parent directories
+# are created automatically.
+# CLI flag: --db
+# Env var: BHTUNE_DB
+# Default:
+#   Linux/macOS: $XDG_DATA_HOME/bhtune/bhtune.db
+#                (falls back to $HOME/.local/share/bhtune/bhtune.db)
+#   Windows:     %APPDATA%\bhtune\bhtune.db
+db = "/var/lib/bhtune/bhtune.db"
+
+# opcda-bridge gateway address `tune --backend opcda` and the `opc`
+# subcommands connect to, used when --bridge-host is omitted.
+# CLI flag: --bridge-host
+# Env var: BHTUNE_BRIDGE_HOST
+# Default: localhost:7600
+bridge_host = "localhost:7600"
+
+# Default OPC DA server ProgID for `tune --backend opcda` and the `opc`
+# subcommands, used when --server is omitted. Unlike the other keys, there
+# is no built-in default — if this is unset and --server is omitted, the
+# command errors.
+# CLI flag: --server
+server = "Kepware.KepServerEX.V5"

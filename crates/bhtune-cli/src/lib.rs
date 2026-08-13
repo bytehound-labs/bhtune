@@ -6,6 +6,8 @@
 //!
 //! - [`args`] — the `clap` derive `Cli`/`Command` definitions and the wrapper enums adapting
 //!   `bhtune-core`'s domain enums to `clap::ValueEnum` (required by Rust's orphan rule).
+//! - [`config`] — `CLI > env > TOML config file > platform default` precedence for the
+//!   database path, opcda-bridge gateway address, and default OPC server.
 //! - [`db`] — opens the database and seeds built-in templates on every startup.
 //! - [`backend`] — constructs the selected `Backend` implementation.
 //! - [`commands`] — one module per subcommand family: `tune`/`simulate`, `template`,
@@ -19,6 +21,7 @@
 pub mod args;
 pub mod backend;
 pub mod commands;
+pub mod config;
 pub mod db;
 #[cfg(test)]
 mod test_support;
@@ -34,18 +37,40 @@ pub async fn run() -> ExitCode {
     run_with_cli(Cli::parse()).await
 }
 
-/// Opens the database, dispatches to the requested subcommand, and reports any error.
+/// Loads the config file, resolves the database path, dispatches to the requested
+/// subcommand, and reports any error.
+///
+/// Config loading and DB-path resolution happen here (not inside `db::open` or each
+/// `commands::*::run`) because this is the one call site that has access to real process
+/// environment variables (`XDG_DATA_HOME`/`HOME`/`APPDATA`) -- everything downstream of this
+/// function takes already-resolved values or the loaded [`config::BhtuneConfig`] itself,
+/// keeping the config-precedence logic in `config.rs` fully unit-testable by injection.
 pub(crate) async fn run_with_cli(cli: Cli) -> ExitCode {
-    match db::open(&cli.db).await {
+    let config = match config::load_config(cli.config.as_deref()) {
+        Ok(config) => config,
+        Err(e) => return fail(&e),
+    };
+    let db_path = config::resolve_db_path(
+        cli.db,
+        &config,
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        std::env::var("APPDATA").ok().as_deref(),
+        cfg!(target_os = "windows"),
+    );
+
+    match db::open(&db_path).await {
         Err(e) => fail(&e),
         Ok(pool) => {
             let result = match cli.command {
-                Command::Tune(args) => commands::tune::run(&pool, args).await,
-                Command::Simulate(args) => commands::tune::run(&pool, args.into_tune_args()).await,
+                Command::Tune(args) => commands::tune::run(&pool, args, &config).await,
+                Command::Simulate(args) => {
+                    commands::tune::run(&pool, args.into_tune_args(), &config).await
+                }
                 Command::Template { command } => commands::template::run(&pool, command).await,
                 Command::History { command } => commands::history::run(&pool, command).await,
                 Command::Export(args) => commands::export::run(&pool, args).await,
-                Command::Opc { command } => commands::opc::run(command).await,
+                Command::Opc { command } => commands::opc::run(command, &config).await,
             };
             match result {
                 Ok(()) => ExitCode::SUCCESS,
@@ -76,7 +101,23 @@ mod tests {
     async fn run_with_cli_config_load_failure_is_exit_failure() {
         // An unwritable directory as the DB path is a hard error opening the database.
         let cli = Cli {
-            db: PathBuf::from("/nonexistent-dir/bhtune.db"),
+            db: Some(PathBuf::from("/nonexistent-dir/bhtune.db")),
+            config: None,
+            command: Command::Template {
+                command: crate::args::TemplateCommand::List,
+            },
+        };
+        assert_eq!(run_with_cli(cli).await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn run_with_cli_explicit_config_path_failure_is_exit_failure() {
+        // An explicit `--config` path that doesn't exist is a hard error (unlike
+        // auto-discovery, which silently falls back to defaults) -- confirms `run_with_cli`
+        // surfaces `config::load_config`'s error before ever touching the database.
+        let cli = Cli {
+            db: None,
+            config: Some(PathBuf::from("/nonexistent/bhtune.toml")),
             command: Command::Template {
                 command: crate::args::TemplateCommand::List,
             },
@@ -88,7 +129,8 @@ mod tests {
     async fn run_with_cli_success_is_exit_success() {
         let (_dir, db) = temp_db_path();
         let cli = Cli {
-            db,
+            db: Some(db),
+            config: None,
             command: Command::Template {
                 command: crate::args::TemplateCommand::List,
             },
@@ -100,7 +142,8 @@ mod tests {
     async fn run_with_cli_command_error_is_exit_failure() {
         let (_dir, db) = temp_db_path();
         let cli = Cli {
-            db,
+            db: Some(db),
+            config: None,
             command: Command::Tune(TuneArgs {
                 tagname: "Unit1.LIC101.PV".to_string(),
                 template: "Nonexistent Template".to_string(),
@@ -112,7 +155,7 @@ mod tests {
                 noise_protection_secs: None,
                 mrft_delay: 0,
                 backend: BackendKindArg::Simulator,
-                bridge_host: String::new(),
+                bridge_host: None,
                 server: None,
                 sim_gain: 1.0,
                 sim_tau: 2.0,
@@ -171,7 +214,8 @@ mod tests {
 
         assert_eq!(
             run_with_cli(Cli {
-                db: db.clone(),
+                db: Some(db.clone()),
+                config: None,
                 command: Command::Simulate(fast_simulate_args()),
             })
             .await,
@@ -193,7 +237,8 @@ mod tests {
 
         assert_eq!(
             run_with_cli(Cli {
-                db: db.clone(),
+                db: Some(db.clone()),
+                config: None,
                 command: Command::History {
                     command: crate::args::HistoryCommand::Show { run_id },
                 },
@@ -204,7 +249,8 @@ mod tests {
 
         assert_eq!(
             run_with_cli(Cli {
-                db: db.clone(),
+                db: Some(db.clone()),
+                config: None,
                 command: Command::Export(crate::args::ExportArgs {
                     run_id,
                     format: crate::args::ExportFormat::Json,
@@ -220,11 +266,12 @@ mod tests {
         // an unreachable gateway host fails promptly and still counts as "dispatched".
         assert_eq!(
             run_with_cli(Cli {
-                db,
+                db: Some(db),
+                config: None,
                 command: Command::Opc {
                     command: crate::args::OpcCommand::Read {
-                        bridge_host: "127.0.0.1:1".to_string(),
-                        server: "Sim.Server".to_string(),
+                        bridge_host: Some("127.0.0.1:1".to_string()),
+                        server: Some("Sim.Server".to_string()),
                         tags: vec!["Unit1.LIC101.PV".to_string()],
                     },
                 },
@@ -232,5 +279,23 @@ mod tests {
             .await,
             ExitCode::FAILURE
         );
+    }
+
+    #[tokio::test]
+    async fn run_with_cli_resolves_db_path_from_config_file_when_cli_flag_is_unset() {
+        let (_dir, db) = temp_db_path();
+        let mut config_file = tempfile::NamedTempFile::new().unwrap();
+        use std::io::Write;
+        writeln!(config_file, "db = {:?}", db.to_str().unwrap()).unwrap();
+
+        let cli = Cli {
+            db: None,
+            config: Some(config_file.path().to_path_buf()),
+            command: Command::Template {
+                command: crate::args::TemplateCommand::List,
+            },
+        };
+        assert_eq!(run_with_cli(cli).await, ExitCode::SUCCESS);
+        assert!(db.exists());
     }
 }

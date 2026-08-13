@@ -20,16 +20,21 @@ bhtune-backend = { path = "../bhtune-backend" }
 bhtune-db = { path = "../bhtune-db" }
 anyhow = "1"
 chrono.workspace = true
-# `derive` for the `Cli`/`Command` structs; only this crate parses CLI args, so it stays
-# local rather than promoted to `[workspace.dependencies]`, matching the project's
+# `derive` for the `Cli`/`Command` structs, `env` so flags like `--db`/`--bridge-host` can
+# also be set via `BHTUNE_DB`/`BHTUNE_BRIDGE_HOST`; only this crate parses CLI args, so it
+# stays local rather than promoted to `[workspace.dependencies]`, matching the project's
 # single-consumer-dependency convention (see the root `Cargo.toml`).
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 # CSV export (`bhtune export`) generates its header row from the same `#[derive(Serialize)]`
 # struct as its data rows, making the legacy app's MV/SV column-transposition bug (see
 # AGENTS.md's bug register) structurally impossible to reintroduce.
 csv = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `bhtune.toml` config file parsing (`cli-config`) -- single-consumer, so pinned directly
+# here rather than promoted to `[workspace.dependencies]`, matching this crate's existing
+# `clap`/`csv` convention. Same major version `opcda-bridge` uses.
+toml = "1"
 # `rt-multi-thread`/`macros` to run as an async binary; `time` for the tune command's
 # polling-interval ticker; `signal` for Ctrl+C-triggered graceful abort (the CLI's one
 # concession to interactivity — see AGENTS.md's `cli-commands`/`cli-safety` scope split).

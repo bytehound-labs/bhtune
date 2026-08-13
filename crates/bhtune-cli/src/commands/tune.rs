@@ -31,7 +31,28 @@ use crate::backend::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
 /// successfully (a failed/aborted run is recorded in the database and reported to stdout);
 /// `Err` is reserved for setup problems (unknown template, invalid flag combination,
 /// database errors) surfaced directly to the caller.
-pub async fn run(pool: &SqlitePool, args: TuneArgs) -> anyhow::Result<()> {
+///
+/// Resolves `args.bridge_host` (always) and `args.server` (only for the `opcda` backend,
+/// since the simulator backend has no OPC server concept at all) through `app_config`'s
+/// `CLI > env > config file > default` precedence before anything else runs, so every
+/// downstream consumer (`crate::backend::build`, mainly) can keep reading the plain
+/// `TuneArgs` fields it always has.
+pub async fn run(
+    pool: &SqlitePool,
+    mut args: TuneArgs,
+    app_config: &crate::config::BhtuneConfig,
+) -> anyhow::Result<()> {
+    args.bridge_host = Some(crate::config::resolve_bridge_host(
+        args.bridge_host.take(),
+        app_config,
+    ));
+    if matches!(args.backend, BackendKindArg::Opcda) {
+        args.server = Some(crate::config::resolve_server(
+            args.server.take(),
+            app_config,
+        )?);
+    }
+
     let template_row = DcsTemplateRow::get_by_name(pool, &args.template)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no template named '{}'", args.template))?;
@@ -734,6 +755,14 @@ mod tests {
         pool
     }
 
+    /// `run()`'s tests all pass explicit `TuneArgs.bridge_host`/`server` values (or the
+    /// simulator backend, which ignores both), so an all-default `BhtuneConfig` never
+    /// actually supplies anything here -- it's only present because `run()`'s signature
+    /// requires it.
+    fn test_config() -> crate::config::BhtuneConfig {
+        crate::config::BhtuneConfig::default()
+    }
+
     /// A fast-converging simulator tune: proportionally scaled down from
     /// `bhtune-backend`'s own proven `FopdtConfig::new(1.0, 2.0, 5.0, 1.0)` E2E fixture (2
     /// ticks of lag, 5 ticks of dead time) so the whole test — which polls on a real
@@ -751,7 +780,7 @@ mod tests {
             noise_protection_secs: Some(0),
             mrft_delay: 0,
             backend: BackendKindArg::Simulator,
-            bridge_host: String::new(),
+            bridge_host: None,
             server: None,
             sim_gain: 1.0,
             sim_tau: 0.01,
@@ -773,7 +802,9 @@ mod tests {
     #[tokio::test]
     async fn a_full_simulator_tune_completes_and_persists_results() {
         let pool = seeded_pool().await;
-        run(&pool, fast_simulator_args()).await.unwrap();
+        run(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
 
         let runs = TuneRunRow::list(
             &pool,
@@ -839,10 +870,10 @@ mod tests {
         let mut args = fast_simulator_args();
         args.backend = BackendKindArg::Opcda;
         args.tagname = "Unit1.LIC101.PV".to_string();
-        args.bridge_host = host;
+        args.bridge_host = Some(host);
         args.server = Some("MockServer".to_string());
 
-        let err = run(&pool, args).await.unwrap_err();
+        let err = run(&pool, args, &test_config()).await.unwrap_err();
         assert!(err.to_string().contains("backend operation failed"));
 
         let runs = TuneRunRow::list(
@@ -866,6 +897,71 @@ mod tests {
         server.shutdown().await;
     }
 
+    /// Proves `run()` actually resolves `bridge_host`/`server` from `app_config` (not just
+    /// from `TuneArgs`) by leaving both CLI-facing fields unset and supplying them only via
+    /// the config -- if resolution didn't happen, `backend::build` would either fail fast
+    /// with "no OPC server specified" (server never resolved) or try to dial
+    /// `DEFAULT_BRIDGE_HOST` instead of the mock (bridge_host never resolved), producing a
+    /// different failure than the one asserted below. The mock is configured to fail
+    /// starting on its very first `read` call so this stays a fast, deterministic setup
+    /// failure -- there is no wall-clock timeout in `run_polling_loop` yet (that lands in
+    /// `cli-safety`), so a config-resolution bug that instead let the run reach a real
+    /// polling loop against a frozen PV value would hang this test forever rather than
+    /// fail cleanly.
+    #[tokio::test]
+    async fn run_resolves_bridge_host_and_server_from_config_when_cli_flags_are_unset() {
+        use crate::test_support::{MockBridgeService, start_mock_server};
+        use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue};
+
+        let (host, server) = start_mock_server(
+            MockBridgeService {
+                read_response: ReadResponse {
+                    values: vec![ProtoTagValue {
+                        tag_id: "ignored".to_string(),
+                        value: "50".to_string(),
+                        quality: "Good".to_string(),
+                        timestamp: "2024-01-15 10:23:45".to_string(),
+                    }],
+                },
+                ..Default::default()
+            }
+            .failing_read_from_call(1),
+        )
+        .await;
+
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.backend = BackendKindArg::Opcda;
+        args.tagname = "Unit1.LIC101.PV".to_string();
+        args.bridge_host = None;
+        args.server = None;
+
+        let app_config = crate::config::BhtuneConfig {
+            bridge_host: Some(host),
+            server: Some("MockServer".to_string()),
+            ..Default::default()
+        };
+
+        // A "backend operation failed" error (rather than "no OPC server specified" or a
+        // connection error against the unresolved default host) proves setup got as far as
+        // issuing a real RPC against the config-resolved mock server.
+        let err = run(&pool, args, &app_config).await.unwrap_err();
+        assert!(err.to_string().contains("backend operation failed"));
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn run_errors_when_opcda_server_is_unset_in_both_cli_and_config() {
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.backend = BackendKindArg::Opcda;
+        args.server = None;
+
+        let err = run(&pool, args, &test_config()).await.unwrap_err();
+        assert!(err.to_string().contains("no OPC server specified"));
+    }
+
     /// `--mrft-delay` is whole seconds (the smallest non-zero value costs ~1s of real
     /// wall-clock time, both before the test starts switching and after it completes), so
     /// this is deliberately the one slower test in the suite -- there is no way to fast
@@ -876,7 +972,7 @@ mod tests {
         let pool = seeded_pool().await;
         let mut args = fast_simulator_args();
         args.mrft_delay = 1;
-        run(&pool, args).await.unwrap();
+        run(&pool, args, &test_config()).await.unwrap();
 
         let runs = TuneRunRow::list(
             &pool,
@@ -903,7 +999,7 @@ mod tests {
         let pool = seeded_pool().await;
         let mut args = fast_simulator_args();
         args.template = "Does Not Exist".to_string();
-        let err = run(&pool, args).await.unwrap_err();
+        let err = run(&pool, args, &test_config()).await.unwrap_err();
         assert!(err.to_string().contains("Does Not Exist"));
     }
 
