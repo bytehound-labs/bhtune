@@ -411,6 +411,32 @@ pub enum OpcCommand {
 mod tests {
     use super::*;
 
+    /// Downcasts `$value` to `$pattern`'s binding, panicking with `expected $label` otherwise.
+    /// Every test below that parses a `Cli`/subcommand enum needs exactly this "or fail the
+    /// test clearly" step; sharing one macro (rather than each call site's own `let-else {
+    /// panic!(...) }`) means there is exactly one such panic branch in this file instead of
+    /// four near-identical, individually-uncovered ones. `expect_variant_panics_on_a_mismatch`
+    /// below is a dedicated test that deliberately trips it, so this one shared branch is
+    /// itself covered rather than becoming a permanent, accepted gap.
+    macro_rules! expect_variant {
+        ($value:expr, $pattern:pat => $binding:expr, $label:literal) => {
+            match $value {
+                $pattern => $binding,
+                _ => panic!("expected {}", $label),
+            }
+        };
+    }
+
+    #[test]
+    fn expect_variant_panics_on_a_mismatch() {
+        let command = Cli::parse_from(["bhtune", "simulate"]).command;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || expect_variant!(command, Command::Tune(a) => a, "Tune"),
+        ));
+        let panic_message = *result.unwrap_err().downcast::<&str>().unwrap();
+        assert_eq!(panic_message, "expected Tune");
+    }
+
     #[test]
     fn process_type_arg_converts_to_every_core_variant() {
         assert_eq!(
@@ -490,9 +516,7 @@ mod tests {
     #[test]
     fn simulate_args_expand_into_tune_args_with_simulator_backend() {
         let cli = Cli::parse_from(["bhtune", "simulate"]);
-        let Command::Simulate(simulate) = cli.command else {
-            panic!("expected Simulate");
-        };
+        let simulate = expect_variant!(cli.command, Command::Simulate(s) => s, "Simulate");
         let tune = simulate.into_tune_args();
         assert!(matches!(tune.backend, BackendKindArg::Simulator));
         assert_eq!(tune.tagname, "Sim.Loop1.PV");
@@ -521,9 +545,7 @@ mod tests {
             "--backend",
             "simulator",
         ]);
-        let Command::Tune(args) = cli.command else {
-            panic!("expected Tune");
-        };
+        let args = expect_variant!(cli.command, Command::Tune(a) => a, "Tune");
         assert_eq!(args.tagname, "Unit1.LIC101.PV");
         assert!(matches!(args.process_type, ProcessTypeArg::Flow));
         assert!(matches!(args.controller_type, ControllerTypeArg::Pi));
@@ -542,17 +564,13 @@ mod tests {
             "--limit",
             "10",
         ]);
-        let Command::History { command } = cli.command else {
-            panic!("expected History");
-        };
-        let HistoryCommand::List {
-            outcome,
-            limit,
-            offset,
-        } = command
-        else {
-            panic!("expected List");
-        };
+        let command =
+            expect_variant!(cli.command, Command::History { command } => command, "History");
+        let (outcome, limit, offset) = expect_variant!(
+            command,
+            HistoryCommand::List { outcome, limit, offset } => (outcome, limit, offset),
+            "List"
+        );
         assert!(matches!(outcome, Some(OutcomeArg::Completed)));
         assert_eq!(limit, 10);
         assert_eq!(offset, 0);

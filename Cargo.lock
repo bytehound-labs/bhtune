@@ -191,6 +191,7 @@ dependencies = [
  "chrono",
  "clap",
  "csv",
+ "libc",
  "opcda-bridge-proto",
  "serde",
  "serde_json",

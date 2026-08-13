@@ -93,83 +93,14 @@ async fn browse(bridge_host: &str, server: &str, path: &str) -> anyhow::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
+    use crate::test_support::{MockBridgeService, start_mock_server};
     use opcda_bridge_proto::bridge::{
-        BrowseRequest, BrowseResponse, ListServersRequest, ListServersResponse, ReadRequest,
-        ReadResponse, TagValue as ProtoTagValue, WriteRequest, WriteResponse,
+        BrowseResponse, ReadResponse, TagValue as ProtoTagValue, WriteResponse,
     };
-    use std::net::SocketAddr;
-    use tokio::sync::mpsc;
-    use tokio_stream::wrappers::ReceiverStream;
-    use tonic::transport::Server;
-    use tonic::{Request, Response, Status};
-
-    #[derive(Default)]
-    struct MockBridgeService {
-        read_response: ReadResponse,
-        write_response: WriteResponse,
-        browse_responses: Vec<BrowseResponse>,
-    }
-
-    #[tonic::async_trait]
-    impl Bridge for MockBridgeService {
-        async fn list_servers(
-            &self,
-            _request: Request<ListServersRequest>,
-        ) -> Result<Response<ListServersResponse>, Status> {
-            Ok(Response::new(ListServersResponse::default()))
-        }
-
-        type BrowseStream = ReceiverStream<Result<BrowseResponse, Status>>;
-
-        async fn browse(
-            &self,
-            _request: Request<BrowseRequest>,
-        ) -> Result<Response<Self::BrowseStream>, Status> {
-            let (tx, rx) = mpsc::channel(4);
-            let items = self.browse_responses.clone();
-            tokio::spawn(async move {
-                for item in items {
-                    if tx.send(Ok(item)).await.is_err() {
-                        break;
-                    }
-                }
-            });
-            Ok(Response::new(ReceiverStream::new(rx)))
-        }
-
-        async fn read(
-            &self,
-            _request: Request<ReadRequest>,
-        ) -> Result<Response<ReadResponse>, Status> {
-            Ok(Response::new(self.read_response.clone()))
-        }
-
-        async fn write(
-            &self,
-            _request: Request<WriteRequest>,
-        ) -> Result<Response<WriteResponse>, Status> {
-            Ok(Response::new(self.write_response.clone()))
-        }
-    }
-
-    async fn start_mock_server(service: MockBridgeService) -> String {
-        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            Server::builder()
-                .add_service(BridgeServer::new(service))
-                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-                .await
-                .unwrap();
-        });
-        format!("127.0.0.1:{port}")
-    }
 
     #[tokio::test]
     async fn read_prints_values_from_a_mock_gateway() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, server) = start_mock_server(MockBridgeService {
             read_response: ReadResponse {
                 values: vec![ProtoTagValue {
                     tag_id: "Unit1.LIC101.PV".to_string(),
@@ -185,6 +116,8 @@ mod tests {
         read(&host, "Sim.Server", &["Unit1.LIC101.PV".to_string()])
             .await
             .unwrap();
+
+        server.shutdown().await;
     }
 
     #[tokio::test]
@@ -195,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_reports_success_from_a_mock_gateway() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, server) = start_mock_server(MockBridgeService {
             write_response: WriteResponse {
                 tag_id: "Unit1.LIC101.OP".to_string(),
                 success: true,
@@ -208,11 +141,13 @@ mod tests {
         write(&host, "Sim.Server", "Unit1.LIC101.OP", "55.0")
             .await
             .unwrap();
+
+        server.shutdown().await;
     }
 
     #[tokio::test]
     async fn write_surfaces_a_rejected_write_as_an_error() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, server) = start_mock_server(MockBridgeService {
             write_response: WriteResponse {
                 tag_id: "Unit1.LIC101.OP".to_string(),
                 success: false,
@@ -226,11 +161,13 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("read-only"));
+
+        server.shutdown().await;
     }
 
     #[tokio::test]
     async fn write_accepts_a_raw_non_numeric_value() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, server) = start_mock_server(MockBridgeService {
             write_response: WriteResponse {
                 tag_id: "Unit1.LIC101.OP".to_string(),
                 success: true,
@@ -243,11 +180,13 @@ mod tests {
         write(&host, "Sim.Server", "Unit1.LIC101.MODE", "MAN")
             .await
             .unwrap();
+
+        server.shutdown().await;
     }
 
     #[tokio::test]
     async fn browse_prints_nodes_from_a_mock_gateway() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, server) = start_mock_server(MockBridgeService {
             browse_responses: vec![BrowseResponse {
                 tag_id: "Unit1".to_string(),
                 node_type: "Branch".to_string(),
@@ -257,12 +196,15 @@ mod tests {
         .await;
 
         browse(&host, "Sim.Server", "").await.unwrap();
+
+        server.shutdown().await;
     }
 
     #[tokio::test]
     async fn browse_handles_an_empty_result() {
-        let host = start_mock_server(MockBridgeService::default()).await;
+        let (host, server) = start_mock_server(MockBridgeService::default()).await;
         browse(&host, "Sim.Server", "Unit1").await.unwrap();
+        server.shutdown().await;
     }
 
     #[tokio::test]
@@ -280,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_dispatches_read_write_and_browse() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, server) = start_mock_server(MockBridgeService {
             read_response: ReadResponse {
                 values: vec![ProtoTagValue {
                     tag_id: "Unit1.LIC101.PV".to_string(),
@@ -298,6 +240,7 @@ mod tests {
                 tag_id: "Unit1".to_string(),
                 node_type: "Branch".to_string(),
             }],
+            ..Default::default()
         })
         .await;
 
@@ -325,5 +268,7 @@ mod tests {
         })
         .await
         .unwrap();
+
+        server.shutdown().await;
     }
 }

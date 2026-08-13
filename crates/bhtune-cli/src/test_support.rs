@@ -1,8 +1,9 @@
-//! Test-only mock gRPC `Bridge` service, shared by [`crate::backend`] and
-//! [`crate::commands::tune`]'s tests that need a real (mock) OPC DA bridge for
-//! [`bhtune_backend::OpcDaBackend`] to connect to — proving the CLI's own OPC DA wiring
-//! (connect success path, backend-kind bookkeeping, mid-poll error propagation) actually
-//! composes, without re-exercising `opcda-bridge`'s own already-tested RPC error-path matrix.
+//! Test-only mock gRPC `Bridge` service, shared by [`crate::backend`] and the
+//! [`crate::commands::tune`]/[`crate::commands::opc`] tests that need a real (mock) OPC DA
+//! bridge for [`bhtune_backend::OpcDaBackend`] to connect to — proving the CLI's own OPC DA
+//! wiring (connect success path, backend-kind bookkeeping, mid-poll error propagation, the
+//! `opc` passthrough commands) actually composes, without re-exercising `opcda-bridge`'s own
+//! already-tested RPC error-path matrix.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,6 +14,8 @@ use opcda_bridge_proto::bridge::{
     BrowseRequest, BrowseResponse, ListServersRequest, ListServersResponse, ReadRequest,
     ReadResponse, WriteRequest, WriteResponse,
 };
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -21,6 +24,7 @@ use tonic::{Request, Response, Status};
 pub(crate) struct MockBridgeService {
     pub(crate) read_response: ReadResponse,
     pub(crate) write_response: WriteResponse,
+    pub(crate) browse_responses: Vec<BrowseResponse>,
     /// Once the `read` RPC has been called this many times (1-based) or more, it fails with
     /// a gRPC error instead of returning `read_response` — lets a test simulate a bridge
     /// that works fine during setup and then drops partway through a poll loop.
@@ -40,10 +44,11 @@ impl MockBridgeService {
 
 #[tonic::async_trait]
 impl Bridge for MockBridgeService {
-    // `list_servers`/`browse` are never called by any test that uses this shared mock —
-    // `bhtune-cli`'s OPC DA support only exercises `Read`/`Write` (setup reads, poll-loop
-    // reads, and the mode-revert write). Kept minimal rather than mirroring `opc.rs`'s own
-    // fuller mock, which does need real (streaming) browse support for its own tests.
+    // `list_servers` is never called by any test that uses this shared mock —
+    // `bhtune-cli`'s OPC DA support has no "list servers on a gateway host" passthrough
+    // command (only `read`/`write`/`browse`, all against an already-known server). Still a
+    // required `Bridge` trait method, so it's exercised directly (bypassing a live gRPC
+    // round trip) by `list_servers_returns_an_empty_response` below.
     async fn list_servers(
         &self,
         _request: Request<ListServersRequest>,
@@ -57,9 +62,18 @@ impl Bridge for MockBridgeService {
         &self,
         _request: Request<BrowseRequest>,
     ) -> Result<Response<Self::BrowseStream>, Status> {
-        Err(Status::unimplemented(
-            "mock bridge: browse is not used by bhtune-cli's tests",
-        ))
+        let (tx, rx) = mpsc::channel(4);
+        let items = self.browse_responses.clone();
+        tokio::spawn(async move {
+            for item in items {
+                if tx.send(Ok(item)).await.is_err() {
+                    // The caller dropped the stream before consuming every item — stop
+                    // forwarding rather than sending into a channel with no receiver.
+                    break;
+                }
+            }
+        });
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 
     async fn read(&self, _request: Request<ReadRequest>) -> Result<Response<ReadResponse>, Status> {
@@ -80,17 +94,112 @@ impl Bridge for MockBridgeService {
     }
 }
 
-/// Starts `service` on an OS-assigned loopback port and returns its `host:port` address.
-pub(crate) async fn start_mock_server(service: MockBridgeService) -> String {
+/// A running mock server plus the means to shut it down and wait for it to actually exit.
+/// Dropping this without calling [`Self::shutdown`] also stops the server (dropping the
+/// sender closes the shutdown channel the same way sending on it would), but only
+/// `shutdown` proves the server task's own `.await` on `serve_with_incoming_shutdown`
+/// completes and returns rather than being abandoned mid-flight at test-process exit.
+pub(crate) struct MockServerHandle {
+    shutdown: oneshot::Sender<()>,
+    task: JoinHandle<()>,
+}
+
+impl MockServerHandle {
+    /// Signals the server to stop accepting new work and waits for its task to exit.
+    pub(crate) async fn shutdown(self) {
+        let _ = self.shutdown.send(());
+        self.task.await.unwrap();
+    }
+}
+
+/// Starts `service` on an OS-assigned loopback port and returns its `host:port` address
+/// alongside a handle that can gracefully stop it.
+pub(crate) async fn start_mock_server(service: MockBridgeService) -> (String, MockServerHandle) {
     let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    tokio::spawn(async move {
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
         Server::builder()
             .add_service(BridgeServer::new(service))
-            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .serve_with_incoming_shutdown(
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+                async {
+                    let _ = shutdown_rx.await;
+                },
+            )
             .await
             .unwrap();
     });
-    format!("127.0.0.1:{port}")
+    (
+        format!("127.0.0.1:{port}"),
+        MockServerHandle {
+            shutdown: shutdown_tx,
+            task,
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio_stream::StreamExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn list_servers_returns_an_empty_response() {
+        let service = MockBridgeService::default();
+        let response = service
+            .list_servers(Request::new(ListServersRequest::default()))
+            .await
+            .unwrap();
+        assert!(response.into_inner().servers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn browse_forwards_every_configured_response() {
+        let service = MockBridgeService {
+            browse_responses: vec![BrowseResponse {
+                tag_id: "Unit1".to_string(),
+                node_type: "Branch".to_string(),
+            }],
+            ..Default::default()
+        };
+        let mut stream = service
+            .browse(Request::new(BrowseRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first.tag_id, "Unit1");
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn browse_forwarder_stops_once_the_caller_drops_the_stream() {
+        let service = MockBridgeService {
+            browse_responses: vec![BrowseResponse {
+                tag_id: "Unit1".to_string(),
+                node_type: "Branch".to_string(),
+            }],
+            ..Default::default()
+        };
+        let response = service
+            .browse(Request::new(BrowseRequest::default()))
+            .await
+            .unwrap();
+        // Drop the stream before the spawned forwarder task has had any chance to run (it
+        // was only just `tokio::spawn`-ed, not yet polled), so its first `tx.send` observes
+        // an already-closed channel and takes the early-exit `break` rather than looping to
+        // completion.
+        drop(response);
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+    }
+
+    #[tokio::test]
+    async fn start_mock_server_shuts_down_gracefully() {
+        let (_host, server) = start_mock_server(MockBridgeService::default()).await;
+        server.shutdown().await;
+    }
 }

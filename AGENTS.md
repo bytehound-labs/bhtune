@@ -495,21 +495,44 @@ today's only configuration knob, by design (see `args.rs`'s doc comment on `Cli:
 `SimulatorBackend` for full happy-path runs (including the `--mrft-delay` padding test, which
 necessarily costs a couple of real wall-clock seconds — `chrono::Utc::now()`, which
 `pre_delay_end`/`post_delay_end` are computed from, is unaffected by tokio's pausable test
-clock), and a shared test-only mock gRPC `Bridge` service (`crate::test_support`, used by both
-`backend.rs` and `tune.rs`) to prove the OPC DA path — connect, initial reads, and a mid-poll
-failure — actually works end-to-end without a real gateway or OPC DA server. A single canned
-mock read response satisfies every setup read regardless of which tag was requested (see
-`OpcDaBackend::read`'s positional, not tag-matched, mapping), which is what makes it possible
-to calibrate exactly which call number a mock failure should start on.
+clock), and a shared test-only mock gRPC `Bridge` service (`crate::test_support`, used by
+`backend.rs`, `tune.rs`, and `commands/opc.rs`) to prove the OPC DA path — connect, initial
+reads, a mid-poll failure, and the `opc` passthrough commands — actually works end-to-end
+without a real gateway or OPC DA server. A single canned mock read response satisfies every
+setup read regardless of which tag was requested (see `OpcDaBackend::read`'s positional, not
+tag-matched, mapping), which is what makes it possible to calibrate exactly which call number
+a mock failure should start on. `test_support::MockBridgeService` supports configurable
+streaming `browse` responses (a spawned per-request forwarder over an `mpsc` channel, mirroring
+`opcda-bridge`'s own real streaming shape) so `commands/opc.rs` doesn't need — and no longer
+has — its own separate mock implementation. `test_support::start_mock_server` returns a
+`MockServerHandle` alongside the listening address; calling `.shutdown().await` signals the
+server via a oneshot channel and awaits its task, so a mock server's lifetime is explicit and
+bounded rather than only ever abandoned at test-process exit.
 
-One coverage gap is accepted permanently, not chased further: `run_polling_loop`'s
-`tokio::signal::ctrl_c()` select arm (and the `Aborted`-outcome branches downstream of it in
-`run`/`execute`) cannot safely be exercised by raising a real process signal inside `cargo
-test`'s shared, multi-threaded test binary — a race between signal delivery and tokio's
-handler registration could terminate the entire test process, not just one test, and signal
-handling is process-global rather than per-runtime. Injecting a fake cancellation source
-instead would mean refactoring safety-critical shutdown/restore logic for marginal coverage
-gain. This matches the project's existing precedent for `main.rs`, `lib.rs::run()`, and
+`run_polling_loop`'s `tokio::signal::ctrl_c()` select arm (and the `Aborted`-outcome branches
+downstream of it in `run`/`execute`) is covered by `tests/ctrlc_abort.rs`, a black-box
+integration test that spawns the real compiled `bhtune` binary as a child OS process (via
+`Command::new(env!("CARGO_BIN_EXE_bhtune"))`, only available to `tests/*.rs` integration
+targets, not `#[cfg(test)]` unit tests) and sends it a genuine `SIGINT` mid-poll — sidestepping
+the risk of raising a real process signal *inside* `cargo test`'s own shared, multi-threaded
+test binary (where a race between signal delivery and tokio's handler registration could
+terminate the entire test process, not just one test). `cargo-llvm-cov` merges the spawned
+child's coverage data automatically (its `%p`-templated `LLVM_PROFILE_FILE` is inherited and
+resolved per-process at runtime), so this one test also closes `lib.rs::run()` and `main.rs`,
+both of which require the real binary entry point to actually execute. The same technique is
+reusable for any future OS-signal-dependent or entry-point-only code path.
+
+`args.rs`'s tests share one `expect_variant!` macro (downcasting a parsed `Cli::command` to
+the specific `Command`/`HistoryCommand` variant a test expects, panicking clearly otherwise)
+instead of each of the four call sites carrying its own near-identical, individually-uncovered
+`let-else { panic!(...) }` — collapsing four never-taken branches into one, which
+`expect_variant_panics_on_a_mismatch` then exercises directly via `std::panic::catch_unwind`.
+
+Coverage is genuinely 100% line-covered for this phase (verified directly against `lcov`
+`DA:` records, not just the region-based `--summary-only` view, which has a known — and
+harmless — aggregation quirk of reporting a small nonzero "Missed Lines" count for a handful
+of files that `--show-missing-lines`'s per-line annotations and `lcov` both agree are fully
+hit); no gap is accepted or left permanently unaddressed in this phase.
 `args.rs`'s let-else panic branches — genuinely hard-to-test lines are named and accepted
 rather than either skipped silently or chased at disproportionate risk.
 

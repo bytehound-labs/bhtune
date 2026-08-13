@@ -52,3 +52,10 @@ async-trait = "0.1"
 # true)]` and skip past the code's real `tokio::time::sleep(1000ms)` calls instantly, rather
 # than making the test suite spend several real wall-clock seconds sleeping.
 tokio = { version = "1", features = ["test-util"] }
+# `tests/ctrlc_abort.rs` only: sends a real SIGINT to a spawned `bhtune` subprocess, which is
+# the only way to genuinely exercise the Ctrl+C-triggered abort path (a real OS signal can't
+# be delivered to one `#[test]` inside a shared multi-threaded `cargo test` binary without
+# also hitting every other concurrently running test). Unix-only, matching the test's own
+# `#[cfg(unix)]` gate; already present transitively (tokio/mio), so this just names the
+# version directly rather than introducing a new dependency to the build graph.
+libc = "0.2"

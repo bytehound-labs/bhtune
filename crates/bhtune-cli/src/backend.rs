@@ -103,7 +103,7 @@ mod tests {
         use crate::test_support::{MockBridgeService, start_mock_server};
         use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue};
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, server) = start_mock_server(MockBridgeService {
             read_response: ReadResponse {
                 values: vec![ProtoTagValue {
                     tag_id: "Sim.MV".to_string(),
@@ -126,5 +126,7 @@ mod tests {
         let backend = build(&args).await.unwrap();
         let values = backend.read(&["Sim.MV".to_string()]).await.unwrap();
         assert_eq!(values[0].value, "50");
+
+        server.shutdown().await;
     }
 }

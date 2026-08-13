@@ -814,7 +814,7 @@ mod tests {
         use crate::test_support::{MockBridgeService, start_mock_server};
         use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue, WriteResponse};
 
-        let host = start_mock_server(
+        let (host, server) = start_mock_server(
             MockBridgeService {
                 read_response: ReadResponse {
                     values: vec![ProtoTagValue {
@@ -862,6 +862,8 @@ mod tests {
                 .unwrap()
                 .contains("backend operation failed")
         );
+
+        server.shutdown().await;
     }
 
     /// `--mrft-delay` is whole seconds (the smallest non-zero value costs ~1s of real
