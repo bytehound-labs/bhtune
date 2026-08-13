@@ -28,9 +28,13 @@ either `OpcDaBackend` or `SimulatorBackend`, persisting the full lifecycle throu
 the bridge, bypassing the tuning engine). `cli-config` is done: `CLI flag > env var > TOML
 config file > platform default` precedence for the database path, opcda-bridge gateway
 address, and default OPC server, mirroring `opcda-bridge-client`'s own config conventions
-(see "Config precedence" below). Non-interactive automation flags, unattended-operation
-safety guardrails, and structured logging remain separate, not-yet-started phases
-(`cli-automation`/`cli-safety`/`cli-logging`) — `cli-commands` is the subcommands and
+(see "Config precedence" below). `cli-automation` is done: `--yes`/`--write-pid`/
+`--output json` on `tune`/`simulate`, `--output json` on `history list`/`show`, and
+distinguished process exit codes (`EXIT_ABORTED`, `EXIT_WRITE_BACK_FAILED`) so scheduled/
+scripted callers can tell a Ctrl+C abort or a failed PID write-back apart from a clean
+completion without parsing stdout (see "Automation" below). Unattended-operation safety
+guardrails and structured logging remain separate, not-yet-started phases
+(`cli-safety`/`cli-logging`) — `cli-commands` is the subcommands and
 orchestration only. `backend-replay`, the replay harness, and the web GUI are not yet — the
 GUI plan reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before
 any Tauri code was written (see "Key architectural decisions"). See "Phases and todos" below
@@ -487,10 +491,11 @@ discretization and its numerical cross-check against that reference.
   the CLI equivalent of the legacy app's ad-hoc tag testing.
 
 **What `cli-commands` deliberately does not cover** — each is its own later phase, not an
-oversight: non-interactive automation flags like `--yes`/`--write-pid`/`--output json` and
-exit codes (`cli-automation`), mandatory unattended-run timeouts and auto-abort-and-restore
-(`cli-safety`), and `tracing`-based structured logging (`cli-logging`). Platform-standard
-config file/data-directory precedence shipped separately as `cli-config` — see "Config
+oversight: mandatory unattended-run timeouts and auto-abort-and-restore (`cli-safety`), and
+`tracing`-based structured logging (`cli-logging`). Non-interactive automation flags
+(`--yes`/`--write-pid`/`--output json`) and distinguished exit codes shipped separately as
+`cli-automation` — see "Automation" below. Platform-standard config file/data-directory
+precedence shipped separately as `cli-config` — see "Config
 precedence" below.
 
 **Testing approach.** `commands/tune.rs`'s tests use a `MockBackend` (an in-memory
@@ -592,6 +597,63 @@ The block's actual branches are both genuinely exercised: the success path 13 ti
 `map_err`/`?` failure path exactly once, via the existing
 `run_with_cli_config_load_failure_is_exit_failure` test's unwritable `/nonexistent-dir/`
 database path — not a real gap.
+
+## Automation (`cli-automation`)
+
+`bhtune tune`/`bhtune simulate` support fully non-interactive operation for scheduled/scripted
+use (`cron`, Windows Task Scheduler, CI), and `bhtune history list`/`show` support
+machine-readable output for the same callers:
+
+- **`--yes`** — required before `--write-pid` is honored at all; see below.
+- **`--write-pid <aggressive|moderate|sluggish>`** — writes that response level's calculated
+  PID constants back to the DCS without the interactive stdin confirmation prompt
+  `maybe_write_back` otherwise uses. Requires `--yes`; `run()` rejects the combination with a
+  hard `Err` as its very first statement, before any backend connection or database write —
+  an unattended write-back must be an explicit, deliberate choice, not a stray flag. If the
+  named response level has no recorded calculated result (defensive; not reachable through
+  normal CLI validation), the write-back is reported as failed rather than attempted, exactly
+  as an invalid interactive selection already was.
+- **`--output <table|json>`** — on `tune`/`simulate`, the final summary line; on
+  `history list`/`show`, the whole listing/detail. `table` is the default and preserves the
+  original plain-text shape exactly. `json` prints one `serde_json::to_string_pretty` object
+  (or array, for `history list`) to stdout — never a mix of the two on one invocation. Local
+  DTOs (`RunSummaryJson`/`RunListJson`/`InitialReadingsJson`/`ResultJson`/`WriteJson`/
+  `RunDetailJson` in `commands/history.rs`) project the `bhtune-db` row types that don't
+  themselves derive `Serialize` (DB row shape stays deliberately decoupled from any API/CLI
+  JSON shape); `bhtune-core` enums and `LoopConfig`/`TuneBackend`/`TuneOutcome` already derive
+  `Serialize` and are reused directly.
+- **Exit codes** — `lib.rs` defines `EXIT_SUCCESS = 0`, `EXIT_FAILURE = 1` (a setup error:
+  unknown template, invalid flag combination, database/backend connection failure — anything
+  `run()` returns as `Err`), `EXIT_ABORTED = 2` (Ctrl+C), and `EXIT_WRITE_BACK_FAILED = 3`
+  (the test itself completed, but the requested PID write-back failed — rejected write,
+  failed confirmation readback, or the defensive missing-result case above).
+  `tune_outcome_exit_code` maps `commands::tune::TuneOutcome` (`Completed`/`Aborted`/
+  `WriteBackFailed`, returned by `run()` on the `Ok` path) to the process's actual
+  `ExitCode`; `fail()` handles the `Err` path and always prints the error in the format
+  `--output` requested before returning `EXIT_FAILURE`. **The database's own
+  `tune_runs.outcome` column only ever records `Completed`/`Aborted`/`Failed`** —
+  `TuneRunRow::complete` runs *before* the optional write-back attempt, so a write-back
+  failure changes the process's exit code and the printed summary but never retroactively
+  rewrites an already-`Completed` run's DB outcome to look like the whole test failed.
+- **`--write-pid`/`--yes` on `bhtune simulate`** are accepted (for a uniform flag surface with
+  `tune`) but always a no-op: the built-in simulator has no PID constant tags configured at
+  all (`build_loop_tags` leaves them all `None` for `BackendKindArg::Simulator`), so write-back
+  is unconditionally `WriteBackOutcome::Skipped` regardless of these flags.
+
+**Testing approach.** `tune_outcome_for_run`/`print_summary` are pure/near-pure functions
+(the latter's only side effect is the `println!` itself) tested directly against every
+`RunOutcome` x `OutputFormat` combination, rather than only through a full `run()`. A genuine
+end-to-end test of `run()` reaching a real `WriteBackOutcome::Written`/`Failed` through the
+actual polling loop is structurally impossible with current test infrastructure: the mock OPC
+DA bridge only ever returns static PV values (can never trigger a real relay switch), and
+`SimulatorBackend` structurally has no PID tags at all (see above) — so
+`a_full_simulator_tune_with_write_pid_and_yes_still_skips_write_back` proves the flag
+combination is a harmless no-op against the simulator, while `maybe_write_back`'s own
+non-interactive `--write-pid` branch (including the "requested level has no recorded result"
+case) is tested directly via the `run_with_recorded_results()` fixture instead of chasing a
+full E2E. `tests/ctrlc_abort.rs` (see below) asserts the real subprocess exits with
+`EXIT_ABORTED`, not `0`, closing the loop on the one `TuneOutcome` variant `print_summary`'s
+own unit tests can't reach through a real `run_polling_loop` execution.
 
 ## Validation strategy: golden-master replay
 
@@ -747,7 +809,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | `cli-commands` + `cli-config` done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above); automation flags, safety guardrails, and structured logging pending |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | `cli-commands` + `cli-config` + `cli-automation` done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above); safety guardrails and structured logging pending |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -787,8 +849,10 @@ that binary does something real and gains its own targeted tests.
 6. **Headless CLI** — `tune`/`simulate`/`template`/`history`/`export`/`opc` subcommands
    (`cli-commands`, done — see "CLI reference" above), `CLI > env > TOML > default` config
    precedence (`cli-config`, done — see "Config precedence" above), non-interactive automation
-   mode (`cli-automation`), safety guardrails (`cli-safety`: mandatory timeout + auto-restore,
-   explicit opt-in for unattended PID writes), structured logging (`cli-logging`).
+   mode (`cli-automation`, done: `--yes`/`--write-pid`/`--output json` and distinguished exit
+   codes — see "Automation" above), safety guardrails (`cli-safety`: mandatory timeout +
+   auto-restore, explicit opt-in for unattended PID writes), structured logging
+   (`cli-logging`).
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS

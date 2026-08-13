@@ -54,6 +54,25 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// The `--output` format this command asked for, or [`crate::output::OutputFormat::Table`]
+    /// for commands that don't have the concept yet (`Template`/`Export`/`Opc` -- `Export`
+    /// already has its own unrelated `--output <path>` flag naming the destination file).
+    /// Read before the command is dispatched (and potentially moved), so a config/database
+    /// error occurring before dispatch can still be reported in the format the caller
+    /// actually asked for -- see `lib.rs::run_with_cli`.
+    pub(crate) fn output_format(&self) -> crate::output::OutputFormat {
+        match self {
+            Command::Tune(args) => args.output,
+            Command::Simulate(args) => args.output,
+            Command::History { command } => command.output_format(),
+            Command::Template { .. } | Command::Export(_) | Command::Opc { .. } => {
+                crate::output::OutputFormat::Table
+            }
+        }
+    }
+}
+
 /// A [`bhtune_core::ProcessType`] value, as a CLI flag.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessTypeArg {
@@ -121,6 +140,25 @@ pub enum BackendKindArg {
     Opcda,
     /// The in-process FOPDT simulator — no external dependency at all.
     Simulator,
+}
+
+/// A [`bhtune_core::ResponseLevel`] value, as a CLI flag (`--write-pid
+/// <aggressive|moderate|sluggish>`).
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseLevelArg {
+    Aggressive,
+    Moderate,
+    Sluggish,
+}
+
+impl From<ResponseLevelArg> for bhtune_core::ResponseLevel {
+    fn from(value: ResponseLevelArg) -> Self {
+        match value {
+            ResponseLevelArg::Aggressive => bhtune_core::ResponseLevel::Aggressive,
+            ResponseLevelArg::Moderate => bhtune_core::ResponseLevel::Moderate,
+            ResponseLevelArg::Sluggish => bhtune_core::ResponseLevel::Sluggish,
+        }
+    }
 }
 
 /// Flags shared by `tune` and (a defaulted subset of) `simulate`.
@@ -226,6 +264,22 @@ pub struct TuneArgs {
     /// A friendly name for this run, recorded as `loop_name` (default: the PV tag name).
     #[arg(long)]
     pub name: Option<String>,
+
+    /// Confirm an unattended PID write-back. Required alongside `--write-pid` (the command
+    /// refuses to start otherwise) -- writing to a live loop with no human present must be
+    /// an explicit, deliberate choice. Has no effect without `--write-pid`.
+    #[arg(long)]
+    pub yes: bool,
+
+    /// Non-interactively write this response level's calculated PID parameters back to the
+    /// DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune
+    /// able to actually update a loop with no one watching. Requires `--yes`.
+    #[arg(long, value_enum)]
+    pub write_pid: Option<ResponseLevelArg>,
+
+    /// How to print this run's final outcome line.
+    #[arg(long, value_enum, default_value = "table")]
+    pub output: crate::output::OutputFormat,
 }
 
 /// `bhtune simulate`: every field defaulted for a true zero-configuration demo run.
@@ -275,6 +329,21 @@ pub struct SimulateArgs {
 
     #[arg(long)]
     pub name: Option<String>,
+
+    /// See `TuneArgs::yes`.
+    #[arg(long)]
+    pub yes: bool,
+
+    /// See `TuneArgs::write_pid`. Note the built-in FOPDT simulator has no PID constant
+    /// tags at all (see `build_loop_tags`), so write-back is always skipped for `simulate`
+    /// regardless of this flag -- it's accepted here purely so `simulate`'s flag surface
+    /// stays a strict defaulted subset of `tune`'s, matching every other field.
+    #[arg(long, value_enum)]
+    pub write_pid: Option<ResponseLevelArg>,
+
+    /// See `TuneArgs::output`.
+    #[arg(long, value_enum, default_value = "table")]
+    pub output: crate::output::OutputFormat,
 }
 
 impl SimulateArgs {
@@ -312,6 +381,9 @@ impl SimulateArgs {
             direction: Some(DirectionArg::Reverse),
             poll_interval_ms: self.poll_interval_ms,
             name: self.name,
+            yes: self.yes,
+            write_pid: self.write_pid,
+            output: self.output,
         }
     }
 }
@@ -338,10 +410,27 @@ pub enum HistoryCommand {
         limit: i64,
         #[arg(long, default_value_t = 0)]
         offset: i64,
+        /// How to print the run list.
+        #[arg(long, value_enum, default_value = "table")]
+        output: crate::output::OutputFormat,
     },
     /// Show one run's full detail: config, initial readings, calculated results, and any
     /// PID write-back audit rows.
-    Show { run_id: i64 },
+    Show {
+        run_id: i64,
+        /// How to print the run detail.
+        #[arg(long, value_enum, default_value = "table")]
+        output: crate::output::OutputFormat,
+    },
+}
+
+impl HistoryCommand {
+    pub(crate) fn output_format(&self) -> crate::output::OutputFormat {
+        match self {
+            HistoryCommand::List { output, .. } => *output,
+            HistoryCommand::Show { output, .. } => *output,
+        }
+    }
 }
 
 /// A [`bhtune_db::models::TuneOutcome`] value, as a CLI flag.
@@ -531,6 +620,43 @@ mod tests {
         assert_eq!(tune.mv_range_low, Some(0.0));
         assert_eq!(tune.mv_range_high, Some(100.0));
         assert!(matches!(tune.direction, Some(DirectionArg::Reverse)));
+        assert!(!tune.yes);
+        assert!(tune.write_pid.is_none());
+        assert_eq!(tune.output, crate::output::OutputFormat::Table);
+    }
+
+    #[test]
+    fn simulate_args_expand_into_tune_args_carries_yes_write_pid_and_output_through() {
+        let cli = Cli::parse_from([
+            "bhtune",
+            "simulate",
+            "--yes",
+            "--write-pid",
+            "sluggish",
+            "--output",
+            "json",
+        ]);
+        let simulate = expect_variant!(cli.command, Command::Simulate(s) => s, "Simulate");
+        let tune = simulate.into_tune_args();
+        assert!(tune.yes);
+        assert!(matches!(tune.write_pid, Some(ResponseLevelArg::Sluggish)));
+        assert_eq!(tune.output, crate::output::OutputFormat::Json);
+    }
+
+    #[test]
+    fn response_level_arg_converts_to_every_core_variant() {
+        assert_eq!(
+            bhtune_core::ResponseLevel::from(ResponseLevelArg::Aggressive),
+            bhtune_core::ResponseLevel::Aggressive
+        );
+        assert_eq!(
+            bhtune_core::ResponseLevel::from(ResponseLevelArg::Moderate),
+            bhtune_core::ResponseLevel::Moderate
+        );
+        assert_eq!(
+            bhtune_core::ResponseLevel::from(ResponseLevelArg::Sluggish),
+            bhtune_core::ResponseLevel::Sluggish
+        );
     }
 
     #[test]
@@ -557,6 +683,38 @@ mod tests {
         assert!(matches!(args.controller_type, ControllerTypeArg::Pi));
         assert!(matches!(args.backend, BackendKindArg::Simulator));
         assert_eq!(args.poll_interval_ms, 800);
+        assert!(!args.yes);
+        assert!(args.write_pid.is_none());
+        assert_eq!(args.output, crate::output::OutputFormat::Table);
+    }
+
+    #[test]
+    fn cli_parses_tune_yes_and_write_pid_flags() {
+        let cli = Cli::parse_from([
+            "bhtune",
+            "tune",
+            "-t",
+            "Unit1.LIC101.PV",
+            "--template",
+            "Yokogawa CentumVP",
+            "--process-type",
+            "flow",
+            "--controller-type",
+            "pi",
+            "--relay-amp",
+            "5.0",
+            "--backend",
+            "simulator",
+            "--yes",
+            "--write-pid",
+            "moderate",
+            "--output",
+            "json",
+        ]);
+        let args = expect_variant!(cli.command, Command::Tune(a) => a, "Tune");
+        assert!(args.yes);
+        assert!(matches!(args.write_pid, Some(ResponseLevelArg::Moderate)));
+        assert_eq!(args.output, crate::output::OutputFormat::Json);
     }
 
     #[test]
@@ -572,14 +730,55 @@ mod tests {
         ]);
         let command =
             expect_variant!(cli.command, Command::History { command } => command, "History");
-        let (outcome, limit, offset) = expect_variant!(
+        let (outcome, limit, offset, output) = expect_variant!(
             command,
-            HistoryCommand::List { outcome, limit, offset } => (outcome, limit, offset),
+            HistoryCommand::List { outcome, limit, offset, output } => (outcome, limit, offset, output),
             "List"
         );
         assert!(matches!(outcome, Some(OutcomeArg::Completed)));
         assert_eq!(limit, 10);
         assert_eq!(offset, 0);
+        assert_eq!(output, crate::output::OutputFormat::Table);
+    }
+
+    #[test]
+    fn cli_parses_history_list_and_show_with_output_json() {
+        let cli = Cli::parse_from(["bhtune", "history", "list", "--output", "json"]);
+        let command =
+            expect_variant!(cli.command, Command::History { command } => command, "History");
+        assert_eq!(command.output_format(), crate::output::OutputFormat::Json);
+
+        let cli = Cli::parse_from(["bhtune", "history", "show", "42", "--output", "json"]);
+        let command =
+            expect_variant!(cli.command, Command::History { command } => command, "History");
+        let (run_id, output) = expect_variant!(
+            command,
+            HistoryCommand::Show { run_id, output } => (run_id, output),
+            "Show"
+        );
+        assert_eq!(run_id, 42);
+        assert_eq!(output, crate::output::OutputFormat::Json);
+    }
+
+    #[test]
+    fn command_output_format_defaults_to_table_for_commands_without_the_concept() {
+        let cli = Cli::parse_from(["bhtune", "template", "list"]);
+        assert_eq!(
+            cli.command.output_format(),
+            crate::output::OutputFormat::Table
+        );
+
+        let cli = Cli::parse_from(["bhtune", "opc", "read", "Unit1.LIC101.PV"]);
+        assert_eq!(
+            cli.command.output_format(),
+            crate::output::OutputFormat::Table
+        );
+
+        let cli = Cli::parse_from(["bhtune", "export", "1"]);
+        assert_eq!(
+            cli.command.output_format(),
+            crate::output::OutputFormat::Table
+        );
     }
 
     #[test]

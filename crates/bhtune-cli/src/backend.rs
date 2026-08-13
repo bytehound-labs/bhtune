@@ -86,6 +86,9 @@ mod tests {
             direction: Some(DirectionArg::Reverse),
             poll_interval_ms: 800,
             name: None,
+            yes: false,
+            write_pid: None,
+            output: crate::output::OutputFormat::Table,
         }
     }
 

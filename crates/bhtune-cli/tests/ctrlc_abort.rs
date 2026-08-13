@@ -1,6 +1,8 @@
 //! Spawns the real, compiled `bhtune` binary and sends it a genuine `SIGINT`, proving the
 //! Ctrl+C-triggered abort path in `commands::tune::run_polling_loop` actually restores the
-//! loop and reports `Aborted` end to end.
+//! loop and reports `Aborted` end to end — including exiting with `EXIT_ABORTED` rather than
+//! success, so an unattended caller (a scheduler, a CI job) can distinguish an interrupted
+//! tune from a completed one without parsing stdout.
 //!
 //! This has to be a real subprocess: `tokio::signal::ctrl_c()` listens for the process's own
 //! signal handler, and `cargo test` runs every test as one thread inside a single shared
@@ -91,9 +93,12 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
     .expect("joining the wait_with_output task panicked")
     .expect("failed to wait for the bhtune child process");
 
-    assert!(
-        output.status.success(),
-        "expected exit success (Aborted maps to ExitCode::SUCCESS), got {:?}. stderr: {}",
+    assert_eq!(
+        output.status.code(),
+        Some(bhtune_cli::EXIT_ABORTED as i32),
+        "expected exit code {} (EXIT_ABORTED -- distinct from a clean completion, so an \
+         operator/scheduler can tell a Ctrl+C abort apart from success), got {:?}. stderr: {}",
+        bhtune_cli::EXIT_ABORTED,
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );

@@ -108,6 +108,22 @@ available key.
 | opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host` | `localhost:7600`                                                                            |
 | Default OPC DA server | `--server`      | —                    | `server`      | none — must be set one way or another                                                      |
 
+## Automation
+
+`bhtune tune`/`bhtune simulate` run fully non-interactively when scripted or scheduled (`cron`,
+Windows Task Scheduler, CI):
+
+- **`--write-pid <aggressive|moderate|sluggish>`** writes that response level's calculated PID
+  constants back without the interactive confirmation prompt. It requires **`--yes`** — the
+  combination is rejected before any backend connection or database write, so an unattended
+  write-back is always an explicit, deliberate choice.
+- **`--output json`** (also on `history list`/`show`) prints a single machine-readable JSON
+  object or array to stdout instead of the plain-text table, for scripting.
+- **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
+  (bad flags, unreachable backend/database), `2` aborted (Ctrl+C), `3` the test completed but
+  the requested PID write-back failed. A caller never has to parse stdout just to find out
+  whether a scheduled tune actually wrote anything.
+
 ## Validation
 
 BHTune's tuning engine is validated by golden-master replay: recorded input/output traces are
