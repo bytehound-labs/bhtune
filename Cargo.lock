@@ -118,9 +118,11 @@ name = "bhtune-backend"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bhtune-core",
  "chrono",
  "opcda-bridge",
  "opcda-bridge-proto",
+ "rand",
  "thiserror",
  "tokio",
  "tokio-stream",

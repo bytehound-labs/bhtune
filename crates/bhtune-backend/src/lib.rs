@@ -7,9 +7,10 @@
 //! - [`opcda`]: the primary driver for v1 ([`OpcDaBackend`]), over the `opcda-bridge`
 //!   crates.io dependency (Windows OPC DA via a network gateway — no COM/DCOM dependency in
 //!   this process).
-//! - `simulator`: an in-process FOPDT (first-order-plus-dead-time) process model with a
-//!   virtual PID controller, used for fully automated E2E tests on CI (no Windows, no
-//!   Kepware, no external process) and as a demo mode.
+//! - [`simulator`]: an in-process FOPDT (first-order-plus-dead-time) process model
+//!   ([`SimulatorBackend`]), used for fully automated E2E tests on CI (no Windows, no
+//!   Kepware, no external process) and as a demo mode. Also home to [`VirtualPid`], a
+//!   standalone PID controller for closed-loop validation/demos.
 //! - `replay`: feeds a recorded golden-master trace back through the engine, for regression
 //!   validation.
 //!
@@ -21,16 +22,20 @@
 //!   [`WriteOutcome`], [`TagNode`]) that cross the trait boundary.
 //! - [`error`] — the crate's error type, [`BackendError`].
 //! - [`opcda`] — [`OpcDaBackend`], the OPC DA implementation.
+//! - [`simulator`] — [`SimulatorBackend`], [`FopdtProcess`]/[`FopdtConfig`], and
+//!   [`VirtualPid`]/[`VirtualPidConfig`].
 //!
-//! Not yet implemented: `simulator`/`replay` — this crate has the trait, its supporting
-//! types, and the OPC DA backend only, until `backend-simulator`/`backend-replay` land.
+//! Not yet implemented: `replay` — this crate has the trait, its supporting types, and the
+//! OPC DA and simulator backends only, until `backend-replay` lands.
 
 pub mod backend;
 pub mod error;
 pub mod opcda;
+pub mod simulator;
 pub mod types;
 
 pub use backend::Backend;
 pub use error::{BackendError, BackendResult};
 pub use opcda::OpcDaBackend;
+pub use simulator::{FopdtConfig, FopdtProcess, SimulatorBackend, VirtualPid, VirtualPidConfig};
 pub use types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome};

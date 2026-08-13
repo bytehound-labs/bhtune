@@ -17,9 +17,11 @@ complete/fail/abort), dynamic filtering and pagination over runs, and per-run sa
 write queries, and whole-database backup/restore (`db-backup-restore`) is done: a single
 portable-file snapshot via `VACUUM INTO`, and a validated, safety-copied restore back into
 place. `bhtune-backend`'s `Backend` trait and error model (`backend-trait`) are
-defined and tested, and its OPC DA implementation (`backend-opcda`, `OpcDaBackend`) is also
-done — the primary v1 driver, over the published `opcda-bridge` crate. `backend-simulator`/
-`backend-replay`, the replay harness, CLI, and GUI are not yet. See "Phases and todos" below
+defined and tested, its OPC DA implementation (`backend-opcda`, `OpcDaBackend`) is
+done — the primary v1 driver, over the published `opcda-bridge` crate — and its in-Rust
+FOPDT process simulator (`backend-simulator`, `SimulatorBackend`) is done, giving CI a
+fully synthetic, wall-clock-free way to drive a real `MrftEngine` end to end. `backend-replay`,
+the replay harness, CLI, and GUI are not yet. See "Phases and todos" below
 for what's next.
 
 ## Design philosophy and scope discipline
@@ -183,6 +185,41 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   across `.await` points — only `tokio::sync::Mutex`'s guard is `Send`, which `#[async_trait]`'s
   generated futures require by default. A single tuning session only ever has one read/write/
   browse in flight anyway, so serializing is not a real bottleneck.
+- **`SimulatorBackend` uses `std::sync::Mutex`, not `tokio::sync::Mutex` like `OpcDaBackend`.**
+  Its `read`/`write` bodies contain no `.await` points at all — they're `async fn` only because
+  the `Backend` trait requires it — so nothing ever holds the guard across a suspension point,
+  making the simpler std mutex both sufficient and correct. This is a genuine difference from
+  `OpcDaBackend`, not an inconsistency: the tokio mutex there is load-bearing because its guard
+  really is held across `.await`.
+- **The FOPDT process model uses an exact closed-form discretization, not a ported ODE solver.**
+  For the first-order lag `tau*dy/dt = -(y-y0) + Kp*(u-u0)` driven by a zero-order-hold input over
+  one tick, the update `pv_new = pv*decay + (1-decay)*(bias + gain*mv_effective)` (`decay =
+  exp(-dt/tau)`) is the exact analytical solution, not an approximation — verified by comparing
+  it against the legacy Python reference's own `scipy.integrate.odeint` integration across 5
+  varied gain/tau/dt combinations (agreement to ~1e-5, `odeint`'s own tolerance). This avoids
+  taking on a numerical-ODE-solver dependency for a model simple enough to solve in closed form.
+  Dead time is a `VecDeque<f32>` delay line seeded with `ceil(dead_time_s / tick_interval_s)`
+  copies of the initial MV, push-then-pop each tick.
+- **`VirtualPid` (the standalone PID controller used to closed-loop-validate the simulator) is
+  deliberately not wired into `SimulatorBackend`/`Backend`.** `SimulatorBackend` exists so a real
+  `MrftEngine` can drive a synthetic process through the actual `Backend` trait; `VirtualPid` is a
+  separate demo/validation utility proving the FOPDT model behaves like a real control loop under
+  simple feedback (proportional-only exact-formula check, anti-windup, no derivative kick,
+  full closed-loop convergence — the convergence gains were numerically pre-verified against a
+  disposable Python script before being hardcoded, the same discipline used for `core-mrft`/
+  `core-tuning-math`'s expected values). Wiring it into `Backend` would give `Backend` two
+  unrelated jobs (being a `MrftEngine`'s tag I/O source, and running its own independent
+  controller) for no real benefit.
+- **`rand` 0.10 is configured `default-features = false, features = ["std", "std_rng"]`, and
+  `StdRng` is seeded explicitly rather than using a thread-local RNG.** Every RNG in
+  `bhtune-backend` is constructed via `StdRng::seed_from_u64`, so `thread_rng`/OS-entropy features
+  are never used and stay disabled. `StdRng` was chosen over `SmallRng` specifically because
+  `SmallRng`'s own documentation states its algorithm depends on the target's pointer size — a
+  real cross-platform reproducibility risk for a Windows/macOS/Linux project — whereas `StdRng`'s
+  only non-portability caveat is across `rand` crate versions, which is acceptable since CI only
+  runs on `ubuntu-latest` (see `.github/workflows/checks.yml`/`coverage.yml`). No test hardcodes
+  an exact noise value for this reason; tests only assert bounds and same-seed/different-seed
+  equality/inequality, so a future `rand` upgrade changing `StdRng`'s internals can't break them.
 - **`OpcDaBackend` always reports `TagValue::timestamp` as `None`, never a guessed value.**
   `opc-da-client`'s documented contract (the Windows-only library the gateway wraps) reports
   each tag's last-change time as a *local*, offset-less `"YYYY-MM-DD HH:MM:SS"` string (or
@@ -322,6 +359,39 @@ only needs the unary calls, while subscription-driven Step Test remains deferred
 exposes a live push/subscription RPC (a different kind of stream than `Browse`'s bounded one-shot
 listing).
 
+## Simulator backend reference (`backend-simulator`)
+
+`backend-simulator` is implemented in `crates/bhtune-backend/src/simulator.rs`: an in-process
+FOPDT (first-order-plus-dead-time) process model plus a standalone virtual PID controller, served
+through the real `Backend` trait as `SimulatorBackend`. No external process, no Windows, no
+network I/O — every tick advances an internal virtual clock rather than sleeping on the wall
+clock, which is what makes it usable for fast CI E2E runs.
+
+- **`FopdtConfig`/`FopdtProcess`** — the process model: `gain`, `time_constant_s`, `dead_time_s`,
+  `tick_interval_s`, and an optional noise amplitude. `step()` advances the model by exactly one
+  tick using the exact closed-form discretization (see "Key architectural decisions" above), with
+  dead time modeled as a `VecDeque<f32>` delay line. `mv()` reads the last-written MV without
+  advancing anything; `write_mv()` sets it.
+- **`VirtualPidConfig`/`VirtualPid`** — a standalone position-form PID controller (`Kc`, `Ti`,
+  `Td`), derivative-on-measurement (matching the legacy Python reference, avoids derivative kick
+  on a setpoint step), with anti-reset-windup (an integral increment is only committed if the
+  resulting output didn't need clamping). Not wired into `SimulatorBackend`/`Backend` — see "Key
+  architectural decisions" above for why it's kept as a separate demo/validation utility.
+- **`SimulatorBackend`** — the `Backend` impl. Constructed with a PV tag name, an MV tag name, a
+  `FopdtConfig`, initial PV/MV, and an RNG seed; wraps one `FopdtProcess` behind a
+  `std::sync::Mutex` (see "Key architectural decisions" above for why not `tokio::sync::Mutex`).
+  Reading the configured PV tag calls `FopdtProcess::step` (advances the simulated clock one
+  tick); reading the MV tag returns `mv()` without advancing. Writing the MV tag accepts either a
+  `TagWrite::Float` or a `TagWrite::Raw` that parses as `f32`; a non-numeric raw write is a
+  rejected `WriteOutcome`, not a `BackendError`. Any other tag name is `BackendError::
+  InvalidTagValue` on both read and write. `browse` is always `BackendError::Unsupported` — a
+  synthetic two-tag process has no real tag tree to browse.
+
+The FOPDT physics were ported from the legacy `Model` repo's `ProcessModelOPC.py` (the script the
+legacy C# app's hidden `OPCClass.Python` debug branch actually shells out to), not reimplemented
+from a textbook formula — see "Key architectural decisions" above for the closed-form
+discretization and its numerical cross-check against that reference.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -333,9 +403,12 @@ change didn't silently alter tuning behavior.
 
 Reference traces are captured two ways, neither of which requires Windows:
 
-1. **Synthetic runs against the in-Rust FOPDT simulator** (`backend-simulator`) across a coverage
-   matrix of process types, controller types, action directions, and edge cases (non-zero MV range
-   floor, varied skip/count cycles).
+1. **Synthetic runs against the in-Rust FOPDT simulator** (`backend-simulator`, done — see
+   "Simulator backend reference" above) across a coverage matrix of process types, controller
+   types, action directions, and edge cases (non-zero MV range floor, varied skip/count cycles).
+   `bhtune-backend`'s own test suite already includes one such run (a full `MrftEngine` driven
+   through `SimulatorBackend` to completion); `core-replay-harness` will need more, spanning the
+   full matrix, once it's built.
 2. **Real traces recorded from field use**, once the CLI/GUI exist.
 
 Snapshot a run as a fixture only after manually verifying the engine's output is
@@ -472,7 +545,7 @@ that binary does something real and gains its own targeted tests.
 | Crate            | Phase                                                                   | Status                                                                       |
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
-| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` done (trait, error model, and OPC DA implementation, all tested); simulator/replay pending |
+| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
 | `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet                                  |
@@ -493,9 +566,11 @@ that binary does something real and gains its own targeted tests.
    unit-tested directly.
 4. **Backends** — the `Backend` trait (`backend-trait`, done: `read`/`write`/`browse` plus
    `TagId`/`TagValue`/`TagWrite`/`WriteOutcome`/`TagNode`/`BackendError` in `crates/
-   bhtune-backend`) and its OPC DA implementation (`backend-opcda`, done: `OpcDaBackend` in
-   `crates/bhtune-backend/src/opcda.rs`, see "OPC DA integration reference" above); simulator
-   (Rust FOPDT process model) and replay implementations remain.
+   bhtune-backend`), its OPC DA implementation (`backend-opcda`, done: `OpcDaBackend` in
+   `crates/bhtune-backend/src/opcda.rs`, see "OPC DA integration reference" above), and its
+   in-Rust FOPDT simulator (`backend-simulator`, done: `SimulatorBackend`/`FopdtProcess`/
+   `VirtualPid` in `crates/bhtune-backend/src/simulator.rs`, see "Simulator backend reference"
+   above); the replay implementation remains.
 5. **Persistence** — SQLite schema (`db-schema`, done: `dcs_templates`, `loops`, `tune_runs`,
    `tune_samples`, `tune_results`, `tune_writes`, `settings`, all migrated/tested in
    `crates/bhtune-db`), startup seeding of the four DCS/PLC template presets
