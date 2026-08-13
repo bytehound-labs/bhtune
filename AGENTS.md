@@ -12,9 +12,10 @@ relay-switching engine (`core-mrft`), and tuning-constant math (`core-tuning-mat
 implemented and unit-tested. `bhtune-db`'s SQLite schema (`db-schema`) is implemented and
 tested — all 7 tables, migrations, and connection/pragma setup — and the four built-in DCS
 templates now seed themselves on startup (`db-seed-templates`). `bhtune-backend`'s `Backend`
-trait and error model (`backend-trait`) are defined and tested, but have no real
-implementation yet. The replay harness, `backend-opcda`/`backend-simulator`/`backend-replay`,
-CLI, and GUI are not yet. See "Phases and todos" below for what's next.
+trait and error model (`backend-trait`) are defined and tested, and its OPC DA implementation
+(`backend-opcda`, `OpcDaBackend`) is also done — the primary v1 driver, over the published
+`opcda-bridge` crate. `backend-simulator`/`backend-replay`, the replay harness, CLI, and GUI
+are not yet. See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -50,10 +51,13 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
 - **Zero Windows/COM dependency in this application.** All OPC DA communication is delegated to
   the sibling project [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) over the
   network. bhtune itself builds and runs on Linux, macOS, and Windows identically.
-- **The OPC DA client is a crates.io dependency.** The future `bhtune-backend` OPC DA
-  implementation consumes the published `opcda-bridge` library with
-  `opcda-bridge = "0.2"`; it must not use a Git dependency or a local path checkout. The
-  Windows-side `opcda-bridge-gateway` remains a separate process.
+- **The OPC DA client is a crates.io dependency, local to `bhtune-backend` only.** The
+  `OpcDaBackend` implementation consumes the published `opcda-bridge` library with
+  `opcda-bridge = "0.2"` pinned directly in `crates/bhtune-backend/Cargo.toml` — not promoted
+  to `[workspace.dependencies]`, since `bhtune-backend` is the only crate that talks to the
+  bridge directly (everything else goes through the `Backend` trait), matching this project's
+  single-consumer-stays-local dependency convention. It must not use a Git dependency or a
+  local path checkout. The Windows-side `opcda-bridge-gateway` remains a separate process.
 - **`Backend` trait is the extensibility seam, and deliberately has zero `bhtune-core`
   dependency.** A single async trait in `bhtune-backend` abstracts all tag I/O so the tuning
   engine never knows what it's talking to:
@@ -84,13 +88,14 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   itself — gluing `Backend` to `LoopTags`/`ControllerDirection`/etc. is each concrete
   backend's own job (`backend-opcda`, `backend-simulator`), not this trait's.
 
-  `OpcDaBackend` (via `opcda-bridge`) is the primary/only driver for v1. `OpcUaBackend` and
-  `ModbusBackend` are roadmap items that must slot in without touching `bhtune-core`.
-  Connecting/constructing a specific backend is deliberately *not* part of the trait — each
-  implementation's own inherent constructor takes whatever it individually needs (gateway
-  host/port + OPC DA server name, a trace file path, simulator parameters), since one uniform
-  `connect()` signature across such different backends would leak one implementation's
-  parameters into the trait every other implementation would have to ignore.
+  `OpcDaBackend` (via `opcda-bridge`) is the primary/only driver for v1, now implemented (see
+  `backend-opcda` below). `OpcUaBackend` and `ModbusBackend` are roadmap items that must slot in
+  without touching `bhtune-core`. Connecting/constructing a specific backend is deliberately
+  *not* part of the trait — each implementation's own inherent constructor takes whatever it
+  individually needs (gateway host/port + OPC DA server name, a trace file path, simulator
+  parameters), since one uniform `connect()` signature across such different backends would
+  leak one implementation's parameters into the trait every other implementation would have to
+  ignore.
 
 - **AGPL-3.0-or-later + CLA.** FOSS for everyone now; the CLA (see `CLA.md`, currently a draft —
   not yet in force) is what would let ByteHound also offer separate commercial licensing terms to
@@ -139,25 +144,54 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   (so a suffix/unit fix in a later release reaches existing installs automatically), and never
   touches a row whose name collides with a built-in's but which isn't itself `is_builtin` — a
   user's own template is never silently overwritten just because it shares a name with a preset.
+- **`OpcDaBackend` serializes access to one `opcda_bridge::Client` behind a `tokio::sync::Mutex`,
+  never `std::sync::Mutex`.** The bridge client's methods take `&mut self`, but `Backend`'s
+  methods take `&self` (required for `Arc<dyn Backend>` sharing), so the mutex guard is held
+  across `.await` points — only `tokio::sync::Mutex`'s guard is `Send`, which `#[async_trait]`'s
+  generated futures require by default. A single tuning session only ever has one read/write/
+  browse in flight anyway, so serializing is not a real bottleneck.
+- **`OpcDaBackend` always reports `TagValue::timestamp` as `None`, never a guessed value.**
+  `opc-da-client`'s documented contract (the Windows-only library the gateway wraps) reports
+  each tag's last-change time as a *local*, offset-less `"YYYY-MM-DD HH:MM:SS"` string (or
+  `"N/A"`/`"Invalid"` for tags with none) — there is no reliable way to convert that into a
+  trustworthy `DateTime<Utc>` without knowing the gateway host's timezone, which isn't part of
+  the bridge protocol and can't safely be assumed to match wherever `bhtune` runs. Guessing
+  (e.g. treating it as UTC, or as bhtune's own local time via `chrono::Local`) would silently
+  produce a wrong-but-plausible value — exactly what this project avoids elsewhere (see
+  `TagValue.value` staying an unparsed string above). This is also why `chrono`'s `clock`
+  feature is never enabled anywhere in this workspace even after adding `opcda-bridge`/`tonic`:
+  Cargo's feature unification would otherwise silently re-enable `Utc::now()`/`Local::now()`
+  for `bhtune-core` too in any build that includes both crates (`cargo build --workspace`,
+  `cargo test --workspace`, and eventually `bhtune-cli`'s own binary) — confirmed by
+  temporarily adding a `Utc::now()` call to `bhtune-core` and observing it still fails to
+  compile with `opcda-bridge` present in the workspace. The field is diagnostic only (e.g.
+  detecting a frozen tag whose timestamp stops advancing); it is never the tick time the
+  tuning engine itself runs on, which always comes from the caller's own polling clock.
+- **`OpcDaBackend`'s error-mapping and quality/write/browse translation is split into small,
+  pure, synchronous functions** (`quality_from_raw`, `tag_value_from_raw`,
+  `opc_value_from_write`, `write_outcome_from_result`, `tag_node_from_browse`,
+  `map_bridge_error`), fully unit-tested with no I/O, separate from the thin async shell that
+  only locks the mutex and calls into `opcda_bridge::Client`. The shell itself is covered by a
+  handful of smoke tests against a minimal mock `Bridge` gRPC service (mirroring the pattern in
+  `opcda-bridge`'s own `test_support.rs`) proving the wiring composes correctly end-to-end,
+  rather than re-exercising `opcda-bridge`'s own already-tested RPC error-path matrix.
 
 ## OPC DA integration reference (`backend-opcda`)
 
-When implementing `backend-opcda`, consume the published `opcda-bridge` facade crate from
-crates.io. Do not add a Git dependency, a local path dependency, or the CLI crate
-`opcda-bridge-client`:
+`backend-opcda` is implemented: `OpcDaBackend` in `crates/bhtune-backend/src/opcda.rs`
+consumes the published `opcda-bridge` facade crate from crates.io, pinned directly in
+`crates/bhtune-backend/Cargo.toml` (not `[workspace.dependencies]` — see "Key architectural
+decisions" above). It does not use a Git dependency, a local path dependency, or the CLI
+crate `opcda-bridge-client`:
 
 ```toml
-# Root Cargo.toml
-[workspace.dependencies]
-opcda-bridge = "0.2"
-
 # crates/bhtune-backend/Cargo.toml
 [dependencies]
-opcda-bridge.workspace = true
+opcda-bridge = "0.2"
 ```
 
-The facade intentionally hides generated gRPC details and exposes the typed API needed by a
-`Backend` adapter:
+The facade intentionally hides generated gRPC details and exposes the typed API
+`OpcDaBackend` wraps:
 
 ```rust
 use opcda_bridge::{Client, Value};
@@ -179,22 +213,45 @@ let result = client
     .await?;
 ```
 
-Integration rules:
+Integration rules, as implemented in `OpcDaBackend`:
 
-- Pass `host:port` to `Client::connect`; it adds the plaintext `http://` scheme itself. The
-  default gateway port is `opcda_bridge::DEFAULT_BRIDGE_PORT` (`7600`).
-- Keep one `Client` and reuse it across ticks; its methods require `&mut self` and the underlying
-  channel is designed to be reused.
-- `read` returns `TagValue` fields as strings (`value`, `quality`, and `timestamp`). Parse the
-  numeric value into `f32` at the adapter boundary and surface parse or bad-quality errors; never
-  silently substitute defaults.
-- `write` accepts `Value::{String, Int, Float, Bool}`. Convert bhtune's `f32` analog values with
-  `f64::from(value)` and inspect `WriteResult.success`; a gateway-level rejected write is a normal
-  result with `success == false`, not necessarily an RPC error.
-- Propagate or wrap `opcda_bridge::Error` while preserving its source. It distinguishes connection
-  failures (`Error::Connect`) from gateway RPC failures (`Error::Rpc`).
-- Use `opcda-bridge-proto = "0.2"` only if raw generated gRPC messages are genuinely required;
-  ordinary BHTune code should depend on the facade alone.
+- `OpcDaBackend::connect(host, server)` passes `host:port` straight to `Client::connect`, which
+  adds the plaintext `http://` scheme itself. The default gateway port is
+  `opcda_bridge::DEFAULT_BRIDGE_PORT` (`7600`). `server` (the OPC DA ProgID) is stored alongside
+  the client and passed to every subsequent call — `Backend`'s own trait methods don't take a
+  server parameter, since that's OPC DA-specific plumbing, not something every backend has.
+- One `Client` is held (behind a `tokio::sync::Mutex`, see "Key architectural decisions" above)
+  and reused across every call; its methods require `&mut self` and the underlying channel is
+  designed to be reused rather than reconnected per call.
+- `read` returns `TagValue` fields as strings (`value`, `quality`, and `timestamp`).
+  `OpcDaBackend` maps `quality` via an exact `"Good"`/`"Uncertain"` string match (anything else,
+  including `opc-da-client`'s synthesized `"Unknown(0xNNNN)"`, becomes `Quality::Bad` — never
+  silently trusted) and leaves `timestamp` as `None` always (see "Key architectural decisions"
+  above for why). `value` itself is passed through unparsed, per the `Backend` trait's own
+  contract — parsing into `f32` and surfacing a parse failure as a real error is each specific
+  caller's job, not this backend's.
+- `write` accepts `Value::{String, Int, Float, Bool}`; `OpcDaBackend` only ever sends
+  `Value::Float` (via `f64::from(value)` for a `TagWrite::Float`) or `Value::String` (for a
+  `TagWrite::Raw`, e.g. a mode-revert write) — never `Int`/`Bool`, since bhtune has no tags of
+  those kinds. `WriteResult.success == false` maps to `Ok(WriteOutcome::failure(..))`, not an
+  `Err` — a gateway-level rejected write (read-only tag, out of range) is a normal RPC result,
+  never an RPC error.
+- `opcda_bridge::Error` is boxed and wrapped, preserving its source, via one exhaustive
+  `map_bridge_error` function: `Error::Connect` becomes `BackendError::Connect`, `Error::Rpc`
+  becomes `BackendError::Operation`. Exhaustive (no wildcard arm) so a future new variant in
+  `opcda_bridge::Error` fails this crate's build rather than silently falling into one bucket.
+- `browse` hardcodes `flat: false` (one level, matching `Backend::browse`'s own contract) and a
+  `max_tags` of `1000`, matching `opcda-bridge-client`'s own CLI default
+  (`DEFAULT_MAX_TAGS` in that crate's `config.rs`) for consistency with the reference CLI.
+  `BrowseNode.node_type` is mapped via an exact `"Branch"` string match (the gateway's own
+  `NODE_TYPE_BRANCH` constant); anything else — including an unrecognized value — is treated as
+  a leaf, the conservative choice (a wrongly-leaf-tagged branch just returns a clear error on
+  read/write; a wrongly-branch-tagged leaf would make a real tag invisible to a tag-tree
+  browser).
+- `opcda-bridge-proto = "0.2"`, `tonic = "0.14"`, and `tokio-stream = "0.1"` are dev-dependencies
+  only, pinned to the exact versions `opcda-bridge` itself uses internally, so this crate's own
+  mock-gateway smoke tests (a minimal in-process `Bridge` gRPC service) produce wire-compatible
+  types. Production code never depends on `opcda-bridge-proto` directly — only the facade.
 
 The gateway is a separate Windows process installed with `cargo install opcda-bridge-gateway` or
 downloaded from the upstream releases page. It runs beside the OPC DA server, listens on port
@@ -355,7 +412,7 @@ that binary does something real and gains its own targeted tests.
 | Crate            | Phase                                                                   | Status                                                                       |
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
-| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` done (trait + error model, tested); implementations pending  |
+| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` done (trait, error model, and OPC DA implementation, all tested); simulator/replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`                                         | Both done (7 tables, tested; 4 templates auto-seed on startup)               |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
 | `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet                                  |
@@ -368,17 +425,17 @@ that binary does something real and gains its own targeted tests.
    from the simulator and, later, real field use; build the trace fixture normalizer.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
    `cargo-deny` FOSS gate.
-2. **`opcda-bridge` reusable client library** (published upstream) — consume the
-   `opcda-bridge` crate from crates.io (`opcda-bridge = "0.2"`) when implementing
-   `backend-opcda`. Keep the dependency out of the workspace until that implementation has real
-   code to use it.
+2. **`opcda-bridge` reusable client library** (published upstream) — consumed as a plain
+   crates.io dependency (`opcda-bridge = "0.2"`), local to `bhtune-backend`'s own `Cargo.toml`
+   (see "Key architectural decisions" for why it stays out of `[workspace.dependencies]`).
 3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, and tuning math are
    done; the replay harness remains, with the correctness-critical details above baked in and
    unit-tested directly.
 4. **Backends** — the `Backend` trait (`backend-trait`, done: `read`/`write`/`browse` plus
    `TagId`/`TagValue`/`TagWrite`/`WriteOutcome`/`TagNode`/`BackendError` in `crates/
-   bhtune-backend`); OPC DA, simulator (Rust FOPDT process model), and replay implementations
-   remain.
+   bhtune-backend`) and its OPC DA implementation (`backend-opcda`, done: `OpcDaBackend` in
+   `crates/bhtune-backend/src/opcda.rs`, see "OPC DA integration reference" above); simulator
+   (Rust FOPDT process model) and replay implementations remain.
 5. **Persistence** — SQLite schema (`db-schema`, done: `dcs_templates`, `loops`, `tune_runs`,
    `tune_samples`, `tune_results`, `tune_writes`, `settings`, all migrated/tested in
    `crates/bhtune-db`) and startup seeding of the four DCS/PLC template presets

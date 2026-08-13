@@ -73,7 +73,7 @@ mod tests {
     #[async_trait]
     impl Backend for MockBackend {
         async fn read(&self, tags: &[TagId]) -> BackendResult<Vec<TagValue>> {
-            let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+            let timestamp = Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap());
             tags.iter()
                 .map(|tag| {
                     let (value, quality) = self.values.get(tag).cloned().ok_or_else(|| {

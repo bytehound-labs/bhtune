@@ -14,6 +14,27 @@ thiserror.workspace = true
 # session can pick an implementation at runtime from config; native `async fn` in traits is
 # not yet dyn-compatible), so it stays local rather than promoted to `[workspace.dependencies]`.
 async-trait = "0.1"
+# `OpcDaBackend` is the only thing that talks to the bridge directly -- everything else goes
+# through the `Backend` trait instead -- so this stays local rather than promoted to
+# `[workspace.dependencies]`, matching the single-consumer convention already used for
+# `async-trait` above.
+opcda-bridge = "0.2"
+# Needed for `tokio::sync::Mutex`: `opcda_bridge::Client`'s methods take `&mut self` (it
+# buffers per-call gRPC codec state), but `Backend`'s methods take `&self` (required so a
+# backend can be shared behind `Arc<dyn Backend>`), so `OpcDaBackend` serializes access to
+# its one `Client` through an async-aware mutex. Unlike `std::sync::MutexGuard`,
+# `tokio::sync::MutexGuard` is `Send`, so it can be held across the `.await` points inside
+# each trait method without breaking `#[async_trait]`'s default requirement that its
+# generated futures be `Send`.
+tokio = { version = "1", features = ["sync"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
+# Pinned to the same versions `opcda-bridge` itself declares in its own `Cargo.toml`: this
+# crate's tests stand up a mock `Bridge` gRPC service to test `OpcDaBackend` end-to-end
+# against, and the generated `tonic`/`prost` types on both sides of that connection (the mock
+# service here, `opcda_bridge::Client`'s generated stub on the other) must agree on the exact
+# wire types or they won't type-check against each other.
+opcda-bridge-proto = "0.2"
+tonic = "0.14"
+tokio-stream = "0.1"

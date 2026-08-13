@@ -45,12 +45,21 @@ impl Quality {
 /// parse failure as an error rather than silently substituting a default — is left to the
 /// caller that knows which of its requested tags are numeric, mirroring how
 /// `opcda-bridge`'s own `Client::read` returns every value as a string for the same reason.
+///
+/// `timestamp` is `Option`, not a bare `DateTime<Utc>` — deliberately, since not every backend
+/// can honestly supply one. OPC DA over the bridge, in particular, reports the item's last-
+/// change time as a *local*, offset-less `"YYYY-MM-DD HH:MM:SS"` string, with `"N/A"`/
+/// `"Invalid"` sentinels for items that have none (see `backend-opcda`'s `parse_timestamp`).
+/// `None` when a backend cannot supply a trustworthy value, rather than a synthetic
+/// stand-in — this field is diagnostic (e.g. detecting a frozen tag whose timestamp stops
+/// advancing while its value doesn't change), never the tick time the tuning engine itself
+/// runs on, which comes from the caller's own polling clock instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TagValue {
     pub tag: TagId,
     pub value: String,
     pub quality: Quality,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Option<DateTime<Utc>>,
 }
 
 /// A value to write to a tag via [`crate::Backend::write`].

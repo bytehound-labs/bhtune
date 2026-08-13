@@ -4,9 +4,9 @@
 //! `browse`) so `bhtune-core`'s tuning engine never knows what it is talking to. Three
 //! implementations are planned:
 //!
-//! - `opcda`: the primary driver for v1, over a reusable client library published as the
-//!   `opcda-bridge` crates.io dependency (Windows OPC DA via a network gateway — no
-//!   COM/DCOM dependency in this process).
+//! - [`opcda`]: the primary driver for v1 ([`OpcDaBackend`]), over the `opcda-bridge`
+//!   crates.io dependency (Windows OPC DA via a network gateway — no COM/DCOM dependency in
+//!   this process).
 //! - `simulator`: an in-process FOPDT (first-order-plus-dead-time) process model with a
 //!   virtual PID controller, used for fully automated E2E tests on CI (no Windows, no
 //!   Kepware, no external process) and as a demo mode.
@@ -20,15 +20,17 @@
 //! - [`types`] — the plain data types ([`TagId`], [`TagValue`], [`TagWrite`],
 //!   [`WriteOutcome`], [`TagNode`]) that cross the trait boundary.
 //! - [`error`] — the crate's error type, [`BackendError`].
+//! - [`opcda`] — [`OpcDaBackend`], the OPC DA implementation.
 //!
-//! Not yet implemented: `opcda`/`simulator`/`replay` themselves — this crate has the trait
-//! and its supporting types only, until `backend-opcda`/`backend-simulator`/`backend-replay`
-//! land.
+//! Not yet implemented: `simulator`/`replay` — this crate has the trait, its supporting
+//! types, and the OPC DA backend only, until `backend-simulator`/`backend-replay` land.
 
 pub mod backend;
 pub mod error;
+pub mod opcda;
 pub mod types;
 
 pub use backend::Backend;
 pub use error::{BackendError, BackendResult};
+pub use opcda::OpcDaBackend;
 pub use types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome};
