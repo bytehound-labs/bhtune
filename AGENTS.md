@@ -11,10 +11,12 @@ Early. Workspace and CI are in place. `bhtune-core`'s data model (`core-model`),
 relay-switching engine (`core-mrft`), and tuning-constant math (`core-tuning-math`) are
 implemented and unit-tested. `bhtune-db`'s SQLite schema (`db-schema`) is implemented and
 tested — all 7 tables, migrations, and connection/pragma setup — the four built-in DCS
-templates seed themselves on startup (`db-seed-templates`), and the run-history repository
+templates seed themselves on startup (`db-seed-templates`), the run-history repository
 layer (`history-query-api`) is done: full run lifecycle (start/record-initial-readings/
 complete/fail/abort), dynamic filtering and pagination over runs, and per-run sample/result/
-write queries. `bhtune-backend`'s `Backend` trait and error model (`backend-trait`) are
+write queries, and whole-database backup/restore (`db-backup-restore`) is done: a single
+portable-file snapshot via `VACUUM INTO`, and a validated, safety-copied restore back into
+place. `bhtune-backend`'s `Backend` trait and error model (`backend-trait`) are
 defined and tested, and its OPC DA implementation (`backend-opcda`, `OpcDaBackend`) is also
 done — the primary v1 driver, over the published `opcda-bridge` crate. `backend-simulator`/
 `backend-replay`, the replay harness, CLI, and GUI are not yet. See "Phases and todos" below
@@ -206,6 +208,33 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   handful of smoke tests against a minimal mock `Bridge` gRPC service (mirroring the pattern in
   `opcda-bridge`'s own `test_support.rs`) proving the wiring composes correctly end-to-end,
   rather than re-exercising `opcda-bridge`'s own already-tested RPC error-path matrix.
+- **`db-backup-restore`'s `backup_to`/`restore_from` use `VACUUM INTO` and a validate-first,
+  safety-copy-first design, not a raw file copy.** `VACUUM INTO` produces a single, compacted,
+  non-WAL file with no `-wal`/`-shm` sidecars to also track — the most portable on-disk form for
+  "one file, take it anywhere" — and runs online (it doesn't block the source pool's other
+  readers/writers). `restore_from` takes its `pool` **by value**, not `&SqlitePool`: restoring
+  replaces the file underneath every existing connection, so the type system forces the caller
+  to give up its old handle rather than risk it staying around and getting reused after the file
+  it pointed to no longer holds the same data. Before touching anything live, the candidate
+  backup file is opened **read-only** and run through `PRAGMA integrity_check` plus a check for a
+  real `tune_runs` table (cheap proxy for "this is actually a bhtune database") — every way that
+  check can fail (nonexistent file, unopenable file, failed or non-"ok" integrity check, wrong
+  schema) maps to the same `DbError::InvalidBackup`, so callers don't need to distinguish causes
+  to handle "this isn't a valid backup" correctly. Per this project's own "export before
+  destructive DB operations" rule, `restore_from` unconditionally copies any existing live file
+  to a timestamped `<file>.pre-restore-<UTC timestamp>.bak` sibling *before* overwriting it, and
+  reports that path back via `RestoreOutcome::pre_restore_backup` (`None` only when there was no
+  live file to protect, i.e. a fresh install). The actual file replacement is
+  copy-to-a-same-directory-temp-file-then-`rename`, so a crash or a full disk mid-copy can never
+  leave `db_path` half-overwritten (rename onto an existing path is atomic on the same
+  filesystem). Stale `-wal`/`-shm` sidecars at the old live path are then explicitly removed —
+  proven necessary by testing that a graceful `Pool::close()` on a database's last connection
+  already deletes sidecars *it* created, so the removal loop only matters for genuinely orphaned
+  ones with no backing connection (crash leftovers, or files copied in from elsewhere); the test
+  covering this simulates exactly that case rather than the (already self-cleaning) graceful
+  case. Finally, `db_path` is reopened via the ordinary `connect()`, so any migrations the
+  backup predates are re-applied going forward — restoring an old backup transparently upgrades
+  its schema, the same as opening an old database file normally would.
 
 ## OPC DA integration reference (`backend-opcda`)
 
@@ -444,7 +473,7 @@ that binary does something real and gains its own targeted tests.
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` done (trait, error model, and OPC DA implementation, all tested); simulator/replay pending |
-| `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`                     | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination) |
+| `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | Scaffolded, prints a placeholder line only                                   |
 | `bhtune-desktop` | `tauri-runner`                                                          | Placeholder binary, no Tauri dependency yet                                  |
 | `bhtune-server`  | roadmap only                                                            | Placeholder binary, not part of v1                                           |
@@ -471,11 +500,12 @@ that binary does something real and gains its own targeted tests.
    `tune_samples`, `tune_results`, `tune_writes`, `settings`, all migrated/tested in
    `crates/bhtune-db`), startup seeding of the four DCS/PLC template presets
    (`db-seed-templates`, done: `bhtune_db::seed_builtin_templates` upserts `built_in_templates()`
-   on every startup), and the run-history repository layer (`history-query-api`, done: full
+   on every startup), the run-history repository layer (`history-query-api`, done: full
    `TuneRunRow` lifecycle, dynamic filtering/pagination via `sqlx::QueryBuilder`, and per-run
-   `TuneSampleRow`/`TuneResultRow`/`TuneWriteRow` queries — see "Key architectural decisions"
-   above). Remaining: establishing platform-standard data directories for the database file
-   itself (part of `db-drop-legacy`).
+   `TuneSampleRow`/`TuneResultRow`/`TuneWriteRow` queries), and whole-database backup/restore
+   (`db-backup-restore`, done: `backup_to`/`restore_from` in `crates/bhtune-db/src/backup.rs` —
+   see "Key architectural decisions" above). Remaining: establishing platform-standard data
+   directories for the database file itself (part of `db-drop-legacy`).
 6. **Headless CLI** — `tune`/`template`/`history`/`export`/`simulate` subcommands, CLI > env >
    TOML > default config precedence, non-interactive automation mode, safety guardrails
    (mandatory timeout + auto-restore, explicit opt-in for unattended PID writes), structured

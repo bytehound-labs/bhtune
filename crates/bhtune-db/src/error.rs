@@ -21,6 +21,23 @@ pub enum DbError {
     /// invalid value.
     #[error("column {column:?} held an unrecognized value: {value:?}")]
     InvalidEnumValue { column: &'static str, value: String },
+
+    /// [`crate::backup::backup_to`]'s destination already exists. Refused rather than
+    /// silently overwritten — clobbering a previous backup because of a reused filename
+    /// would itself be a data-loss bug.
+    #[error("backup destination already exists: {}", .0.display())]
+    BackupDestinationExists(std::path::PathBuf),
+
+    /// [`crate::backup::restore_from`] (or [`crate::backup::backup_to`]'s own post-write
+    /// check) determined a file is not a usable bhtune backup: it failed
+    /// `PRAGMA integrity_check`, or it doesn't contain a `tune_runs` table.
+    #[error("not a valid bhtune backup file: {0}")]
+    InvalidBackup(String),
+
+    /// A filesystem operation during [`crate::backup::backup_to`]/
+    /// [`crate::backup::restore_from`] (copying, renaming, or removing a file) failed.
+    #[error("backup/restore file operation failed: {0}")]
+    Io(#[source] std::io::Error),
 }
 
 pub type DbResult<T> = Result<T, DbError>;
