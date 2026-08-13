@@ -504,8 +504,12 @@ that binary does something real and gains its own targeted tests.
    `TuneRunRow` lifecycle, dynamic filtering/pagination via `sqlx::QueryBuilder`, and per-run
    `TuneSampleRow`/`TuneResultRow`/`TuneWriteRow` queries), and whole-database backup/restore
    (`db-backup-restore`, done: `backup_to`/`restore_from` in `crates/bhtune-db/src/backup.rs` —
-   see "Key architectural decisions" above). Remaining: establishing platform-standard data
-   directories for the database file itself (part of `db-drop-legacy`).
+   see "Key architectural decisions" above). `db-drop-legacy` needed no work of its own: bhtune
+   never had licensing/loop-locking/log-encryption to remove in the first place, since
+   `db-schema` designed plain SQLite storage in from the start. Remaining: wiring up
+   platform-standard data directories for the database file itself, once there's an actual
+   application entry point to wire it into (part of `bhtune-cli`'s `cli-config`, not a
+   `bhtune-db` concern).
 6. **Headless CLI** — `tune`/`template`/`history`/`export`/`simulate` subcommands, CLI > env >
    TOML > default config precedence, non-interactive automation mode, safety guardrails
    (mandatory timeout + auto-restore, explicit opt-in for unattended PID writes), structured
