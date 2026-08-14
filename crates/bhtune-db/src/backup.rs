@@ -5,7 +5,10 @@
 //! machine, or a safety net immediately before a risky operation), not about pruning
 //! individual runs. Exposed to both the CLI and the GUI.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use chrono::{DateTime, Utc};
 use sqlx::{
@@ -17,6 +20,18 @@ use crate::{
     error::{DbError, DbResult},
     pool::connect,
 };
+
+/// How long the pre-restore exclusivity probe waits on a lock before concluding another
+/// connection is genuinely still using the database, rather than just finishing up.
+///
+/// Deliberately much shorter than [`crate::pool::connect`]'s own busy timeout (10 seconds):
+/// that timeout exists so ordinary contended *work* (a retention sweep, a large export) has
+/// room to finish rather than erroring out. This one exists only to answer "is anyone here
+/// right now", so it should fail fast — a restore command that appears to hang for ten
+/// seconds every time a read happened moments earlier would be a poor, confusing experience
+/// for what is meant to be a quick, decisive check. A short grace window still lets a
+/// genuinely fleeting reader (one that's already committing) avoid a false positive.
+const EXCLUSIVITY_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// Writes a complete, consistent, compacted snapshot of `pool`'s database to `dest`.
 ///
@@ -67,19 +82,33 @@ pub struct RestoreOutcome {
 /// 1. `backup_path` is validated (`PRAGMA integrity_check`, plus confirming a real
 ///    `tune_runs` table exists) *before* anything about the live database is touched, so a
 ///    corrupt or unrelated file never gets a chance to destroy good data.
-/// 2. If `db_path` already exists, it is copied to a timestamped sibling file first (see
-///    [`RestoreOutcome::pre_restore_backup`]) — restoring the wrong backup, or restoring
-///    when a fresh backup was what was actually wanted, is still recoverable afterward.
-/// 3. The backup is copied into place via write-to-a-temp-file-then-rename, so a crash or a
+/// 2. The caller's own connections to `db_path` are closed first, so step 3's exclusivity
+///    check isn't confused by this process's own still-open pool.
+/// 3. If `db_path` already exists, [`exclusive_pre_restore_snapshot`] both confirms no other
+///    connection — in this process or another — still holds it open, and, while that's
+///    proven true, takes a consistent `VACUUM INTO` copy of it (see
+///    [`RestoreOutcome::pre_restore_backup`]). Restoring the wrong backup, or restoring when
+///    a fresh backup was what was actually wanted, is still recoverable afterward. Using
+///    `VACUUM INTO` here rather than a raw file copy means the safety copy can never be
+///    silently missing data that was still sitting in a WAL file — the same reason
+///    [`backup_to`] uses it.
+/// 4. The backup is copied into place via write-to-a-temp-file-then-rename, so a crash or a
 ///    full disk mid-copy leaves the original `db_path` untouched rather than half-overwritten
 ///    (rename onto an existing path is atomic on the same filesystem, which a same-directory
-///    temp file guarantees).
-/// 4. Any stale `-wal`/`-shm` sidecar files left over from the old `db_path` are removed —
-///    they describe uncommitted changes to a database that, after step 3, no longer exists
+///    temp file guarantees; renaming a file onto an existing file — as opposed to a
+///    directory — replaces it on Windows too, via `MOVEFILE_REPLACE_EXISTING`, so no
+///    Windows-specific fallback is needed here).
+/// 5. Any stale `-wal`/`-shm` sidecar files left over from the old `db_path` are removed —
+///    they describe uncommitted changes to a database that, after step 4, no longer exists
 ///    at that path.
-/// 5. `db_path` is reopened via [`connect`], which reapplies the standard pragmas and runs
+/// 6. `db_path` is reopened via [`connect`], which reapplies the standard pragmas and runs
 ///    any migrations the backup predates forward — restoring an older backup transparently
 ///    upgrades its schema, exactly as opening an old database file normally would.
+///
+/// Restoring while *another* bhtune process (for instance `bhtune-server`, running
+/// alongside the CLI) has `db_path` open returns [`DbError::DatabaseInUse`] instead of
+/// proceeding — see [`exclusive_pre_restore_snapshot`] for how that's detected and its
+/// residual, deliberately-accepted race.
 pub async fn restore_from(
     pool: SqlitePool,
     db_path: &Path,
@@ -90,13 +119,12 @@ pub async fn restore_from(
 
     // Wait for every connection to be gracefully closed (not just dropped) before touching
     // the file at the OS level — an open file handle can otherwise block the rename/delete
-    // calls below outright, especially on Windows.
+    // calls below outright, especially on Windows, and so the exclusivity probe below isn't
+    // confused by this process's own still-open connections.
     pool.close().await;
 
     let pre_restore_backup = if db_path.exists() {
-        let sidecar = pre_restore_backup_path(db_path, now);
-        std::fs::copy(db_path, &sidecar).map_err(DbError::Io)?;
-        Some(sidecar)
+        Some(exclusive_pre_restore_snapshot(db_path, now).await?)
     } else {
         None
     };
@@ -117,6 +145,57 @@ pub async fn restore_from(
         pool,
         pre_restore_backup,
     })
+}
+
+/// Confirms nothing else still holds `db_path` open, and — while that exclusivity is
+/// proven — takes a `VACUUM INTO` safety copy of it before [`restore_from`] overwrites it.
+///
+/// The check is `PRAGMA wal_checkpoint(TRUNCATE)`'s own `busy` column: fully truncating the
+/// WAL requires that no other connection, in this process or any other, is still reading or
+/// writing the database, so a nonzero `busy` result is SQLite's own proof that something
+/// else has it open. No separate lock file or advisory-lock scheme is needed to get that
+/// answer.
+///
+/// This is a point-in-time check, not a held lock: nothing stops a different process from
+/// opening `db_path` in the moment between this returning and [`restore_from`]'s later file
+/// replacement. That residual race is accepted deliberately — it's the "honest fix for the
+/// multi-process case" this was designed for, not a claim of a full distributed lock. A
+/// truly exclusive, lock-held-for-the-whole-restore guarantee would need every bhtune
+/// process to cooperate through a shared lock file from the moment it opens the database,
+/// which is a larger change than this finding's scope.
+///
+/// Deliberately does not go through [`connect`]: that runs migrations, which this must not
+/// do against a database that's about to be discarded and replaced wholesale.
+async fn exclusive_pre_restore_snapshot(db_path: &Path, now: DateTime<Utc>) -> DbResult<PathBuf> {
+    let options = SqliteConnectOptions::new()
+        .filename(db_path)
+        .busy_timeout(EXCLUSIVITY_PROBE_TIMEOUT);
+    let probe_pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(DbError::Connect)?;
+
+    let (busy, _log, _checkpointed): (i64, i64, i64) =
+        sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+            .fetch_one(&probe_pool)
+            .await
+            .map_err(DbError::Query)?;
+    if busy != 0 {
+        probe_pool.close().await;
+        return Err(DbError::DatabaseInUse(db_path.to_path_buf()));
+    }
+
+    let sidecar = pre_restore_backup_path(db_path, now);
+    sqlx::query("VACUUM INTO ?")
+        .bind(sidecar.display().to_string())
+        .execute(&probe_pool)
+        .await
+        .map_err(DbError::Query)?;
+
+    probe_pool.close().await;
+    validate_backup_file(&sidecar).await?;
+    Ok(sidecar)
 }
 
 /// Opens `path` read-only and confirms it's a usable bhtune database: SQLite's own
@@ -478,6 +557,134 @@ mod tests {
         assert_eq!(
             template_names(&outcome.pool).await,
             vec!["From Backup".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_from_removes_orphaned_sidecars_even_when_db_path_itself_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+
+        let backup_source_pool = connect(&dir.path().join("source.db")).await.unwrap();
+        seed_one_template(&backup_source_pool, "From Backup", now).await;
+        let backup_path = dir.path().join("backup.db");
+        backup_to(&backup_source_pool, &backup_path).await.unwrap();
+
+        // `db_path` itself has never existed -- so the pre-restore exclusivity check and
+        // safety snapshot are skipped entirely, there being nothing live to check or copy
+        // -- but stale `-wal`/`-shm` sidecar files sit at the paths it would use anyway,
+        // e.g. left behind by something that removed just the main file by hand. These
+        // must still be cleared before the restored file is written there, or the freshly
+        // restored database would be confused by unrelated WAL content sitting beside it.
+        // This is the one path that can reach the sidecar-removal loop directly: whenever
+        // `db_path` already exists, [`exclusive_pre_restore_snapshot`]'s own
+        // open-checkpoint-close sequence already disposes of any stale sidecars as a side
+        // effect, before the removal loop ever runs.
+        let live_path = dir.path().join("live.db");
+        let wal_path = sibling_path(&live_path, "-wal");
+        let shm_path = sibling_path(&live_path, "-shm");
+        std::fs::write(&wal_path, b"orphaned wal content").unwrap();
+        std::fs::write(&shm_path, b"orphaned shm content").unwrap();
+
+        let live_pool = crate::pool::connect_in_memory().await.unwrap();
+        let outcome = restore_from(live_pool, &live_path, &backup_path, now)
+            .await
+            .unwrap();
+
+        // `connect()`'s own final reopen legitimately creates a fresh `-wal` file for the
+        // new pool (ordinary WAL-mode operation), so the sidecar path may exist again by
+        // now -- what the removal loop must guarantee is that the *garbage* content is
+        // gone, not that no file is ever present at that path again.
+        if let Ok(contents) = std::fs::read(&wal_path) {
+            assert_ne!(contents, b"orphaned wal content");
+        }
+        assert_eq!(
+            template_names(&outcome.pool).await,
+            vec!["From Backup".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_from_refuses_when_another_connection_still_holds_the_live_database_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+
+        let backup_source_pool = connect(&dir.path().join("source.db")).await.unwrap();
+        let backup_path = dir.path().join("backup.db");
+        backup_to(&backup_source_pool, &backup_path).await.unwrap();
+
+        let live_path = dir.path().join("live.db");
+        let live_pool = connect(&live_path).await.unwrap();
+        seed_one_template(&live_pool, "Must Survive The Refusal", now).await;
+
+        // A second, independent connection to the same file with an open read transaction,
+        // simulating another bhtune process (e.g. `bhtune-server` running alongside the
+        // CLI) that still has the database open. `restore_from` only closes the pool *it*
+        // was handed, so this second connection is exactly what the exclusivity probe
+        // inside `exclusive_pre_restore_snapshot` exists to notice. A `SELECT` (not just
+        // `BEGIN`) is required to actually establish a WAL read snapshot -- an empty
+        // transaction holds no lock a checkpoint would need to wait on.
+        let blocker_pool = connect(&live_path).await.unwrap();
+        let mut blocker_tx = blocker_pool.begin().await.unwrap();
+        sqlx::query("SELECT COUNT(*) FROM tune_runs")
+            .fetch_one(&mut *blocker_tx)
+            .await
+            .unwrap();
+
+        let err = restore_from(live_pool, &live_path, &backup_path, now)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DbError::DatabaseInUse(path) if path == live_path));
+
+        // The live database must be left completely untouched by the refused attempt.
+        drop(blocker_tx);
+        blocker_pool.close().await;
+        let live_pool_again = connect(&live_path).await.unwrap();
+        assert_eq!(
+            template_names(&live_pool_again).await,
+            vec!["Must Survive The Refusal".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_from_succeeds_once_the_blocking_connection_is_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+
+        let backup_source_pool = connect(&dir.path().join("source.db")).await.unwrap();
+        seed_one_template(&backup_source_pool, "From Backup", now).await;
+        let backup_path = dir.path().join("backup.db");
+        backup_to(&backup_source_pool, &backup_path).await.unwrap();
+
+        let live_path = dir.path().join("live.db");
+        let live_pool = connect(&live_path).await.unwrap();
+
+        let blocker_pool = connect(&live_path).await.unwrap();
+        let mut blocker_tx = blocker_pool.begin().await.unwrap();
+        sqlx::query("SELECT COUNT(*) FROM tune_runs")
+            .fetch_one(&mut *blocker_tx)
+            .await
+            .unwrap();
+
+        // `restore_from` already closed `live_pool` before discovering the blocker, so that
+        // handle is spent regardless of the outcome -- a real caller (e.g. a CLI command)
+        // would need to reconnect before trying again, exactly as this test does below.
+        let err = restore_from(live_pool, &live_path, &backup_path, now)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DbError::DatabaseInUse(_)));
+
+        drop(blocker_tx);
+        blocker_pool.close().await;
+
+        let live_pool_retry = connect(&live_path).await.unwrap();
+        let outcome = restore_from(live_pool_retry, &live_path, &backup_path, now)
+            .await
+            .unwrap();
+        assert_eq!(
+            template_names(&outcome.pool).await,
+            vec!["From Backup".to_string()],
+            "once the other connection releases its read snapshot, the check must clear and the restore proceed"
         );
     }
 }

@@ -50,6 +50,16 @@ pub enum DbError {
     /// [`crate::backup::restore_from`] (copying, renaming, or removing a file) failed.
     #[error("backup/restore file operation failed: {0}")]
     Io(#[source] std::io::Error),
+
+    /// [`crate::backup::restore_from`] found another connection (in this process or
+    /// another) still attached to the live database. Restoring while that's true risks
+    /// desynchronizing whatever holds it: its view of the file would silently stop matching
+    /// what's on disk the moment the restore replaces it.
+    #[error(
+        "database at {} appears to be in use by another connection or process -- close it before restoring",
+        .0.display()
+    )]
+    DatabaseInUse(std::path::PathBuf),
 }
 
 pub type DbResult<T> = Result<T, DbError>;

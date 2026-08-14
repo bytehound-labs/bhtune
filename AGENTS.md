@@ -338,10 +338,13 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   check can fail (nonexistent file, unopenable file, failed or non-"ok" integrity check, wrong
   schema) maps to the same `DbError::InvalidBackup`, so callers don't need to distinguish causes
   to handle "this isn't a valid backup" correctly. Per this project's own "export before
-  destructive DB operations" rule, `restore_from` unconditionally copies any existing live file
-  to a timestamped `<file>.pre-restore-<UTC timestamp>.bak` sibling *before* overwriting it, and
+  destructive DB operations" rule, `restore_from` copies any existing live file to a
+  timestamped `<file>.pre-restore-<UTC timestamp>.bak` sibling *before* overwriting it, and
   reports that path back via `RestoreOutcome::pre_restore_backup` (`None` only when there was no
-  live file to protect, i.e. a fresh install). The actual file replacement is
+  live file to protect, i.e. a fresh install) — via `VACUUM INTO`, not a raw `fs::copy`, and
+  gated by an exclusive-access check that refuses to proceed while another connection still
+  holds the live file open (`safety-db-restore`; see "Live-plant safety hardening" below for
+  the exclusivity-check design and its accepted TOCTOU limitation). The actual file replacement is
   copy-to-a-same-directory-temp-file-then-`rename`, so a crash or a full disk mid-copy can never
   leave `db_path` half-overwritten (rename onto an existing path is atomic on the same
   filesystem). Stale `-wal`/`-shm` sidecars at the old live path are then explicitly removed —
@@ -1107,6 +1110,64 @@ time; this section is updated as each lands, with a full pass once all are done:
   final test exercises the `--output json` success path directly (`bhtune-cli`'s own
   subprocess-level "stdout is exactly one JSON object" contract remains
   `safety-json-contract`'s responsibility, not re-proven per command here).
+- **`bhtune-db`'s `restore_from` is now safe under an active WAL and requires exclusive
+  access before restoring** — done (`bhtune_db::backup::exclusive_pre_restore_snapshot`,
+  `EXCLUSIVITY_PROBE_TIMEOUT`, `DbError::DatabaseInUse`). This finding predates any CLI
+  command actually calling `restore_from`/`backup_to` (both remain library-only APIs, per
+  `db-backup-restore`) — genuinely proactive hardening rather than a fix to a shipping
+  path, but sequenced here rather than deferred since Phase 6.6's template catalog work
+  edits the same pre-release migration findings 6 and 9 already touch. Previously the
+  pre-restore safety copy used a raw `std::fs::copy`, and SQLite only auto-checkpoints a
+  WAL when the *actual last connection to the file across the whole system* closes — not
+  merely the last connection in the caller's own pool — so a copy taken while a second
+  process (`bhtune-server` running alongside the CLI, the exact topology this project's own
+  architecture anticipates) still held the database open could silently miss committed data
+  sitting only in the WAL. Separately investigated and found to be a non-issue:
+  `restore_from`'s existing copy-to-temp-then-`rename` file replacement was already correct
+  on Windows — `std::fs::rename` overwriting an existing destination *file* (as opposed to a
+  directory) has always worked there via `MOVEFILE_REPLACE_EXISTING`, so no
+  Windows-specific fallback was needed for that part of the original finding. Closed as the
+  design's "A + C":
+  - **`VACUUM INTO` replaces the raw copy** (Option A) — the pre-restore safety copy is now
+    taken the same way `backup_to` already takes its own snapshots: a consistent,
+    WAL-content-inclusive copy that can never be silently missing committed data.
+  - **An exclusivity probe gates the snapshot** (Option C) —
+    `exclusive_pre_restore_snapshot` opens a dedicated, single-connection probe pool
+    straight to `db_path` (deliberately not via `connect()`, which runs migrations that must
+    never touch a database about to be discarded) and runs `PRAGMA wal_checkpoint(TRUNCATE)`;
+    a nonzero `busy` column is SQLite's own native proof that some other connection — in this
+    process or any other — is still attached, with no lock-file or advisory-lock scheme
+    needed to get that answer. `busy != 0` fails the whole restore with
+    `DbError::DatabaseInUse(db_path)` before the snapshot or the live file are touched at
+    all. A dedicated `EXCLUSIVITY_PROBE_TIMEOUT` (200ms) backs this check rather than
+    reusing `pool::connect`'s general-purpose 10-second `BUSY_TIMEOUT`: the two timeouts
+    answer different questions (connect's, "let contended work finish"; this one's, "is
+    anyone here right now") and reusing the longer one was measured to make every
+    blocked-restore path take a real ~10 seconds, since `wal_checkpoint(TRUNCATE)`
+    internally retries for the full busy-timeout duration before ever reporting `busy = 1`.
+  - **The residual race is accepted and documented, not hidden.** The exclusivity probe is a
+    point-in-time check, not a held lock — a different process could still open `db_path` in
+    the instant between the probe succeeding and the later file replacement.
+    `restore_from`'s doc comment calls this out explicitly as "the honest fix for the
+    multi-process case," matching the design's own framing of Option C versus the fuller,
+    explicitly deferred Option D (a logical/online restore that needs no exclusivity at
+    all).
+
+  **Testing approach.** Two new tests prove the exclusivity check itself: one opens a second
+  real connection to the live database, begins a transaction, and executes an actual
+  `SELECT` (establishing a genuine WAL read snapshot — a bare `BEGIN` alone wouldn't hold the
+  file open the same way), then asserts `restore_from` returns `DbError::DatabaseInUse` with
+  the live database left completely untouched; the other confirms a retry succeeds once that
+  blocking connection is dropped and closed. A third test targets the one line the new
+  exclusivity step's own side effect made harder to reach: because
+  `exclusive_pre_restore_snapshot`'s own open-checkpoint-close sequence against an
+  *existing* `db_path` already tidies up any stale `-wal`/`-shm` sidecars itself, the
+  pre-existing orphaned-sidecar test no longer exercises the later post-rename cleanup
+  loop's own `remove_file` call (caught by `cargo llvm-cov`'s line-level report, not by a
+  failing test — its own assertions, checking only final restored data, still passed). The
+  new test constructs the one scenario that *can* only be cleaned up by that loop: `db_path`
+  itself never existing (so the exclusivity/snapshot step is skipped entirely, per its own
+  existence gate) while stale sidecar files exist anyway at the paths it would use.
 
 ## Logging (`cli-logging`)
 
@@ -1327,7 +1388,7 @@ that binary does something real and gains its own targeted tests.
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
-| `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
+| `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; see "Live-plant safety hardening" below) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. Undergoing a live-plant safety hardening pass (Phase 6.5) after a post-`cli-logging` review; see "Live-plant safety hardening" below |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
