@@ -37,8 +37,12 @@ serde_json = "1"
 toml = "1"
 # `rt-multi-thread`/`macros` to run as an async binary; `time` for the tune command's
 # polling-interval ticker; `signal` for Ctrl+C-triggered graceful abort (the CLI's one
-# concession to interactivity — see AGENTS.md's `cli-commands`/`cli-safety` scope split).
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+# concession to interactivity — see AGENTS.md's `cli-commands`/`cli-safety` scope split);
+# `sync` for `crate::cancel`'s process-wide `tokio::sync::watch`-based Ctrl+C handle
+# (`safety-cancellation`), listed explicitly here even though `test_support.rs` was already
+# pulling `sync` in transitively via dev-dependency feature unification, so the real
+# (non-test) binary's own dependency on it isn't left implicit.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync"] }
 # Structured logging (`cli-logging`), matching `opcda-bridge-gateway`'s own `tracing`
 # stack/versions/features exactly so both projects' logging conventions stay recognizable to
 # the same user -- see `crate::logging`. Single-consumer within this workspace so far

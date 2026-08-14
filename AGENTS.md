@@ -35,8 +35,9 @@ scripted callers can tell a Ctrl+C abort or a failed PID write-back apart from a
 completion without parsing stdout (see "Automation" below). `cli-safety` is done: real
 range validation on `--relay-amp` at the `LoopConfig` model/construction level (not just a
 "not blank" check), a mandatory `--timeout-secs` wall-clock limit racing the poll loop
-itself so it fires even mid-hung-read (auto-abort-and-restore, its own distinguished
-`EXIT_TIMED_OUT` exit code), and an unconditional `--write-pid`-requires-`--yes` gate (there
+(auto-abort-and-restore, its own distinguished `EXIT_TIMED_OUT` exit code) — later hardened
+by `safety-cancellation` below to actually reach an in-flight backend call rather than only
+the idle wait between ticks — and an unconditional `--write-pid`-requires-`--yes` gate (there
 is no way to write PID constants to a live loop, interactively or scripted, without
 confirming it) — see "Safety" below. `cli-logging` is done: `tracing`/`tracing-subscriber` structured logging to a rotating
 file, resolved through the same `CLI > env > TOML > default` precedence as every other
@@ -634,11 +635,18 @@ machine-readable output for the same callers:
   `Serialize` and are reused directly.
 - **Exit codes** — `lib.rs` defines `EXIT_SUCCESS = 0`, `EXIT_FAILURE = 1` (a setup error:
   unknown template, invalid flag combination, database/backend connection failure — anything
-  `run()` returns as `Err`), `EXIT_ABORTED = 2` (Ctrl+C), and `EXIT_WRITE_BACK_FAILED = 3`
+  `run()` returns as `Err`), `EXIT_ABORTED = 2` (Ctrl+C), `EXIT_WRITE_BACK_FAILED = 3`
   (the test itself completed, but the requested PID write-back failed — rejected write,
-  failed confirmation readback, or the defensive missing-result case above).
-  `tune_outcome_exit_code` maps `commands::tune::TuneOutcome` (`Completed`/`Aborted`/
-  `WriteBackFailed`, returned by `run()` on the `Ok` path) to the process's actual
+  failed confirmation readback, or the defensive missing-result case above), `EXIT_TIMED_OUT
+  = 4` (`--timeout-secs` elapsed before the test finished), `EXIT_POOR_QUALITY = 5` (a
+  non-`Good` OPC sample aborted the run — see the OPC-quality bullet under "Live-plant safety
+  hardening" above), and `EXIT_RESTORE_INCOMPLETE = 6` (the post-run restore could not be
+  confirmed within `--restore-timeout-secs`, or was cut short by a second Ctrl+C — see
+  `safety-cancellation` above; kept distinct from `EXIT_ABORTED` since "aborted and restored"
+  and "aborted, restore abandoned — go check the loop by hand" are very different outcomes
+  for a scheduler to alert on). `tune_outcome_exit_code` maps `commands::tune::TuneOutcome`
+  (`Completed`/`Aborted`/`TimedOut`/`WriteBackFailed`/`PoorQuality`/`RestoreIncomplete`,
+  returned by `run()` on the `Ok` path) to the process's actual
   `ExitCode`; `fail()` handles the `Err` path and always prints the error in the format
   `--output` requested before returning `EXIT_FAILURE`. **The database's own
   `tune_runs.outcome` column only ever records `Completed`/`Aborted`/`Failed`** —
@@ -686,16 +694,20 @@ removes that supervision while still stroking a live valve, so these are not opt
   test, with no disable/unlimited option; a value of `0` just means an (essentially unusable)
   instant timeout, preserving genuine "mandatory" semantics. Implemented in
   `run_polling_loop` as a `tokio::time::sleep` created once before the loop and raced via a
-  third `tokio::select!` arm alongside `interval.tick()` and `tokio::signal::ctrl_c()` —
-  deliberately a genuine race, not a check performed only after each completed tick, so the
-  timeout still fires even if a single backend read call itself hangs (e.g. a stalled network
-  read), which is the realistic failure mode this guardrail exists to catch. On firing, the
-  loop is restored to its pre-test mode via the exact same path as a Ctrl+C abort (`restore` +
-  `TuneRunRow::abort`, recording plain `Aborted` in `tune_runs.outcome` — no new DB state) and
-  reported to the caller as the distinct `TuneOutcome::TimedOut` / `EXIT_TIMED_OUT = 4`, so a
-  scheduler's alerting can tell "this run had to be forcibly killed for running too long"
-  (possibly a stuck relay, a misconfigured tag mapping, or a stalled backend read — worth
-  investigating) apart from "an operator stopped it on purpose" (`EXIT_ABORTED`, routine).
+  `tokio::select!` arm alongside `interval.tick()` and a single process-wide `CtrlC` handle
+  (see `safety-cancellation` below) — but that outer race only covers the *idle* wait between
+  ticks. The timeout (and Ctrl+C) also stay effective *during* a tick — including a stalled
+  backend read or write, e.g. a wedged DCOM call or a black-holed network — because every
+  backend call inside the tick body is separately raced against the same `CtrlC` handle and a
+  `--op-timeout-secs` cap via `bounded_backend_call` (see `safety-cancellation` for why this
+  two-layer design, rather than one that only checked after each completed tick, was needed).
+  On firing, the loop is restored to its pre-test mode via the exact same path as a Ctrl+C
+  abort (`restore` + `TuneRunRow::abort`, recording plain `Aborted` in `tune_runs.outcome` —
+  no new DB state) and reported to the caller as the distinct `TuneOutcome::TimedOut` /
+  `EXIT_TIMED_OUT = 4`, so a scheduler's alerting can tell "this run had to be forcibly killed
+  for running too long" (possibly a stuck relay, a misconfigured tag mapping, or a stalled
+  backend read — worth investigating) apart from "an operator stopped it on purpose"
+  (`EXIT_ABORTED`, routine).
 - **`--write-pid <level>` unconditionally requires `--yes`** — in `run()`
   (`args.write_pid.is_some() && !args.yes`), checked before any backend connection or
   database write. There is no rehearsal mode that lifts this gate: a `--write-pid` run either
@@ -826,6 +838,69 @@ time; this section is updated as each lands, with a full pass once all are done:
   `bhtune tune --allow-uncertain-quality` is the CLI flag; a poor-quality abort exits with
   `EXIT_POOR_QUALITY` (5), distinct from a Ctrl+C/timeout abort, and `--output json` carries
   nullable `poor_quality_tag`/`poor_quality` fields alongside the existing `timeout_secs`.
+- **Ctrl+C and `--timeout-secs` now reach an in-flight backend call, and the restore itself
+  is bounded** — done (`bhtune-cli::cancel`, `commands::tune::{bounded_backend_call,
+  attempt_restore}`). Previously the signal listener and the timeout sleep were both
+  reconstructed fresh on every polling-loop iteration, inline in a `tokio::select!` — so for
+  the entire duration of a tick's body (the PV read, the relay MV write, the sample insert)
+  neither existed, and a Ctrl+C delivered in that window was silently lost (tokio coalesces
+  signal delivery per kind, and a `Signal` future created *after* delivery never observes
+  it), with no fallback to the OS's default terminate-on-SIGINT behavior either (tokio
+  replaces it process-wide the first time `ctrl_c()` is ever polled, and never reverts it). A
+  hung backend read made the loop uninterruptible outright — exactly the scenario
+  `--timeout-secs` was introduced to prevent, and the very claim ("fires even mid-hung-read")
+  that this fix makes true rather than aspirational. Closed in three parts:
+  - `bhtune_cli::cancel::CtrlC` — one process-wide Ctrl+C listener, installed exactly once at
+    real startup (`CtrlC::install`, called only from `crate::run`, never from a function unit
+    tests exercise) and threaded explicitly through `execute`/`run_polling_loop`/
+    `attempt_restore` as `&mut CtrlC` rather than each calling `tokio::signal::ctrl_c()`
+    itself. Built on `tokio::sync::watch` (not `tokio_util::sync::CancellationToken`, which
+    would add a dependency) specifically for its per-clone "have I observed this value yet"
+    semantics: `CtrlC::signalled()` resolves immediately for a signal that arrived at any
+    point before that call — including before the handle's first call at all — and a
+    *second* signal is a second, distinguishable resolution on the same handle, which is
+    exactly the "first Ctrl+C aborts, second forces a hard stop" distinction below needs.
+    `CtrlC::never()`/`CtrlC::test_pair()` back the test-only `run`/direct-call entry points,
+    so the many unit tests never install a real process-wide signal handler (which would
+    otherwise risk swallowing a developer's own Ctrl+C to a hung `cargo test`).
+  - `bounded_backend_call`/`TickOperation` — races one backend call (the tick's PV read, or
+    its MV write) against `ctrl_c.signalled()` and a fresh `--op-timeout-secs` sleep (new
+    flag, default 30s, capping a single operation rather than the whole run), returning
+    `Completed(T)`/`Cancelled`/`TimedOut`; a genuine `Err` from the call itself still
+    propagates via `?` rather than being folded into this enum, since a rejected write or a
+    transport error is a real failure, not "gave up waiting". `run_polling_loop`'s outer
+    `tokio::select!` (covering the *idle* wait between ticks) reuses the exact same `&mut
+    CtrlC` handle passed down into the tick body's `bounded_backend_call`s, which is safe
+    specifically because a tokio `watch::Receiver`'s "seen this value" state advances the
+    moment either `select!` observes it — there is no way for the outer and an inner
+    `select!` to each separately consume the same signal.
+  - `attempt_restore`/`RestoreAttempt` — wraps `restore()` in the same race, against a new
+    `--restore-timeout-secs` (default 30s, independent of `--op-timeout-secs`/
+    `--timeout-secs`, since a restore triggered *by* a timeout would otherwise inherit an
+    already-expired budget) and `ctrl_c.signalled()` again — a *second* Ctrl+C during the
+    restore is what "forces a hard stop" means in practice, since the restore is the one
+    thing that keeps running after the first signal aborts polling.
+    `RestoreAttempt::Incomplete { reason }` (timeout or second-Ctrl+C, distinguished only by
+    `reason`'s text) prints an operator-facing `eprintln!` naming the MV tag and its
+    pre-test value plus a structured `tracing::error!`, and becomes a new
+    `RunOutcome::RestoreIncomplete`/`TuneOutcome::RestoreIncomplete`, exiting
+    `EXIT_RESTORE_INCOMPLETE` (6) — distinct from `EXIT_ABORTED` (2), since "aborted and
+    restored" and "aborted, restore abandoned, go check the loop by hand" are very different
+    outcomes for a scheduler to alert on.
+
+  **Testing approach.** A `MockBackend.hanging_read`/`hanging_write` (awaits
+  `std::future::pending::<()>()` before ever reaching its own bookkeeping, so a hung call is
+  provably never recorded even though the abandoned future is only dropped, not signalled)
+  backs two new `run_polling_loop` integration tests: a stalled PV read aborting via
+  `--op-timeout-secs` with no sample recorded (no valid tick exists yet), and a stalled MV
+  write being cancelled by a `CtrlC::test_pair()`-driven background task (standing in for a
+  human pressing Ctrl+C mid-write) while still recording the sample from that tick's earlier,
+  already-completed PV read. `bounded_backend_call`/`attempt_restore` also each have direct
+  unit tests exercising all of their outcomes in isolation (completed/cancelled/timed-out/a
+  genuine error propagating; confirmed/incomplete-via-timeout/incomplete-via-second-Ctrl+C),
+  and one `run_with_ctrl_c` test exercises the real (non-test-only) entry point end-to-end
+  with a simulated signal, rather than only through the `CtrlC::never()`-backed `run` every
+  other test in the module uses.
 
 ## Logging (`cli-logging`)
 

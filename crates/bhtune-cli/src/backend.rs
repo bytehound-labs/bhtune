@@ -97,6 +97,8 @@ mod tests {
             yes: false,
             write_pid: None,
             allow_uncertain_quality: false,
+            op_timeout_secs: 30,
+            restore_timeout_secs: 30,
             output: crate::output::OutputFormat::Table,
         }
     }

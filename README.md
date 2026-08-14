@@ -126,8 +126,11 @@ Windows Task Scheduler, CI):
 - **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
   (bad flags, unreachable backend/database), `2` aborted (Ctrl+C or `--timeout-secs` elapsing),
   `3` the test completed but the requested PID write-back failed, `4` the test was forcibly
-  stopped for running past `--timeout-secs`. A caller never has to parse stdout just to find out
-  whether a scheduled tune actually wrote anything, or why it stopped early.
+  stopped for running past `--timeout-secs`, `5` a poor-quality OPC reading aborted the run, and
+  `6` the post-run restore could not be confirmed (a second Ctrl+C, or `--restore-timeout-secs`
+  elapsing) — distinct from `2` since "aborted and restored" and "aborted, restore abandoned"
+  call for very different alerting. A caller never has to parse stdout just to find out whether
+  a scheduled tune actually wrote anything, or why it stopped early.
 
 ## Safety
 
@@ -144,7 +147,16 @@ unattended runs against live plant equipment fail safe:
   correct ordering immediately after the initial read and before the loop is switched to manual.
 - **`--timeout-secs <seconds>`** (default `3600`) is a mandatory wall-clock limit on the whole
   test — there is no way to disable it. If it elapses, the loop is automatically restored to its
-  pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`).
+  pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`). Both Ctrl+C
+  and the timeout stay effective even if a single backend read or write stalls mid-tick (a
+  wedged gateway, a black-holed network): every backend call is separately capped by
+  **`--op-timeout-secs`** (default `30`), so a hung call is abandoned rather than blocking the
+  whole run indefinitely.
+- **`--restore-timeout-secs <seconds>`** (default `30`) bounds putting the loop back afterwards,
+  independently of `--timeout-secs`. If the restore can't be confirmed within that time, or a
+  *second* Ctrl+C arrives while it's in progress, the process prints which tag and value to
+  check by hand and exits `6` — distinct from `2`, since "aborted and restored" and "aborted,
+  restore abandoned" call for very different responses.
 - **`--write-pid <level>` always requires `--yes`** — there is no way to write PID constants to
   a live loop without explicitly confirming it, whether interactively or from a script.
 - **Every run snapshots the exact template and resolved tags it used** — a historical run

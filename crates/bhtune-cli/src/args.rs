@@ -360,6 +360,25 @@ pub struct TuneArgs {
     #[arg(long)]
     pub allow_uncertain_quality: bool,
 
+    /// Cap on any single backend read/write during the run, in seconds. A stalled call
+    /// (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited
+    /// forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even
+    /// mid-hung-read/write -- see AGENTS.md's `safety-cancellation` section. Distinct from
+    /// `--timeout-secs`, which bounds the whole run rather than one operation; size this
+    /// well above a healthy round trip to your OPC DA gateway, not to the expected test
+    /// duration.
+    #[arg(long, default_value_t = 30, value_parser = positive_u64)]
+    pub op_timeout_secs: u64,
+
+    /// Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by
+    /// completion, Ctrl+C, or a timeout), in seconds. Bounded independently of
+    /// `--timeout-secs`, since a restore triggered *by* a timeout would otherwise inherit an
+    /// already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run
+    /// exits `EXIT_RESTORE_INCOMPLETE` with a warning naming the loop and its last-written
+    /// value, instead of hanging indefinitely.
+    #[arg(long, default_value_t = 30, value_parser = positive_u64)]
+    pub restore_timeout_secs: u64,
+
     /// How to print this run's final outcome line.
     #[arg(long, value_enum, default_value = "table")]
     pub output: crate::output::OutputFormat,
@@ -432,6 +451,14 @@ pub struct SimulateArgs {
     #[arg(long)]
     pub allow_uncertain_quality: bool,
 
+    /// See `TuneArgs::op_timeout_secs`.
+    #[arg(long, default_value_t = 30, value_parser = positive_u64)]
+    pub op_timeout_secs: u64,
+
+    /// See `TuneArgs::restore_timeout_secs`.
+    #[arg(long, default_value_t = 30, value_parser = positive_u64)]
+    pub restore_timeout_secs: u64,
+
     /// See `TuneArgs::output`.
     #[arg(long, value_enum, default_value = "table")]
     pub output: crate::output::OutputFormat,
@@ -476,6 +503,8 @@ impl SimulateArgs {
             yes: self.yes,
             write_pid: self.write_pid,
             allow_uncertain_quality: self.allow_uncertain_quality,
+            op_timeout_secs: self.op_timeout_secs,
+            restore_timeout_secs: self.restore_timeout_secs,
             output: self.output,
         }
     }
@@ -715,6 +744,8 @@ mod tests {
         assert!(matches!(tune.direction, Some(DirectionArg::Reverse)));
         assert!(!tune.yes);
         assert!(tune.write_pid.is_none());
+        assert_eq!(tune.op_timeout_secs, 30);
+        assert_eq!(tune.restore_timeout_secs, 30);
         assert_eq!(tune.output, crate::output::OutputFormat::Table);
     }
 
@@ -778,7 +809,82 @@ mod tests {
         assert_eq!(args.poll_interval_ms, 800);
         assert!(!args.yes);
         assert!(args.write_pid.is_none());
+        assert_eq!(args.op_timeout_secs, 30);
+        assert_eq!(args.restore_timeout_secs, 30);
         assert_eq!(args.output, crate::output::OutputFormat::Table);
+    }
+
+    #[test]
+    fn cli_parses_tune_op_and_restore_timeout_flags() {
+        let cli = Cli::parse_from([
+            "bhtune",
+            "tune",
+            "-t",
+            "Unit1.LIC101.PV",
+            "--template",
+            "Yokogawa CentumVP",
+            "--process-type",
+            "flow",
+            "--controller-type",
+            "pi",
+            "--relay-amp",
+            "5.0",
+            "--backend",
+            "simulator",
+            "--op-timeout-secs",
+            "15",
+            "--restore-timeout-secs",
+            "45",
+        ]);
+        let args = expect_variant!(cli.command, Command::Tune(a) => a, "Tune");
+        assert_eq!(args.op_timeout_secs, 15);
+        assert_eq!(args.restore_timeout_secs, 45);
+    }
+
+    #[test]
+    fn cli_rejects_zero_op_timeout_secs() {
+        let result = Cli::try_parse_from([
+            "bhtune",
+            "tune",
+            "-t",
+            "Unit1.LIC101.PV",
+            "--template",
+            "Yokogawa CentumVP",
+            "--process-type",
+            "flow",
+            "--controller-type",
+            "pi",
+            "--relay-amp",
+            "5.0",
+            "--backend",
+            "simulator",
+            "--op-timeout-secs",
+            "0",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_rejects_zero_restore_timeout_secs() {
+        let result = Cli::try_parse_from([
+            "bhtune",
+            "tune",
+            "-t",
+            "Unit1.LIC101.PV",
+            "--template",
+            "Yokogawa CentumVP",
+            "--process-type",
+            "flow",
+            "--controller-type",
+            "pi",
+            "--relay-amp",
+            "5.0",
+            "--backend",
+            "simulator",
+            "--restore-timeout-secs",
+            "0",
+        ]);
+        assert!(result.is_err());
     }
 
     #[test]

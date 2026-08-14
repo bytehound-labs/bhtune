@@ -9,6 +9,7 @@
 //! setpoint/mode/mode-attribute/PID-constant tags at all (see `build_loop_tags` below) — no
 //! separate "is this the simulator?" branching is needed in that logic.
 
+use std::future::Future;
 use std::time::Duration;
 
 use bhtune_backend::{Backend, TagWrite};
@@ -26,6 +27,7 @@ use chrono::{DateTime, Utc};
 
 use crate::args::{BackendKindArg, TuneArgs};
 use crate::backend::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
+use crate::cancel::CtrlC;
 use crate::output::OutputFormat;
 
 /// The final disposition of a `tune`/`simulate` run -- drives the printed summary (see
@@ -56,6 +58,13 @@ pub enum TuneOutcome {
     /// failed (rejected write, failed confirmation readback, or -- defensively -- a
     /// `--write-pid` level with no matching calculated result).
     WriteBackFailed,
+    /// The run ended (via normal completion, Ctrl+C, or a timeout) without being able to
+    /// confirm the loop was fully restored to its pre-test mode/MV/setpoint -- a second
+    /// Ctrl+C arrived while the restore was in flight, or `--restore-timeout-secs` elapsed
+    /// first. The loop may still be sitting at a relay-test MV/mode; an operator must check
+    /// it by hand using the tag/value named in the warning printed to stderr. See
+    /// `safety-cancellation` in AGENTS.md.
+    RestoreIncomplete,
 }
 
 impl TuneOutcome {
@@ -67,6 +76,7 @@ impl TuneOutcome {
             TuneOutcome::TimedOut => "timed_out",
             TuneOutcome::PoorQuality => "poor_quality",
             TuneOutcome::WriteBackFailed => "write_back_failed",
+            TuneOutcome::RestoreIncomplete => "restore_incomplete",
         }
     }
 }
@@ -76,15 +86,37 @@ impl TuneOutcome {
 /// `Err` is reserved for setup problems (unknown template, invalid flag combination,
 /// database errors) surfaced directly to the caller.
 ///
+/// Test-facing entry point: delegates to [`run_with_ctrl_c`] with a [`CtrlC::never`] handle,
+/// so this crate's large existing test suite never installs a real process-wide signal
+/// handler -- see `cancel`'s module doc comment for why that matters. `#[cfg(test)]`-gated
+/// (rather than merely unused outside tests) because it depends on [`CtrlC::never`], itself
+/// only defined for test builds. Real dispatch (`lib.rs::run_with_cli_and_ctrl_c`) calls
+/// [`run_with_ctrl_c`] directly with a real, installed [`CtrlC`] instead of going through
+/// this wrapper.
+#[cfg(test)]
+pub async fn run(
+    pool: &SqlitePool,
+    args: TuneArgs,
+    app_config: &crate::config::BhtuneConfig,
+) -> anyhow::Result<TuneOutcome> {
+    run_with_ctrl_c(pool, args, app_config, &mut CtrlC::never()).await
+}
+
 /// Resolves `args.bridge_host` (always) and `args.server` (only for the `opcda` backend,
 /// since the simulator backend has no OPC server concept at all) through `app_config`'s
 /// `CLI > env > config file > default` precedence before anything else runs, so every
 /// downstream consumer (`crate::backend::build`, mainly) can keep reading the plain
 /// `TuneArgs` fields it always has.
-pub async fn run(
+///
+/// `ctrl_c` is threaded through to [`execute`] (and, from there, to every backend await in
+/// [`run_polling_loop`] and the final restore), so a Ctrl+C delivered at any point during
+/// the run -- not just while idle between polls -- is observed. See `safety-cancellation`
+/// in AGENTS.md.
+pub(crate) async fn run_with_ctrl_c(
     pool: &SqlitePool,
     mut args: TuneArgs,
     app_config: &crate::config::BhtuneConfig,
+    ctrl_c: &mut CtrlC,
 ) -> anyhow::Result<TuneOutcome> {
     // Fails before any backend/database I/O at all: an unattended write-back must be an
     // explicit, deliberate choice, not something a stray `--write-pid` without `--yes` can
@@ -158,6 +190,7 @@ pub async fn run(
         config,
         started_at,
         write_pid,
+        ctrl_c,
     )
     .await;
 
@@ -184,8 +217,20 @@ pub async fn run(
 
 #[derive(Debug)]
 enum RunOutcome {
-    Completed { write_back: WriteBackOutcome },
+    Completed {
+        write_back: WriteBackOutcome,
+    },
     Aborted(AbortReason),
+    /// The run ended (via normal completion or [`RunOutcome::Aborted`]) but the subsequent
+    /// restore attempt ([`attempt_restore`]) could not be confirmed -- a second Ctrl+C
+    /// arrived, or `--restore-timeout-secs` elapsed, before `restore()` itself resolved.
+    /// `reason` is a human-readable description of what happened, already including the
+    /// original abort trigger (if any) -- see `execute`'s composition of it. Write-back is
+    /// always skipped in this case, since writing new PID constants to a loop whose mode/MV
+    /// cannot be confirmed restored would compound the uncertainty.
+    RestoreIncomplete {
+        reason: String,
+    },
 }
 
 /// Why a run ended via [`RunOutcome::Aborted`] instead of a normal engine completion.
@@ -196,6 +241,13 @@ enum AbortReason {
     /// `--timeout-secs` elapsed before the engine reported completion. Carries the
     /// configured limit that was hit, for the printed/JSON summary.
     Timeout { timeout_secs: u64 },
+    /// A single backend read/write during a poll tick did not resolve within
+    /// `--op-timeout-secs` -- distinct from [`AbortReason::Timeout`], which bounds the whole
+    /// run rather than one operation. Carries the tag that stalled and the configured limit,
+    /// for the printed/JSON summary. Maps to the same [`TuneOutcome::TimedOut`] as
+    /// `Timeout`, since both mean "gave up waiting", differing only in what exactly timed
+    /// out.
+    OperationTimedOut { tag: String, op_timeout_secs: u64 },
     /// An in-flight PV poll sample's quality was `Bad`, or `Uncertain` without
     /// `--allow-uncertain-quality` set (finding 5 of the live-plant safety review). Unlike
     /// the two variants above, this is checked and constructed from inside
@@ -241,7 +293,9 @@ fn tune_outcome_for_run(outcome: &RunOutcome) -> TuneOutcome {
         RunOutcome::Completed { .. } => TuneOutcome::Completed,
         RunOutcome::Aborted(AbortReason::UserInterrupt) => TuneOutcome::Aborted,
         RunOutcome::Aborted(AbortReason::Timeout { .. }) => TuneOutcome::TimedOut,
+        RunOutcome::Aborted(AbortReason::OperationTimedOut { .. }) => TuneOutcome::TimedOut,
         RunOutcome::Aborted(AbortReason::PoorQuality { .. }) => TuneOutcome::PoorQuality,
+        RunOutcome::RestoreIncomplete { .. } => TuneOutcome::RestoreIncomplete,
     }
 }
 
@@ -279,9 +333,22 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                     "Tune aborted: exceeded the {timeout_secs}s --timeout-secs limit before completing; loop restored."
                 );
             }
+            RunOutcome::Aborted(AbortReason::OperationTimedOut {
+                tag,
+                op_timeout_secs,
+            }) => {
+                println!(
+                    "Tune aborted: tag '{tag}' did not respond within the {op_timeout_secs}s --op-timeout-secs limit; loop restored."
+                );
+            }
             RunOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => {
                 println!(
                     "Tune aborted: tag '{tag}' reported OPC quality {quality:?} during polling; loop restored."
+                );
+            }
+            RunOutcome::RestoreIncomplete { reason } => {
+                println!(
+                    "Tune ended, but the loop's restore could not be confirmed ({reason}). Check the loop by hand -- see the warning above for the tag and value to check."
                 );
             }
         },
@@ -297,6 +364,7 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                     write_back: WriteBackOutcome::Failed,
                 } => ("failed", None),
                 RunOutcome::Aborted(_) => ("not_attempted", None),
+                RunOutcome::RestoreIncomplete { .. } => ("not_attempted", None),
             };
             let timeout_secs = match outcome {
                 RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => Some(*timeout_secs),
@@ -309,6 +377,17 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                 ),
                 _ => (None, None),
             };
+            let (op_timeout_tag, op_timeout_secs) = match outcome {
+                RunOutcome::Aborted(AbortReason::OperationTimedOut {
+                    tag,
+                    op_timeout_secs,
+                }) => (Some(tag.clone()), Some(*op_timeout_secs)),
+                _ => (None, None),
+            };
+            let restore_incomplete_reason = match outcome {
+                RunOutcome::RestoreIncomplete { reason } => Some(reason.clone()),
+                _ => None,
+            };
             let json = serde_json::json!({
                 "run_id": run_id,
                 "outcome": tune_outcome.label(),
@@ -317,6 +396,9 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                 "timeout_secs": timeout_secs,
                 "poor_quality_tag": poor_quality_tag,
                 "poor_quality": poor_quality,
+                "op_timeout_tag": op_timeout_tag,
+                "op_timeout_secs": op_timeout_secs,
+                "restore_incomplete_reason": restore_incomplete_reason,
             });
             println!(
                 "{}",
@@ -467,6 +549,7 @@ async fn execute(
     config: LoopConfig,
     started_at: DateTime<Utc>,
     write_pid: Option<ResponseLevel>,
+    ctrl_c: &mut CtrlC,
 ) -> anyhow::Result<RunOutcome> {
     let allow_uncertain = args.allow_uncertain_quality;
     let initial = read_initial_values(backend, tags, template, allow_uncertain).await?;
@@ -510,8 +593,17 @@ async fn execute(
         MrftCompat::default(),
     );
 
-    let poll_result =
-        run_polling_loop(pool, run_id, args, tags, backend, &mut engine, started_at).await;
+    let poll_result = run_polling_loop(
+        pool,
+        run_id,
+        args,
+        tags,
+        backend,
+        &mut engine,
+        started_at,
+        ctrl_c,
+    )
+    .await;
 
     match poll_result {
         Ok(PollOutcome::Completed(completion)) => {
@@ -530,30 +622,75 @@ async fn execute(
             )
             .await?;
             TuneRunRow::complete(pool, run_id, Utc::now()).await?;
-            restore(backend, tags, template, &initial, &mode_state).await?;
-            let write_back = maybe_write_back(
-                pool,
-                run_id,
+            match attempt_restore(
+                backend,
                 tags,
                 template,
-                backend,
-                config,
-                write_pid,
-                allow_uncertain,
-                &mut std::io::stdin().lock(),
+                &initial,
+                &mode_state,
+                args.restore_timeout_secs,
+                ctrl_c,
             )
-            .await?;
-            Ok(RunOutcome::Completed { write_back })
+            .await?
+            {
+                RestoreAttempt::Confirmed => {
+                    let write_back = maybe_write_back(
+                        pool,
+                        run_id,
+                        tags,
+                        template,
+                        backend,
+                        config,
+                        write_pid,
+                        allow_uncertain,
+                        &mut std::io::stdin().lock(),
+                    )
+                    .await?;
+                    Ok(RunOutcome::Completed { write_back })
+                }
+                RestoreAttempt::Incomplete { reason } => {
+                    Ok(RunOutcome::RestoreIncomplete { reason })
+                }
+            }
         }
         Ok(PollOutcome::Aborted(reason)) => {
-            restore(backend, tags, template, &initial, &mode_state).await?;
+            let restore_attempt = attempt_restore(
+                backend,
+                tags,
+                template,
+                &initial,
+                &mode_state,
+                args.restore_timeout_secs,
+                ctrl_c,
+            )
+            .await?;
             TuneRunRow::abort(pool, run_id, Utc::now()).await?;
-            Ok(RunOutcome::Aborted(reason))
+            match restore_attempt {
+                RestoreAttempt::Confirmed => Ok(RunOutcome::Aborted(reason)),
+                RestoreAttempt::Incomplete {
+                    reason: restore_reason,
+                } => Ok(RunOutcome::RestoreIncomplete {
+                    reason: format!("run aborted ({reason:?}); {restore_reason}"),
+                }),
+            }
         }
         Err(e) => {
             // Best-effort: a failed test still stroked the valve, so try to put it back even
-            // though the overall run is going to be reported as failed regardless.
-            let _ = restore(backend, tags, template, &initial, &mode_state).await;
+            // though the overall run is going to be reported as failed regardless. Still
+            // bounded/interruptible (a second Ctrl+C or `--restore-timeout-secs` still cuts
+            // it short) and still warns loudly on an incomplete restore -- only the return
+            // value is discarded, since there's no `RunOutcome` to report it through on this
+            // path.
+            let _ = attempt_restore(
+                backend,
+                tags,
+                template,
+                &initial,
+                &mode_state,
+                args.restore_timeout_secs,
+                ctrl_c,
+            )
+            .await;
             Err(e)
         }
     }
@@ -867,24 +1004,140 @@ async fn restore(
     Ok(())
 }
 
+/// The outcome of racing one backend call ([`read_pv_sample`]/[`write_value`], during a poll
+/// tick) against Ctrl+C and `--op-timeout-secs` -- see [`bounded_backend_call`]. Distinct
+/// from a genuine `Err` from the call itself (a rejected write, a malformed value, a
+/// transport error), which [`bounded_backend_call`] still propagates via `?` rather than
+/// wrapping here, since those are real failures, not "gave up waiting".
+#[derive(Debug)]
+enum TickOperation<T> {
+    /// `fut` resolved before either interrupt source.
+    Completed(T),
+    /// Ctrl+C (or a second Ctrl+C) fired first; `fut` was dropped, abandoning it in flight.
+    Cancelled,
+    /// `--op-timeout-secs` elapsed first; `fut` was dropped, abandoning it in flight.
+    TimedOut,
+}
+
+/// Races one backend call against `ctrl_c` and a fresh `op_timeout_secs` sleep, so a single
+/// stalled read/write (gateway down, DCOM wedged, network black-holed) can never make the
+/// polling loop -- or the restore, via [`attempt_restore`] -- uninterruptible. This is what
+/// fixes finding 2 of the live-plant safety review: previously, `run_polling_loop`'s Ctrl+C
+/// and `--timeout-secs` listeners only ran *between* tick-body awaits, so a hung call inside
+/// one was invisible to both. `fut` is taken by value (not `&mut`) and is simply dropped,
+/// abandoning the in-flight operation, on the losing branches -- there is no cancellation
+/// signal sent to the backend itself, only to this call's own wait for it. A genuine `Err`
+/// from `fut` resolving still propagates through the `?` here, distinct from either
+/// [`TickOperation`] interrupt case.
+async fn bounded_backend_call<T>(
+    op_timeout_secs: u64,
+    ctrl_c: &mut CtrlC,
+    fut: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<TickOperation<T>> {
+    tokio::select! {
+        result = fut => result.map(TickOperation::Completed),
+        () = ctrl_c.signalled() => Ok(TickOperation::Cancelled),
+        () = tokio::time::sleep(Duration::from_secs(op_timeout_secs)) => Ok(TickOperation::TimedOut),
+    }
+}
+
+/// The outcome of [`attempt_restore`] -- whether `restore()` itself was confirmed to run to
+/// completion, or was abandoned because a second Ctrl+C arrived or `--restore-timeout-secs`
+/// elapsed first.
+enum RestoreAttempt {
+    /// `restore()` returned `Ok(())`. A genuine `Err` from `restore()` itself is not part of
+    /// this enum at all -- it still propagates via `?`, distinct from "gave up waiting".
+    Confirmed,
+    /// The restore could not be confirmed within `restore_timeout_secs`, or a second Ctrl+C
+    /// arrived first. `reason` is a human-readable description of which, for composing into
+    /// the final [`RunOutcome::RestoreIncomplete`] message and the stderr warning already
+    /// printed by [`warn_restore_incomplete`] before this variant is returned.
+    Incomplete { reason: String },
+}
+
+/// Restores the loop, bounded by `restore_timeout_secs` and a second Ctrl+C, so a restore
+/// that itself hangs (the same class of stalled-backend-call risk `bounded_backend_call`
+/// guards the polling loop against) can never block the process indefinitely. Unlike
+/// [`bounded_backend_call`], this takes `restore`'s exact parameters directly rather than a
+/// generic `impl Future` -- there is only one real call shape (one `restore(...)` call per
+/// run), so a generic signature would add no value. On [`RestoreAttempt::Incomplete`], calls
+/// [`warn_restore_incomplete`] before returning, so the operator-facing warning is printed
+/// exactly once, at the one place that decides a restore could not be confirmed -- callers
+/// only need to fold the returned `reason` into their own context (e.g. the original
+/// [`AbortReason`], if any) for the final [`RunOutcome`].
+async fn attempt_restore(
+    backend: &dyn Backend,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    mode_state: &ModeRestoreState,
+    restore_timeout_secs: u64,
+    ctrl_c: &mut CtrlC,
+) -> anyhow::Result<RestoreAttempt> {
+    tokio::select! {
+        result = restore(backend, tags, template, initial, mode_state) => {
+            result?;
+            Ok(RestoreAttempt::Confirmed)
+        }
+        () = ctrl_c.signalled() => {
+            let reason = "a second Ctrl+C was received while restoring the loop".to_string();
+            warn_restore_incomplete(tags, initial, &reason);
+            Ok(RestoreAttempt::Incomplete { reason })
+        }
+        () = tokio::time::sleep(Duration::from_secs(restore_timeout_secs)) => {
+            let reason = format!(
+                "the restore did not complete within the {restore_timeout_secs}s --restore-timeout-secs limit"
+            );
+            warn_restore_incomplete(tags, initial, &reason);
+            Ok(RestoreAttempt::Incomplete { reason })
+        }
+    }
+}
+
+/// Prints a loud, operator-facing warning (to stderr, so it survives `--output json` and any
+/// stdout redirection) naming the MV tag and the pre-test value it may not have been
+/// restored to, plus a matching `tracing::error!` for anyone mining logs rather than watching
+/// the terminal. The loop's mode may also not have been reverted -- see `restore`'s own
+/// mode/setpoint/mode-attribute steps -- but the MV is called out specifically since it is
+/// the one value every template has and the one most directly consequential if left at a
+/// relay-test extreme.
+fn warn_restore_incomplete(tags: &LoopTags, initial: &InitialState, reason: &str) {
+    eprintln!(
+        "WARNING: could not confirm the loop was fully restored ({reason}). Tag '{}' may still be at its last relay-test value instead of its pre-test value {}. Check it -- and the loop's mode -- by hand.",
+        tags.manipulated_variable, initial.mv_ini
+    );
+    tracing::error!(
+        mv_tag = %tags.manipulated_variable,
+        mv_ini = initial.mv_ini,
+        reason,
+        "loop restore could not be confirmed"
+    );
+}
+
 /// Distinguishes *why* [`run_polling_loop`] ended without a normal engine completion, so
 /// `execute` can record and report the right [`AbortReason`].
 enum PollOutcome {
     /// The engine reported [`Action::Complete`] and any post-completion `--mrft-delay`
     /// padding has elapsed.
     Completed(Action),
-    /// Ctrl+C or `--timeout-secs` fired first.
+    /// Ctrl+C, `--timeout-secs`, `--op-timeout-secs`, or a poor-quality PV sample ended the
+    /// run before that.
     Aborted(AbortReason),
 }
 
 /// Polls the backend on `args.poll_interval_ms`, driving `engine` once the pre-test
 /// `--mrft-delay` padding period has elapsed, and continuing to record (but not evaluate)
 /// samples for the same padding period after completion. Returns `Ok(PollOutcome::Completed`
-/// on a normal finish, `Ok(PollOutcome::Aborted)` if interrupted by Ctrl+C or by
-/// `args.timeout_secs` elapsing first -- whichever the caller should prefer, the whole
-/// `tokio::select!` races the interval tick against *both* interrupt sources, so a timeout
-/// fires even if a single backend read call is itself hung (e.g. a stalled network read),
-/// not only in between completed ticks.
+/// on a normal finish, `Ok(PollOutcome::Aborted)` if interrupted by Ctrl+C, by
+/// `args.timeout_secs` elapsing, or by a single backend call exceeding
+/// `args.op_timeout_secs` -- the last of these via [`bounded_backend_call`], which wraps
+/// every backend read/write in the tick body so a stalled call is abandoned rather than
+/// awaited forever, keeping Ctrl+C and both timeouts effective even mid-hung-read/write. The
+/// outer `tokio::select!` below still separately covers the *idle* wait between ticks (via
+/// `ctrl_c`, shared with every `bounded_backend_call` inside the winning tick body -- see
+/// that function's doc comment for why reusing it across nested `select!`s is safe) and the
+/// whole-run `--timeout-secs` deadline.
+#[allow(clippy::too_many_arguments)]
 async fn run_polling_loop(
     pool: &SqlitePool,
     run_id: i64,
@@ -893,6 +1146,7 @@ async fn run_polling_loop(
     backend: &dyn Backend,
     engine: &mut MrftEngine,
     start_time: DateTime<Utc>,
+    ctrl_c: &mut CtrlC,
 ) -> anyhow::Result<PollOutcome> {
     let mut interval = tokio::time::interval(Duration::from_millis(args.poll_interval_ms.max(1)));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -914,7 +1168,32 @@ async fn run_polling_loop(
         tokio::select! {
             _ = interval.tick() => {
                 let now = Utc::now();
-                let (pv, quality) = read_pv_sample(backend, &tags.process_variable).await?;
+                let (pv, quality) = match bounded_backend_call(
+                    args.op_timeout_secs,
+                    ctrl_c,
+                    read_pv_sample(backend, &tags.process_variable),
+                )
+                .await?
+                {
+                    TickOperation::Completed(sample) => sample,
+                    TickOperation::Cancelled => {
+                        tracing::warn!(run_id, tick_index, "Ctrl+C received while reading the PV; aborting run");
+                        return Ok(PollOutcome::Aborted(AbortReason::UserInterrupt));
+                    }
+                    TickOperation::TimedOut => {
+                        tracing::warn!(
+                            run_id,
+                            tick_index,
+                            op_timeout_secs = args.op_timeout_secs,
+                            tag = %tags.process_variable,
+                            "--op-timeout-secs elapsed reading the PV; aborting run"
+                        );
+                        return Ok(PollOutcome::Aborted(AbortReason::OperationTimedOut {
+                            tag: tags.process_variable.clone(),
+                            op_timeout_secs: args.op_timeout_secs,
+                        }));
+                    }
+                };
                 let tick = Tick { time: now, pv };
                 let sample_quality = sample_quality_from_backend(quality);
 
@@ -944,7 +1223,40 @@ async fn run_polling_loop(
 
                 for action in engine.step(tick) {
                     match action {
-                        Action::WriteMv(v) => write_value(backend, &tags.manipulated_variable, v).await?,
+                        Action::WriteMv(v) => {
+                            match bounded_backend_call(
+                                args.op_timeout_secs,
+                                ctrl_c,
+                                write_value(backend, &tags.manipulated_variable, v),
+                            )
+                            .await?
+                            {
+                                TickOperation::Completed(()) => {}
+                                TickOperation::Cancelled => {
+                                    // A valid sample/tick is already in hand for this iteration
+                                    // (unlike the PV-read timeout/cancel case above), so record
+                                    // it before aborting -- same rationale as the quality-check
+                                    // abort above.
+                                    TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
+                                    tracing::warn!(run_id, tick_index, "Ctrl+C received while writing the MV; aborting run");
+                                    return Ok(PollOutcome::Aborted(AbortReason::UserInterrupt));
+                                }
+                                TickOperation::TimedOut => {
+                                    TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
+                                    tracing::warn!(
+                                        run_id,
+                                        tick_index,
+                                        op_timeout_secs = args.op_timeout_secs,
+                                        tag = %tags.manipulated_variable,
+                                        "--op-timeout-secs elapsed writing the MV; aborting run"
+                                    );
+                                    return Ok(PollOutcome::Aborted(AbortReason::OperationTimedOut {
+                                        tag: tags.manipulated_variable.clone(),
+                                        op_timeout_secs: args.op_timeout_secs,
+                                    }));
+                                }
+                            }
+                        }
                         Action::Complete { .. } => {
                             tracing::info!(
                                 run_id,
@@ -968,7 +1280,7 @@ async fn run_polling_loop(
                     break;
                 }
             }
-            _ = tokio::signal::ctrl_c() => {
+            () = ctrl_c.signalled() => {
                 tracing::warn!(run_id, tick_index, "Ctrl+C received; aborting run");
                 return Ok(PollOutcome::Aborted(AbortReason::UserInterrupt));
             }
@@ -1270,6 +1582,8 @@ mod tests {
             direction: Some(DirectionArg::Reverse),
             poll_interval_ms: 5,
             timeout_secs: 3600,
+            op_timeout_secs: 30,
+            restore_timeout_secs: 30,
             name: Some("test-loop".to_string()),
             yes: false,
             write_pid: None,
@@ -1610,13 +1924,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_ctrl_c_style_abort_restores_and_records_aborted() {
-        // Exercise the abort path directly (rather than actually raising SIGINT in a test
-        // process) by calling `run_polling_loop` with an engine that will never see enough
-        // ticks to complete within a near-zero timeout, then checking the run was left in a
-        // consistent, restorable state. Since we cannot easily fake a real ctrl_c signal in
-        // a unit test, this test instead confirms `restore` + `TuneRunRow::abort` leave the
-        // database in the expected shape when called directly, which is the code path Ctrl+C
-        // takes.
+        // Exercises the DB/restore shape of an abort directly -- calling `restore` +
+        // `TuneRunRow::abort` exactly as the real Ctrl+C path does -- rather than going
+        // through a full `run_polling_loop`/`run_with_ctrl_c` cycle. `CtrlC::test_pair()` can
+        // and does fake a real signal end to end elsewhere (see
+        // `a_stalled_mv_write_during_a_tick_is_cancelled_and_still_records_the_sample` and
+        // `run_with_ctrl_c_aborts_the_run_when_signalled_during_the_poll`, both further down
+        // in this module); this test is kept as a narrower, cheaper check of just the
+        // resulting database row shape.
         let pool = seeded_pool().await;
         let template = bhtune_core::built_in_templates().remove(0);
         let args = fast_simulator_args();
@@ -1718,6 +2033,7 @@ mod tests {
             &backend,
             &mut engine,
             started_at,
+            &mut CtrlC::never(),
         )
         .await
         .unwrap();
@@ -1757,6 +2073,190 @@ mod tests {
         );
     }
 
+    // --- safety-cancellation: `--op-timeout-secs` / mid-tick Ctrl+C via `bounded_backend_call`
+
+    /// Proves the wiring, not just the mechanism (see the dedicated `bounded_backend_call`
+    /// unit tests below for that): a PV read that never resolves at all -- the gateway is
+    /// down, DCOM is wedged, the network is black-holed -- must abort the run via
+    /// `--op-timeout-secs` rather than hang the poll loop forever, exactly the scenario
+    /// finding 2 of the live-plant safety review names as the most severe of the three
+    /// consequences of the pre-`safety-cancellation` design. Real (unpaused) time, paying a
+    /// real ~1s wall-clock cost: `start_paused` interacts badly with the real sqlx
+    /// `SqlitePool` this test also creates (it fast-forwards the pool's own internal
+    /// connection-acquire timeout too), matching the documented precedent in
+    /// `run_times_out_and_aborts_when_timeout_secs_elapses_before_completion` below.
+    #[tokio::test]
+    async fn a_stalled_pv_read_aborts_the_poll_loop_via_op_timeout_secs() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto().hanging_read(&tags.process_variable);
+        let mut args = fast_simulator_args();
+        args.op_timeout_secs = 1;
+        let config = build_loop_config(&args).unwrap();
+
+        let started_at = Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "stalled-pv-read",
+            TuneBackend::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
+        .await
+        .unwrap();
+
+        let initial = sample_initial_state();
+        let beta = lookup(
+            config.process_type,
+            config.controller_type,
+            ResponseLevel::Aggressive,
+        )
+        .beta;
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &backend,
+            &mut engine,
+            started_at,
+            &mut CtrlC::never(),
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            PollOutcome::Aborted(AbortReason::OperationTimedOut {
+                tag,
+                op_timeout_secs,
+            }) => {
+                assert_eq!(tag, tags.process_variable);
+                assert_eq!(op_timeout_secs, 1);
+            }
+            _ => panic!("expected PollOutcome::Aborted(AbortReason::OperationTimedOut)"),
+        }
+
+        // Unlike the poor-quality/mid-write-cancellation cases, the PV read itself is what
+        // stalled -- there is no valid tick/sample to record for this iteration at all.
+        let samples = TuneSampleRow::list_for_run(&pool, run.id).await.unwrap();
+        assert!(samples.is_empty());
+    }
+
+    /// The write-side counterpart of the read-stall test above, and also the one integration
+    /// test exercising a mid-tick Ctrl+C (as opposed to the pre-existing idle-between-ticks
+    /// coverage in `a_ctrl_c_style_abort_restores_and_records_aborted`): the PV read for tick
+    /// 1 succeeds normally (so a real `tick`/`sample_quality` is in hand), the engine's very
+    /// first `step` call always emits `Action::WriteMv` (see `MrftEngine::switch_is_needed`:
+    /// `hysteresis` is still zero and `counter_all_switches == 0` on tick 1), and that write
+    /// then hangs forever via `hanging_write`. A background task -- standing in for a human
+    /// pressing Ctrl+C mid-write, which a unit test can't do with a real signal without
+    /// hitting every other concurrently running test (see `tests/ctrlc_abort.rs`'s doc
+    /// comment) -- sends the cancellation a short real delay later. Deliberately *not*
+    /// `start_paused`: the delay has to be observed as "genuinely still in flight" by a
+    /// concurrently running task, which paused virtual time (where nothing advances until
+    /// every task is parked) can't model as naturally as a small real sleep.
+    #[tokio::test]
+    async fn a_stalled_mv_write_during_a_tick_is_cancelled_and_still_records_the_sample() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto().hanging_write(&tags.manipulated_variable);
+        let mut args = fast_simulator_args();
+        // Large enough that the op-timeout branch never wins the race against the
+        // background task's much shorter real delay below.
+        args.op_timeout_secs = 30;
+        let config = build_loop_config(&args).unwrap();
+
+        let started_at = Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "stalled-mv-write",
+            TuneBackend::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
+        .await
+        .unwrap();
+
+        let initial = sample_initial_state();
+        let beta = lookup(
+            config.process_type,
+            config.controller_type,
+            ResponseLevel::Aggressive,
+        )
+        .beta;
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(1);
+        });
+
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &backend,
+            &mut engine,
+            started_at,
+            &mut ctrl_c,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::UserInterrupt)
+        ));
+
+        // Unlike the read-stall case, a valid sample for this tick was already in hand
+        // before the write was attempted, so it must still be recorded before aborting.
+        let samples = TuneSampleRow::list_for_run(&pool, run.id).await.unwrap();
+        assert_eq!(samples.len(), 1);
+
+        // The hung write never actually completed -- the loop was left at its relay-test MV,
+        // matching `warn_restore_incomplete`'s premise for why the operator warning names
+        // the MV specifically.
+        assert!(backend.write_log().is_empty());
+    }
+
     // --- opcda-style mode-transition/restore/write-back coverage ---------------------------
     //
     // The tests above all use the simulator backend, whose `LoopTags` has no
@@ -1778,6 +2278,13 @@ mod tests {
         error_reads: std::collections::HashSet<String>,
         error_writes: std::collections::HashSet<String>,
         empty_reads: std::collections::HashSet<String>,
+        /// Tags whose `read`/`write` never resolves (`.await`s `std::future::pending`
+        /// forever), simulating a stalled OPC DA call (gateway down, DCOM wedged, network
+        /// black-holed) so `--op-timeout-secs`/Ctrl+C-during-a-tick can actually be exercised
+        /// -- every other mock read/write body resolves synchronously and has no real
+        /// `.await` point, so it can never be caught mid-flight by a racing timeout/cancel.
+        hang_reads: std::collections::HashSet<String>,
+        hang_writes: std::collections::HashSet<String>,
         /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
         /// listed -- matching a healthy real backend and letting most tests ignore quality
         /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
@@ -1817,6 +2324,18 @@ mod tests {
             self
         }
 
+        /// Makes reading `tag` hang forever -- see the `hang_reads` field doc comment.
+        fn hanging_read(mut self, tag: &str) -> MockBackend {
+            self.hang_reads.insert(tag.to_string());
+            self
+        }
+
+        /// Makes writing `tag` hang forever -- see the `hang_writes` field doc comment.
+        fn hanging_write(mut self, tag: &str) -> MockBackend {
+            self.hang_writes.insert(tag.to_string());
+            self
+        }
+
         /// Overrides a single tag's fixture value -- e.g. to make an otherwise-valid
         /// baseline backend (like `honeywell_backend_auto()`) report one bad reading.
         fn with_value(self, tag: &str, value: &str) -> MockBackend {
@@ -1852,6 +2371,9 @@ mod tests {
             &self,
             tags: &[String],
         ) -> bhtune_backend::BackendResult<Vec<bhtune_backend::TagValue>> {
+            if tags.iter().any(|tag| self.hang_reads.contains(tag)) {
+                std::future::pending::<()>().await;
+            }
             let store = self.values.lock().unwrap();
             let mut out = Vec::new();
             for tag in tags {
@@ -1884,6 +2406,9 @@ mod tests {
             tag: &String,
             value: TagWrite,
         ) -> bhtune_backend::BackendResult<bhtune_backend::WriteOutcome> {
+            if self.hang_writes.contains(tag) {
+                std::future::pending::<()>().await;
+            }
             if self.error_writes.contains(tag) {
                 return Err(bhtune_backend::BackendError::Operation(Box::new(
                     std::io::Error::other("mock write error"),
@@ -2120,6 +2645,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            &mut CtrlC::never(),
         )
         .await
         .unwrap_err();
@@ -2163,6 +2689,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            &mut CtrlC::never(),
         )
         .await
         .unwrap_err();
@@ -2253,6 +2780,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            &mut CtrlC::never(),
         )
         .await
         .unwrap_err();
@@ -3064,7 +3592,7 @@ mod tests {
 
     #[test]
     fn print_summary_returns_the_tune_outcome_matching_the_run_outcome_in_every_output_format() {
-        // Full 6 (RunOutcome shape) x 2 (OutputFormat) matrix, so every `println!` arm in
+        // Full 8 (RunOutcome shape) x 2 (OutputFormat) matrix, so every `println!` arm in
         // both `match output` branches is exercised directly here rather than relying on
         // incidental coverage from `run()`-level tests (which never reach `Written`/`Failed`
         // write-back outcomes -- see the module doc comment on why that's structurally hard
@@ -3168,6 +3696,28 @@ mod tests {
         assert_eq!(
             print_summary(
                 1,
+                &RunOutcome::Aborted(AbortReason::OperationTimedOut {
+                    tag: "Unit1.LIC101.PV".to_string(),
+                    op_timeout_secs: 30,
+                }),
+                OutputFormat::Table
+            ),
+            TuneOutcome::TimedOut
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::Aborted(AbortReason::OperationTimedOut {
+                    tag: "Unit1.LIC101.PV".to_string(),
+                    op_timeout_secs: 30,
+                }),
+                OutputFormat::Json
+            ),
+            TuneOutcome::TimedOut
+        );
+        assert_eq!(
+            print_summary(
+                1,
                 &RunOutcome::Aborted(AbortReason::PoorQuality {
                     tag: "Unit1.LIC101.PV".to_string(),
                     quality: bhtune_backend::Quality::Uncertain,
@@ -3186,6 +3736,30 @@ mod tests {
                 OutputFormat::Json
             ),
             TuneOutcome::PoorQuality
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::RestoreIncomplete {
+                    reason: "run aborted (UserInterrupt); a second Ctrl+C was received while \
+                             restoring the loop"
+                        .to_string(),
+                },
+                OutputFormat::Table
+            ),
+            TuneOutcome::RestoreIncomplete
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::RestoreIncomplete {
+                    reason: "run aborted (UserInterrupt); a second Ctrl+C was received while \
+                             restoring the loop"
+                        .to_string(),
+                },
+                OutputFormat::Json
+            ),
+            TuneOutcome::RestoreIncomplete
         );
     }
 
@@ -3265,5 +3839,187 @@ mod tests {
             .await
             .unwrap();
         assert!(!samples.is_empty());
+    }
+
+    // --- `bounded_backend_call` / `TickOperation`: the four possible race outcomes, tested --
+    // --- directly and in isolation from the polling loop that's the only real caller --------
+
+    #[tokio::test]
+    async fn bounded_backend_call_returns_completed_when_the_call_finishes_first() {
+        let mut ctrl_c = CtrlC::never();
+        let result = bounded_backend_call(30, &mut ctrl_c, async { Ok::<_, anyhow::Error>(42) })
+            .await
+            .unwrap();
+        assert!(matches!(result, TickOperation::Completed(42)));
+    }
+
+    #[tokio::test]
+    async fn bounded_backend_call_propagates_a_genuine_error_from_the_call() {
+        // A real failure from the call itself (a rejected write, a malformed value, a
+        // transport error) must still propagate through `?` at the call site -- it is not
+        // "gave up waiting", so it has no `TickOperation` variant of its own.
+        let mut ctrl_c = CtrlC::never();
+        let err = bounded_backend_call(30, &mut ctrl_c, async {
+            Err::<(), _>(anyhow::anyhow!("boom"))
+        })
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn bounded_backend_call_returns_cancelled_when_ctrl_c_fires_first() {
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tx.send(1).unwrap();
+        let result = bounded_backend_call(30, &mut ctrl_c, async {
+            std::future::pending::<anyhow::Result<()>>().await
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, TickOperation::Cancelled));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bounded_backend_call_returns_timed_out_when_the_backend_call_stalls() {
+        // No `SqlitePool` involved here (unlike the `run_polling_loop`-level tests), so
+        // `start_paused` is safe -- see the precedent/caveat noted on the timeout test above.
+        let mut ctrl_c = CtrlC::never();
+        let result = bounded_backend_call(1, &mut ctrl_c, async {
+            std::future::pending::<anyhow::Result<()>>().await
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, TickOperation::TimedOut));
+    }
+
+    // --- `attempt_restore` / `RestoreAttempt`: confirmed vs. incomplete, and both ways to ---
+    // --- become incomplete (a second Ctrl+C, and `--restore-timeout-secs` elapsing) ---------
+
+    #[tokio::test(start_paused = true)]
+    async fn attempt_restore_confirms_a_normal_restore() {
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto();
+        let initial = read_initial_values(&backend, &tags, &template, false)
+            .await
+            .unwrap();
+        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+            .await
+            .unwrap();
+
+        let outcome = attempt_restore(
+            &backend,
+            &tags,
+            &template,
+            &initial,
+            &mode_state,
+            30,
+            &mut CtrlC::never(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(outcome, RestoreAttempt::Confirmed));
+        assert_eq!(
+            backend.value_of(&tags.manipulated_variable).as_deref(),
+            Some("45")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn attempt_restore_reports_incomplete_when_restore_timeout_secs_elapses() {
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        // `restore`'s very first step writes the MV -- hanging it means `restore()` itself
+        // can never resolve on its own, so only the timeout branch can win this race.
+        let backend = honeywell_backend_auto().hanging_write(&tags.manipulated_variable);
+        let initial = sample_initial_state();
+        let mode_state = ModeRestoreState::default();
+
+        let outcome = attempt_restore(
+            &backend,
+            &tags,
+            &template,
+            &initial,
+            &mode_state,
+            1,
+            &mut CtrlC::never(),
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RestoreAttempt::Incomplete { reason } => {
+                assert!(reason.contains("--restore-timeout-secs"));
+            }
+            RestoreAttempt::Confirmed => panic!("expected RestoreAttempt::Incomplete"),
+        }
+    }
+
+    #[tokio::test]
+    async fn attempt_restore_reports_incomplete_on_a_second_ctrl_c() {
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto().hanging_write(&tags.manipulated_variable);
+        let initial = sample_initial_state();
+        let mode_state = ModeRestoreState::default();
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tx.send(1).unwrap();
+
+        let outcome = attempt_restore(
+            &backend,
+            &tags,
+            &template,
+            &initial,
+            &mode_state,
+            30,
+            &mut ctrl_c,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RestoreAttempt::Incomplete { reason } => {
+                assert!(reason.contains("second Ctrl+C"));
+            }
+            RestoreAttempt::Confirmed => panic!("expected RestoreAttempt::Incomplete"),
+        }
+    }
+
+    // --- `run_with_ctrl_c`: the real, ctrl-c-aware entry point, exercised end to end with ---
+    // --- a simulated signal rather than only through the `CtrlC::never()`-backed `run` above
+
+    /// The one test exercising `run_with_ctrl_c` itself (every other test in this module goes
+    /// through the `#[cfg(test)]`-only `run` wrapper, which always passes `CtrlC::never()` --
+    /// see its doc comment) -- proving this is what `lib.rs::run_with_cli_and_ctrl_c` actually
+    /// calls in production correctly reacts to a signalled `CtrlC` end to end: dispatch, the
+    /// poll loop, the restore, and the final `TuneOutcome`/DB row.
+    #[tokio::test]
+    async fn run_with_ctrl_c_aborts_the_run_when_signalled_during_the_poll() {
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        // Impossible to legitimately finish within the ~50ms before the signal below fires,
+        // matching the timeout test's own precedent for making a real completion race moot.
+        args.cycles_count = Some(100_000);
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(1);
+        });
+
+        let outcome = run_with_ctrl_c(&pool, args, &test_config(), &mut ctrl_c)
+            .await
+            .unwrap();
+        assert_eq!(outcome, TuneOutcome::Aborted);
+
+        let runs = TuneRunRow::list(
+            &pool,
+            &bhtune_db::models::TuneRunFilter::default(),
+            bhtune_db::models::Pagination::first(10),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].outcome, bhtune_db::models::TuneOutcome::Aborted);
     }
 }

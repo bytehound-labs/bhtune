@@ -30,12 +30,14 @@
 //! `--yes`/`--write-pid <level>`/`--timeout-secs` flags (bypassing the interactive
 //! write-back prompt and mandatorily bounding an unattended run's wall-clock duration) plus
 //! this module's distinguished exit codes ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`],
-//! [`EXIT_WRITE_BACK_FAILED`]), so a scheduler can tell "aborted", "timed out", "test ran but
-//! the write-back failed", and "never ran at all" apart without parsing stdout. See
-//! AGENTS.md's `cli-automation`/`cli-safety` sections.
+//! [`EXIT_POOR_QUALITY`], [`EXIT_WRITE_BACK_FAILED`], [`EXIT_RESTORE_INCOMPLETE`]), so a
+//! scheduler can tell "aborted", "timed out", "the plant data couldn't be trusted", "test ran
+//! but the write-back failed", "the loop may not have been fully restored", and "never ran at
+//! all" apart without parsing stdout. See AGENTS.md's `cli-automation`/`cli-safety` sections.
 
 pub mod args;
 pub mod backend;
+mod cancel;
 pub mod commands;
 pub mod config;
 pub mod db;
@@ -88,6 +90,15 @@ pub const EXIT_TIMED_OUT: u8 = 4;
 /// run that simply took too long. See `commands::tune::TuneOutcome::PoorQuality` and
 /// AGENTS.md's `safety-quality` section.
 pub const EXIT_POOR_QUALITY: u8 = 5;
+/// A `tune`/`simulate` run ended (via normal completion, Ctrl+C, or a timeout) without being
+/// able to confirm the loop was fully restored to its pre-test mode/MV/setpoint -- either a
+/// second Ctrl+C was received while the restore was in flight, or `--restore-timeout-secs`
+/// elapsed first. Distinct from every other exit code because it means the loop may have
+/// been left mutated with no further attempt made to fix it: an operator must check it by
+/// hand, using the tag/value named in the warning printed to stderr. See
+/// `commands::tune::TuneOutcome::RestoreIncomplete` and AGENTS.md's `safety-cancellation`
+/// section.
+pub const EXIT_RESTORE_INCOMPLETE: u8 = 6;
 
 /// Parses real CLI arguments, initializes structured logging, and runs, returning a process
 /// exit code.
@@ -100,7 +111,16 @@ pub const EXIT_POOR_QUALITY: u8 = 5;
 /// ever be installed once per process. A logging setup failure (e.g. an unwritable log
 /// directory) is deliberately non-fatal -- see [`logging::init_tracing`] -- so it never
 /// prevents the actual command (and its `println!`-based result) from running.
+///
+/// [`cancel::CtrlC::install`] is called here, as the very first line, rather than inside
+/// [`run_with_cli`] or anywhere later -- deliberately earlier than the Ctrl+C listener's
+/// strict minimum requirement (registered once before the polling loop starts), so that a
+/// Ctrl+C pressed during config loading, logging setup, database open/migrate/seed, or the
+/// initial-readings/mode-transition sequence is also captured rather than lost or hitting
+/// the OS default (process kill, skipping the loop restore entirely). See
+/// `safety-cancellation` in AGENTS.md.
 pub async fn run() -> ExitCode {
+    let ctrl_c = cancel::CtrlC::install();
     let cli = Cli::parse();
 
     let config = config::load_config(cli.config.as_deref()).unwrap_or_default();
@@ -123,7 +143,20 @@ pub async fn run() -> ExitCode {
     // -- dropping it any earlier would risk silently truncating buffered log lines.
     let _log_guard = logging::init_tracing(&log_settings);
 
-    run_with_cli(cli).await
+    run_with_cli_and_ctrl_c(cli, ctrl_c).await
+}
+
+/// Test-facing entry point: exercises [`run_with_cli_and_ctrl_c`] against an already-parsed
+/// [`args::Cli`] with a [`cancel::CtrlC::never`] handle, so the large existing test suite
+/// built around this function never installs a real process-wide signal handler -- see
+/// `cancel`'s module doc comment for why that matters beyond just this crate's own tests.
+/// Real process startup ([`run`]) calls [`run_with_cli_and_ctrl_c`] directly with a real,
+/// installed [`cancel::CtrlC`] instead of going through this wrapper. `#[cfg(test)]`-gated
+/// (rather than merely unused outside tests) because it depends on [`cancel::CtrlC::never`],
+/// itself only defined for test builds -- see that function's own doc comment.
+#[cfg(test)]
+pub(crate) async fn run_with_cli(cli: Cli) -> ExitCode {
+    run_with_cli_and_ctrl_c(cli, cancel::CtrlC::never()).await
 }
 
 /// Loads the config file, resolves the database path, dispatches to the requested
@@ -134,7 +167,7 @@ pub async fn run() -> ExitCode {
 /// environment variables (`XDG_DATA_HOME`/`HOME`/`APPDATA`) -- everything downstream of this
 /// function takes already-resolved values or the loaded [`config::BhtuneConfig`] itself,
 /// keeping the config-precedence logic in `config.rs` fully unit-testable by injection.
-pub(crate) async fn run_with_cli(cli: Cli) -> ExitCode {
+async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCode {
     // Captured before `cli.command` is moved into the dispatch match below, so a config/db
     // error can still be reported in the format the command actually asked for.
     let output_format = cli.command.output_format();
@@ -156,14 +189,19 @@ pub(crate) async fn run_with_cli(cli: Cli) -> ExitCode {
         Err(e) => fail(&e, output_format),
         Ok(pool) => {
             let result: anyhow::Result<ExitCode> = match cli.command {
-                Command::Tune(args) => commands::tune::run(&pool, args, &config)
-                    .await
-                    .map(tune_outcome_exit_code),
-                Command::Simulate(args) => {
-                    commands::tune::run(&pool, args.into_tune_args(), &config)
+                Command::Tune(args) => {
+                    commands::tune::run_with_ctrl_c(&pool, args, &config, &mut ctrl_c)
                         .await
                         .map(tune_outcome_exit_code)
                 }
+                Command::Simulate(args) => commands::tune::run_with_ctrl_c(
+                    &pool,
+                    args.into_tune_args(),
+                    &config,
+                    &mut ctrl_c,
+                )
+                .await
+                .map(tune_outcome_exit_code),
                 Command::Template { command } => commands::template::run(&pool, command)
                     .await
                     .map(|()| ExitCode::SUCCESS),
@@ -194,6 +232,7 @@ fn tune_outcome_exit_code(outcome: commands::tune::TuneOutcome) -> ExitCode {
         commands::tune::TuneOutcome::TimedOut => ExitCode::from(EXIT_TIMED_OUT),
         commands::tune::TuneOutcome::WriteBackFailed => ExitCode::from(EXIT_WRITE_BACK_FAILED),
         commands::tune::TuneOutcome::PoorQuality => ExitCode::from(EXIT_POOR_QUALITY),
+        commands::tune::TuneOutcome::RestoreIncomplete => ExitCode::from(EXIT_RESTORE_INCOMPLETE),
     }
 }
 
@@ -308,6 +347,8 @@ mod tests {
                 yes: false,
                 write_pid: None,
                 allow_uncertain_quality: false,
+                op_timeout_secs: 30,
+                restore_timeout_secs: 30,
                 output: OutputFormat::Table,
             }),
         };
@@ -350,6 +391,10 @@ mod tests {
             tune_outcome_exit_code(commands::tune::TuneOutcome::PoorQuality),
             ExitCode::from(EXIT_POOR_QUALITY)
         );
+        assert_eq!(
+            tune_outcome_exit_code(commands::tune::TuneOutcome::RestoreIncomplete),
+            ExitCode::from(EXIT_RESTORE_INCOMPLETE)
+        );
     }
 
     /// Every `SimulateArgs` field explicitly set to a fast-converging demo run (mirroring
@@ -379,6 +424,8 @@ mod tests {
             yes: false,
             write_pid: None,
             allow_uncertain_quality: false,
+            op_timeout_secs: 30,
+            restore_timeout_secs: 30,
             output: OutputFormat::Table,
         }
     }
