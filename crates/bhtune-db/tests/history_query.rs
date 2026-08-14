@@ -7,14 +7,14 @@
 use bhtune_core::{
     ControllerDirection, ControllerType, DcsTemplate, LoopConfig, LoopTags, MrftState, ProcessType,
     ResponseLevel, Tick, built_in_templates,
-    tuning_math::{OpcWriteValues, PidParameters, TuningResult},
+    tuning_math::{PidParameters, TuningResult},
 };
 use bhtune_db::{
     connect_in_memory,
     models::{
-        DcsTemplateRow, Pagination, SampleQuality, TemplateOrigin, TuneBackend, TuneOutcome,
-        TuneResultRow, TuneRunFilter, TuneRunInitialReadings, TuneRunRow, TuneSampleRow,
-        TuneWriteRow, WriteReadback,
+        DcsTemplateRow, NewTuneWrite, Pagination, RollbackState, SampleQuality, TemplateOrigin,
+        TuneBackend, TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunInitialReadings, TuneRunRow,
+        TuneSampleRow, TuneWriteRow, WriteReadback,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -947,7 +947,7 @@ async fn tune_result_list_for_run_is_empty_for_an_incomplete_run() {
 // tune_writes {{{1
 
 #[tokio::test]
-async fn tune_write_insert_success_records_readback_and_no_error() {
+async fn tune_write_insert_records_full_success_with_previous_and_no_rollback() {
     let pool = connect_in_memory().await.unwrap();
     let run = TuneRunRow::start(
         &pool,
@@ -962,33 +962,44 @@ async fn tune_write_insert_success_records_readback_and_no_error() {
     )
     .await
     .unwrap();
-    let written = OpcWriteValues {
-        response_level: ResponseLevel::Moderate,
-        proportional: 66.7,
-        integral: 2.5,
-        derivative: 0.0,
-    };
-    let readback = WriteReadback {
-        proportional: 66.7,
-        integral: 2.5,
-        derivative: 0.0,
-    };
 
-    let row = TuneWriteRow::insert_success(&pool, run.id, written, readback, Utc::now())
-        .await
-        .unwrap();
+    let mut new = NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());
+    new.previous = Some(WriteReadback {
+        proportional: 50.0,
+        integral: 3.0,
+        derivative: 0.0,
+    });
+    new.proportional_written = Some(66.7);
+    new.integral_written = Some(2.5);
+    new.derivative_written = Some(0.0);
+    new.proportional_readback = Some(66.7);
+    new.integral_readback = Some(2.5);
+    new.derivative_readback = Some(0.0);
+    new.success = true;
+
+    let row = TuneWriteRow::insert(&pool, run.id, new).await.unwrap();
     assert_eq!(row.run_id, run.id);
     assert_eq!(row.response_level, ResponseLevel::Moderate);
     assert!(row.success);
-    assert_eq!(row.proportional_written, 66.7);
+    assert_eq!(
+        row.previous,
+        Some(WriteReadback {
+            proportional: 50.0,
+            integral: 3.0,
+            derivative: 0.0,
+        })
+    );
+    assert_eq!(row.proportional_written, Some(66.7));
     assert_eq!(row.proportional_readback, Some(66.7));
     assert_eq!(row.integral_readback, Some(2.5));
     assert_eq!(row.derivative_readback, Some(0.0));
     assert!(row.error_message.is_none());
+    assert!(row.rollback_state.is_none());
+    assert!(row.rollback_error.is_none());
 }
 
 #[tokio::test]
-async fn tune_write_insert_failure_records_error_and_no_readback() {
+async fn tune_write_insert_records_pre_read_failure_with_nothing_attempted() {
     let pool = connect_in_memory().await.unwrap();
     let run = TuneRunRow::start(
         &pool,
@@ -1003,26 +1014,29 @@ async fn tune_write_insert_failure_records_error_and_no_readback() {
     )
     .await
     .unwrap();
-    let written = OpcWriteValues {
-        response_level: ResponseLevel::Aggressive,
-        proportional: 40.0,
-        integral: 1.0,
-        derivative: 0.0,
-    };
 
-    let row =
-        TuneWriteRow::insert_failure(&pool, run.id, written, Utc::now(), "write rejected by DCS")
-            .await
-            .unwrap();
+    let mut new = NewTuneWrite::new(ResponseLevel::Aggressive, Utc::now());
+    new.error_message = Some("pre-read of Integral tag failed: bad quality".to_string());
+
+    let row = TuneWriteRow::insert(&pool, run.id, new).await.unwrap();
     assert!(!row.success);
-    assert_eq!(row.error_message.as_deref(), Some("write rejected by DCS"));
+    assert!(row.previous.is_none());
+    assert!(row.proportional_written.is_none());
+    assert!(row.integral_written.is_none());
+    assert!(row.derivative_written.is_none());
     assert!(row.proportional_readback.is_none());
     assert!(row.integral_readback.is_none());
     assert!(row.derivative_readback.is_none());
+    assert_eq!(
+        row.error_message.as_deref(),
+        Some("pre-read of Integral tag failed: bad quality")
+    );
+    assert!(row.rollback_state.is_none());
+    assert!(row.rollback_error.is_none());
 }
 
 #[tokio::test]
-async fn tune_write_list_for_run_orders_oldest_first() {
+async fn tune_write_insert_records_partial_write_with_successful_rollback() {
     let pool = connect_in_memory().await.unwrap();
     let run = TuneRunRow::start(
         &pool,
@@ -1037,32 +1051,100 @@ async fn tune_write_list_for_run_orders_oldest_first() {
     )
     .await
     .unwrap();
-    let t0 = Utc::now();
-    let written = OpcWriteValues {
-        response_level: ResponseLevel::Aggressive,
-        proportional: 1.0,
-        integral: 1.0,
-        derivative: 0.0,
-    };
-    let readback = WriteReadback {
-        proportional: 1.0,
-        integral: 1.0,
-        derivative: 0.0,
-    };
 
-    let second = TuneWriteRow::insert_success(
+    let mut new = NewTuneWrite::new(ResponseLevel::Sluggish, Utc::now());
+    new.previous = Some(WriteReadback {
+        proportional: 50.0,
+        integral: 3.0,
+        derivative: 0.0,
+    });
+    // Proportional wrote and verified fine; Integral was rejected, so Derivative was never
+    // attempted at all -- both left `None`, distinguishing "attempted and confirmed 3.0" from
+    // "never attempted".
+    new.proportional_written = Some(66.7);
+    new.proportional_readback = Some(66.7);
+    new.integral_written = Some(9.0);
+    new.success = false;
+    new.error_message = Some("Integral readback 3.0 outside tolerance of requested 9.0".into());
+    new.rollback_state = Some(RollbackState::Succeeded);
+
+    let row = TuneWriteRow::insert(&pool, run.id, new).await.unwrap();
+    assert!(!row.success);
+    assert_eq!(row.proportional_written, Some(66.7));
+    assert_eq!(row.proportional_readback, Some(66.7));
+    assert_eq!(row.integral_written, Some(9.0));
+    assert!(row.integral_readback.is_none());
+    assert!(row.derivative_written.is_none());
+    assert!(row.derivative_readback.is_none());
+    assert_eq!(row.rollback_state, Some(RollbackState::Succeeded));
+    assert!(row.rollback_error.is_none());
+}
+
+#[tokio::test]
+async fn tune_write_insert_records_partial_write_with_failed_rollback() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
         &pool,
-        run.id,
-        OpcWriteValues {
-            response_level: ResponseLevel::Moderate,
-            ..written
-        },
-        readback,
-        t0 + Duration::seconds(5),
+        None,
+        "LIC114",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        Utc::now(),
     )
     .await
     .unwrap();
-    let first = TuneWriteRow::insert_success(&pool, run.id, written, readback, t0)
+
+    let mut new = NewTuneWrite::new(ResponseLevel::Aggressive, Utc::now());
+    new.previous = Some(WriteReadback {
+        proportional: 50.0,
+        integral: 3.0,
+        derivative: 0.0,
+    });
+    new.proportional_written = Some(40.0);
+    new.success = false;
+    new.error_message = Some("Integral write rejected by DCS".to_string());
+    new.rollback_state = Some(RollbackState::Failed);
+    new.rollback_error = Some("Proportional rollback write rejected by DCS".to_string());
+
+    let row = TuneWriteRow::insert(&pool, run.id, new).await.unwrap();
+    assert!(!row.success);
+    assert_eq!(row.rollback_state, Some(RollbackState::Failed));
+    assert_eq!(
+        row.rollback_error.as_deref(),
+        Some("Proportional rollback write rejected by DCS")
+    );
+}
+
+#[tokio::test]
+async fn tune_write_list_for_run_orders_oldest_first() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC115",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let t0 = Utc::now();
+
+    let mut new_second = NewTuneWrite::new(ResponseLevel::Moderate, t0 + Duration::seconds(5));
+    new_second.success = true;
+    let second = TuneWriteRow::insert(&pool, run.id, new_second)
+        .await
+        .unwrap();
+
+    let mut new_first = NewTuneWrite::new(ResponseLevel::Aggressive, t0);
+    new_first.success = true;
+    let first = TuneWriteRow::insert(&pool, run.id, new_first)
         .await
         .unwrap();
 
@@ -1079,7 +1161,7 @@ async fn tune_write_list_for_run_is_empty_when_nothing_was_written() {
     let run = TuneRunRow::start(
         &pool,
         None,
-        "LIC114",
+        "LIC116",
         TuneBackend::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,

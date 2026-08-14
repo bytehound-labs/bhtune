@@ -111,14 +111,26 @@ impl From<&TuneResultRow> for ResultJson {
 struct WriteJson {
     response_level: bhtune_core::ResponseLevel,
     written_at: chrono::DateTime<chrono::Utc>,
-    proportional_written: f32,
-    integral_written: f32,
-    derivative_written: f32,
+    /// The P/I/D values read from the backend before any write was attempted. `None` only
+    /// when the pre-read itself failed, in which case every field below is also `None`.
+    proportional_previous: Option<f32>,
+    integral_previous: Option<f32>,
+    derivative_previous: Option<f32>,
+    /// `None` for a constant that was never attempted because an earlier one in the
+    /// P/I/D write-and-verify sequence had already failed.
+    proportional_written: Option<f32>,
+    integral_written: Option<f32>,
+    derivative_written: Option<f32>,
     proportional_readback: Option<f32>,
     integral_readback: Option<f32>,
     derivative_readback: Option<f32>,
     success: bool,
     error_message: Option<String>,
+    /// `None` means no rollback was applicable -- either every constant wrote successfully
+    /// or the pre-read failed before any write was attempted. See `rollback_error` for what
+    /// went wrong when this is `Some(RollbackState::Failed)`.
+    rollback_state: Option<bhtune_db::models::RollbackState>,
+    rollback_error: Option<String>,
 }
 
 impl From<&TuneWriteRow> for WriteJson {
@@ -126,6 +138,9 @@ impl From<&TuneWriteRow> for WriteJson {
         Self {
             response_level: w.response_level,
             written_at: w.written_at,
+            proportional_previous: w.previous.map(|p| p.proportional),
+            integral_previous: w.previous.map(|p| p.integral),
+            derivative_previous: w.previous.map(|p| p.derivative),
             proportional_written: w.proportional_written,
             integral_written: w.integral_written,
             derivative_written: w.derivative_written,
@@ -134,6 +149,8 @@ impl From<&TuneWriteRow> for WriteJson {
             derivative_readback: w.derivative_readback,
             success: w.success,
             error_message: w.error_message.clone(),
+            rollback_state: w.rollback_state,
+            rollback_error: w.rollback_error.clone(),
         }
     }
 }
@@ -222,6 +239,15 @@ async fn list(
         }
     }
     Ok(())
+}
+
+/// Renders an optional PID constant reading/write for `history show`'s plain-text table --
+/// `"-"` for `None` (never attempted, or the pre-read failed), 4 decimal places otherwise.
+fn fmt_opt_f32(value: Option<f32>) -> String {
+    match value {
+        Some(v) => format!("{v:.4}"),
+        None => "-".to_string(),
+    }
 }
 
 async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::Result<()> {
@@ -313,18 +339,34 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 println!("  PID write-back audit:");
                 for w in &writes {
                     println!(
-                        "    [{}] {:?} level: success={} P={} I={} D={}{}",
+                        "    [{}] {:?} level: success={} previous(P={} I={} D={}) \
+                         written(P={} I={} D={}) readback(P={} I={} D={}){}",
                         w.written_at.to_rfc3339(),
                         w.response_level,
                         w.success,
-                        w.proportional_written,
-                        w.integral_written,
-                        w.derivative_written,
+                        fmt_opt_f32(w.previous.map(|p| p.proportional)),
+                        fmt_opt_f32(w.previous.map(|p| p.integral)),
+                        fmt_opt_f32(w.previous.map(|p| p.derivative)),
+                        fmt_opt_f32(w.proportional_written),
+                        fmt_opt_f32(w.integral_written),
+                        fmt_opt_f32(w.derivative_written),
+                        fmt_opt_f32(w.proportional_readback),
+                        fmt_opt_f32(w.integral_readback),
+                        fmt_opt_f32(w.derivative_readback),
                         w.error_message
                             .as_ref()
                             .map(|m| format!(" error={m}"))
                             .unwrap_or_default(),
                     );
+                    if let Some(rollback_state) = w.rollback_state {
+                        println!(
+                            "        rollback: {rollback_state:?}{}",
+                            w.rollback_error
+                                .as_ref()
+                                .map(|m| format!(" error={m}"))
+                                .unwrap_or_default(),
+                        );
+                    }
                 }
             }
         }
@@ -513,28 +555,36 @@ mod tests {
         .await
         .unwrap();
 
-        let written = bhtune_core::OpcWriteValues {
-            response_level: bhtune_core::ResponseLevel::Moderate,
-            proportional: 12.0,
-            integral: 2.5,
-            derivative: 0.6,
-        };
-        TuneWriteRow::insert_success(
-            &pool,
-            run.id,
-            written,
-            bhtune_db::models::WriteReadback {
-                proportional: 12.0,
-                integral: 2.5,
-                derivative: 0.6,
-            },
-            now,
-        )
-        .await
-        .unwrap();
-        TuneWriteRow::insert_failure(&pool, run.id, written, now, "mock failure")
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 2.0,
+            derivative: 0.5,
+        });
+        successful.proportional_written = Some(12.0);
+        successful.integral_written = Some(2.5);
+        successful.derivative_written = Some(0.6);
+        successful.proportional_readback = Some(12.0);
+        successful.integral_readback = Some(2.5);
+        successful.derivative_readback = Some(0.6);
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run.id, successful)
             .await
             .unwrap();
+
+        let mut failed =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        failed.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 2.0,
+            derivative: 0.5,
+        });
+        failed.proportional_written = Some(12.0);
+        failed.error_message = Some("mock failure".to_string());
+        failed.rollback_state = Some(bhtune_db::models::RollbackState::Failed);
+        failed.rollback_error = Some("mock rollback failure".to_string());
+        TuneWriteRow::insert(&pool, run.id, failed).await.unwrap();
 
         (pool, run.id)
     }

@@ -27,7 +27,7 @@
 use bhtune_core::{
     ControllerDirection, ControllerType, DcsTemplate, LoopConfig, LoopTags, MrftState, ProcessType,
     ResponseLevel, Tick,
-    tuning_math::{OpcWriteValues, PidParameters, TuningResult},
+    tuning_math::{PidParameters, TuningResult},
 };
 use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, sqlite::SqliteRow};
@@ -1186,28 +1186,45 @@ fn row_to_tune_result(row: SqliteRow) -> DbResult<TuneResultRow> {
 /// One row of `tune_writes`: an audit record of PID constants actually written back to the
 /// DCS for one [`ResponseLevel`] of one run, distinct from what was merely *calculated*
 /// ([`TuneResultRow`]). Flattened for the same reason as `TuneResultRow`.
+///
+/// `*_written`/`*_readback` are independently nullable (not all-or-nothing like `previous`)
+/// because `safety-writeback-rollback` writes and verifies P, then I, then D in sequence,
+/// stopping at the first failure -- so a partial attempt leaves the constants after the
+/// failure point at `None` rather than 0, distinguishing "never attempted" from "attempted
+/// and confirmed zero".
 #[derive(Debug, Clone, PartialEq)]
 pub struct TuneWriteRow {
     pub id: i64,
     pub run_id: i64,
     pub response_level: ResponseLevel,
     pub written_at: DateTime<Utc>,
-    pub proportional_written: f32,
-    pub integral_written: f32,
-    pub derivative_written: f32,
-    /// Read back immediately after writing to confirm the DCS accepted the value. `None`
-    /// when `success` is `false` and the write never got far enough to read back.
+    /// The P/I/D values read from the backend *before* any write was attempted. `None` only
+    /// when the pre-read itself failed -- a hard stop before any write, so nothing else on
+    /// this row was ever attempted either (`success = false`, every other field below `None`).
+    pub previous: Option<WriteReadback>,
+    pub proportional_written: Option<f32>,
+    pub integral_written: Option<f32>,
+    pub derivative_written: Option<f32>,
+    /// Read back immediately after writing to confirm the DCS accepted the value within
+    /// tolerance. `None` whenever the corresponding `*_written` field is `None`, or when the
+    /// write was sent but the readback attempt itself failed.
     pub proportional_readback: Option<f32>,
     pub integral_readback: Option<f32>,
     pub derivative_readback: Option<f32>,
     pub success: bool,
     pub error_message: Option<String>,
+    /// Set only when `success = false` and at least one constant had already been written
+    /// before the failure, so a best-effort rollback to `previous` was attempted. `None`
+    /// means rollback did not apply -- either every constant wrote successfully (`success =
+    /// true`) or the pre-read failed before any write was attempted.
+    pub rollback_state: Option<RollbackState>,
+    pub rollback_error: Option<String>,
 }
 
-/// The proportional/integral/derivative values read back from the backend immediately after
-/// a [`TuneWriteRow::insert_success`] write, to confirm the DCS actually accepted them. Not a
-/// `bhtune-core` type like [`OpcWriteValues`]: this isn't a calculated/intended value, just
-/// raw floats the caller read back from the backend after writing.
+/// A triple of proportional/integral/derivative values, read from the backend before any
+/// write is attempted ([`TuneWriteRow::previous`]). Not a `bhtune-core` type like
+/// `bhtune_core::tuning_math::OpcWriteValues`: this is a raw observation, not a
+/// calculated/intended value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WriteReadback {
     pub proportional: f32,
@@ -1215,69 +1232,101 @@ pub struct WriteReadback {
     pub derivative: f32,
 }
 
-impl TuneWriteRow {
-    /// Records a successful PID write-back, including what was read back afterward to
-    /// confirm the DCS accepted it. `written`'s own `response_level` becomes the row's
-    /// `response_level` — one source of truth, rather than a second field that could
-    /// disagree with it.
-    pub async fn insert_success(
-        pool: &SqlitePool,
-        run_id: i64,
-        written: OpcWriteValues,
-        readback: WriteReadback,
-        written_at: DateTime<Utc>,
-    ) -> DbResult<TuneWriteRow> {
-        let row = sqlx::query(
-            r#"
-            INSERT INTO tune_writes (
-                run_id, response_level, written_at, proportional_written, integral_written,
-                derivative_written, proportional_readback, integral_readback,
-                derivative_readback, success
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-            RETURNING *
-            "#,
-        )
-        .bind(run_id)
-        .bind(enum_to_text(&written.response_level))
-        .bind(written_at)
-        .bind(written.proportional)
-        .bind(written.integral)
-        .bind(written.derivative)
-        .bind(readback.proportional)
-        .bind(readback.integral)
-        .bind(readback.derivative)
-        .fetch_one(pool)
-        .await
-        .map_err(DbError::Query)?;
+/// Whether a best-effort rollback of a partially-completed PID write was attempted and, if
+/// so, whether it succeeded. See [`TuneWriteRow::rollback_state`] for when this is `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RollbackState {
+    /// Every constant that had been written was successfully written back to its `previous`
+    /// value.
+    Succeeded,
+    /// At least one constant could not be written back to its `previous` value -- the loop
+    /// may still hold a mismatched, partially-updated set of PID constants. See
+    /// [`TuneWriteRow::rollback_error`] and `bhtune history revert` for recovering by hand.
+    Failed,
+}
 
-        row_to_tune_write(row)
+/// Everything needed to record one write-back attempt, successful or not. Built up by the
+/// caller as it works through the sequential pre-read / write-and-verify / rollback steps,
+/// then persisted in a single [`TuneWriteRow::insert`] call -- replacing the old two-outcome
+/// `insert_success`/`insert_failure` split, which could not represent a partial write or a
+/// rollback attempt at all. See `safety-writeback-rollback` in AGENTS.md for the four
+/// distinguishable outcomes this shape exists to capture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewTuneWrite {
+    pub response_level: ResponseLevel,
+    pub written_at: DateTime<Utc>,
+    pub previous: Option<WriteReadback>,
+    pub proportional_written: Option<f32>,
+    pub integral_written: Option<f32>,
+    pub derivative_written: Option<f32>,
+    pub proportional_readback: Option<f32>,
+    pub integral_readback: Option<f32>,
+    pub derivative_readback: Option<f32>,
+    pub success: bool,
+    pub error_message: Option<String>,
+    pub rollback_state: Option<RollbackState>,
+    pub rollback_error: Option<String>,
+}
+
+impl NewTuneWrite {
+    /// Starts a record with every previous/written/readback/rollback field unset -- callers
+    /// fill in fields (all `pub`) as they progress through the pre-read, write-and-verify,
+    /// and rollback steps, then pass the result to [`TuneWriteRow::insert`].
+    pub fn new(response_level: ResponseLevel, written_at: DateTime<Utc>) -> Self {
+        NewTuneWrite {
+            response_level,
+            written_at,
+            previous: None,
+            proportional_written: None,
+            integral_written: None,
+            derivative_written: None,
+            proportional_readback: None,
+            integral_readback: None,
+            derivative_readback: None,
+            success: false,
+            error_message: None,
+            rollback_state: None,
+            rollback_error: None,
+        }
     }
+}
 
-    /// Records a PID write-back that failed — the DCS rejected the value, or the write
-    /// itself errored — before any readback was possible. Readback columns are left `NULL`.
-    pub async fn insert_failure(
+impl TuneWriteRow {
+    /// Records one write-back attempt exactly as `new` describes it -- see [`NewTuneWrite`].
+    pub async fn insert(
         pool: &SqlitePool,
         run_id: i64,
-        written: OpcWriteValues,
-        written_at: DateTime<Utc>,
-        error_message: &str,
+        new: NewTuneWrite,
     ) -> DbResult<TuneWriteRow> {
         let row = sqlx::query(
             r#"
             INSERT INTO tune_writes (
-                run_id, response_level, written_at, proportional_written, integral_written,
-                derivative_written, success, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                run_id, response_level, written_at,
+                proportional_previous, integral_previous, derivative_previous,
+                proportional_written, integral_written, derivative_written,
+                proportional_readback, integral_readback, derivative_readback,
+                success, error_message, rollback_state, rollback_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
         .bind(run_id)
-        .bind(enum_to_text(&written.response_level))
-        .bind(written_at)
-        .bind(written.proportional)
-        .bind(written.integral)
-        .bind(written.derivative)
-        .bind(error_message)
+        .bind(enum_to_text(&new.response_level))
+        .bind(new.written_at)
+        .bind(new.previous.map(|p| p.proportional))
+        .bind(new.previous.map(|p| p.integral))
+        .bind(new.previous.map(|p| p.derivative))
+        .bind(new.proportional_written)
+        .bind(new.integral_written)
+        .bind(new.derivative_written)
+        .bind(new.proportional_readback)
+        .bind(new.integral_readback)
+        .bind(new.derivative_readback)
+        .bind(new.success)
+        .bind(new.error_message)
+        .bind(new.rollback_state.map(|s| enum_to_text(&s)))
+        .bind(new.rollback_error)
         .fetch_one(pool)
         .await
         .map_err(DbError::Query)?;
@@ -1299,11 +1348,32 @@ impl TuneWriteRow {
 
 fn row_to_tune_write(row: SqliteRow) -> DbResult<TuneWriteRow> {
     let response_level: String = row.try_get("response_level").map_err(DbError::Query)?;
+    let proportional_previous: Option<f32> = row
+        .try_get("proportional_previous")
+        .map_err(DbError::Query)?;
+    let integral_previous: Option<f32> =
+        row.try_get("integral_previous").map_err(DbError::Query)?;
+    let derivative_previous: Option<f32> =
+        row.try_get("derivative_previous").map_err(DbError::Query)?;
+    let previous = match (
+        proportional_previous,
+        integral_previous,
+        derivative_previous,
+    ) {
+        (Some(proportional), Some(integral), Some(derivative)) => Some(WriteReadback {
+            proportional,
+            integral,
+            derivative,
+        }),
+        _ => None,
+    };
+    let rollback_state: Option<String> = row.try_get("rollback_state").map_err(DbError::Query)?;
     Ok(TuneWriteRow {
         id: row.try_get("id").map_err(DbError::Query)?,
         run_id: row.try_get("run_id").map_err(DbError::Query)?,
         response_level: text_to_enum("response_level", &response_level)?,
         written_at: row.try_get("written_at").map_err(DbError::Query)?,
+        previous,
         proportional_written: row
             .try_get("proportional_written")
             .map_err(DbError::Query)?,
@@ -1316,6 +1386,10 @@ fn row_to_tune_write(row: SqliteRow) -> DbResult<TuneWriteRow> {
         derivative_readback: row.try_get("derivative_readback").map_err(DbError::Query)?,
         success: row.try_get("success").map_err(DbError::Query)?,
         error_message: row.try_get("error_message").map_err(DbError::Query)?,
+        rollback_state: rollback_state
+            .map(|s| text_to_enum("rollback_state", &s))
+            .transpose()?,
+        rollback_error: row.try_get("rollback_error").map_err(DbError::Query)?,
     })
 }
 // }}}1

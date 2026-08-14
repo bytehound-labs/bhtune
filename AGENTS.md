@@ -244,13 +244,21 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
 - **Write-back readback values are a new `bhtune-db`-local `WriteReadback` type, not
   `bhtune_core::tuning_math::OpcWriteValues` reused a second time.** `OpcWriteValues` is
   documented as "the literal values to write" — a calculated, intended value, and it already
-  supplies `TuneWriteRow`'s `response_level`. What a backend reads back immediately after
-  issuing that write is a different kind of fact (a raw, unlabelled observation, not a
-  calculation) with no natural home in `bhtune-core`, so `TuneWriteRow::insert_success` takes a
-  `WriteReadback { proportional, integral, derivative }` instead. `insert_success` and
-  `insert_failure` are kept as two separate functions, rather than one taking
-  `Option<WriteReadback>` plus `Option<String>`, so a nonsensical combination (both present, or
-  neither) is structurally unrepresentable rather than merely validated at runtime.
+  supplies `TuneWriteRow`'s `response_level`. What a backend reads back is a different kind
+  of fact (a raw, unlabelled observation, not a calculation) with no natural home in
+  `bhtune-core`, so both the *pre-write* readback (`TuneWriteRow.previous`) and the
+  *post-write* confirmation readbacks reuse `WriteReadback { proportional, integral,
+  derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
+  independently nullable fields) because `safety-writeback-rollback`'s pre-read step is a
+  hard stop — either all three pre-reads succeed before anything is written, or nothing is
+  written and there is no partial "previous" to record. The three `*_written`/`*_readback`
+  columns, by contrast, *are* independently nullable, since the write-and-verify loop is
+  sequential and stops at the first failure (P can succeed while I fails and D is never
+  attempted). A single `NewTuneWrite` struct (all fields `pub`, built incrementally via
+  `NewTuneWrite::new(response_level, written_at)` and one `TuneWriteRow::insert`) replaced an
+  earlier `insert_success`/`insert_failure` two-function split once partial writes and
+  rollback outcomes needed representing — two constructors can't express "wrote P, failed on
+  I, rolled P back successfully" without one of them degenerating into the other's superset.
 - **`OpcDaBackend` serializes access to one `opcda_bridge::Client` behind a `tokio::sync::Mutex`,
   never `std::sync::Mutex`.** The bridge client's methods take `&mut self`, but `Backend`'s
   methods take `&self` (required for `Arc<dyn Backend>` sharing), so the mutex guard is held
@@ -827,9 +835,8 @@ time; this section is updated as each lands, with a full pass once all are done:
     history explorer can show exactly what was seen when the run gave up.
   - The PID write-back confirmation readback (`maybe_write_back`) — a poor-quality readback
     is classified as a write-back failure (`WriteBackOutcome::Failed`, audited via
-    `TuneWriteRow`), never silently accepted as proof the write landed. Does not attempt a
-    rollback of the write itself; that is finding 6 (`safety-writeback-rollback`, not yet
-    implemented).
+    `TuneWriteRow`), never silently accepted as proof the write landed. A poor-quality
+    readback also drives finding 6's rollback of whatever was already confirmed, below.
 
   `tune_samples` gained a `pv_quality` column (`SampleQuality`: `Good`/`Uncertain`/`Bad`, the
   DB-side mirror of `bhtune_backend::Quality` — two separate enums since `bhtune-backend` and
@@ -963,6 +970,82 @@ time; this section is updated as each lands, with a full pass once all are done:
   `MockBackend::degrade_quality_after` test-harness extension, returning a tag's quality as
   `Good` for the first N reads and a chosen `Quality` after) still runs the restore end to
   end and records `Incomplete`.
+- **PID write-back now pre-reads, verifies against tolerance, and rolls back a partial
+  write** — done, core rewrite (`commands::tune::{read_previous_pid_values,
+  pid_value_within_tolerance, write_and_verify_pid_value, rollback_pid_writes,
+  maybe_write_back}`, `bhtune_db::models::{NewTuneWrite, RollbackState}`). Previously the
+  three constants were written in sequence with no pre-read at all: if P succeeded and I was
+  rejected, the loop was left with a mismatched, half-updated set and no way to know what P
+  used to be. A transport error during the confirmation readback propagated via `?` and
+  skipped the audit row entirely — the single most alarming failure mode was the one least
+  likely to be recorded. "Confirmation" itself only checked that three values parsed as
+  numbers, without checking quality or how close they were to what was requested, so a
+  clamped or stale readback was indistinguishable from genuine confirmation. Closed as:
+  - **Pre-read is a hard stop.** `read_previous_pid_values` reads P, then I, then D
+    (subject to finding 5's quality rule), failing on the first bad read before anything is
+    written — the run's `previous` values are always fully known or the write never starts,
+    so a rollback target always exists once anything has been written.
+  - **Write, verify, and check tolerance, one constant at a time.** `write_and_verify_pid_value`
+    reuses `write_value` (so a transport error and a rejected write both surface the same
+    way, rather than a raw `?` skipping the audit row) and `read_f32` (so a poor-quality
+    confirmation read is never mistaken for success), then checks the readback against
+    `pid_value_within_tolerance` — a combined absolute (`1e-3`) and relative (1%) tolerance,
+    rather than exact equality, since a DCS's own unit conversion means a just-written float
+    is not guaranteed to read back bit-identical, and a purely relative tolerance breaks
+    down for a requested value at or near zero (e.g. `D = 0` on a PI controller).
+    `maybe_write_back` calls this once per constant, in P/I/D order, stopping at the first
+    failure — implemented as a loop over a fixed 3-element array of `(label, tag, requested,
+    previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the written/readback
+    values, rather than string-matching on `label`, then unpacked into `NewTuneWrite`'s named
+    fields once the loop ends.
+  - **Roll back only what was actually confirmed.** A constant is only added to
+    `rollback_targets` after its own write-and-verify succeeds, so if P succeeds and I fails,
+    only P is rolled back — D, never attempted, needs no rollback and I, never confirmed,
+    has nothing to put back either. `rollback_pid_writes` mirrors `restore()`'s "attempt
+    every step independently" philosophy from the previous bullet rather than stopping at
+    the first rollback failure, collecting every failure so a rollback that only partially
+    succeeds is still fully reported.
+  - **Four distinguishable outcomes**, not just success/failure: wrote nothing (pre-read
+    failed, `previous = None`, `rollback_state = None`); wrote and confirmed everything
+    (`success = true`); wrote some, failed, rolled back successfully
+    (`rollback_state = Succeeded`); and wrote some, failed, and the rollback *itself* failed
+    (`rollback_state = Failed`, `rollback_error` set) — printing a message pointing the
+    operator at `bhtune history revert <run-id>` for the last case, since the loop may now
+    hold a mismatched set of constants with no automated way left to fix it.
+  - **`tune_writes` gained five columns**: `proportional_previous`/`integral_previous`/
+    `derivative_previous` (nullable — the pre-read itself can fail) and `rollback_state`
+    (`CHECK` constrained to `succeeded`/`failed`, `NULL` meaning rollback was never needed)/
+    `rollback_error`. The existing `proportional_written`/`integral_written`/
+    `derivative_written` columns were relaxed from `NOT NULL` to nullable, since a partial
+    write can now leave a later constant's `written`/`readback` genuinely absent rather than
+    forced to some placeholder value — added to the one pre-release migration in place,
+    since nothing has shipped yet.
+
+  **Testing approach.** `MockBackend` gained three more builders alongside the existing
+  `degrade_quality_after`: `erroring_read_after`/`rejecting_write_after` (a tag's first N
+  reads/writes succeed normally, then every one after that fails — letting a test put a
+  tag's *pre-read* in good standing while still forcing its *post-write* readback or a later
+  *rollback* write to fail deterministically) and `distorting_write` (silently perturbs a
+  written float by a fixed offset before storing it, so a readback that parses fine and
+  reports `Good` quality can still be exercised as an out-of-tolerance rejection — a failure
+  mode distinct from an erroring or poor-quality readback that no prior mock capability could
+  produce). Dedicated tests cover all nine `maybe_write_back` outcomes: a full success
+  (asserting `previous`/all three `*_written`/`*_readback` fields and `rollback_state = None`
+  together, not just the top-level `WriteBackOutcome`), a pre-read failure (`previous = None`,
+  nothing on the backend's write log at all), a rejected write, a readback that errors after
+  the pre-read has already succeeded, a poor-quality readback (distinguished by message
+  prefix from both the read-error case and a pre-read failure), an out-of-tolerance readback,
+  a successful rollback (confirming the backend's live value was actually restored, not just
+  the audit row), a rollback that itself fails (`rollback_state = Failed` with
+  `rollback_error` naming the constant), and an `Uncertain` readback accepted without
+  incident under `--allow-uncertain-quality` (proving finding 5's escape hatch and finding
+  6's tolerance check compose correctly rather than the latter accidentally re-imposing a
+  `Good`-only rule of its own). `pid_value_within_tolerance` also has direct unit
+  tests pinning down its exact-match, relative-band, absolute-floor-near-zero, and
+  negative-value behavior. **Not yet done:** the `bhtune history revert <run-id>` command
+  itself — see the previous bullet's note on bundling it with the deferred
+  `restore-loop` replay, since both share the same "read historical values, write them back
+  under a confirmation gate" shape.
 
 ## Logging (`cli-logging`)
 

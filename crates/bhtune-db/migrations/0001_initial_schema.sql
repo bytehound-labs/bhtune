@@ -282,19 +282,40 @@ CREATE TABLE tune_writes (
     response_level           TEXT NOT NULL CHECK (response_level IN ('aggressive', 'moderate', 'sluggish')),
     written_at               TEXT NOT NULL,
 
-    proportional_written     REAL NOT NULL,
-    integral_written         REAL NOT NULL,
-    derivative_written       REAL NOT NULL,
+    -- Read back *before* any write is attempted, so the pre-write state is
+    -- always known if a rollback later turns out to be necessary. NULL only
+    -- when the pre-read itself failed, in which case no write was attempted
+    -- at all (`success = 0`, every `*_written`/`*_readback` column NULL too)
+    -- -- see `safety-writeback-rollback`.
+    proportional_previous    REAL,
+    integral_previous        REAL,
+    derivative_previous      REAL,
+
+    -- NULL when the pre-read failed and no write was attempted for that
+    -- constant. Populated in write order (P, then I, then D), so a partial
+    -- failure leaves later constants NULL rather than 0.
+    proportional_written     REAL,
+    integral_written         REAL,
+    derivative_written       REAL,
 
     -- Read back immediately after writing, to confirm the DCS actually
-    -- accepted the value rather than silently clamping/rejecting it. NULL
-    -- when `success = 0` and the write never got far enough to read back.
+    -- accepted the value rather than silently clamping/rejecting it, within
+    -- tolerance. NULL whenever the corresponding `*_written` column is NULL.
     proportional_readback    REAL,
     integral_readback        REAL,
     derivative_readback      REAL,
 
     success                   INTEGER NOT NULL CHECK (success IN (0, 1)),
-    error_message             TEXT
+    error_message             TEXT,
+
+    -- Set only when `success = 0` and at least one constant had already been
+    -- written before the failure, so a best-effort rollback to the
+    -- `*_previous` values was attempted. NULL means "no rollback was
+    -- applicable" -- covers both a fully successful write (nothing to roll
+    -- back) and a pre-read failure (nothing was ever written). See
+    -- `bhtune history revert` for reverting a *successful* write later.
+    rollback_state            TEXT CHECK (rollback_state IN ('succeeded', 'failed')),
+    rollback_error            TEXT
 );
 CREATE INDEX idx_tune_writes_run ON tune_writes(run_id);
 

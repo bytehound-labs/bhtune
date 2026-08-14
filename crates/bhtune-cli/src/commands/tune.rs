@@ -20,8 +20,8 @@ use bhtune_core::{
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, SampleQuality, TemplateOrigin, TuneBackend, TuneResultRow,
-    TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
+    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TemplateOrigin, TuneBackend,
+    TuneResultRow, TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
 };
 use chrono::{DateTime, Utc};
 
@@ -1604,6 +1604,95 @@ async fn persist_results(
     Ok(())
 }
 
+/// Reads the existing Proportional/Integral/Derivative values before any write is attempted
+/// -- `safety-writeback-rollback`'s pre-read step. Reading all three is a hard stop on the
+/// first failure, mirroring findings 4/5's "refuse before mutating" pattern, and has the
+/// useful side effect of guaranteeing that a rollback, if one later turns out to be
+/// necessary, always has a known-good value to roll back to.
+async fn read_previous_pid_values(
+    backend: &dyn Backend,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    allow_uncertain: bool,
+) -> anyhow::Result<WriteReadback> {
+    let proportional = read_f32(backend, p_tag, allow_uncertain)
+        .await
+        .map_err(|e| anyhow::anyhow!("pre-read of Proportional tag '{p_tag}' failed: {e}"))?;
+    let integral = read_f32(backend, i_tag, allow_uncertain)
+        .await
+        .map_err(|e| anyhow::anyhow!("pre-read of Integral tag '{i_tag}' failed: {e}"))?;
+    let derivative = read_f32(backend, d_tag, allow_uncertain)
+        .await
+        .map_err(|e| anyhow::anyhow!("pre-read of Derivative tag '{d_tag}' failed: {e}"))?;
+    Ok(WriteReadback {
+        proportional,
+        integral,
+        derivative,
+    })
+}
+
+/// Whether a PID write-back's confirmation readback is close enough to `requested` to count
+/// as confirmed. Combined absolute (1e-3) and relative (1%) tolerance rather than exact
+/// equality, since a DCS's own internal unit conversion/precision means the readback of a
+/// just-written float is not guaranteed to be bit-identical -- and a purely relative
+/// tolerance breaks down for a requested value at or near zero (e.g. `D = 0` for a PI
+/// controller).
+fn pid_value_within_tolerance(requested: f32, actual: f32) -> bool {
+    let tolerance = (1e-3_f32).max(0.01 * requested.abs());
+    (actual - requested).abs() <= tolerance
+}
+
+/// Writes `value` to `tag` and reads it back to confirm the DCS accepted it within
+/// [`pid_value_within_tolerance`], reusing [`write_value`] (so a transport error and a
+/// rejected write both surface the same way) and [`read_f32`] (so a poor-quality or
+/// non-numeric readback is never mistaken for confirmation). `label` is only used to prefix
+/// the error message so a caller writing several constants in sequence can tell which one
+/// failed.
+async fn write_and_verify_pid_value(
+    backend: &dyn Backend,
+    label: &str,
+    tag: &str,
+    value: f32,
+    allow_uncertain: bool,
+) -> Result<f32, String> {
+    write_value(backend, tag, value)
+        .await
+        .map_err(|e| format!("{label} write to '{tag}' failed: {e}"))?;
+    let readback = read_f32(backend, tag, allow_uncertain)
+        .await
+        .map_err(|e| format!("{label} readback from '{tag}' failed: {e}"))?;
+    if pid_value_within_tolerance(value, readback) {
+        Ok(readback)
+    } else {
+        Err(format!(
+            "{label} readback {readback} from '{tag}' is outside tolerance of requested {value}"
+        ))
+    }
+}
+
+/// Best-effort rollback of whichever PID constants were confirmed written before a later one
+/// failed -- mirroring `restore()`'s "attempt every step independently, don't short-circuit
+/// on the first failure" philosophy (`safety-restore-guard`). `targets` is `(label, tag,
+/// previous_value)` triples, in any order. Returns `Ok(())` only if every rollback write
+/// succeeded; otherwise `Err` describing every one that did not.
+async fn rollback_pid_writes(
+    backend: &dyn Backend,
+    targets: &[(&str, &str, f32)],
+) -> Result<(), String> {
+    let mut failures = Vec::new();
+    for (label, tag, previous_value) in targets {
+        if let Err(e) = write_value(backend, tag, *previous_value).await {
+            failures.push(format!("{label} rollback write to '{tag}' failed: {e}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
 /// Writes back the calculated PID parameters for one response level -- chosen either
 /// interactively (prompting on `reader`) or non-interactively via `write_pid`
 /// (`--write-pid`; the caller has already validated `--yes` was also given before the tune
@@ -1613,6 +1702,12 @@ async fn persist_results(
 /// were recorded at all. `reader` is injected (rather than reading `std::io::stdin()`
 /// directly) so tests can supply a fixed `Cursor` in place of the process's real stdin; it
 /// is never read from at all when `write_pid` is `Some`.
+///
+/// Pre-reads the existing constants, writes and verifies Proportional then Integral then
+/// Derivative in sequence (stopping at the first failure), and rolls back whatever was
+/// already confirmed if a later constant fails -- `safety-writeback-rollback` (finding 6).
+/// Every attempt, including a pre-read failure or a transport error mid-write, produces
+/// exactly one [`TuneWriteRow`] audit row.
 #[allow(clippy::too_many_arguments)]
 async fn maybe_write_back(
     pool: &SqlitePool,
@@ -1701,92 +1796,118 @@ async fn maybe_write_back(
     let written = opc_write_values(pid, config.controller_type, template.integral_type);
     let written_at = Utc::now();
 
-    let p_outcome = backend
-        .write(&p_tag.clone(), TagWrite::Float(written.proportional))
-        .await?;
-    let i_outcome = backend
-        .write(&i_tag.clone(), TagWrite::Float(written.integral))
-        .await?;
-    let d_outcome = backend
-        .write(&d_tag.clone(), TagWrite::Float(written.derivative))
-        .await?;
+    let mut new_write = NewTuneWrite::new(response_level, written_at);
 
-    if p_outcome.success && i_outcome.success && d_outcome.success {
-        match backend
-            .read(&[p_tag.clone(), i_tag.clone(), d_tag.clone()])
-            .await
-        {
-            Ok(values) if values.len() == 3 => {
-                // Finding 5's rule applies to the confirmation readback too: a clamped or
-                // stale value is worse than no value at all if it's silently accepted as
-                // proof the write landed. This doesn't attempt a rollback (that's finding 6,
-                // `safety-writeback-rollback`, not yet implemented) -- it only makes sure a
-                // poor-quality confirmation is never mistaken for a good one.
-                let poor_quality = values
-                    .iter()
-                    .find(|v| check_quality(&v.tag, v.quality, allow_uncertain).is_err());
-                if let Some(v) = poor_quality {
-                    let message = format!(
-                        "confirmation readback for tag '{}' reported OPC quality {:?}; write not confirmed",
-                        v.tag, v.quality
+    let previous =
+        match read_previous_pid_values(backend, p_tag, i_tag, d_tag, allow_uncertain).await {
+            Ok(previous) => previous,
+            Err(e) => {
+                let message = e.to_string();
+                new_write.error_message = Some(message.clone());
+                TuneWriteRow::insert(pool, run_id, new_write).await?;
+                println!("PID write-back skipped: {message}");
+                tracing::error!(run_id, ?response_level, %message, "PID pre-read failed");
+                return Ok(WriteBackOutcome::Failed);
+            }
+        };
+    new_write.previous = Some(previous);
+
+    // Write and verify Proportional, then Integral, then Derivative, stopping at the first
+    // failure. `rollback_targets` accumulates only the constants confirmed written so far,
+    // so a failure partway through knows exactly what needs rolling back.
+    let steps: [(&str, &str, f32, f32); 3] = [
+        (
+            "Proportional",
+            p_tag.as_str(),
+            written.proportional,
+            previous.proportional,
+        ),
+        (
+            "Integral",
+            i_tag.as_str(),
+            written.integral,
+            previous.integral,
+        ),
+        (
+            "Derivative",
+            d_tag.as_str(),
+            written.derivative,
+            previous.derivative,
+        ),
+    ];
+    let mut written_vals: [Option<f32>; 3] = [None; 3];
+    let mut readback_vals: [Option<f32>; 3] = [None; 3];
+    let mut rollback_targets: Vec<(&str, &str, f32)> = Vec::new();
+    let mut failure: Option<String> = None;
+
+    for (i, (label, tag, value, previous_value)) in steps.into_iter().enumerate() {
+        written_vals[i] = Some(value);
+        match write_and_verify_pid_value(backend, label, tag, value, allow_uncertain).await {
+            Ok(readback) => {
+                readback_vals[i] = Some(readback);
+                rollback_targets.push((label, tag, previous_value));
+            }
+            Err(e) => {
+                failure = Some(e);
+                break;
+            }
+        }
+    }
+
+    new_write.proportional_written = written_vals[0];
+    new_write.integral_written = written_vals[1];
+    new_write.derivative_written = written_vals[2];
+    new_write.proportional_readback = readback_vals[0];
+    new_write.integral_readback = readback_vals[1];
+    new_write.derivative_readback = readback_vals[2];
+
+    match failure {
+        None => {
+            new_write.success = true;
+            TuneWriteRow::insert(pool, run_id, new_write).await?;
+            println!("Wrote and confirmed {response_level:?} PID parameters.");
+            tracing::info!(run_id, ?response_level, "PID write-back succeeded");
+            Ok(WriteBackOutcome::Written { response_level })
+        }
+        Some(error_message) => {
+            new_write.success = false;
+            new_write.error_message = Some(error_message.clone());
+
+            if rollback_targets.is_empty() {
+                // Nothing had been confirmed written yet, so there is nothing to roll back.
+                TuneWriteRow::insert(pool, run_id, new_write).await?;
+                println!("PID write-back failed: {error_message}");
+                tracing::error!(run_id, ?response_level, %error_message, "PID write-back failed before writing anything");
+                return Ok(WriteBackOutcome::Failed);
+            }
+
+            match rollback_pid_writes(backend, &rollback_targets).await {
+                Ok(()) => {
+                    new_write.rollback_state = Some(RollbackState::Succeeded);
+                    TuneWriteRow::insert(pool, run_id, new_write).await?;
+                    println!("PID write-back failed and was rolled back: {error_message}");
+                    tracing::error!(run_id, ?response_level, %error_message, "PID write-back failed partway through; rollback succeeded");
+                }
+                Err(rollback_error) => {
+                    new_write.rollback_state = Some(RollbackState::Failed);
+                    new_write.rollback_error = Some(rollback_error.clone());
+                    TuneWriteRow::insert(pool, run_id, new_write).await?;
+                    println!(
+                        "PID write-back failed ({error_message}) and rollback also failed \
+                         ({rollback_error}); the loop may hold a mismatched set of PID \
+                         constants -- see `bhtune history revert {run_id}`."
                     );
-                    TuneWriteRow::insert_failure(pool, run_id, written, written_at, &message)
-                        .await?;
-                    println!("Wrote PID parameters, but {message}.");
                     tracing::error!(
                         run_id,
                         ?response_level,
-                        tag = %v.tag,
-                        quality = ?v.quality,
-                        "PID write-back confirmation reported poor OPC quality"
+                        %error_message,
+                        %rollback_error,
+                        "PID write-back failed partway through; rollback also failed"
                     );
-                    return Ok(WriteBackOutcome::Failed);
                 }
-
-                let readback = WriteReadback {
-                    proportional: values[0].value.trim().parse().unwrap_or(f32::NAN),
-                    integral: values[1].value.trim().parse().unwrap_or(f32::NAN),
-                    derivative: values[2].value.trim().parse().unwrap_or(f32::NAN),
-                };
-                TuneWriteRow::insert_success(pool, run_id, written, readback, written_at).await?;
-                println!("Wrote and confirmed {response_level:?} PID parameters.");
-                tracing::info!(run_id, ?response_level, "PID write-back succeeded");
-                Ok(WriteBackOutcome::Written { response_level })
             }
-            _ => {
-                TuneWriteRow::insert_failure(
-                    pool,
-                    run_id,
-                    written,
-                    written_at,
-                    "readback after write failed",
-                )
-                .await?;
-                println!("Wrote PID parameters, but the confirmation readback failed.");
-                tracing::error!(run_id, ?response_level, "PID write-back readback failed");
-                Ok(WriteBackOutcome::Failed)
-            }
+            Ok(WriteBackOutcome::Failed)
         }
-    } else {
-        let error_message = [&p_outcome, &i_outcome, &d_outcome]
-            .iter()
-            .filter_map(|o| {
-                if o.success {
-                    None
-                } else {
-                    Some(
-                        o.error_message
-                            .clone()
-                            .unwrap_or_else(|| "unknown reason".to_string()),
-                    )
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        TuneWriteRow::insert_failure(pool, run_id, written, written_at, &error_message).await?;
-        println!("PID write-back failed: {error_message}");
-        tracing::error!(run_id, ?response_level, %error_message, "PID write-back rejected");
-        Ok(WriteBackOutcome::Failed)
     }
 }
 
@@ -2570,8 +2691,30 @@ mod tests {
         /// elapsed time or a Ctrl+C race, unlike `--timeout-secs`/`--op-timeout-secs`-driven
         /// aborts.
         degrade_quality_after: std::collections::HashMap<String, (usize, bhtune_backend::Quality)>,
-        /// Tracks how many times each tag has been read so far, for `degrade_quality_after`.
+        /// Tracks how many times each tag has been read so far, for
+        /// `degrade_quality_after`/`erroring_read_after`.
         read_counts: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+        /// Per-tag: the tag's first `usize` reads resolve normally, then every read after
+        /// that returns a transport-level error -- the same "succeeds at first, degrades
+        /// partway through" shape as `degrade_quality_after`, but a hard read error rather
+        /// than a quality downgrade, so `safety-writeback-rollback`'s pre-read-succeeds/
+        /// verify-readback-errors path can be exercised distinctly from the
+        /// verify-readback-reports-poor-quality path.
+        error_reads_after: std::collections::HashMap<String, usize>,
+        /// Tags whose float writes are silently perturbed by a fixed offset before being
+        /// stored, simulating a DCS that clamps/rounds a written value rather than accepting
+        /// it exactly -- lets a test exercise `pid_value_within_tolerance`'s rejection path
+        /// deterministically.
+        write_offsets: std::collections::HashMap<String, f32>,
+        /// Per-tag: the tag's first `usize` writes are accepted normally, then every write
+        /// after that is rejected (mirrors `reject_writes`'s `WriteOutcome::failure`, not a
+        /// transport error). Lets a test make a constant's *forward* write succeed while its
+        /// later *rollback* write (the same tag, written a second time with the previous
+        /// value) is rejected -- exercising `rollback_state = Failed`.
+        reject_writes_after: std::collections::HashMap<String, usize>,
+        /// Tracks how many times each tag has been written so far, for
+        /// `reject_writes_after`.
+        write_counts: std::sync::Mutex<std::collections::HashMap<String, usize>>,
     }
 
     impl MockBackend {
@@ -2653,6 +2796,29 @@ mod tests {
             self
         }
 
+        /// See the `error_reads_after` field doc comment: `tag`'s first `good_reads` reads
+        /// succeed normally, then every read after that returns a transport-level error.
+        fn erroring_read_after(mut self, tag: &str, good_reads: usize) -> MockBackend {
+            self.error_reads_after.insert(tag.to_string(), good_reads);
+            self
+        }
+
+        /// See the `write_offsets` field doc comment: writing a float to `tag` silently
+        /// stores `value + offset` instead of `value`, so a subsequent readback observes a
+        /// value that differs from what was requested.
+        fn distorting_write(mut self, tag: &str, offset: f32) -> MockBackend {
+            self.write_offsets.insert(tag.to_string(), offset);
+            self
+        }
+
+        /// See the `reject_writes_after` field doc comment: `tag`'s first `good_writes`
+        /// writes are accepted normally, then every write after that is rejected.
+        fn rejecting_write_after(mut self, tag: &str, good_writes: usize) -> MockBackend {
+            self.reject_writes_after
+                .insert(tag.to_string(), good_writes);
+            self
+        }
+
         fn value_of(&self, tag: &str) -> Option<String> {
             self.values.lock().unwrap().get(tag).cloned()
         }
@@ -2682,6 +2848,22 @@ mod tests {
                 if self.empty_reads.contains(tag) {
                     continue;
                 }
+                // Shared per-tag read counter, consulted by both `degrade_quality_after` and
+                // `erroring_read_after` -- each test only ever registers a tag in one of the
+                // two, but counting once keeps the two mechanisms consistent if that changed.
+                let count = {
+                    let mut counts = self.read_counts.lock().unwrap();
+                    let count = counts.entry(tag.clone()).or_insert(0);
+                    *count += 1;
+                    *count
+                };
+                if let Some(good_reads) = self.error_reads_after.get(tag)
+                    && count > *good_reads
+                {
+                    return Err(bhtune_backend::BackendError::Operation(Box::new(
+                        std::io::Error::other("mock read error after good reads"),
+                    )));
+                }
                 let baseline_quality = self
                     .qualities
                     .lock()
@@ -2691,10 +2873,7 @@ mod tests {
                     .unwrap_or(bhtune_backend::Quality::Good);
                 let quality = match self.degrade_quality_after.get(tag) {
                     Some((good_reads, degraded)) => {
-                        let mut counts = self.read_counts.lock().unwrap();
-                        let count = counts.entry(tag.clone()).or_insert(0);
-                        *count += 1;
-                        if *count > *good_reads {
+                        if count > *good_reads {
                             *degraded
                         } else {
                             baseline_quality
@@ -2725,9 +2904,9 @@ mod tests {
                     std::io::Error::other("mock write error"),
                 )));
             }
-            let text = match value {
+            let text = match &value {
                 TagWrite::Float(f) => f.to_string(),
-                TagWrite::Raw(s) => s,
+                TagWrite::Raw(s) => s.clone(),
             };
             self.writes
                 .lock()
@@ -2736,7 +2915,25 @@ mod tests {
             if self.reject_writes.contains(tag) {
                 return Ok(bhtune_backend::WriteOutcome::failure("mock rejected write"));
             }
-            self.values.lock().unwrap().insert(tag.clone(), text);
+            if let Some(good_writes) = self.reject_writes_after.get(tag) {
+                let mut counts = self.write_counts.lock().unwrap();
+                let count = counts.entry(tag.clone()).or_insert(0);
+                *count += 1;
+                if *count > *good_writes {
+                    return Ok(bhtune_backend::WriteOutcome::failure(
+                        "mock rejected write after good writes",
+                    ));
+                }
+            }
+            // Store the (possibly silently distorted) value that a subsequent read would
+            // observe, while `writes` above kept a log of what was actually requested -- see
+            // the `write_offsets` field doc comment.
+            let stored = if let TagWrite::Float(f) = value {
+                (f + self.write_offsets.get(tag).copied().unwrap_or(0.0)).to_string()
+            } else {
+                text
+            };
+            self.values.lock().unwrap().insert(tag.clone(), stored);
             Ok(bhtune_backend::WriteOutcome::success())
         }
 
@@ -2789,6 +2986,41 @@ mod tests {
         let err_with_flag =
             check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Bad, true).unwrap_err();
         assert!(err_with_flag.to_string().contains("Bad"));
+    }
+
+    // --- `pid_value_within_tolerance`: finding 6's write-back confirmation rule -------------
+
+    #[test]
+    fn pid_value_within_tolerance_accepts_an_exact_match() {
+        assert!(pid_value_within_tolerance(10.0, 10.0));
+        assert!(pid_value_within_tolerance(0.0, 0.0));
+    }
+
+    #[test]
+    fn pid_value_within_tolerance_accepts_within_the_one_percent_relative_band() {
+        // 1% of 10.0 is 0.1, so 10.09 is inside and 10.2 is outside.
+        assert!(pid_value_within_tolerance(10.0, 10.09));
+        assert!(pid_value_within_tolerance(10.0, 9.91));
+        assert!(!pid_value_within_tolerance(10.0, 10.2));
+        assert!(!pid_value_within_tolerance(10.0, 9.8));
+    }
+
+    #[test]
+    fn pid_value_within_tolerance_uses_the_absolute_floor_near_zero() {
+        // 1% of a requested 0.0 (or anything smaller than 0.1) would be a tolerance under
+        // 1e-3, which would reject even a harmless floating-point rounding difference -- the
+        // absolute 1e-3 floor exists precisely for a requested `D = 0` on a PI controller.
+        assert!(pid_value_within_tolerance(0.0, 0.0009));
+        assert!(!pid_value_within_tolerance(0.0, 0.002));
+    }
+
+    #[test]
+    fn pid_value_within_tolerance_handles_negative_requested_values() {
+        // The tolerance formula uses `requested.abs()`, so the relative band is symmetric
+        // around a negative requested value too (relevant for reverse-acting controllers'
+        // sign conventions).
+        assert!(pid_value_within_tolerance(-10.0, -10.09));
+        assert!(!pid_value_within_tolerance(-10.0, -10.2));
     }
 
     /// "Honeywell Experion" is the one built-in template with every optional tag (setpoint,
@@ -3924,6 +4156,188 @@ mod tests {
         assert!(write.success);
         assert_eq!(write.response_level, ResponseLevel::Moderate);
         assert!(write.error_message.is_none());
+        // A full success pre-reads, writes, and verifies all three constants, and never
+        // rolls anything back.
+        assert!(write.previous.is_some());
+        assert!(write.proportional_written.is_some());
+        assert!(write.integral_written.is_some());
+        assert!(write.derivative_written.is_some());
+        assert!(write.proportional_readback.is_some());
+        assert!(write.integral_readback.is_some());
+        assert!(write.derivative_readback.is_some());
+        assert_eq!(write.rollback_state, None);
+        assert!(write.rollback_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_records_failure_when_the_pre_read_fails() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        // Every read of the P tag fails, including the very first (pre-read) one -- nothing
+        // is ever written.
+        let backend = honeywell_backend_auto().erroring_read("Unit1.LIC101.K");
+
+        let outcome = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            None,
+            false,
+            &mut std::io::Cursor::new(b"1\n".as_slice()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, WriteBackOutcome::Failed);
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        assert_eq!(writes.len(), 1);
+        let write = &writes[0];
+        assert!(!write.success);
+        // The pre-read never produced a known-good value, so there is nothing to record as
+        // "previous", and nothing was ever attempted.
+        assert!(write.previous.is_none());
+        assert!(write.proportional_written.is_none());
+        assert!(write.integral_written.is_none());
+        assert!(write.derivative_written.is_none());
+        assert!(
+            write
+                .error_message
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("pre-read of Proportional")
+        );
+        assert_eq!(write.rollback_state, None);
+        // Nothing was written to the backend at all -- confirms the pre-read is a genuine
+        // hard stop, not just a reported failure alongside attempted writes.
+        assert!(backend.write_log().is_empty());
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_rolls_back_a_confirmed_write_when_a_later_constant_fails() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        // P writes and verifies successfully; I's write is then rejected. P was already
+        // confirmed, so it must be rolled back to its pre-read value.
+        let backend = honeywell_backend_auto().rejecting_write("Unit1.LIC101.T1");
+
+        let outcome = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            None,
+            false,
+            &mut std::io::Cursor::new(b"1\n".as_slice()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, WriteBackOutcome::Failed);
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        assert_eq!(writes.len(), 1);
+        let write = &writes[0];
+        assert!(!write.success);
+        assert!(write.previous.is_some());
+        // P was confirmed (written + read back), I was attempted but never confirmed, D was
+        // never attempted at all.
+        assert!(write.proportional_written.is_some());
+        assert!(write.proportional_readback.is_some());
+        assert!(write.integral_written.is_some());
+        assert!(write.integral_readback.is_none());
+        assert!(write.derivative_written.is_none());
+        assert!(write.derivative_readback.is_none());
+        assert_eq!(write.rollback_state, Some(RollbackState::Succeeded));
+        assert!(write.rollback_error.is_none());
+        // The rollback actually put P's original value back on the backend, not just in the
+        // audit row.
+        let p_previous = write.previous.as_ref().unwrap().proportional;
+        assert_eq!(
+            backend
+                .value_of("Unit1.LIC101.K")
+                .and_then(|v| v.parse::<f32>().ok()),
+            Some(p_previous)
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_records_a_failed_rollback_when_the_rollback_write_is_also_rejected() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        // P's forward write succeeds (1st write to the tag), but its rollback write (2nd
+        // write to the same tag, once I fails) is rejected -- "wrote some and could not put
+        // it back" must be a distinguishable, clearly reported outcome.
+        let backend = honeywell_backend_auto()
+            .rejecting_write("Unit1.LIC101.T1")
+            .rejecting_write_after("Unit1.LIC101.K", 1);
+
+        let outcome = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            None,
+            false,
+            &mut std::io::Cursor::new(b"1\n".as_slice()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, WriteBackOutcome::Failed);
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        assert_eq!(writes.len(), 1);
+        let write = &writes[0];
+        assert!(!write.success);
+        assert_eq!(write.rollback_state, Some(RollbackState::Failed));
+        let rollback_error = write.rollback_error.as_deref().unwrap_or_default();
+        assert!(rollback_error.contains("Proportional"));
+        assert!(rollback_error.contains("rollback"));
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_records_failure_when_the_readback_is_outside_tolerance() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        // The write itself succeeds and the readback parses fine at Good quality, but the
+        // DCS silently stored a value far outside tolerance of what was requested -- a
+        // distinct failure mode from an erroring or poor-quality readback.
+        let backend = honeywell_backend_auto().distorting_write("Unit1.LIC101.K", 5.0);
+
+        let outcome = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            None,
+            false,
+            &mut std::io::Cursor::new(b"1\n".as_slice()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, WriteBackOutcome::Failed);
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        assert_eq!(writes.len(), 1);
+        let write = &writes[0];
+        assert!(!write.success);
+        let message = write.error_message.as_deref().unwrap_or_default();
+        assert!(message.contains("outside tolerance"));
+        assert!(message.contains("Proportional"));
+        // Nothing was confirmed before the tolerance rejection, so there is nothing to roll
+        // back.
+        assert_eq!(write.rollback_state, None);
     }
 
     #[tokio::test]
@@ -3959,9 +4373,9 @@ mod tests {
         let (pool, run_id) = run_with_recorded_results().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        // The 3 PID-constant writes themselves succeed, but the confirmation re-read of the
-        // P tag then errors (`erroring_read` doesn't affect `write`, only `read`).
-        let backend = honeywell_backend_auto().erroring_read("Unit1.LIC101.K");
+        // The pre-read of P succeeds (the tag's 1st read), the write itself succeeds, but
+        // the confirmation re-read of the P tag (its 2nd read) then errors.
+        let backend = honeywell_backend_auto().erroring_read_after("Unit1.LIC101.K", 1);
 
         let outcome = maybe_write_back(
             &pool,
@@ -3981,10 +4395,14 @@ mod tests {
 
         assert_eq!(writes.len(), 1);
         assert!(!writes[0].success);
-        assert_eq!(
-            writes[0].error_message.as_deref(),
-            Some("readback after write failed")
-        );
+        // The pre-read succeeded, so the audit row still records the previous values, even
+        // though the write-and-verify step for P failed.
+        assert!(writes[0].previous.is_some());
+        let message = writes[0].error_message.as_deref().unwrap_or_default();
+        assert!(message.starts_with("Proportional readback from"));
+        assert!(!message.starts_with("pre-read of"));
+        // Nothing was confirmed before the failure, so there is nothing to roll back.
+        assert_eq!(writes[0].rollback_state, None);
     }
 
     #[tokio::test]
@@ -3992,13 +4410,16 @@ mod tests {
         let (pool, run_id) = run_with_recorded_results().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        // The 3 PID-constant writes themselves succeed (quality only affects `read`, never
-        // `write`); only the confirmation re-read of the P tag reports a poor OPC quality --
+        // The pre-read of P (its 1st read) succeeds at the default `Good` quality; only the
+        // confirmation re-read after the write (its 2nd read) reports a poor OPC quality --
         // finding 5's rule applies to this readback exactly as it does to any other
         // tuning-critical read, so a stale/clamped value must not be mistaken for proof the
         // write actually landed.
-        let backend =
-            honeywell_backend_auto().with_quality("Unit1.LIC101.K", bhtune_backend::Quality::Bad);
+        let backend = honeywell_backend_auto().degrade_quality_after(
+            "Unit1.LIC101.K",
+            1,
+            bhtune_backend::Quality::Bad,
+        );
 
         let outcome = maybe_write_back(
             &pool,
@@ -4018,13 +4439,17 @@ mod tests {
         let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
         assert_eq!(writes.len(), 1);
         assert!(!writes[0].success);
+        assert!(writes[0].previous.is_some());
         let message = writes[0].error_message.as_deref().unwrap_or_default();
         assert!(message.contains("quality"));
         assert!(message.contains("Unit1.LIC101.K"));
-        // Distinguishable from the generic "readback after write failed" message the
-        // read-error branch above produces, so an operator (or the history explorer) can
-        // tell a poor-quality confirmation apart from an outright read failure.
-        assert_ne!(message, "readback after write failed");
+        // Confirms this is the *readback* failing, not the pre-read -- the pre-read's
+        // message format is "pre-read of ... failed", distinct from "... readback from ...
+        // failed", so an operator (or the history explorer) can tell a poor-quality
+        // confirmation apart from a pre-read failure or an outright transport read failure.
+        assert!(message.starts_with("Proportional readback from"));
+        assert!(!message.starts_with("pre-read of"));
+        assert_eq!(writes[0].rollback_state, None);
     }
 
     #[tokio::test]

@@ -174,6 +174,16 @@ unattended runs against live plant equipment fail safe:
   `--allow-uncertain-quality` is explicitly passed (logged and recorded on the run either way).
   A poor-quality reading during the in-flight test aborts and restores the loop just like a
   Ctrl+C, and the exit code (`5`) is distinct from every other abort reason.
+- **PID write-back is pre-read, verified, audited, and rolled back on partial failure.** Before
+  any constant is written, the loop's current P/I/D values are read and recorded — if that
+  pre-read fails, nothing is written at all. Each constant is then written and immediately read
+  back to confirm it landed within tolerance, in order, stopping at the first failure; a
+  constant that already wrote and confirmed successfully is automatically rolled back to its
+  pre-write value if a later one in the same write-back fails, so a loop is never left with a
+  mismatched, half-updated set of constants. `bhtune history show <run>` reports the previous
+  value, the written value, and the confirmed readback for every constant, plus whether a
+  rollback was needed and whether it succeeded — a rollback that itself fails is called out
+  explicitly, since it means the loop may hold constants that need fixing by hand.
 
 ## Logging
 
