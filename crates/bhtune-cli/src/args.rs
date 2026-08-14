@@ -294,25 +294,15 @@ pub struct TuneArgs {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Rehearse a full run -- including the write-back step's own validation (are PID
-    /// constant tags configured? is there a calculated result for the requested response
-    /// level?) -- but never actually write to the DCS, regardless of `--write-pid`/`--yes`.
-    /// Also lifts the `--write-pid`-requires-`--yes` requirement below, since a dry run
-    /// never touches anything live.
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Confirm an unattended PID write-back. Required alongside `--write-pid` (the command
-    /// refuses to start otherwise) unless `--dry-run` is also given -- writing to a live loop
-    /// with no human present must be an explicit, deliberate choice. Has no effect without
-    /// `--write-pid`.
+    /// Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command
+    /// refuses to start otherwise -- since writing to a live loop with no human present must
+    /// be an explicit, deliberate choice. Has no effect without `--write-pid`.
     #[arg(long)]
     pub yes: bool,
 
     /// Non-interactively write this response level's calculated PID parameters back to the
     /// DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune
-    /// able to actually update a loop with no one watching. Requires `--yes` (or `--dry-run`,
-    /// which then rehearses this write-back instead of performing it).
+    /// able to actually update a loop with no one watching. Requires `--yes`.
     #[arg(long, value_enum)]
     pub write_pid: Option<ResponseLevelArg>,
 
@@ -373,10 +363,6 @@ pub struct SimulateArgs {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// See `TuneArgs::dry_run`.
-    #[arg(long)]
-    pub dry_run: bool,
-
     /// See `TuneArgs::yes`.
     #[arg(long)]
     pub yes: bool,
@@ -429,7 +415,6 @@ impl SimulateArgs {
             poll_interval_ms: self.poll_interval_ms,
             timeout_secs: self.timeout_secs,
             name: self.name,
-            dry_run: self.dry_run,
             yes: self.yes,
             write_pid: self.write_pid,
             output: self.output,

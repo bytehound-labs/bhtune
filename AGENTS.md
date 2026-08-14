@@ -36,9 +36,9 @@ completion without parsing stdout (see "Automation" below). `cli-safety` is done
 range validation on `--relay-amp` at the `LoopConfig` model/construction level (not just a
 "not blank" check), a mandatory `--timeout-secs` wall-clock limit racing the poll loop
 itself so it fires even mid-hung-read (auto-abort-and-restore, its own distinguished
-`EXIT_TIMED_OUT` exit code), and `--dry-run` (rehearses the full write-back validation path
-with no live DCS write, and lifts the `--write-pid`-requires-`--yes` gate) — see "Safety"
-below. `cli-logging` is done: `tracing`/`tracing-subscriber` structured logging to a rotating
+`EXIT_TIMED_OUT` exit code), and an unconditional `--write-pid`-requires-`--yes` gate (there
+is no way to write PID constants to a live loop, interactively or scripted, without
+confirming it) — see "Safety" below. `cli-logging` is done: `tracing`/`tracing-subscriber` structured logging to a rotating
 file, resolved through the same `CLI > env > TOML > default` precedence as every other
 setting, with console mirroring confined to stderr so it can never corrupt the `--output
 json` stdout contract — see "Logging" below. This completes all five `bhtune-cli` sub-phases;
@@ -477,8 +477,8 @@ discretization and its numerical cross-check against that reference.
   response level's PID constants with a stdin confirmation prompt (`maybe_write_back`) —
   audited via `TuneWriteRow`. `--mrft-delay <seconds>` pads the run with pre-/post-test
   recording-only ticks (PV still read and logged; no switch evaluation), mirroring the legacy
-  `--mrftDelayTime` flag. `--timeout-secs`/`--dry-run` add mandatory-unattended-operation
-  guardrails — see "Safety" below. A run's outcome (`Completed`/`Aborted` on Ctrl+C or
+  `--mrftDelayTime` flag. `--timeout-secs` adds a mandatory-unattended-operation guardrail —
+  see "Safety" below. A run's outcome (`Completed`/`Aborted` on Ctrl+C or
   `--timeout-secs`/`Failed` on any setup or mid-poll error) is always recorded in `tune_runs`
   before the process returns, even on failure.
 - **`bhtune simulate`** — a zero-configuration wrapper around `tune` that forces
@@ -502,7 +502,7 @@ discretization and its numerical cross-check against that reference.
 not an oversight: `tracing`-based structured logging shipped separately as `cli-logging` —
 see "Logging" below. Non-interactive automation flags (`--yes`/`--write-pid`/`--output json`)
 and distinguished exit codes shipped separately as `cli-automation` — see "Automation" below.
-Unattended-run safety guardrails (`--timeout-secs`/`--dry-run`/`LoopConfig::validate`) shipped
+Unattended-run safety guardrails (`--timeout-secs`/`LoopConfig::validate`) shipped
 separately as `cli-safety` — see "Safety" below. Platform-standard config file/data-directory
 precedence shipped separately as `cli-config` — see "Config precedence" below.
 
@@ -694,14 +694,13 @@ removes that supervision while still stroking a live valve, so these are not opt
   scheduler's alerting can tell "this run had to be forcibly killed for running too long"
   (possibly a stuck relay, a misconfigured tag mapping, or a stalled backend read — worth
   investigating) apart from "an operator stopped it on purpose" (`EXIT_ABORTED`, routine).
-- **`--dry-run`** — rehearses a complete write-back: tags configured, a calculated result
-  exists for the resolved response level (via `--write-pid` or the interactive prompt) — every
-  validation step a real write-back performs — but returns immediately before the actual
-  `backend.write`/confirmation-readback calls, as `WriteBackOutcome::DryRun { response_level }`.
-  No `tune_writes` row is recorded, matching `Skipped`'s "nothing was attempted at the
-  backend" rule. Lifts the `--write-pid`-requires-`--yes` gate in `run()` (`args.write_pid.
-  is_some() && !args.yes && !args.dry_run`): nothing live is touched, so there is nothing for
-  `--yes` to confirm.
+- **`--write-pid <level>` unconditionally requires `--yes`** — in `run()`
+  (`args.write_pid.is_some() && !args.yes`), checked before any backend connection or
+  database write. There is no rehearsal mode that lifts this gate: a `--write-pid` run either
+  has explicit confirmation or is rejected outright. (An earlier `--dry-run` flag did lift
+  this gate, but it was removed since it did not actually avoid touching the live loop: it
+  still forced the mode transition and stroked the MV through a full relay test, only
+  skipping the final PID write.)
 
 **Testing approach.** `run_times_out_and_aborts_when_timeout_secs_elapses_before_completion`
 exercises the real timeout end-to-end (`poll_interval_ms: 3`/`timeout_secs: 1`, deliberately
@@ -711,13 +710,30 @@ a real ~1s wall-clock cost rather than using `#[tokio::test(start_paused = true)
 pausing tokio's clock also fast-forwards the real `SqlitePool`'s own internal connection-
 acquire timeout, turning every query into a spurious `PoolTimedOut` error; `tests/
 ctrlc_abort.rs` already accepts a similar real-time cost for the same underlying reason (an
-actual signal/timeout has to actually elapse). `--dry-run`'s short-circuit is covered directly
-against `maybe_write_back` (both the interactive-selection and `--write-pid` resolution paths,
-asserting the mock backend's write log stays empty and no `tune_writes` row is recorded) and
-end-to-end via `run_allows_write_pid_without_yes_when_dry_run_is_set`, which proves the gate
-bypass itself. `build_loop_config_rejects_an_out_of_range_relay_amp_before_any_backend_or_db_
-io` mirrors the existing "no I/O before the fail-fast check" pattern already proven for
-`--write-pid`/`--yes`.
+actual signal/timeout has to actually elapse). `build_loop_config_rejects_an_out_of_range_
+relay_amp_before_any_backend_or_db_io` mirrors the same "no I/O before the fail-fast check"
+pattern now also proven for `--write-pid`/`--yes` (`run_rejects_write_pid_without_yes_before_
+starting_the_tune`).
+
+### Live-plant safety hardening (in progress)
+
+A post-`cli-logging` review of the live-tuning path (`commands/tune.rs`) surfaced nine
+further findings before the CLI's first real trial against live plant equipment: Ctrl+C/
+timeout cancellation not reaching an in-flight backend call, no guaranteed restore on every
+exit path, missing input validation (e.g. `--cycles-count 0` panics mid-run), OPC quality
+never checked, PID write-back with no pre-read/rollback, `bhtune-db`'s `restore_from` unsafe
+under an active WAL and wrong on Windows, `--output json` emitting prose ahead of the JSON
+object, and no template/tag snapshot on a recorded run. Being remediated one finding at a
+time; this section is updated as each lands, with a full pass once all are done:
+
+- **`--dry-run` removed entirely** — done. It was documented as never touching the DCS, but
+  actually forced the full mode transition and stroked the MV through a complete relay test,
+  skipping only the final PID write — indistinguishable from a real test for every purpose
+  except the last write. No rescoped/renamed replacement was added: "runs a real relay test
+  but skips one write" is already exactly what omitting `--write-pid` does in non-interactive
+  mode. A genuinely non-mutating rehearsal (validate tags/template/ranges/connectivity with
+  no loop I/O at all) remains on the roadmap as a separate future command, not a flag on a
+  live tune.
 
 ## Logging (`cli-logging`)
 
@@ -939,7 +955,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation, mandatory `--timeout-secs`, and `--dry-run`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. Undergoing a live-plant safety hardening pass (Phase 6.5) after a post-`cli-logging` review; see "Live-plant safety hardening" below |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -981,11 +997,12 @@ that binary does something real and gains its own targeted tests.
    precedence (`cli-config`, done — see "Config precedence" above), non-interactive automation
    mode (`cli-automation`, done: `--yes`/`--write-pid`/`--output json` and distinguished exit
    codes — see "Automation" above), safety guardrails (`cli-safety`, done: relay-amp range
-   validation, mandatory `--timeout-secs` with auto-abort-and-restore, `--dry-run` — see
-   "Safety" above), and structured logging (`cli-logging`, done: `tracing`/`tracing-subscriber`
+   validation and mandatory `--timeout-secs` with auto-abort-and-restore — see "Safety"
+   above), and structured logging (`cli-logging`, done: `tracing`/`tracing-subscriber`
    to a rotating file plus stderr-only console mirroring — see "Logging" above). All five
    sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
-   own, with no server required.
+   own, with no server required. Now undergoing a live-plant safety hardening pass (Phase
+   6.5) — see "Live-plant safety hardening" above.
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS
@@ -1030,9 +1047,11 @@ that binary does something real and gains its own targeted tests.
 - **Safety is a first-class requirement, not polish.** Scheduled/scripted tuning against a live,
   running process removes human supervision (no operator watching the trend, able to hit Stop)
   while still stroking a real control valve. `cli-safety` (done — see "Safety" above) ships
-  real relay-amp range validation, a mandatory wall-clock timeout with automatic
-  abort-and-restore, and `--dry-run` for rehearsing a write-back with no live DCS write; none
-  of it is optional polish.
+  real relay-amp range validation and a mandatory wall-clock timeout with automatic
+  abort-and-restore; none of it is optional polish. A further live-plant safety hardening pass
+  (Phase 6.5, in progress — see "Live-plant safety hardening" above) is closing nine more
+  findings from a follow-up review, including making Ctrl+C/timeout cancellation reach an
+  in-flight backend call, guaranteeing a restore on every exit path, and enforcing OPC quality.
 - **Chart library**: `uPlot` over `Recharts` for the frontend trend chart — handles high-rate
   streaming data (multiple updates/second) far better.
 - **Naming**: `bytehound` is an established Rust memory-profiler brand. `bhtune` avoids a direct

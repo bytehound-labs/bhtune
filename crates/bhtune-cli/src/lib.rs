@@ -27,12 +27,12 @@
 //! suite -- see `logging`'s test module doc comment.
 //!
 //! Non-interactive/scheduled use (cron, CI, batch campaigns) is `tune`/`simulate`'s
-//! `--yes`/`--write-pid <level>`/`--dry-run`/`--timeout-secs` flags (bypassing the
-//! interactive write-back prompt, rehearsing a write-back, and mandatorily bounding an
-//! unattended run's wall-clock duration) plus this module's distinguished exit codes
-//! ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`], [`EXIT_WRITE_BACK_FAILED`]), so a scheduler can tell
-//! "aborted", "timed out", "test ran but the write-back failed", and "never ran at
-//! all" apart without parsing stdout. See AGENTS.md's `cli-automation`/`cli-safety` sections.
+//! `--yes`/`--write-pid <level>`/`--timeout-secs` flags (bypassing the interactive
+//! write-back prompt and mandatorily bounding an unattended run's wall-clock duration) plus
+//! this module's distinguished exit codes ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`],
+//! [`EXIT_WRITE_BACK_FAILED`]), so a scheduler can tell "aborted", "timed out", "test ran but
+//! the write-back failed", and "never ran at all" apart without parsing stdout. See
+//! AGENTS.md's `cli-automation`/`cli-safety` sections.
 
 pub mod args;
 pub mod backend;
@@ -294,7 +294,6 @@ mod tests {
                 poll_interval_ms: 800,
                 timeout_secs: 3600,
                 name: None,
-                dry_run: false,
                 yes: false,
                 write_pid: None,
                 output: OutputFormat::Table,
@@ -361,7 +360,6 @@ mod tests {
             poll_interval_ms: 5,
             timeout_secs: 3600,
             name: Some("dispatch-test".to_string()),
-            dry_run: false,
             yes: false,
             write_pid: None,
             output: OutputFormat::Table,

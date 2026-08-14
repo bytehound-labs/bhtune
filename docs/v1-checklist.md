@@ -198,6 +198,9 @@ Everything in this section is deferred past v1, not permanently out of scope.
 - [ ] REQUIRED — one unified async concurrency model in `bhtune-core` for both MRFT (polling) and
       Step Test (subscription, once implemented) — not two different mechanisms for conceptually
       the same job.
-- [x] REQUIRED — `cli-safety` guardrails for unattended/scheduled tuning: dry-run mode, mandatory
-      wall-clock timeout with automatic abort-and-restore, explicit opt-in required for any run
-      that writes PID constants without a human present.
+- [x] REQUIRED — `cli-safety` guardrails for unattended/scheduled tuning: mandatory wall-clock
+      timeout with automatic abort-and-restore, explicit opt-in required for any run that writes
+      PID constants without a human present. Undergoing a further live-plant safety hardening
+      pass (Phase 6.5) covering cancellation, guaranteed restoration, input validation, OPC
+      quality enforcement, and PID write-back rollback — see AGENTS.md's "Live-plant safety
+      hardening" section.

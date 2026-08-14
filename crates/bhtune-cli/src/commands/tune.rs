@@ -33,8 +33,8 @@ use crate::output::OutputFormat;
 /// exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuneOutcome {
-    /// The test completed. Either no write-back was requested/possible/attempted (including
-    /// a `--dry-run` rehearsal), or a requested write-back succeeded.
+    /// The test completed. Either no write-back was requested/possible/attempted, or a
+    /// requested write-back succeeded.
     Completed,
     /// The user pressed Ctrl+C; the loop was restored to its original mode/setpoint before
     /// returning.
@@ -79,12 +79,11 @@ pub async fn run(
 ) -> anyhow::Result<TuneOutcome> {
     // Fails before any backend/database I/O at all: an unattended write-back must be an
     // explicit, deliberate choice, not something a stray `--write-pid` without `--yes` can
-    // trigger by accident. `--dry-run` lifts this requirement -- it never touches the DCS
-    // regardless of `--write-pid`/`--yes`, so there is nothing for `--yes` to confirm.
-    if args.write_pid.is_some() && !args.yes && !args.dry_run {
+    // trigger by accident.
+    if args.write_pid.is_some() && !args.yes {
         anyhow::bail!(
-            "--write-pid requires --yes (or --dry-run): writing PID constants back to the \
-             DCS with no human present to confirm must be an explicit, deliberate choice"
+            "--write-pid requires --yes: writing PID constants back to the DCS with no \
+             human present to confirm must be an explicit, deliberate choice"
         );
     }
 
@@ -177,9 +176,8 @@ enum AbortReason {
 
 /// The result of `maybe_write_back`'s attempt (or non-attempt) to write calculated PID
 /// parameters back to the DCS. A real write (`Written`/`Failed`) is always fully recorded in
-/// `tune_writes`; `Skipped` and `DryRun` never touch the backend at all, so neither leaves a
-/// row there. This enum exists purely to drive the printed summary and the process exit
-/// code.
+/// `tune_writes`; `Skipped` never touches the backend at all, so it leaves no row there. This
+/// enum exists purely to drive the printed summary and the process exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WriteBackOutcome {
     /// No write was attempted: no PID constant tags configured, no results recorded, or
@@ -191,10 +189,6 @@ enum WriteBackOutcome {
     /// failed -- the backend rejected it, the confirmation readback failed, or (defensively)
     /// `--write-pid` named a response level with no recorded calculated result.
     Failed,
-    /// `--dry-run` was given: a response level was resolved and validated (tags configured,
-    /// a calculated result exists) exactly as a real write-back would be, but the actual
-    /// `backend.write` call and confirmation readback were skipped entirely.
-    DryRun { response_level: ResponseLevel },
 }
 
 /// Maps one run's full outcome down to the coarser [`TuneOutcome`] that drives the process
@@ -238,13 +232,6 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                     "Tune completed successfully (run id {run_id}), but PID write-back failed; the loop was left with its previous PID constants."
                 );
             }
-            RunOutcome::Completed {
-                write_back: WriteBackOutcome::DryRun { response_level },
-            } => {
-                println!(
-                    "Tune completed successfully (run id {run_id}); --dry-run: would have written {response_level:?} PID parameters (no write performed)."
-                );
-            }
             RunOutcome::Aborted(AbortReason::UserInterrupt) => {
                 println!("Tune aborted (Ctrl+C received; loop restored).");
             }
@@ -265,9 +252,6 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                 RunOutcome::Completed {
                     write_back: WriteBackOutcome::Failed,
                 } => ("failed", None),
-                RunOutcome::Completed {
-                    write_back: WriteBackOutcome::DryRun { response_level },
-                } => ("dry_run", Some(*response_level)),
                 RunOutcome::Aborted(_) => ("not_attempted", None),
             };
             let timeout_secs = match outcome {
@@ -499,7 +483,6 @@ async fn execute(
                 backend,
                 config,
                 write_pid,
-                args.dry_run,
                 &mut std::io::stdin().lock(),
             )
             .await?;
@@ -846,20 +829,13 @@ async fn persist_results(
 
 /// Writes back the calculated PID parameters for one response level -- chosen either
 /// interactively (prompting on `reader`) or non-interactively via `write_pid`
-/// (`--write-pid`; the caller has already validated `--yes`/`--dry-run` was also given
-/// before the tune even started). Skips with an informational message (rather than
-/// prompting/writing) whenever any of the three PID constant tags is unconfigured — true
-/// for the simulator backend, and also a sane guard for any real template missing one — or
-/// when no results were recorded at all. `reader` is injected (rather than reading
-/// `std::io::stdin()` directly) so tests can supply a fixed `Cursor` in place of the
-/// process's real stdin; it is never read from at all when `write_pid` is `Some`.
-///
-/// When `dry_run` is set, every validation step above still runs exactly as it would for a
-/// real write-back (tags configured, a result exists for the resolved response level), but
-/// the function returns right before the actual `backend.write`/confirmation-readback calls
-/// -- proving the write-back *would* have succeeded without ever touching the live DCS. No
-/// `tune_writes` row is recorded for a dry run, matching `Skipped`'s "nothing was attempted
-/// at the backend" rule.
+/// (`--write-pid`; the caller has already validated `--yes` was also given before the tune
+/// even started). Skips with an informational message (rather than prompting/writing)
+/// whenever any of the three PID constant tags is unconfigured — true for the simulator
+/// backend, and also a sane guard for any real template missing one — or when no results
+/// were recorded at all. `reader` is injected (rather than reading `std::io::stdin()`
+/// directly) so tests can supply a fixed `Cursor` in place of the process's real stdin; it
+/// is never read from at all when `write_pid` is `Some`.
 #[allow(clippy::too_many_arguments)]
 async fn maybe_write_back(
     pool: &SqlitePool,
@@ -869,7 +845,6 @@ async fn maybe_write_back(
     backend: &dyn Backend,
     config: LoopConfig,
     write_pid: Option<ResponseLevel>,
-    dry_run: bool,
     reader: &mut impl std::io::BufRead,
 ) -> anyhow::Result<WriteBackOutcome> {
     let (Some(p_tag), Some(i_tag), Some(d_tag)) = (
@@ -947,14 +922,6 @@ async fn maybe_write_back(
     };
     let written = opc_write_values(pid, config.controller_type, template.integral_type);
     let written_at = Utc::now();
-
-    if dry_run {
-        println!(
-            "--dry-run: would write {response_level:?} PID parameters (P={:.4} I={:.4} D={:.4}); skipping the actual write.",
-            written.proportional, written.integral, written.derivative
-        );
-        return Ok(WriteBackOutcome::DryRun { response_level });
-    }
 
     let p_outcome = backend
         .write(&p_tag.clone(), TagWrite::Float(written.proportional))
@@ -1074,7 +1041,6 @@ mod tests {
             poll_interval_ms: 5,
             timeout_secs: 3600,
             name: Some("test-loop".to_string()),
-            dry_run: false,
             yes: false,
             write_pid: None,
             output: OutputFormat::Table,
@@ -1981,7 +1947,6 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
-            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2022,7 +1987,6 @@ mod tests {
             &backend,
             config,
             None,
-            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2056,7 +2020,6 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
-            false,
             &mut std::io::Cursor::new(input),
         )
         .await
@@ -2134,7 +2097,6 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
-            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2164,7 +2126,6 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
-            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2197,7 +2158,6 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             Some(ResponseLevel::Aggressive),
-            false,
             &mut std::io::Cursor::new(b"".as_slice()),
         )
         .await
@@ -2266,7 +2226,6 @@ mod tests {
             &backend,
             config,
             Some(ResponseLevel::Sluggish),
-            false,
             &mut std::io::Cursor::new(b"".as_slice()),
         )
         .await
@@ -2293,14 +2252,6 @@ mod tests {
         assert_eq!(
             tune_outcome_for_run(&RunOutcome::Completed {
                 write_back: WriteBackOutcome::Written {
-                    response_level: ResponseLevel::Moderate
-                }
-            }),
-            TuneOutcome::Completed
-        );
-        assert_eq!(
-            tune_outcome_for_run(&RunOutcome::Completed {
-                write_back: WriteBackOutcome::DryRun {
                     response_level: ResponseLevel::Moderate
                 }
             }),
@@ -2368,30 +2319,6 @@ mod tests {
                 1,
                 &RunOutcome::Completed {
                     write_back: WriteBackOutcome::Written {
-                        response_level: ResponseLevel::Aggressive
-                    }
-                },
-                OutputFormat::Json
-            ),
-            TuneOutcome::Completed
-        );
-        assert_eq!(
-            print_summary(
-                1,
-                &RunOutcome::Completed {
-                    write_back: WriteBackOutcome::DryRun {
-                        response_level: ResponseLevel::Aggressive
-                    }
-                },
-                OutputFormat::Table
-            ),
-            TuneOutcome::Completed
-        );
-        assert_eq!(
-            print_summary(
-                1,
-                &RunOutcome::Completed {
-                    write_back: WriteBackOutcome::DryRun {
                         response_level: ResponseLevel::Aggressive
                     }
                 },
@@ -2489,22 +2416,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_allows_write_pid_without_yes_when_dry_run_is_set() {
-        // `--dry-run` never touches the DCS regardless of `--write-pid`, so there is nothing
-        // for `--yes` to confirm -- contrast with `run_rejects_write_pid_without_yes_before_
-        // starting_the_tune` above, which asserts the opposite (an error) when `--dry-run` is
-        // *not* given.
-        let pool = seeded_pool().await;
-        let mut args = fast_simulator_args();
-        args.write_pid = Some(crate::args::ResponseLevelArg::Aggressive);
-        args.yes = false;
-        args.dry_run = true;
-
-        let outcome = run(&pool, args, &test_config()).await.unwrap();
-        assert_eq!(outcome, TuneOutcome::Completed);
-    }
-
-    #[tokio::test]
     async fn run_times_out_and_aborts_when_timeout_secs_elapses_before_completion() {
         // Real (unpaused) time: `start_paused` was tried here first but interacts badly with
         // the real sqlx `SqlitePool` -- pausing tokio's clock also fast-forwards the pool's
@@ -2545,82 +2456,5 @@ mod tests {
             .await
             .unwrap();
         assert!(!samples.is_empty());
-    }
-
-    #[tokio::test]
-    async fn maybe_write_back_dry_run_validates_but_does_not_write_via_interactive_selection() {
-        let (pool, run_id) = run_with_recorded_results().await;
-        let template = honeywell_template();
-        let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
-
-        let outcome = maybe_write_back(
-            &pool,
-            run_id,
-            &tags,
-            &template,
-            &backend,
-            build_loop_config(&fast_simulator_args()).unwrap(),
-            None,
-            true,
-            &mut std::io::Cursor::new(b"2\n".as_slice()), // Moderate (index 1)
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            outcome,
-            WriteBackOutcome::DryRun {
-                response_level: ResponseLevel::Moderate
-            }
-        );
-        // No PID constant was actually written to the backend...
-        assert!(backend.write_log().is_empty());
-        // ...and no audit row was recorded either, matching `Skipped`'s "nothing was
-        // attempted at the backend" rule.
-        assert!(
-            TuneWriteRow::list_for_run(&pool, run_id)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn maybe_write_back_dry_run_validates_but_does_not_write_via_write_pid() {
-        let (pool, run_id) = run_with_recorded_results().await;
-        let template = honeywell_template();
-        let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
-
-        // An empty reader proves `--dry-run` + `--write-pid` never touches stdin, exactly
-        // like the real (non-dry-run) `--write-pid` path already does.
-        let outcome = maybe_write_back(
-            &pool,
-            run_id,
-            &tags,
-            &template,
-            &backend,
-            build_loop_config(&fast_simulator_args()).unwrap(),
-            Some(ResponseLevel::Aggressive),
-            true,
-            &mut std::io::Cursor::new(b"".as_slice()),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            outcome,
-            WriteBackOutcome::DryRun {
-                response_level: ResponseLevel::Aggressive
-            }
-        );
-        assert!(backend.write_log().is_empty());
-        assert!(
-            TuneWriteRow::list_for_run(&pool, run_id)
-                .await
-                .unwrap()
-                .is_empty()
-        );
     }
 }

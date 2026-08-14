@@ -94,7 +94,6 @@ mod tests {
             poll_interval_ms: 800,
             timeout_secs: 3600,
             name: None,
-            dry_run: false,
             yes: false,
             write_pid: None,
             output: crate::output::OutputFormat::Table,

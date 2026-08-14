@@ -140,9 +140,8 @@ unattended runs against live plant equipment fail safe:
 - **`--timeout-secs <seconds>`** (default `3600`) is a mandatory wall-clock limit on the whole
   test — there is no way to disable it. If it elapses, the loop is automatically restored to its
   pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`).
-- **`--dry-run`** rehearses the full write-back — resolving the response level, validating tags
-  and calculated results — without ever writing to the DCS/PLC, and lifts the
-  `--write-pid`-requires-`--yes` requirement, since nothing live is touched.
+- **`--write-pid <level>` always requires `--yes`** — there is no way to write PID constants to
+  a live loop without explicitly confirming it, whether interactively or from a script.
 
 ## Logging
 
