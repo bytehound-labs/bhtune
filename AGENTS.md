@@ -1168,6 +1168,85 @@ time; this section is updated as each lands, with a full pass once all are done:
   new test constructs the one scenario that *can* only be cleaned up by that loop: `db_path`
   itself never existing (so the exclusivity/snapshot step is skipped entirely, per its own
   existence gate) while stale sidecar files exist anyway at the paths it would use.
+- **`--output json` now emits exactly one parseable JSON value on stdout on every `tune`
+  path** — done (`commands::tune::maybe_write_back`, `RunOutcome::Completed`'s new
+  `write_back_detail` field). Previously `maybe_write_back` `println!`ed its interactive
+  listing/prompt and every status/result line unconditionally, regardless of `--output` —
+  confirmed by hand: a completed simulator run (which never has PID constant tags
+  configured, see `build_tags`'s `BackendKindArg::Simulator` arm) printed "No PID constant
+  tags configured for this run's backend/template; skipping write-back." on stdout *before*
+  the run's final JSON object, so `serde_json::from_str`/`json.loads` on stdout failed for
+  every scripted/scheduled caller using `--output json` — the exact audience that flag
+  exists to serve. Closed as the design's Option B ("format-aware reporting"), chosen over
+  Option A (prose to stderr only) because a scripted caller ends up with strictly more
+  information than today — the reason a write-back was skipped or failed is now a real,
+  parseable field — rather than merely relocating prose out of the way; Option C (buffer
+  the whole run and render once at the end) was rejected as a far larger refactor for a
+  finding scoped to one function, with the interactive prompt still needing to print before
+  reading stdin regardless.
+  - **`maybe_write_back` gained an `output: OutputFormat` parameter and now returns
+    `(WriteBackOutcome, Option<String>)`** instead of bare `WriteBackOutcome` — the second
+    element is a human-readable detail string explaining *why* the outcome is what it is,
+    populated on every `Skipped`/`Failed` return path (no PID constant tags configured; no
+    calculated results recorded; the named `--write-pid` response level has no result;
+    pre-read failure; a rejected write, with or without a successful/failed rollback) and
+    left `None` only for `Written` (self-explanatory) and the Table-mode "everything
+    succeeded" cases exercised elsewhere. `RunOutcome::Completed`'s new `write_back_detail`
+    field carries this through to `print_summary`, which folds it into the JSON object as
+    `"write_back_detail"` — `Table` mode ignores it entirely (every match arm gained a
+    trailing `..` to accommodate the new field without caring about its value), since the
+    equivalent information is already in the `println!`ed prose there.
+  - **Every remaining `println!` in `maybe_write_back` is now gated on `output ==
+    OutputFormat::Table`**, so `Json` mode prints nothing at all from this function — the
+    caller's single final JSON object is the only thing that reaches stdout.
+  - **The interactive listing/menu/prompt moved to `eprintln!` unconditionally**, in both
+    output formats. A prompt has no business on stdout in *any* format: a caller piping
+    stdout elsewhere (exactly the scripted use `--output json` exists for, but just as true
+    of `--output table | tee run.log`) should never see "Write which response level..."
+    interleaved with the actual result.
+  - **`--output json` without `--write-pid` now skips the interactive prompt outright**
+    rather than attempting to read a response level from stdin — added as a new early-return
+    arm (`None if output == OutputFormat::Json`) checked *before* `reader` is touched at all,
+    returning `WriteBackOutcome::Skipped` with a detail string naming the reason. There is no
+    human present to answer an interactive prompt in a scripted/scheduled JSON run, and the
+    prior behavior (read a line from real `stdin`, block indefinitely if none arrives) is
+    exactly the kind of silent hang this project's automation posture (`cli-automation`) is
+    designed to avoid. Combining `--output json` with `--write-pid <level>` still writes
+    non-interactively exactly as before — this new arm only fires when no level was named.
+  - **`--dry-run`'s removal (finding 1) and this finding compose cleanly**: with `--dry-run`
+    gone, `--write-pid` already requires `--yes` unconditionally, so the JSON-mode
+    early-exit above is reached only when a caller deliberately chose `--output json`
+    without also naming a `--write-pid` level — an unusual but valid combination (e.g.
+    "run the test and report the calculated constants, but never write") that now degrades
+    to a clean, documented skip instead of a stdin hang.
+
+  **Testing approach.** Six of the thirteen existing `maybe_write_back` unit tests were
+  extended (rather than duplicated) with an assertion on the returned detail string, proving
+  the plumbing end-to-end for each distinct skip/failure shape: no PID constant tags
+  configured, no results recorded, the pre-read-failure case (asserts the detail *starts
+  with* `"pre-read failed:"`, since the underlying transport error's own message is
+  interpolated), a rolled-back failure (asserts the detail *ends with* `"(rolled back)"`), a
+  failed rollback (asserts it mentions both `"rollback also failed"` and `"history
+  revert"`), and a named `--write-pid` level with no recorded result. One new unit test
+  (`maybe_write_back_skips_the_interactive_prompt_without_touching_stdin_when_json_output_is_set_without_write_pid`)
+  uses a named `Cursor` (rather than an inline temporary) specifically so `reader.position()`
+  can be asserted as `0` *after* the call — direct proof that the JSON-mode early-exit never
+  reads a single byte from stdin, not just that it returns the right value. None of this,
+  however, can prove the actual stdout *contract* — `print_summary` calls `println!` directly
+  and returns only a label enum, so a unit test has no way to observe the rendered JSON
+  string. That gap is closed by a new subprocess-level integration test,
+  `crates/bhtune-cli/tests/json_output_contract.rs`, modeled on `ctrlc_abort.rs`'s pattern of
+  spawning the real compiled `bhtune` binary (`env!("CARGO_BIN_EXE_bhtune")`) rather than
+  calling anything in-process: `tune_output_json_emits_exactly_one_parseable_json_value_on_stdout`
+  runs a fast-completing simulator tune with `--output json`, asserts a clean exit code, and
+  — the load-bearing assertion — runs `serde_json::from_str` on the *entire, trimmed* stdout
+  and asserts it succeeds, catching both "prose printed before the object" (this finding's
+  original bug) and "prose printed after it"; it further asserts `write_back_detail` is a
+  string containing "no PID constant tags configured" and that the old suppressed prose
+  string never appears anywhere in stdout. A second test,
+  `tune_output_table_is_plain_text_not_json`, is a sanity check that the default `Table`
+  format for the identical run is *not* parseable as JSON, proving the format flag actually
+  branches rather than the two tests coincidentally passing the same way.
 
 ## Logging (`cli-logging`)
 

@@ -220,6 +220,13 @@ pub(crate) async fn run_with_ctrl_c(
 enum RunOutcome {
     Completed {
         write_back: WriteBackOutcome,
+        /// Human-readable reason `write_back` was `Skipped`/`Failed`, or `None` when it
+        /// succeeded ([`WriteBackOutcome::Written`]) or the outcome is otherwise
+        /// self-explanatory. Exists so `--output json` can report the same explanation
+        /// `maybe_write_back`'s suppressed `println!`s would have shown in `Table` mode,
+        /// without printing anything ahead of the run's final JSON object
+        /// (`safety-json-contract`, finding 8).
+        write_back_detail: Option<String>,
     },
     Aborted(AbortReason),
     /// The run ended (via normal completion or [`RunOutcome::Aborted`]) but the subsequent
@@ -290,6 +297,7 @@ fn tune_outcome_for_run(outcome: &RunOutcome) -> TuneOutcome {
     match outcome {
         RunOutcome::Completed {
             write_back: WriteBackOutcome::Failed,
+            ..
         } => TuneOutcome::WriteBackFailed,
         RunOutcome::Completed { .. } => TuneOutcome::Completed,
         RunOutcome::Aborted(AbortReason::UserInterrupt) => TuneOutcome::Aborted,
@@ -309,6 +317,7 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
         OutputFormat::Table => match outcome {
             RunOutcome::Completed {
                 write_back: WriteBackOutcome::Written { response_level },
+                ..
             } => {
                 println!(
                     "Tune completed successfully (run id {run_id}); wrote {response_level:?} PID parameters."
@@ -316,11 +325,13 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
             }
             RunOutcome::Completed {
                 write_back: WriteBackOutcome::Skipped,
+                ..
             } => {
                 println!("Tune completed successfully (run id {run_id}).");
             }
             RunOutcome::Completed {
                 write_back: WriteBackOutcome::Failed,
+                ..
             } => {
                 println!(
                     "Tune completed successfully (run id {run_id}), but PID write-back failed; the loop was left with its previous PID constants."
@@ -357,15 +368,24 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
             let (write_back, response_level) = match outcome {
                 RunOutcome::Completed {
                     write_back: WriteBackOutcome::Written { response_level },
+                    ..
                 } => ("written", Some(*response_level)),
                 RunOutcome::Completed {
                     write_back: WriteBackOutcome::Skipped,
+                    ..
                 } => ("skipped", None),
                 RunOutcome::Completed {
                     write_back: WriteBackOutcome::Failed,
+                    ..
                 } => ("failed", None),
                 RunOutcome::Aborted(_) => ("not_attempted", None),
                 RunOutcome::RestoreIncomplete { .. } => ("not_attempted", None),
+            };
+            let write_back_detail = match outcome {
+                RunOutcome::Completed {
+                    write_back_detail, ..
+                } => write_back_detail.clone(),
+                _ => None,
             };
             let timeout_secs = match outcome {
                 RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => Some(*timeout_secs),
@@ -394,6 +414,7 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                 "outcome": tune_outcome.label(),
                 "write_back": write_back,
                 "write_back_response_level": response_level,
+                "write_back_detail": write_back_detail,
                 "timeout_secs": timeout_secs,
                 "poor_quality_tag": poor_quality_tag,
                 "poor_quality": poor_quality,
@@ -724,7 +745,7 @@ async fn execute(
             record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
             match restore_attempt {
                 RestoreAttempt::Confirmed => {
-                    let write_back = maybe_write_back(
+                    let (write_back, write_back_detail) = maybe_write_back(
                         pool,
                         run_id,
                         tags,
@@ -732,11 +753,15 @@ async fn execute(
                         backend,
                         config,
                         write_pid,
+                        args.output,
                         allow_uncertain,
                         &mut std::io::stdin().lock(),
                     )
                     .await?;
-                    Ok(RunOutcome::Completed { write_back })
+                    Ok(RunOutcome::Completed {
+                        write_back,
+                        write_back_detail,
+                    })
                 }
                 RestoreAttempt::Incomplete { reason } => {
                     Ok(RunOutcome::RestoreIncomplete { reason })
@@ -1704,13 +1729,31 @@ async fn rollback_pid_writes(
 /// backend, and also a sane guard for any real template missing one — or when no results
 /// were recorded at all. `reader` is injected (rather than reading `std::io::stdin()`
 /// directly) so tests can supply a fixed `Cursor` in place of the process's real stdin; it
-/// is never read from at all when `write_pid` is `Some`.
+/// is never read from at all when `write_pid` is `Some`, or when `output` is
+/// [`OutputFormat::Json`] (see below).
 ///
 /// Pre-reads the existing constants, writes and verifies Proportional then Integral then
 /// Derivative in sequence (stopping at the first failure), and rolls back whatever was
 /// already confirmed if a later constant fails -- `safety-writeback-rollback` (finding 6).
 /// Every attempt, including a pre-read failure or a transport error mid-write, produces
 /// exactly one [`TuneWriteRow`] audit row.
+///
+/// `output` makes this function format-aware (`safety-json-contract`, finding 8):
+///
+/// - Under [`OutputFormat::Table`], status/result lines print with `println!` exactly as
+///   before, and the interactive listing/menu print with `eprintln!` -- a prompt has no
+///   business on stdout in *any* format, since a caller piping stdout elsewhere shouldn't
+///   see it interleaved with the tune's actual result.
+/// - Under [`OutputFormat::Json`], none of those `println!`s fire at all. The reason for
+///   every `Skipped`/`Failed` outcome is instead returned as the second element of the
+///   tuple -- a human-readable detail string -- so `print_summary`'s JSON branch can fold
+///   it into the one JSON object this whole run must still emit on stdout. Without this,
+///   the interactive prompt or a plain status line would print ahead of that object and
+///   break `--output json` for every scripted/scheduled caller trying to parse stdout.
+/// - When `output` is `Json` and `write_pid` is `None` (no response level was named
+///   non-interactively), the interactive prompt is skipped entirely -- `reader` (real
+///   stdin outside tests) is never touched, since there is no human present to answer it
+///   and a scripted caller could otherwise hang waiting on input that will never arrive.
 #[allow(clippy::too_many_arguments)]
 async fn maybe_write_back(
     pool: &SqlitePool,
@@ -1720,44 +1763,66 @@ async fn maybe_write_back(
     backend: &dyn Backend,
     config: LoopConfig,
     write_pid: Option<ResponseLevel>,
+    output: OutputFormat,
     allow_uncertain: bool,
     reader: &mut impl std::io::BufRead,
-) -> anyhow::Result<WriteBackOutcome> {
+) -> anyhow::Result<(WriteBackOutcome, Option<String>)> {
     let (Some(p_tag), Some(i_tag), Some(d_tag)) = (
         &tags.proportional_constant,
         &tags.integral_constant,
         &tags.derivative_constant,
     ) else {
-        println!(
-            "No PID constant tags configured for this run's backend/template; skipping write-back."
-        );
-        return Ok(WriteBackOutcome::Skipped);
+        let detail = "no PID constant tags configured for this run's backend/template";
+        if output == OutputFormat::Table {
+            println!(
+                "No PID constant tags configured for this run's backend/template; skipping write-back."
+            );
+        }
+        return Ok((WriteBackOutcome::Skipped, Some(detail.to_string())));
     };
 
     let results = TuneResultRow::list_for_run(pool, run_id).await?;
     if results.is_empty() {
-        return Ok(WriteBackOutcome::Skipped);
+        return Ok((
+            WriteBackOutcome::Skipped,
+            Some("no calculated results were recorded for this run".to_string()),
+        ));
     }
 
     let selected = match write_pid {
         Some(level) => match results.iter().find(|r| r.response_level == level) {
             Some(r) => {
-                println!(
-                    "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
-                );
+                if output == OutputFormat::Table {
+                    println!(
+                        "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
+                    );
+                }
                 r
             }
             None => {
-                println!(
-                    "No calculated result recorded for response level {level:?}; skipping write-back."
-                );
-                return Ok(WriteBackOutcome::Failed);
+                let detail = format!("no calculated result recorded for response level {level:?}");
+                if output == OutputFormat::Table {
+                    println!(
+                        "No calculated result recorded for response level {level:?}; skipping write-back."
+                    );
+                }
+                return Ok((WriteBackOutcome::Failed, Some(detail)));
             }
         },
+        None if output == OutputFormat::Json => {
+            return Ok((
+                WriteBackOutcome::Skipped,
+                Some(
+                    "--output json was set without --write-pid; skipped the interactive \
+                     write-back prompt since there is no human present to answer it"
+                        .to_string(),
+                ),
+            ));
+        }
         None => {
-            println!("\nCalculated PID parameters:");
+            eprintln!("\nCalculated PID parameters:");
             for (i, r) in results.iter().enumerate() {
-                println!(
+                eprintln!(
                     "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
                     i + 1,
                     r.response_level,
@@ -1766,7 +1831,7 @@ async fn maybe_write_back(
                     r.derivative
                 );
             }
-            println!(
+            eprintln!(
                 "Write which response level's PID parameters back to the DCS? [1-{}, or Enter/n to skip]:",
                 results.len()
             );
@@ -1775,15 +1840,21 @@ async fn maybe_write_back(
             let bytes_read = reader.read_line(&mut input).unwrap_or(0);
             let input = input.trim();
             if bytes_read == 0 || input.is_empty() || input.eq_ignore_ascii_case("n") {
-                println!("Skipping PID write-back.");
-                return Ok(WriteBackOutcome::Skipped);
+                eprintln!("Skipping PID write-back.");
+                return Ok((
+                    WriteBackOutcome::Skipped,
+                    Some("skipped interactively (no selection made)".to_string()),
+                ));
             }
 
             match input.parse::<usize>() {
                 Ok(n) if n >= 1 && n <= results.len() => &results[n - 1],
                 _ => {
-                    println!("Invalid selection; skipping PID write-back.");
-                    return Ok(WriteBackOutcome::Skipped);
+                    eprintln!("Invalid selection; skipping PID write-back.");
+                    return Ok((
+                        WriteBackOutcome::Skipped,
+                        Some("invalid response level selection".to_string()),
+                    ));
                 }
             }
         }
@@ -1808,9 +1879,14 @@ async fn maybe_write_back(
                 let message = e.to_string();
                 new_write.error_message = Some(message.clone());
                 TuneWriteRow::insert(pool, run_id, new_write).await?;
-                println!("PID write-back skipped: {message}");
+                if output == OutputFormat::Table {
+                    println!("PID write-back skipped: {message}");
+                }
                 tracing::error!(run_id, ?response_level, %message, "PID pre-read failed");
-                return Ok(WriteBackOutcome::Failed);
+                return Ok((
+                    WriteBackOutcome::Failed,
+                    Some(format!("pre-read failed: {message}")),
+                ));
             }
         };
     new_write.previous = Some(previous);
@@ -1868,9 +1944,11 @@ async fn maybe_write_back(
         None => {
             new_write.success = true;
             TuneWriteRow::insert(pool, run_id, new_write).await?;
-            println!("Wrote and confirmed {response_level:?} PID parameters.");
+            if output == OutputFormat::Table {
+                println!("Wrote and confirmed {response_level:?} PID parameters.");
+            }
             tracing::info!(run_id, ?response_level, "PID write-back succeeded");
-            Ok(WriteBackOutcome::Written { response_level })
+            Ok((WriteBackOutcome::Written { response_level }, None))
         }
         Some(error_message) => {
             new_write.success = false;
@@ -1879,27 +1957,35 @@ async fn maybe_write_back(
             if rollback_targets.is_empty() {
                 // Nothing had been confirmed written yet, so there is nothing to roll back.
                 TuneWriteRow::insert(pool, run_id, new_write).await?;
-                println!("PID write-back failed: {error_message}");
+                if output == OutputFormat::Table {
+                    println!("PID write-back failed: {error_message}");
+                }
                 tracing::error!(run_id, ?response_level, %error_message, "PID write-back failed before writing anything");
-                return Ok(WriteBackOutcome::Failed);
+                return Ok((WriteBackOutcome::Failed, Some(error_message)));
             }
 
+            let detail;
             match rollback_pid_writes(backend, &rollback_targets).await {
                 Ok(()) => {
                     new_write.rollback_state = Some(RollbackState::Succeeded);
                     TuneWriteRow::insert(pool, run_id, new_write).await?;
-                    println!("PID write-back failed and was rolled back: {error_message}");
+                    if output == OutputFormat::Table {
+                        println!("PID write-back failed and was rolled back: {error_message}");
+                    }
                     tracing::error!(run_id, ?response_level, %error_message, "PID write-back failed partway through; rollback succeeded");
+                    detail = format!("{error_message} (rolled back)");
                 }
                 Err(rollback_error) => {
                     new_write.rollback_state = Some(RollbackState::Failed);
                     new_write.rollback_error = Some(rollback_error.clone());
                     TuneWriteRow::insert(pool, run_id, new_write).await?;
-                    println!(
-                        "PID write-back failed ({error_message}) and rollback also failed \
-                         ({rollback_error}); the loop may hold a mismatched set of PID \
-                         constants -- see `bhtune history revert {run_id}`."
-                    );
+                    if output == OutputFormat::Table {
+                        println!(
+                            "PID write-back failed ({error_message}) and rollback also failed \
+                             ({rollback_error}); the loop may hold a mismatched set of PID \
+                             constants -- see `bhtune history revert {run_id}`."
+                        );
+                    }
                     tracing::error!(
                         run_id,
                         ?response_level,
@@ -1907,9 +1993,14 @@ async fn maybe_write_back(
                         %rollback_error,
                         "PID write-back failed partway through; rollback also failed"
                     );
+                    detail = format!(
+                        "{error_message}; rollback also failed: {rollback_error} -- the loop \
+                         may hold a mismatched set of PID constants, see \
+                         `bhtune history revert {run_id}`"
+                    );
                 }
             }
-            Ok(WriteBackOutcome::Failed)
+            Ok((WriteBackOutcome::Failed, Some(detail)))
         }
     }
 }
@@ -4012,7 +4103,7 @@ mod tests {
         tags.proportional_constant = None;
         let backend = honeywell_backend_auto();
 
-        let outcome = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4020,6 +4111,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4027,6 +4119,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome, WriteBackOutcome::Skipped);
+        assert_eq!(
+            write_back_detail.as_deref(),
+            Some("no PID constant tags configured for this run's backend/template")
+        );
         assert!(
             TuneWriteRow::list_for_run(&pool, run_id)
                 .await
@@ -4056,7 +4152,7 @@ mod tests {
         .unwrap();
         let backend = honeywell_backend_auto();
 
-        let outcome = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run.id,
             &tags,
@@ -4064,6 +4160,7 @@ mod tests {
             &backend,
             config,
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4071,6 +4168,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome, WriteBackOutcome::Skipped);
+        assert_eq!(
+            write_back_detail.as_deref(),
+            Some("no calculated results were recorded for this run")
+        );
         assert!(
             TuneWriteRow::list_for_run(&pool, run.id)
                 .await
@@ -4090,7 +4191,7 @@ mod tests {
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto();
 
-        let outcome = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4098,6 +4199,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(input),
         )
@@ -4181,7 +4283,7 @@ mod tests {
         // is ever written.
         let backend = honeywell_backend_auto().erroring_read("Unit1.LIC101.K");
 
-        let outcome = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4189,6 +4291,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4196,6 +4299,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome, WriteBackOutcome::Failed);
+        assert!(
+            write_back_detail
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("pre-read failed:")
+        );
         let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
         assert_eq!(writes.len(), 1);
         let write = &writes[0];
@@ -4228,7 +4337,7 @@ mod tests {
         // confirmed, so it must be rolled back to its pre-read value.
         let backend = honeywell_backend_auto().rejecting_write("Unit1.LIC101.T1");
 
-        let outcome = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4236,6 +4345,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4243,6 +4353,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome, WriteBackOutcome::Failed);
+        assert!(
+            write_back_detail
+                .as_deref()
+                .unwrap_or_default()
+                .ends_with("(rolled back)")
+        );
         let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
         assert_eq!(writes.len(), 1);
         let write = &writes[0];
@@ -4281,7 +4397,7 @@ mod tests {
             .rejecting_write("Unit1.LIC101.T1")
             .rejecting_write_after("Unit1.LIC101.K", 1);
 
-        let outcome = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4289,6 +4405,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4296,6 +4413,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome, WriteBackOutcome::Failed);
+        let detail = write_back_detail.unwrap_or_default();
+        assert!(detail.contains("rollback also failed"));
+        assert!(detail.contains("history revert"));
         let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
         assert_eq!(writes.len(), 1);
         let write = &writes[0];
@@ -4316,7 +4436,7 @@ mod tests {
         // distinct failure mode from an erroring or poor-quality readback.
         let backend = honeywell_backend_auto().distorting_write("Unit1.LIC101.K", 5.0);
 
-        let outcome = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4324,6 +4444,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4350,7 +4471,7 @@ mod tests {
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto().rejecting_write("Unit1.LIC101.K");
 
-        let outcome = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4358,6 +4479,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4380,7 +4502,7 @@ mod tests {
         // the confirmation re-read of the P tag (its 2nd read) then errors.
         let backend = honeywell_backend_auto().erroring_read_after("Unit1.LIC101.K", 1);
 
-        let outcome = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4388,6 +4510,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4424,7 +4547,7 @@ mod tests {
             bhtune_backend::Quality::Bad,
         );
 
-        let outcome = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4432,6 +4555,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4463,7 +4587,7 @@ mod tests {
         let backend = honeywell_backend_auto()
             .with_quality("Unit1.LIC101.K", bhtune_backend::Quality::Uncertain);
 
-        let outcome = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4471,6 +4595,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            OutputFormat::Table,
             true, // allow_uncertain
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
@@ -4492,7 +4617,7 @@ mod tests {
 
         // An empty reader would make the *interactive* path treat this as EOF-and-skip; a
         // `write_pid` request must never even try to read it.
-        let outcome = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -4500,6 +4625,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             Some(ResponseLevel::Aggressive),
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"".as_slice()),
         )
@@ -4564,7 +4690,7 @@ mod tests {
         }
         let backend = honeywell_backend_auto();
 
-        let outcome = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run.id,
             &tags,
@@ -4572,6 +4698,7 @@ mod tests {
             &backend,
             config,
             Some(ResponseLevel::Sluggish),
+            OutputFormat::Table,
             false,
             &mut std::io::Cursor::new(b"".as_slice()),
         )
@@ -4579,9 +4706,59 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome, WriteBackOutcome::Failed);
+        assert_eq!(
+            write_back_detail.as_deref(),
+            Some("no calculated result recorded for response level Sluggish")
+        );
         // Nothing was attempted at the backend at all, so no audit row exists either.
         assert!(
             TuneWriteRow::list_for_run(&pool, run.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_skips_the_interactive_prompt_without_touching_stdin_when_json_output_is_set_without_write_pid()
+     {
+        // `safety-json-contract` (finding 8): under `--output json`, there is no human to
+        // answer an interactive write-back prompt, so `write_pid: None` must skip straight
+        // to `Skipped` -- without printing a prompt to stdout (which would break the JSON
+        // contract) and, just as importantly, without reading a single byte from `reader`
+        // (real stdin outside tests), since consuming input meant for something else, or
+        // hanging a scripted caller waiting on input that will never arrive, would both be
+        // real bugs. A `Cursor` that still reports a real value selection queued up proves
+        // the byte was never consumed: if `maybe_write_back` had actually prompted and read
+        // it, the outcome would be `Written`, not `Skipped`.
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto();
+        let mut reader = std::io::Cursor::new(b"1\n".as_slice());
+
+        let (outcome, write_back_detail) = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            None,
+            OutputFormat::Json,
+            false,
+            &mut reader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, WriteBackOutcome::Skipped);
+        let detail = write_back_detail.unwrap_or_default();
+        assert!(detail.contains("--output json"));
+        assert!(detail.contains("--write-pid"));
+        assert_eq!(reader.position(), 0, "reader must not be read from at all");
+        assert!(
+            TuneWriteRow::list_for_run(&pool, run_id)
                 .await
                 .unwrap()
                 .is_empty()
@@ -4592,7 +4769,8 @@ mod tests {
     fn tune_outcome_for_run_maps_every_run_outcome_variant() {
         assert_eq!(
             tune_outcome_for_run(&RunOutcome::Completed {
-                write_back: WriteBackOutcome::Skipped
+                write_back: WriteBackOutcome::Skipped,
+                write_back_detail: None,
             }),
             TuneOutcome::Completed
         );
@@ -4600,13 +4778,15 @@ mod tests {
             tune_outcome_for_run(&RunOutcome::Completed {
                 write_back: WriteBackOutcome::Written {
                     response_level: ResponseLevel::Moderate
-                }
+                },
+                write_back_detail: None,
             }),
             TuneOutcome::Completed
         );
         assert_eq!(
             tune_outcome_for_run(&RunOutcome::Completed {
-                write_back: WriteBackOutcome::Failed
+                write_back: WriteBackOutcome::Failed,
+                write_back_detail: None,
             }),
             TuneOutcome::WriteBackFailed
         );
@@ -4640,7 +4820,8 @@ mod tests {
             print_summary(
                 1,
                 &RunOutcome::Completed {
-                    write_back: WriteBackOutcome::Skipped
+                    write_back: WriteBackOutcome::Skipped,
+                    write_back_detail: None,
                 },
                 OutputFormat::Table
             ),
@@ -4650,7 +4831,8 @@ mod tests {
             print_summary(
                 1,
                 &RunOutcome::Completed {
-                    write_back: WriteBackOutcome::Skipped
+                    write_back: WriteBackOutcome::Skipped,
+                    write_back_detail: None,
                 },
                 OutputFormat::Json
             ),
@@ -4662,7 +4844,8 @@ mod tests {
                 &RunOutcome::Completed {
                     write_back: WriteBackOutcome::Written {
                         response_level: ResponseLevel::Aggressive
-                    }
+                    },
+                    write_back_detail: None,
                 },
                 OutputFormat::Table
             ),
@@ -4674,7 +4857,8 @@ mod tests {
                 &RunOutcome::Completed {
                     write_back: WriteBackOutcome::Written {
                         response_level: ResponseLevel::Aggressive
-                    }
+                    },
+                    write_back_detail: None,
                 },
                 OutputFormat::Json
             ),
@@ -4684,7 +4868,8 @@ mod tests {
             print_summary(
                 1,
                 &RunOutcome::Completed {
-                    write_back: WriteBackOutcome::Failed
+                    write_back: WriteBackOutcome::Failed,
+                    write_back_detail: None,
                 },
                 OutputFormat::Table
             ),
@@ -4694,7 +4879,8 @@ mod tests {
             print_summary(
                 1,
                 &RunOutcome::Completed {
-                    write_back: WriteBackOutcome::Failed
+                    write_back: WriteBackOutcome::Failed,
+                    write_back_detail: None,
                 },
                 OutputFormat::Json
             ),
