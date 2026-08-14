@@ -39,12 +39,41 @@ use crate::{
 
 // dcs_templates {{{1
 
+/// Where a `dcs_templates` row came from, and -- since [`TuneRunRow`] snapshots a copy of one
+/// at [`TuneRunRow::start`] time -- where a run's snapshotted template came from too. Kept as
+/// one definition reused by both tables (`dcs_templates.origin`, `tune_runs.template_origin`)
+/// rather than two, so they can never drift on what the possible origins even are, and so a
+/// run's history never needs to look the original row back up to know its provenance --
+/// which matters precisely because that row might no longer exist, or might have been
+/// re-imported under a different origin since.
+///
+/// `builtin` and `catalog` rows are re-upserted from their respective data files on every
+/// startup ([`crate::seed::seed_templates`]); `user` rows (hand-imported via `bhtune template
+/// import`, or created through a future GUI editor) are never auto-touched -- auto-reseeding
+/// a hand-edited row would silently discard someone's own customization, while *not*
+/// reseeding a shipped preset would mean a suffix/unit fix in a later release never reaches
+/// existing installs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateOrigin {
+    /// One of the templates `bhtune-core` ships embedded in its own binary (see
+    /// `template-catalog`).
+    Builtin,
+    /// Loaded from a user-supplied catalog file. Not yet produced anywhere --
+    /// `template-user-catalog` (auto-loading `$XDG_CONFIG_HOME/bhtune/templates.toml` and
+    /// equivalents) is what will start seeding rows with this origin.
+    Catalog,
+    /// Hand-imported (`bhtune template import`) or otherwise created by whoever is running
+    /// bhtune.
+    User,
+}
+
 /// One row of `dcs_templates`: a [`DcsTemplate`] plus the database bookkeeping fields that
 /// don't belong on the pure domain type itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DcsTemplateRow {
     pub id: i64,
-    pub is_builtin: bool,
+    pub origin: TemplateOrigin,
     pub template: DcsTemplate,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -58,13 +87,15 @@ impl DcsTemplateRow {
     pub async fn insert(
         pool: &SqlitePool,
         template: &DcsTemplate,
-        is_builtin: bool,
+        origin: TemplateOrigin,
         now: DateTime<Utc>,
     ) -> DbResult<DcsTemplateRow> {
+        let versions_json = serde_json::to_string(&template.versions)
+            .expect("Vec<String> serialization is infallible");
         let row = sqlx::query(
             r#"
             INSERT INTO dcs_templates (
-                name, is_builtin, revert_mode, proportional_type, integral_type,
+                name, origin, revert_mode, proportional_type, integral_type,
                 integral_unit, derivative_type, derivative_unit,
                 process_variable_suffix, manipulated_variable_suffix, setpoint_variable_suffix,
                 controller_direction_suffix, controller_mode_suffix, mode_attribute_suffix,
@@ -72,14 +103,15 @@ impl DcsTemplateRow {
                 lower_mv_range_suffix, proportional_constant_suffix, integral_constant_suffix,
                 derivative_constant_suffix, mode_manual_value, mode_auto_value,
                 mode_attribute_program_value, controller_action_direct_value,
+                versions_json, description, source,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
         .bind(&template.name)
-        .bind(is_builtin)
+        .bind(enum_to_text(&origin))
         .bind(template.revert_mode)
         .bind(enum_to_text(&template.proportional_type))
         .bind(enum_to_text(&template.integral_type))
@@ -103,6 +135,9 @@ impl DcsTemplateRow {
         .bind(&template.mode_auto_value)
         .bind(&template.mode_attribute_program_value)
         .bind(&template.controller_action_direct_value)
+        .bind(versions_json)
+        .bind(&template.description)
+        .bind(&template.source)
         .bind(now)
         .bind(now)
         .fetch_one(pool)
@@ -123,8 +158,8 @@ impl DcsTemplateRow {
     }
 
     /// Fetches one row by its (unique) `name`, or `None` if it doesn't exist. Used by
-    /// [`crate::seed::seed_builtin_templates`] to find any existing row before deciding
-    /// whether to insert or update.
+    /// [`crate::seed::seed_templates`] to find any existing row before deciding whether to
+    /// insert or update.
     pub async fn get_by_name(pool: &SqlitePool, name: &str) -> DbResult<Option<DcsTemplateRow>> {
         let row = sqlx::query("SELECT * FROM dcs_templates WHERE name = ?")
             .bind(name)
@@ -145,7 +180,7 @@ impl DcsTemplateRow {
 
     /// Overwrites every template field of the row at `id` with `template`'s, bumping
     /// `updated_at` to `now`. Deliberately does not touch `name` (the match key callers
-    /// already looked the row up by) or `is_builtin` (ownership of a row never changes after
+    /// already looked the row up by) or `origin` (ownership of a row never changes after
     /// creation) — only [`Self::insert`] sets those.
     pub async fn update(
         pool: &SqlitePool,
@@ -153,6 +188,8 @@ impl DcsTemplateRow {
         template: &DcsTemplate,
         now: DateTime<Utc>,
     ) -> DbResult<DcsTemplateRow> {
+        let versions_json = serde_json::to_string(&template.versions)
+            .expect("Vec<String> serialization is infallible");
         let row = sqlx::query(
             r#"
             UPDATE dcs_templates SET
@@ -166,6 +203,7 @@ impl DcsTemplateRow {
                 proportional_constant_suffix = ?, integral_constant_suffix = ?,
                 derivative_constant_suffix = ?, mode_manual_value = ?, mode_auto_value = ?,
                 mode_attribute_program_value = ?, controller_action_direct_value = ?,
+                versions_json = ?, description = ?, source = ?,
                 updated_at = ?
             WHERE id = ?
             RETURNING *
@@ -194,6 +232,9 @@ impl DcsTemplateRow {
         .bind(&template.mode_auto_value)
         .bind(&template.mode_attribute_program_value)
         .bind(&template.controller_action_direct_value)
+        .bind(versions_json)
+        .bind(&template.description)
+        .bind(&template.source)
         .bind(now)
         .bind(id)
         .fetch_one(pool)
@@ -264,18 +305,20 @@ fn row_to_dcs_template(row: SqliteRow) -> DbResult<DcsTemplateRow> {
         controller_action_direct_value: row
             .try_get("controller_action_direct_value")
             .map_err(DbError::Query)?,
-        // No `versions`/`description`/`source` columns exist yet -- `template-provenance`
-        // adds `versions_json`/`description`/`source` and reads them back for real. Until
-        // then this is an honest placeholder, not a lossy round-trip: nothing has ever been
-        // persisted for these fields, so there is nothing to lose.
-        versions: Vec::new(),
-        description: None,
-        source: None,
+        versions: {
+            let versions_json: String = row.try_get("versions_json").map_err(DbError::Query)?;
+            serde_json::from_str(&versions_json).map_err(|source| DbError::InvalidJsonShape {
+                column: "versions_json",
+                source,
+            })?
+        },
+        description: row.try_get("description").map_err(DbError::Query)?,
+        source: row.try_get("source").map_err(DbError::Query)?,
     };
 
     Ok(DcsTemplateRow {
         id: row.try_get("id").map_err(DbError::Query)?,
-        is_builtin: row.try_get("is_builtin").map_err(DbError::Query)?,
+        origin: text_to_enum("origin", &get_enum("origin")?)?,
         template,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
         updated_at: row.try_get("updated_at").map_err(DbError::Query)?,
@@ -336,40 +379,6 @@ pub enum RestoreStatus {
     /// loop may still be at a relay-test MV/mode -- see `restore_detail` for what an
     /// operator (or `bhtune restore-loop`) needs to check by hand.
     Incomplete,
-}
-
-/// Where a [`TuneRunRow`]'s snapshotted template came from, at the moment the run started.
-/// Mirrors the origin the community template catalog gives a `dcs_templates` row (see
-/// `template-provenance`), captured here so a run's own history never needs to look that row
-/// back up -- which matters precisely because it might no longer exist, or might have been
-/// re-imported under a different origin since.
-///
-/// `Catalog` isn't produced anywhere yet -- that lands with `template-provenance` itself --
-/// but all three variants are defined together now so that landing doesn't require a
-/// non-exhaustive-match-breaking enum change here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TemplateOrigin {
-    /// One of the templates `bhtune-core` ships built in.
-    Builtin,
-    /// Loaded from the community template catalog (`template-provenance`; not yet
-    /// implemented).
-    Catalog,
-    /// Hand-imported or otherwise created by whoever is running bhtune.
-    User,
-}
-
-impl TemplateOrigin {
-    /// Bridges today's [`DcsTemplateRow::is_builtin`] boolean to this richer enum, until
-    /// `template-provenance` gives `dcs_templates` its own real `origin` column that this
-    /// type mirrors directly.
-    pub fn from_is_builtin(is_builtin: bool) -> TemplateOrigin {
-        if is_builtin {
-            TemplateOrigin::Builtin
-        } else {
-            TemplateOrigin::User
-        }
-    }
 }
 
 /// The initial-readings snapshot for a [`TuneRunRow`] — known only once the backend's initial

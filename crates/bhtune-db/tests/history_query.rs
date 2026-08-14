@@ -27,7 +27,7 @@ use sqlx::Row;
 /// `tests/common` module.
 async fn seed_template(pool: &sqlx::SqlitePool) -> i64 {
     let template = built_in_templates().remove(0);
-    DcsTemplateRow::insert(pool, &template, true, Utc::now())
+    DcsTemplateRow::insert(pool, &template, TemplateOrigin::Builtin, Utc::now())
         .await
         .unwrap()
         .id

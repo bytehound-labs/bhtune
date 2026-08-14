@@ -4,7 +4,7 @@ use std::path::Path;
 
 use bhtune_core::DcsTemplate;
 use bhtune_db::SqlitePool;
-use bhtune_db::models::DcsTemplateRow;
+use bhtune_db::models::{DcsTemplateRow, TemplateOrigin};
 
 use crate::args::TemplateCommand;
 
@@ -25,13 +25,13 @@ async fn list(pool: &SqlitePool) -> anyhow::Result<()> {
     }
     println!(
         "{:<28} {:<8} {:<12} {:<11} {:<11}",
-        "NAME", "BUILTIN", "PROPORTIONAL", "INTEGRAL", "DERIVATIVE"
+        "NAME", "ORIGIN", "PROPORTIONAL", "INTEGRAL", "DERIVATIVE"
     );
     for row in templates {
         println!(
             "{:<28} {:<8} {:<12} {:<11} {:<11}",
             row.template.name,
-            row.is_builtin,
+            format!("{:?}", row.origin),
             format!("{:?}", row.template.proportional_type),
             format!("{:?}", row.template.integral_type),
             format!("{:?}", row.template.derivative_type),
@@ -68,7 +68,8 @@ async fn import(pool: &SqlitePool, path: &Path) -> anyhow::Result<()> {
         );
     }
 
-    let row = DcsTemplateRow::insert(pool, &template, false, chrono::Utc::now()).await?;
+    let row =
+        DcsTemplateRow::insert(pool, &template, TemplateOrigin::User, chrono::Utc::now()).await?;
     println!("Imported template '{}' (id {}).", row.template.name, row.id);
     Ok(())
 }
@@ -141,7 +142,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(!row.is_builtin);
+        assert_eq!(row.origin, TemplateOrigin::User);
         assert_eq!(
             row.template.process_variable_suffix,
             template.process_variable_suffix

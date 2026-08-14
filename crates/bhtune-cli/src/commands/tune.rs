@@ -20,8 +20,8 @@ use bhtune_core::{
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TemplateOrigin, TuneBackend,
-    TuneResultRow, TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
+    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TuneBackend, TuneResultRow,
+    TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
 };
 use chrono::{DateTime, Utc};
 
@@ -143,7 +143,7 @@ pub(crate) async fn run_with_ctrl_c(
     let template_row = DcsTemplateRow::get_by_name(pool, &args.template)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no template named '{}'", args.template))?;
-    let template_origin = TemplateOrigin::from_is_builtin(template_row.is_builtin);
+    let template_origin = template_row.origin;
     let template = template_row.template;
 
     let config = build_loop_config(&args)?;
@@ -2009,6 +2009,7 @@ async fn maybe_write_back(
 mod tests {
     use super::*;
     use crate::args::{ControllerTypeArg, DirectionArg, ProcessTypeArg};
+    use bhtune_db::models::TemplateOrigin;
 
     async fn seeded_pool() -> SqlitePool {
         let pool = bhtune_db::connect_in_memory().await.unwrap();

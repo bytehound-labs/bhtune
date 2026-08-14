@@ -5,7 +5,10 @@
 //! through its column/JSON-blob storage exactly.
 
 use bhtune_core::{LoopTags, built_in_templates};
-use bhtune_db::{connect_in_memory, models::DcsTemplateRow};
+use bhtune_db::{
+    connect_in_memory,
+    models::{DcsTemplateRow, TemplateOrigin},
+};
 use chrono::Utc;
 use sqlx::Row;
 
@@ -14,18 +17,12 @@ async fn dcs_template_round_trips_every_built_in_template() {
     let pool = connect_in_memory().await.unwrap();
     let now = Utc::now();
 
-    for mut template in built_in_templates() {
-        let inserted = DcsTemplateRow::insert(&pool, &template, true, now)
+    for template in built_in_templates() {
+        let inserted = DcsTemplateRow::insert(&pool, &template, TemplateOrigin::Builtin, now)
             .await
             .unwrap();
         assert!(inserted.id > 0);
-        assert!(inserted.is_builtin);
-        // `versions`/`description`/`source` have no columns yet -- `template-provenance`
-        // adds `versions_json`/`description`/`source` and makes this a full round-trip;
-        // until then every fetched template comes back with them empty/`None`.
-        template.versions = Vec::new();
-        template.description = None;
-        template.source = None;
+        assert_eq!(inserted.origin, TemplateOrigin::Builtin);
         assert_eq!(inserted.template, template);
 
         let fetched = DcsTemplateRow::get(&pool, inserted.id)
@@ -48,17 +45,107 @@ async fn dcs_template_name_must_be_unique() {
     let template = built_in_templates().remove(0);
     let now = Utc::now();
 
-    DcsTemplateRow::insert(&pool, &template, true, now)
+    DcsTemplateRow::insert(&pool, &template, TemplateOrigin::Builtin, now)
         .await
         .unwrap();
-    let dup = DcsTemplateRow::insert(&pool, &template, true, now).await;
+    let dup = DcsTemplateRow::insert(&pool, &template, TemplateOrigin::Builtin, now).await;
     assert!(dup.is_err(), "duplicate template name must be rejected");
+}
+
+#[tokio::test]
+async fn dcs_templates_reject_invalid_origin_and_invalid_versions_json() {
+    let pool = connect_in_memory().await.unwrap();
+    let template = built_in_templates().remove(0);
+    let id = DcsTemplateRow::insert(&pool, &template, TemplateOrigin::Builtin, Utc::now())
+        .await
+        .unwrap()
+        .id;
+
+    let bad_origin = sqlx::query("UPDATE dcs_templates SET origin = ? WHERE id = ?")
+        .bind("not_a_real_origin")
+        .bind(id)
+        .execute(&pool)
+        .await;
+    assert!(
+        bad_origin.is_err(),
+        "origin outside builtin/catalog/user must be rejected"
+    );
+
+    let bad_versions_json = sqlx::query("UPDATE dcs_templates SET versions_json = ? WHERE id = ?")
+        .bind("not valid json")
+        .bind(id)
+        .execute(&pool)
+        .await;
+    assert!(
+        bad_versions_json.is_err(),
+        "invalid JSON in versions_json must be rejected"
+    );
+}
+
+/// `json_valid` only proves `versions_json` is syntactically valid JSON, not that it
+/// deserializes into the `Vec<String>` shape the column is supposed to hold -- `"123"` is
+/// valid JSON (a bare number) but the wrong shape. This proves `row_to_dcs_template`'s
+/// `DbError::InvalidJsonShape` mapping actually fires for that case, rather than only being
+/// reachable in theory.
+#[tokio::test]
+async fn dcs_template_get_rejects_versions_json_with_the_wrong_shape() {
+    let pool = connect_in_memory().await.unwrap();
+    let template = built_in_templates().remove(0);
+    let id = DcsTemplateRow::insert(&pool, &template, TemplateOrigin::Builtin, Utc::now())
+        .await
+        .unwrap()
+        .id;
+
+    sqlx::query("UPDATE dcs_templates SET versions_json = '123' WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = DcsTemplateRow::get(&pool, id).await.unwrap_err();
+    assert!(matches!(
+        err,
+        bhtune_db::DbError::InvalidJsonShape {
+            column: "versions_json",
+            ..
+        }
+    ));
+}
+
+/// Distinct from `dcs_template_round_trips_every_built_in_template`, which only ever seeds
+/// (and therefore only ever exercises) `origin = 'builtin'`: nothing in `bhtune-cli` produces
+/// `TemplateOrigin::Catalog` yet (`template-user-catalog` is what will), so this is the only
+/// place any test proves `dcs_templates.origin` round-trips *every* variant the `CHECK`
+/// constraint allows, not just the one variant real callers currently use.
+#[tokio::test]
+async fn dcs_template_origin_round_trips_every_variant() {
+    let pool = connect_in_memory().await.unwrap();
+    let template = built_in_templates().remove(0);
+    let id = DcsTemplateRow::insert(&pool, &template, TemplateOrigin::Builtin, Utc::now())
+        .await
+        .unwrap()
+        .id;
+
+    for (raw, expected) in [
+        ("builtin", TemplateOrigin::Builtin),
+        ("catalog", TemplateOrigin::Catalog),
+        ("user", TemplateOrigin::User),
+    ] {
+        sqlx::query("UPDATE dcs_templates SET origin = ? WHERE id = ?")
+            .bind(raw)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let fetched = DcsTemplateRow::get(&pool, id).await.unwrap().unwrap();
+        assert_eq!(fetched.origin, expected);
+    }
 }
 
 /// Inserts one built-in template and returns its id, for tests further down the FK chain.
 async fn seed_template(pool: &sqlx::SqlitePool) -> i64 {
     let template = built_in_templates().remove(0);
-    DcsTemplateRow::insert(pool, &template, true, Utc::now())
+    DcsTemplateRow::insert(pool, &template, TemplateOrigin::Builtin, Utc::now())
         .await
         .unwrap()
         .id

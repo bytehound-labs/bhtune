@@ -1,34 +1,37 @@
-//! Seeds the built-in DCS/PLC templates (`bhtune_core::built_in_templates()`) into
-//! `dcs_templates` on startup, so a fresh database always has the four presets available
-//! without a separate "first run" wizard step.
+//! Seeds a catalog of DCS/PLC templates into `dcs_templates` on startup, so a fresh database
+//! always has the built-in presets available without a separate "first run" wizard step, and
+//! so a future user-supplied catalog file can be kept in sync the same way.
 //!
 //! This is an upsert, not a plain insert, because a template's suffix/unit conventions can
-//! be corrected in a later bhtune release, and an existing install's `dcs_templates` table
-//! should pick up that fix on upgrade rather than being frozen at whatever shipped when the
-//! row was first created.
+//! be corrected in a later catalog revision, and an existing install's `dcs_templates` table
+//! should pick up that fix on the next seed rather than being frozen at whatever was current
+//! when the row was first created.
 
-use bhtune_core::built_in_templates;
+use bhtune_core::{DcsTemplate, built_in_templates};
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
 
-use crate::{error::DbResult, models::DcsTemplateRow};
+use crate::{
+    error::DbResult,
+    models::{DcsTemplateRow, TemplateOrigin},
+};
 
-/// What [`seed_builtin_templates`] did with one built-in template.
+/// What [`seed_templates`] did with one catalog template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeedOutcome {
-    /// No row existed with this name; a new `is_builtin = 1` row was inserted.
+    /// No row existed with this name; a new row was inserted with the seeded `origin`.
     Inserted,
-    /// A row already existed with `is_builtin = 1`; its fields were overwritten to match the
-    /// current built-in definition.
+    /// A row already existed with the seeded `origin`; its fields were overwritten to match
+    /// the current catalog definition.
     Updated,
-    /// A row already existed with this name but `is_builtin = 0` — some past version of
-    /// this function, or a user, created a custom template that happens to share a name
-    /// with a built-in one. Left untouched: a user's own template is never silently
-    /// overwritten, even if its name collides with a preset's.
+    /// A row already existed with this name but a *different* `origin` — some other catalog
+    /// (or a user, via `bhtune template import`) created a template that happens to share a
+    /// name with one in this catalog. Left untouched: a row is never silently overwritten by
+    /// a seed pass it doesn't belong to, even if its name collides with one that does.
     SkippedUserOwned,
 }
 
-/// One template's seeding result, returned so a caller (`cli-commands`, the desktop app's
+/// One template's seeding result, returned so a caller (`cli-commands`, the web GUI's
 /// startup routine) can log what happened — `bhtune-db` itself has no logging dependency.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedResult {
@@ -36,24 +39,32 @@ pub struct SeedResult {
     pub outcome: SeedOutcome,
 }
 
-/// Upserts every [`bhtune_core::built_in_templates`] entry into `dcs_templates`.
+/// Upserts every template in `templates` into `dcs_templates`, all attributed to `origin`.
 ///
-/// Safe to call on every startup: inserts any missing built-in, brings existing
-/// `is_builtin = 1` rows in line with the current definition, and never touches a row whose
-/// name collides with a built-in but which isn't itself marked `is_builtin`.
-pub async fn seed_builtin_templates(
+/// Safe to call on every startup: inserts any missing template, brings existing rows that
+/// already carry `origin` in line with the current definition, and never touches a row whose
+/// name collides with one being seeded but which carries a *different* `origin` — that row
+/// belongs to a different catalog (or a user), not this seed pass.
+///
+/// The one caller today is [`seed_builtin_templates`], seeding
+/// [`bhtune_core::built_in_templates`] with [`TemplateOrigin::Builtin`]. `template-user-catalog`
+/// will be the first caller to seed a user-supplied catalog file with [`TemplateOrigin::Catalog`],
+/// reusing this exact upsert logic rather than duplicating it.
+pub async fn seed_templates(
     pool: &SqlitePool,
+    templates: Vec<DcsTemplate>,
+    origin: TemplateOrigin,
     now: DateTime<Utc>,
 ) -> DbResult<Vec<SeedResult>> {
     let mut results = Vec::new();
 
-    for template in built_in_templates() {
+    for template in templates {
         let outcome = match DcsTemplateRow::get_by_name(pool, &template.name).await? {
             None => {
-                DcsTemplateRow::insert(pool, &template, true, now).await?;
+                DcsTemplateRow::insert(pool, &template, origin, now).await?;
                 SeedOutcome::Inserted
             }
-            Some(existing) if existing.is_builtin => {
+            Some(existing) if existing.origin == origin => {
                 DcsTemplateRow::update(pool, existing.id, &template, now).await?;
                 SeedOutcome::Updated
             }
@@ -67,6 +78,16 @@ pub async fn seed_builtin_templates(
     }
 
     Ok(results)
+}
+
+/// Upserts every [`bhtune_core::built_in_templates`] entry into `dcs_templates` with
+/// [`TemplateOrigin::Builtin`]. A thin, ergonomic wrapper around [`seed_templates`] for the
+/// common startup case — see its docs for the upsert semantics.
+pub async fn seed_builtin_templates(
+    pool: &SqlitePool,
+    now: DateTime<Utc>,
+) -> DbResult<Vec<SeedResult>> {
+    seed_templates(pool, built_in_templates(), TemplateOrigin::Builtin, now).await
 }
 
 #[cfg(test)]
@@ -89,22 +110,14 @@ mod tests {
 
         let rows = DcsTemplateRow::list(&pool).await.unwrap();
         assert_eq!(rows.len(), built_in_templates().len());
-        assert!(rows.iter().all(|r| r.is_builtin));
+        assert!(rows.iter().all(|r| r.origin == TemplateOrigin::Builtin));
 
-        // Every seeded row round-trips back to exactly the template that was seeded --
-        // except `versions`/`description`/`source`, which `dcs_templates` has no columns
-        // for yet (`template-provenance` adds `versions_json`/`description`/`source` and
-        // makes this a full round-trip; until then `row_to_dcs_template` always returns
-        // them empty/`None`, so this test normalizes them away rather than losing coverage
-        // of every other field).
-        for mut template in built_in_templates() {
+        // Every seeded row round-trips back to exactly the template that was seeded.
+        for template in built_in_templates() {
             let row = DcsTemplateRow::get_by_name(&pool, &template.name)
                 .await
                 .unwrap()
                 .expect("seeded template should be found by name");
-            template.versions = Vec::new();
-            template.description = None;
-            template.source = None;
             assert_eq!(row.template, template);
         }
     }
@@ -157,7 +170,7 @@ mod tests {
 
         let mut custom = built_in_templates().remove(0); // "Yokogawa CentumVP"
         custom.manipulated_variable_suffix = "CUSTOM_MV".to_string();
-        let inserted = DcsTemplateRow::insert(&pool, &custom, false, now())
+        let inserted = DcsTemplateRow::insert(&pool, &custom, TemplateOrigin::User, now())
             .await
             .unwrap();
 
@@ -177,6 +190,6 @@ mod tests {
             still_custom.template.manipulated_variable_suffix,
             "CUSTOM_MV"
         );
-        assert!(!still_custom.is_builtin);
+        assert_eq!(still_custom.origin, TemplateOrigin::User);
     }
 }

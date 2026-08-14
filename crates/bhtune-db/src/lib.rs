@@ -29,7 +29,7 @@ pub mod seed;
 pub use backup::{RestoreOutcome, backup_to, restore_from};
 pub use error::{DbError, DbResult};
 pub use pool::{connect, connect_in_memory};
-pub use seed::{SeedOutcome, SeedResult, seed_builtin_templates};
+pub use seed::{SeedOutcome, SeedResult, seed_builtin_templates, seed_templates};
 // Every `models`/`pool` function already takes/returns `sqlx::SqlitePool` in its public
 // signature, so re-exporting the type here lets downstream crates (e.g. `bhtune-cli`) name
 // and hold onto a pool without adding their own direct `sqlx` dependency that would then

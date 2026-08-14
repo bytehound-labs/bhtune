@@ -271,7 +271,7 @@ mod tests {
     use bhtune_core::built_in_templates;
 
     use super::*;
-    use crate::models::DcsTemplateRow;
+    use crate::models::{DcsTemplateRow, TemplateOrigin};
 
     async fn template_names(pool: &SqlitePool) -> Vec<String> {
         let mut names: Vec<String> = sqlx::query_scalar("SELECT name FROM dcs_templates")
@@ -285,7 +285,7 @@ mod tests {
     async fn seed_one_template(pool: &SqlitePool, name: &str, now: DateTime<Utc>) {
         let mut template = built_in_templates().into_iter().next().unwrap();
         template.name = name.to_string();
-        DcsTemplateRow::insert(pool, &template, true, now)
+        DcsTemplateRow::insert(pool, &template, TemplateOrigin::Builtin, now)
             .await
             .unwrap();
     }

@@ -35,15 +35,20 @@ PRAGMA foreign_keys = ON;
 -- and its OPC tag-suffix naming convention. Mirrors
 -- `bhtune_core::template::DcsTemplate` field-for-field.
 --
--- `is_builtin = 1` rows are the four shipped presets (Yokogawa CentumVP,
--- Honeywell Experion, Schneider Modicon, Allen-Bradley PlantPAx), kept in
--- sync by `db-seed-templates` on every startup so template fixes ship via
--- app updates; `is_builtin = 0` rows are freely user-created/edited/deleted
--- and must never be touched by that sync.
+-- `origin = 'builtin'` rows are the four presets embedded in `bhtune-core`'s
+-- own catalog (Yokogawa CentumVP, Honeywell Experion, Schneider Modicon,
+-- Allen-Bradley PlantPAx); `origin = 'catalog'` rows come from a
+-- user-supplied catalog file (`template-user-catalog`). Both are kept in
+-- sync by `seed_templates` on every startup so template fixes ship via app
+-- updates. `origin = 'user'` rows are hand-imported (`bhtune template
+-- import`) or otherwise created by whoever is running bhtune, are freely
+-- user-created/edited/deleted, and must never be touched by that sync.
+-- Mirrors `bhtune_db::models::TemplateOrigin` exactly -- the same enum
+-- `tune_runs.template_origin` below snapshots.
 CREATE TABLE dcs_templates (
     id                              INTEGER PRIMARY KEY AUTOINCREMENT,
     name                             TEXT NOT NULL UNIQUE,
-    is_builtin                       INTEGER NOT NULL DEFAULT 0 CHECK (is_builtin IN (0, 1)),
+    origin                           TEXT NOT NULL CHECK (origin IN ('builtin', 'catalog', 'user')),
 
     revert_mode                      INTEGER NOT NULL CHECK (revert_mode IN (0, 1)),
     proportional_type                TEXT NOT NULL CHECK (proportional_type IN ('gain', 'band')),
@@ -70,6 +75,16 @@ CREATE TABLE dcs_templates (
     mode_auto_value                  TEXT NOT NULL,
     mode_attribute_program_value     TEXT,
     controller_action_direct_value   TEXT NOT NULL,
+
+    -- The DCS/PLC releases this template's tag conventions are known to
+    -- apply to (`bhtune_core::template::DcsTemplate::versions`, a JSON
+    -- array of strings -- no independent identity or SQL-filtering need of
+    -- its own, same reasoning as `loops.tags_json`), a short human
+    -- description, and a documentation citation for where the mapping came
+    -- from. All optional: a template is usable without any of them.
+    versions_json                    TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(versions_json)),
+    description                      TEXT,
+    source                           TEXT,
 
     created_at                       TEXT NOT NULL,
     updated_at                       TEXT NOT NULL

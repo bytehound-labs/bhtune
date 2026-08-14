@@ -45,14 +45,17 @@ setting, with console mirroring confined to stderr so it can never corrupt the `
 json` stdout contract — see "Logging" below. This completes all five `bhtune-cli` sub-phases;
 the CLI is a fully headless, scriptable adapter on its own, no server required.
 The Phase 6.5 live-plant safety hardening pass is done (see "Live-plant safety hardening"
-below). Phase 6.6's `template-catalog` is also done: the four built-in DCS templates moved
-from hardcoded Rust constructors to an embedded, contributable TOML catalog
-(`crates/bhtune-core/templates/builtin.toml`) with a `DcsTemplate::validate()` and new
-`versions`/`description`/`source` fields — see "Community DCS/PLC template catalog" below;
-`template-provenance`/`template-user-catalog`/`template-cli`/`template-docs` remain.
-`backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan reversed
-from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri code was
-written (see "Key architectural decisions"). See "Phases and todos" below for what's next.
+below). Phase 6.6's `template-catalog` and `template-provenance` are also done: the four
+built-in DCS templates moved from hardcoded Rust constructors to an embedded, contributable
+TOML catalog (`crates/bhtune-core/templates/builtin.toml`) with a `DcsTemplate::validate()`
+and new `versions`/`description`/`source` fields, and `dcs_templates` gained a real
+three-way `origin` column (`builtin`/`catalog`/`user`, replacing a plain `is_builtin`
+boolean) plus `versions_json`/`description`/`source` columns to store them — see "Community
+DCS/PLC template catalog" below; `template-user-catalog`/`template-cli`/`template-docs`
+remain. `backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan
+reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri
+code was written (see "Key architectural decisions"). See "Phases and todos" below for what's
+next.
 
 ## Design philosophy and scope discipline
 
@@ -225,10 +228,12 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   into `f64` math — avoids conversion noise and keeps golden-master replay comparisons exact.
 - **Seeding built-in templates is an upsert, keyed on ownership, not a one-time insert.**
   `bhtune_db::seed_builtin_templates` runs on every startup: it inserts any missing built-in
-  template, overwrites existing `is_builtin = 1` rows to match the current shipped definition
-  (so a suffix/unit fix in a later release reaches existing installs automatically), and never
-  touches a row whose name collides with a built-in's but which isn't itself `is_builtin` — a
-  user's own template is never silently overwritten just because it shares a name with a preset.
+  template, overwrites existing `origin = 'builtin'` rows to match the current shipped
+  definition (so a suffix/unit fix in a later release reaches existing installs
+  automatically), and never touches a row whose name collides with a built-in's but whose
+  `origin` differs — a user's own template (or one seeded from a different catalog) is never
+  silently overwritten just because it shares a name with a preset. See `template-provenance`
+  below for the three-way `origin` this generalizes from a plain `is_builtin` boolean.
 - **`history-query-api`'s repository layer covers the full run lifecycle, not just read-side
   querying.** `TuneRunRow` gained `start`/`record_initial_readings`/`complete`/`fail`/`abort`
   alongside `get`/`list`/`count` — a repository that could only read the rows it has no way to
@@ -1397,22 +1402,13 @@ and get a Rust PR reviewed.
 - **`toml` promoted to `[workspace.dependencies]`** now that both `bhtune-cli` (single-
   template JSON/TOML import/export) and `bhtune-core` (the embedded catalog) consume it, per
   the root `Cargo.toml`'s own documented convention of promoting on a second consumer.
-- **`bhtune-db` fallout, deliberately a temporary placeholder.** `DcsTemplate` is `bhtune-
-  db`'s own row type for `dcs_templates` (no separate DTO — see `db-schema`'s design note),
-  so `row_to_dcs_template` had to start constructing the three new fields; since
-  `dcs_templates` has no columns for them yet, they're always read back as empty/`None`,
-  documented in place as a stopgap pending `template-provenance` (which adds real
-  `versions_json`/`description`/`source` columns). Nothing has ever been persisted for these
-  fields, so this loses no data. Two tests asserting full `DcsTemplate` equality between a
-  `built_in_templates()` value and a value read back from a `dcs_templates` row
-  (`bhtune-db`'s `seed::tests::seeds_all_builtins_into_empty_database` and `tests/schema.rs`'s
-  `dcs_template_round_trips_every_built_in_template`) were updated to normalize those three
-  fields to their placeholder values on the comparison side, each with a comment pointing at
-  `template-provenance` as the real fix. `tests/history_query.rs`'s equivalent assertion
-  (`started.template == sample_template()`) needed **no change at all** — it round-trips
-  through `tune_runs.template_snapshot_json` (a full JSON serialization of `DcsTemplate`, per
-  `safety-run-snapshot`'s design), which stays naturally lossless for any new `serde` field
-  with no database column of its own to fall behind.
+- **`bhtune-db` fallout, resolved by `template-provenance`.** `DcsTemplate` is `bhtune-db`'s
+  own row type for `dcs_templates` (no separate DTO — see `db-schema`'s design note), so
+  `row_to_dcs_template` had to start constructing the three new fields the moment
+  `template-catalog` added them to `DcsTemplate` itself. They were read back as empty/`None`
+  placeholders for one commit, documented in place as a stopgap; `template-provenance` (below)
+  closed the gap immediately after by adding real `versions_json`/`description`/`source`
+  columns, so every field now round-trips through actual storage rather than a placeholder.
 
 **Testing approach.** 24 tests in `bhtune-core/src/template.rs` (18 new): the embedded
 catalog parses and every built-in validates; each built-in's `versions`/`description`/
@@ -1423,6 +1419,48 @@ PV suffix, empty MV suffix, mode suffix missing manual value, mode suffix missin
 mode-attribute suffix missing program value); `TemplateError`'s `Display`/`std::error::Error`/
 `source()` behavior is covered for every variant, not just the ones a validation branch
 happens to construct. `cargo llvm-cov` confirms 100% line coverage of the new code.
+
+### `dcs_templates.origin` replaces `is_builtin` (`template-provenance`)
+
+`template-catalog` (above) taught `DcsTemplate` that a template can come from more than one
+place, but `dcs_templates` itself still only had a two-state `is_builtin BOOLEAN` — no room
+for a third state, which `template-user-catalog` (still pending) needs: a row seeded from a
+site's own `templates.toml` is neither a shipped built-in nor a hand-imported user template,
+and treating it as either would break one of the two. Done now, pre-release, specifically to
+avoid a later `ALTER TABLE` migration once real installs exist.
+
+- **`origin TEXT CHECK (origin IN ('builtin', 'catalog', 'user'))`** replaces `is_builtin
+  INTEGER`. `bhtune_db::models::TemplateOrigin` (`Builtin`/`Catalog`/`User`) — previously
+  defined only for `tune_runs.template_origin` (`safety-run-snapshot`, with a temporary
+  `from_is_builtin` bridge method) — moved to be `dcs_templates`' own type, since that's now
+  its primary use; `tune_runs.template_origin` reuses the same enum for its run-start
+  snapshot, and `from_is_builtin` was deleted as dead code now that `dcs_templates.origin` is
+  real. `builtin` and `catalog` rows are re-upserted from their respective files on every
+  startup; `user` rows (hand-imported or, eventually, GUI-created) are never auto-touched.
+- **New `versions_json`/`description`/`source` columns** replace the placeholder empty/`None`
+  values `template-catalog` had to read back (see the "resolved by `template-provenance`"
+  bullet above) with the template's real, already-authored data — `versions_json` follows the
+  same `CHECK (json_valid(...))`-plus-`serde_json`-round-trip idiom as `tags_json`/
+  `template_snapshot_json`, needing no new `DbError` variant (`InvalidJsonShape`'s doc comment
+  was broadened to mention it).
+- **`seed_builtin_templates` generalized into `seed_templates(pool, templates, origin, now)`**,
+  with `seed_builtin_templates` kept as a thin wrapper (`seed_templates(pool,
+  built_in_templates(), TemplateOrigin::Builtin, now)`) rather than renamed, since `bhtune-cli`
+  already has established callers of the original name. `template-user-catalog` will be the
+  first real caller of `seed_templates` directly, with `TemplateOrigin::Catalog`. The
+  `SkippedUserOwned` outcome generalizes the same way the boolean did: a row exists but its
+  `origin` differs from the one being seeded, so it belongs to a different catalog/seed pass
+  and is left untouched.
+- **Three new tests in `tests/schema.rs`** cover what the schema alone had never proven: that
+  the `origin` `CHECK` constraint actually rejects an invalid value (via a raw `UPDATE`, since
+  `dcs_templates` has too many non-defaulted `NOT NULL` columns to hand-write a full raw
+  `INSERT` the way the simpler tables' precedent tests do), that all three `origin`
+  variants — including `Catalog`, which no production code path produces yet — round-trip
+  through `DcsTemplateRow::get`, and that `row_to_dcs_template`'s `versions_json` decode-error
+  path actually fires for JSON that is syntactically valid (satisfying the `CHECK`) but the
+  wrong shape (`"123"`, a bare JSON number, isn't a `Vec<String>`) — the `CHECK` constraint
+  alone only proves bad *syntax* is rejected at the SQL layer, not that the Rust-level shape
+  mismatch is handled once past it.
 
 ## Validation strategy: golden-master replay
 
@@ -1577,7 +1615,7 @@ that binary does something real and gains its own targeted tests.
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness` | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
-| `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; see "Live-plant safety hardening" below) |
+| `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
@@ -1626,9 +1664,10 @@ that binary does something real and gains its own targeted tests.
    sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
    own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done —
    see "Live-plant safety hardening" above. Phase 6.6, turning the built-in DCS/PLC templates
-   into a community-contributable catalog, has started: `template-catalog` (`bhtune-core`,
-   done — see "Community DCS/PLC template catalog" above); `template-provenance` (`bhtune-db`
-   schema), `template-user-catalog` (auto-loading a user catalog file), `template-cli`
+   into a community-contributable catalog, has started: `template-catalog` (`bhtune-core`) and
+   `template-provenance` (`bhtune-db` schema: a real three-way `origin` column plus
+   `versions_json`/`description`/`source`) are done — see "Community DCS/PLC template catalog"
+   above; `template-user-catalog` (auto-loading a user catalog file), `template-cli`
    (multi-template import/export, `template delete`), and `template-docs` remain.
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
