@@ -200,7 +200,9 @@ Everything in this section is deferred past v1, not permanently out of scope.
       the same job.
 - [x] REQUIRED — `cli-safety` guardrails for unattended/scheduled tuning: mandatory wall-clock
       timeout with automatic abort-and-restore, explicit opt-in required for any run that writes
-      PID constants without a human present. Undergoing a further live-plant safety hardening
-      pass (Phase 6.5) covering cancellation, guaranteed restoration, input validation, OPC
-      quality enforcement, and PID write-back rollback — see AGENTS.md's "Live-plant safety
-      hardening" section.
+      PID constants without a human present. A follow-up live-plant safety hardening pass
+      (Phase 6.5) closed nine further findings covering Ctrl+C/timeout cancellation reaching an
+      in-flight backend call, guaranteed restoration on every exit path, input validation, OPC
+      quality enforcement, PID write-back pre-read/verify/audit/rollback, a WAL-safe database
+      restore, an `--output json` stdout contract, and a per-run template/tag snapshot — see
+      AGENTS.md's "Live-plant safety hardening" section.

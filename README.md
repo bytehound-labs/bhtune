@@ -121,8 +121,13 @@ Windows Task Scheduler, CI):
   constants back without the interactive confirmation prompt. It requires **`--yes`** — the
   combination is rejected before any backend connection or database write, so an unattended
   write-back is always an explicit, deliberate choice.
-- **`--output json`** (also on `history list`/`show`/`revert`) prints a single machine-readable
-  JSON object or array to stdout instead of the plain-text table, for scripting.
+- **`--output json`** (also on `history list`/`show`/`revert`) prints exactly one
+  machine-readable JSON value to stdout instead of the plain-text table, and nothing else —
+  no prose, no interactive prompts — ever reaches stdout in that mode, so `stdout | jq` (or
+  any JSON parser) always succeeds. `tune`/`simulate` fold the reason a PID write-back was
+  skipped or failed into a `write_back_detail` field rather than only printing it, and skip
+  the interactive write-back prompt entirely when `--write-pid` wasn't also given, since
+  there's no human present in a scripted run to answer it.
 - **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
   (bad flags, unreachable backend/database), `2` aborted (Ctrl+C or `--timeout-secs` elapsing),
   `3` the test completed but the requested PID write-back failed, `4` the test was forcibly

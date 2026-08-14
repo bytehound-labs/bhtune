@@ -747,16 +747,18 @@ relay_amp_before_any_backend_or_db_io` mirrors the same "no I/O before the fail-
 pattern now also proven for `--write-pid`/`--yes` (`run_rejects_write_pid_without_yes_before_
 starting_the_tune`).
 
-### Live-plant safety hardening (in progress)
+### Live-plant safety hardening (done)
 
 A post-`cli-logging` review of the live-tuning path (`commands/tune.rs`) surfaced nine
-further findings before the CLI's first real trial against live plant equipment: Ctrl+C/
-timeout cancellation not reaching an in-flight backend call, no guaranteed restore on every
-exit path, missing input validation (e.g. `--cycles-count 0` panics mid-run), OPC quality
-never checked, PID write-back with no pre-read/rollback, `bhtune-db`'s `restore_from` unsafe
-under an active WAL and wrong on Windows, `--output json` emitting prose ahead of the JSON
-object, and no template/tag snapshot on a recorded run. Being remediated one finding at a
-time; this section is updated as each lands, with a full pass once all are done:
+findings before the CLI's first real trial against live plant equipment: Ctrl+C/timeout
+cancellation not reaching an in-flight backend call, no guaranteed restore on every exit
+path, missing input validation (e.g. `--cycles-count 0` panicked mid-run), OPC quality never
+checked, PID write-back with no pre-read/rollback, `bhtune-db`'s `restore_from` unsafe under
+an active WAL and wrong on Windows, `--output json` emitting prose ahead of the JSON object,
+and no template/tag snapshot on a recorded run. All nine are closed, each landed as its own
+commit with its own test coverage; the per-finding writeups below are the permanent record
+of what changed and why, kept rather than trimmed once "done" since they're the design
+rationale for code that still exists (not a changelog of the review itself):
 
 - **`--dry-run` removed entirely** — done. It was documented as never touching the DCS, but
   actually forced the full mode transition and stroked the MV through a complete relay test,
@@ -1468,7 +1470,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; see "Live-plant safety hardening" below) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. Undergoing a live-plant safety hardening pass (Phase 6.5) after a post-`cli-logging` review; see "Live-plant safety hardening" below |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -1514,8 +1516,8 @@ that binary does something real and gains its own targeted tests.
    above), and structured logging (`cli-logging`, done: `tracing`/`tracing-subscriber`
    to a rotating file plus stderr-only console mirroring — see "Logging" above). All five
    sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
-   own, with no server required. Now undergoing a live-plant safety hardening pass (Phase
-   6.5) — see "Live-plant safety hardening" above.
+   own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done —
+   see "Live-plant safety hardening" above.
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS
@@ -1561,10 +1563,10 @@ that binary does something real and gains its own targeted tests.
   running process removes human supervision (no operator watching the trend, able to hit Stop)
   while still stroking a real control valve. `cli-safety` (done — see "Safety" above) ships
   real relay-amp range validation and a mandatory wall-clock timeout with automatic
-  abort-and-restore; none of it is optional polish. A further live-plant safety hardening pass
-  (Phase 6.5, in progress — see "Live-plant safety hardening" above) is closing nine more
-  findings from a follow-up review, including making Ctrl+C/timeout cancellation reach an
-  in-flight backend call, guaranteeing a restore on every exit path, and enforcing OPC quality.
+  abort-and-restore; none of it is optional polish. A follow-up live-plant safety hardening pass
+  (Phase 6.5, done — see "Live-plant safety hardening" above) closed nine more findings from a
+  further review, including making Ctrl+C/timeout cancellation reach an in-flight backend call,
+  guaranteeing a restore on every exit path, and enforcing OPC quality.
 - **Chart library**: `uPlot` over `Recharts` for the frontend trend chart — handles high-rate
   streaming data (multiple updates/second) far better.
 - **Naming**: `bytehound` is an established Rust memory-profiler brand. `bhtune` avoids a direct
