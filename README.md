@@ -121,8 +121,8 @@ Windows Task Scheduler, CI):
   constants back without the interactive confirmation prompt. It requires **`--yes`** — the
   combination is rejected before any backend connection or database write, so an unattended
   write-back is always an explicit, deliberate choice.
-- **`--output json`** (also on `history list`/`show`) prints a single machine-readable JSON
-  object or array to stdout instead of the plain-text table, for scripting.
+- **`--output json`** (also on `history list`/`show`/`revert`) prints a single machine-readable
+  JSON object or array to stdout instead of the plain-text table, for scripting.
 - **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
   (bad flags, unreachable backend/database), `2` aborted (Ctrl+C or `--timeout-secs` elapsing),
   `3` the test completed but the requested PID write-back failed, `4` the test was forcibly
@@ -184,6 +184,10 @@ unattended runs against live plant equipment fail safe:
   value, the written value, and the confirmed readback for every constant, plus whether a
   rollback was needed and whether it succeeded — a rollback that itself fails is called out
   explicitly, since it means the loop may hold constants that need fixing by hand.
+- **A past write-back can be undone with `bhtune history revert <run-id>`** — it writes the
+  run's recorded pre-write values back to the live loop, under the same pre-read/verify/audit
+  behavior and the same `--yes` confirmation gate as the original write-back. Useful when a
+  write-back turns out to have been wrong days later and nobody wrote the old numbers down.
 
 ## Logging
 

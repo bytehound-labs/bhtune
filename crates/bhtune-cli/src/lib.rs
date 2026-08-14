@@ -205,7 +205,7 @@ async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCod
                 Command::Template { command } => commands::template::run(&pool, command)
                     .await
                     .map(|()| ExitCode::SUCCESS),
-                Command::History { command } => commands::history::run(&pool, command)
+                Command::History { command } => commands::history::run(&pool, command, &config)
                     .await
                     .map(|()| ExitCode::SUCCESS),
                 Command::Export(args) => commands::export::run(&pool, args)

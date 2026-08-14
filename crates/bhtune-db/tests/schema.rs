@@ -537,10 +537,10 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
     sqlx::query(
         r#"
         INSERT INTO tune_writes (
-            run_id, response_level, written_at, proportional_written, integral_written,
+            run_id, response_level, written_at, kind, proportional_written, integral_written,
             derivative_written, proportional_readback, integral_readback, derivative_readback,
             success
-        ) VALUES (?, 'moderate', ?, 3.0, 4.0, 0.0, 3.0, 4.0, 0.0, 1)
+        ) VALUES (?, 'moderate', ?, 'write', 3.0, 4.0, 0.0, 3.0, 4.0, 0.0, 1)
         "#,
     )
     .bind(run_id)
@@ -553,9 +553,25 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
     sqlx::query(
         r#"
         INSERT INTO tune_writes (
-            run_id, response_level, written_at, proportional_written, integral_written,
+            run_id, response_level, written_at, kind, proportional_written, integral_written,
             derivative_written, success, error_message
-        ) VALUES (?, 'aggressive', ?, 1.0, 2.0, 0.0, 0, 'write rejected by DCS')
+        ) VALUES (?, 'aggressive', ?, 'write', 1.0, 2.0, 0.0, 0, 'write rejected by DCS')
+        "#,
+    )
+    .bind(run_id)
+    .bind(Utc::now())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // A revert, undoing an earlier write -- same shape, `kind = 'revert'`.
+    sqlx::query(
+        r#"
+        INSERT INTO tune_writes (
+            run_id, response_level, written_at, kind, proportional_written, integral_written,
+            derivative_written, proportional_readback, integral_readback, derivative_readback,
+            success
+        ) VALUES (?, 'moderate', ?, 'revert', 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1)
         "#,
     )
     .bind(run_id)
@@ -566,8 +582,8 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
 
     let bad_success = sqlx::query(
         r#"
-        INSERT INTO tune_writes (run_id, response_level, written_at, proportional_written, integral_written, derivative_written, success)
-        VALUES (?, 'sluggish', ?, 1.0, 2.0, 0.0, 2)
+        INSERT INTO tune_writes (run_id, response_level, written_at, kind, proportional_written, integral_written, derivative_written, success)
+        VALUES (?, 'sluggish', ?, 'write', 1.0, 2.0, 0.0, 2)
         "#,
     )
     .bind(run_id)
@@ -577,6 +593,21 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
     assert!(
         bad_success.is_err(),
         "success must be constrained to 0 or 1"
+    );
+
+    let bad_kind = sqlx::query(
+        r#"
+        INSERT INTO tune_writes (run_id, response_level, written_at, kind, proportional_written, integral_written, derivative_written, success)
+        VALUES (?, 'sluggish', ?, 'undo', 1.0, 2.0, 0.0, 1)
+        "#,
+    )
+    .bind(run_id)
+    .bind(Utc::now())
+    .execute(&pool)
+    .await;
+    assert!(
+        bad_kind.is_err(),
+        "kind must be constrained to 'write' or 'revert'"
     );
 
     sqlx::query("DELETE FROM tune_runs WHERE id = ?")

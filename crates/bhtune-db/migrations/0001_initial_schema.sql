@@ -281,6 +281,13 @@ CREATE TABLE tune_writes (
     run_id                   INTEGER NOT NULL REFERENCES tune_runs(id) ON DELETE CASCADE,
     response_level           TEXT NOT NULL CHECK (response_level IN ('aggressive', 'moderate', 'sluggish')),
     written_at               TEXT NOT NULL,
+    -- 'write' is a normal write-back of freshly calculated PID parameters
+    -- (`maybe_write_back`); 'revert' is `bhtune history revert` writing a
+    -- previous 'write' row's `*_previous` values back, undoing it. Both
+    -- kinds share this table since they're the same shape (pre-read, write
+    -- and verify each constant, audit the outcome) -- only which values are
+    -- being written differs.
+    kind                     TEXT NOT NULL CHECK (kind IN ('write', 'revert')),
 
     -- Read back *before* any write is attempted, so the pre-write state is
     -- always known if a rollback later turns out to be necessary. NULL only
@@ -312,11 +319,14 @@ CREATE TABLE tune_writes (
     -- written before the failure, so a best-effort rollback to the
     -- `*_previous` values was attempted. NULL means "no rollback was
     -- applicable" -- covers both a fully successful write (nothing to roll
-    -- back) and a pre-read failure (nothing was ever written). See
-    -- `bhtune history revert` for reverting a *successful* write later.
+    -- back) and a pre-read failure (nothing was ever written). Always NULL
+    -- for a `kind = 'revert'` row -- a revert does not itself chain into a
+    -- further rollback. See `bhtune history revert` for reverting a
+    -- *successful* write later.
     rollback_state            TEXT CHECK (rollback_state IN ('succeeded', 'failed')),
     rollback_error            TEXT
 );
+
 CREATE INDEX idx_tune_writes_run ON tune_writes(run_id);
 
 -- App-wide key/value settings -- e.g. the `history-retention` policy --

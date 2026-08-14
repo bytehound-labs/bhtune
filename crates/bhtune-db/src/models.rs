@@ -1198,6 +1198,9 @@ pub struct TuneWriteRow {
     pub run_id: i64,
     pub response_level: ResponseLevel,
     pub written_at: DateTime<Utc>,
+    /// Whether this row is a normal write-back or `bhtune history revert` undoing one. See
+    /// [`WriteKind`].
+    pub kind: WriteKind,
     /// The P/I/D values read from the backend *before* any write was attempted. `None` only
     /// when the pre-read itself failed -- a hard stop before any write, so nothing else on
     /// this row was ever attempted either (`success = false`, every other field below `None`).
@@ -1216,7 +1219,8 @@ pub struct TuneWriteRow {
     /// Set only when `success = false` and at least one constant had already been written
     /// before the failure, so a best-effort rollback to `previous` was attempted. `None`
     /// means rollback did not apply -- either every constant wrote successfully (`success =
-    /// true`) or the pre-read failed before any write was attempted.
+    /// true`) or the pre-read failed before any write was attempted. Always `None` for a
+    /// `kind = Revert` row.
     pub rollback_state: Option<RollbackState>,
     pub rollback_error: Option<String>,
 }
@@ -1246,6 +1250,21 @@ pub enum RollbackState {
     Failed,
 }
 
+/// Distinguishes a normal write-back from `bhtune history revert` undoing an earlier one.
+/// Both share [`TuneWriteRow`]'s exact shape -- pre-read, write-and-verify each constant,
+/// audit the outcome -- so they live in the same table rather than a second near-duplicate
+/// one; `kind` is the one column that tells them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteKind {
+    /// A write-back of freshly calculated PID parameters (`maybe_write_back`).
+    Write,
+    /// `bhtune history revert` writing an earlier `Write` row's `previous` values back,
+    /// undoing it. Never itself has a `rollback_state` -- a revert does not chain into a
+    /// further rollback.
+    Revert,
+}
+
 /// Everything needed to record one write-back attempt, successful or not. Built up by the
 /// caller as it works through the sequential pre-read / write-and-verify / rollback steps,
 /// then persisted in a single [`TuneWriteRow::insert`] call -- replacing the old two-outcome
@@ -1256,6 +1275,7 @@ pub enum RollbackState {
 pub struct NewTuneWrite {
     pub response_level: ResponseLevel,
     pub written_at: DateTime<Utc>,
+    pub kind: WriteKind,
     pub previous: Option<WriteReadback>,
     pub proportional_written: Option<f32>,
     pub integral_written: Option<f32>,
@@ -1270,13 +1290,16 @@ pub struct NewTuneWrite {
 }
 
 impl NewTuneWrite {
-    /// Starts a record with every previous/written/readback/rollback field unset -- callers
-    /// fill in fields (all `pub`) as they progress through the pre-read, write-and-verify,
-    /// and rollback steps, then pass the result to [`TuneWriteRow::insert`].
+    /// Starts a record with every previous/written/readback/rollback field unset and
+    /// `kind = WriteKind::Write` -- callers fill in fields (all `pub`) as they progress
+    /// through the pre-read, write-and-verify, and rollback steps, then pass the result to
+    /// [`TuneWriteRow::insert`]. A `bhtune history revert` caller should set `kind =
+    /// WriteKind::Revert` immediately after constructing.
     pub fn new(response_level: ResponseLevel, written_at: DateTime<Utc>) -> Self {
         NewTuneWrite {
             response_level,
             written_at,
+            kind: WriteKind::Write,
             previous: None,
             proportional_written: None,
             integral_written: None,
@@ -1302,18 +1325,19 @@ impl TuneWriteRow {
         let row = sqlx::query(
             r#"
             INSERT INTO tune_writes (
-                run_id, response_level, written_at,
+                run_id, response_level, written_at, kind,
                 proportional_previous, integral_previous, derivative_previous,
                 proportional_written, integral_written, derivative_written,
                 proportional_readback, integral_readback, derivative_readback,
                 success, error_message, rollback_state, rollback_error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
         .bind(run_id)
         .bind(enum_to_text(&new.response_level))
         .bind(new.written_at)
+        .bind(enum_to_text(&new.kind))
         .bind(new.previous.map(|p| p.proportional))
         .bind(new.previous.map(|p| p.integral))
         .bind(new.previous.map(|p| p.derivative))
@@ -1348,6 +1372,7 @@ impl TuneWriteRow {
 
 fn row_to_tune_write(row: SqliteRow) -> DbResult<TuneWriteRow> {
     let response_level: String = row.try_get("response_level").map_err(DbError::Query)?;
+    let kind: String = row.try_get("kind").map_err(DbError::Query)?;
     let proportional_previous: Option<f32> = row
         .try_get("proportional_previous")
         .map_err(DbError::Query)?;
@@ -1373,6 +1398,7 @@ fn row_to_tune_write(row: SqliteRow) -> DbResult<TuneWriteRow> {
         run_id: row.try_get("run_id").map_err(DbError::Query)?,
         response_level: text_to_enum("response_level", &response_level)?,
         written_at: row.try_get("written_at").map_err(DbError::Query)?,
+        kind: text_to_enum("kind", &kind)?,
         previous,
         proportional_written: row
             .try_get("proportional_written")

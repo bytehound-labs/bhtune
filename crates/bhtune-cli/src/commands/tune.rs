@@ -1608,8 +1608,10 @@ async fn persist_results(
 /// -- `safety-writeback-rollback`'s pre-read step. Reading all three is a hard stop on the
 /// first failure, mirroring findings 4/5's "refuse before mutating" pattern, and has the
 /// useful side effect of guaranteeing that a rollback, if one later turns out to be
-/// necessary, always has a known-good value to roll back to.
-async fn read_previous_pid_values(
+/// necessary, always has a known-good value to roll back to. `pub(crate)`: also reused by
+/// `commands::history::revert`, which needs the identical pre-read step before writing a
+/// past run's recorded values back.
+pub(crate) async fn read_previous_pid_values(
     backend: &dyn Backend,
     p_tag: &str,
     i_tag: &str,
@@ -1648,8 +1650,9 @@ fn pid_value_within_tolerance(requested: f32, actual: f32) -> bool {
 /// rejected write both surface the same way) and [`read_f32`] (so a poor-quality or
 /// non-numeric readback is never mistaken for confirmation). `label` is only used to prefix
 /// the error message so a caller writing several constants in sequence can tell which one
-/// failed.
-async fn write_and_verify_pid_value(
+/// failed. `pub(crate)`: also reused by `commands::history::revert` for the identical
+/// write-and-verify step against a run's recorded previous values.
+pub(crate) async fn write_and_verify_pid_value(
     backend: &dyn Backend,
     label: &str,
     tag: &str,

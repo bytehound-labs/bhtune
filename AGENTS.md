@@ -29,7 +29,7 @@ the bridge, bypassing the tuning engine). `cli-config` is done: `CLI flag > env 
 config file > platform default` precedence for the database path, opcda-bridge gateway
 address, and default OPC server, mirroring `opcda-bridge-client`'s own config conventions
 (see "Config precedence" below). `cli-automation` is done: `--yes`/`--write-pid`/
-`--output json` on `tune`/`simulate`, `--output json` on `history list`/`show`, and
+`--output json` on `tune`/`simulate`, `--output json` on `history list`/`show`/`revert`, and
 distinguished process exit codes (`EXIT_ABORTED`, `EXIT_WRITE_BACK_FAILED`) so scheduled/
 scripted callers can tell a Ctrl+C abort or a failed PID write-back apart from a clean
 completion without parsing stdout (see "Automation" below). `cli-safety` is done: real
@@ -503,6 +503,11 @@ discretization and its numerical cross-check against that reference.
   `--offset` pagination) and show one run's full detail (config, initial readings, calculated
   results, write-back audit rows), via `history-query-api`'s `TuneRunRow`/`TuneResultRow`/
   `TuneWriteRow` queries.
+- **`bhtune history revert <run-id>`** — undoes a run's last PID write-back by writing its
+  recorded pre-write values back to the live loop, under the same `--yes` confirmation gate
+  as the original write-back; see the "`bhtune history revert <run-id>` — done" bullet under
+  "Live-plant safety hardening" below for the full validation/behavior design
+  (`safety-writeback-rollback`).
 - **`bhtune export <run_id>`** — exports one run's recorded samples as CSV or JSON
   (`--format`), to stdout or `--output <path>`.
 - **`bhtune opc read|write|browse`** — low-level passthrough straight to the `opcda-bridge`
@@ -620,7 +625,7 @@ database path — not a real gap.
 ## Automation (`cli-automation`)
 
 `bhtune tune`/`bhtune simulate` support fully non-interactive operation for scheduled/scripted
-use (`cron`, Windows Task Scheduler, CI), and `bhtune history list`/`show` support
+use (`cron`, Windows Task Scheduler, CI), and `bhtune history list`/`show`/`revert` support
 machine-readable output for the same callers:
 
 - **`--yes`** — required before `--write-pid` is honored at all; see below.
@@ -633,11 +638,13 @@ machine-readable output for the same callers:
   normal CLI validation), the write-back is reported as failed rather than attempted, exactly
   as an invalid interactive selection already was.
 - **`--output <table|json>`** — on `tune`/`simulate`, the final summary line; on
-  `history list`/`show`, the whole listing/detail. `table` is the default and preserves the
-  original plain-text shape exactly. `json` prints one `serde_json::to_string_pretty` object
-  (or array, for `history list`) to stdout — never a mix of the two on one invocation. Local
-  DTOs (`RunSummaryJson`/`RunListJson`/`InitialReadingsJson`/`ResultJson`/`WriteJson`/
-  `RunDetailJson` in `commands/history.rs`) project the `bhtune-db` row types that don't
+  `history list`/`show`, the whole listing/detail; on `history revert`, the pre-attempt
+  status line and the final outcome (a `RevertJson` object). `table` is the default and
+  preserves the original plain-text shape exactly. `json` prints one
+  `serde_json::to_string_pretty` object (or array, for `history list`) to stdout — never a
+  mix of the two on one invocation. Local DTOs (`RunSummaryJson`/`RunListJson`/
+  `InitialReadingsJson`/`ResultJson`/`WriteJson`/`RunDetailJson`/`RevertJson`/
+  `RevertedTargetJson` in `commands/history.rs`) project the `bhtune-db` row types that don't
   themselves derive `Serialize` (DB row shape stays deliberately decoupled from any API/CLI
   JSON shape); `bhtune-core` enums and `LoopConfig`/`TuneBackend`/`TuneOutcome` already derive
   `Serialize` and are reused directly.
@@ -952,11 +959,11 @@ time; this section is updated as each lands, with a full pass once all are done:
     ever attempted — either nothing was mutated, or the run is still in progress), surfaced
     in `bhtune history show`'s table and JSON output. **Not yet done:** the
     `bhtune restore-loop --run <id>` replay command the design calls for, to actually act on
-    that persisted intent later. Deliberately deferred and bundled with finding 6's
-    `bhtune history revert <run-id>` (`safety-writeback-rollback`, not yet implemented) —
-    both commands have the same shape (read historical values off a past run, write them back
-    to the live loop, under the same confirmation gate), so they're worth building together
-    rather than as two near-duplicate one-off commands.
+    that persisted intent later. Deliberately deferred — finding 6's own "read historical
+    values, write them back under a confirmation gate" command,
+    `bhtune history revert <run-id>`, is now implemented (see below), and shares enough
+    shape with a future `restore-loop` that it is worth revisiting whether the two should
+    share code once `restore-loop` is actually built, rather than assuming up front.
 
   **Testing approach.** A direct unit test on `restore()` (bypassing `execute()` entirely,
   via a hand-constructed fully-armed `MutationGuard` and a backend where all four writes
@@ -1042,10 +1049,64 @@ time; this section is updated as each lands, with a full pass once all are done:
   6's tolerance check compose correctly rather than the latter accidentally re-imposing a
   `Good`-only rule of its own). `pid_value_within_tolerance` also has direct unit
   tests pinning down its exact-match, relative-band, absolute-floor-near-zero, and
-  negative-value behavior. **Not yet done:** the `bhtune history revert <run-id>` command
-  itself — see the previous bullet's note on bundling it with the deferred
-  `restore-loop` replay, since both share the same "read historical values, write them back
-  under a confirmation gate" shape.
+  negative-value behavior.
+
+- **`bhtune history revert <run-id>` — done** (`commands::history::revert`,
+  `bhtune_db::models::WriteKind`). Undoes a past PID write-back by writing the run's
+  recorded pre-write values back to the live loop, so a write-back that turns out to have
+  been wrong can be corrected days later without anyone having written the old numbers down
+  by hand.
+  - **`tune_writes` gained a `kind` discriminant** (`WriteKind::Write`/`Revert`, `CHECK`
+    constrained, defaulting to `Write` in `NewTuneWrite::new`) rather than a new table — a
+    revert is structurally identical to a write-back (same pre-read/write/verify/audit
+    shape), just run against a historical target instead of a freshly calculated one, and
+    `tune_writes` has no `UNIQUE (run_id, response_level)` constraint blocking a second row
+    at the same response level. `history show`'s write-back audit listing now prints each
+    row's kind alongside its response level (`Write (Moderate level)` /
+    `Revert (Moderate level)`) so a revert is never mistaken for the original write.
+  - **Validates before ever connecting to the backend.** In order: the run exists; the run
+    used the `Opcda` backend (a `Simulator`/`Replay` run has no live loop to revert against);
+    the run has at least one recorded `Write`-kind row (nothing to revert otherwise); that
+    row's `previous` is `Some` (a write whose own pre-read failed has nothing recorded to
+    revert to); `--yes` was passed (reverting writes to a live loop, same confirmation gate
+    as the original write-back); the run's snapshotted tags have all three PID constant tags
+    configured. Only after all six checks pass does it resolve `--bridge-host`/`--server`
+    and call `OpcDaBackend::connect` — so four of these checks are exercised in tests with no
+    mock backend running at all, and even the connection-failure path itself is a genuine
+    test (an unreachable host, proving every earlier check passed).
+  - **Reuses `commands::tune`'s own pre-read/write-and-verify helpers directly**
+    (`read_previous_pid_values`, `write_and_verify_pid_value`, promoted from private to
+    `pub(crate)` for this purpose) rather than re-implementing them, so a revert's pre-read,
+    tolerance check, and per-constant failure semantics are identical to the original
+    write-back's by construction, not by parallel maintenance. Like the original write-back,
+    a revert pre-reads the loop's *current* live values first and records them as its own
+    `previous` — so a revert that turns out to be wrong can itself be undone by reverting
+    again — then writes and verifies Proportional, Integral, and Derivative in order,
+    stopping at the first failure. A revert never chains a nested rollback of itself
+    (`rollback_state` stays `None` on every revert row); a partially-failed revert is
+    reported and audited, matching a partially-failed original write-back's "roll back only
+    what was confirmed" philosophy being a deliberately separate concern from "undo an old
+    write-back on request".
+  - **Format-aware reporting**, matching the "Option B" design used for the original
+    write-back: a `Table`-mode status line before attempting the revert and a plain-text
+    summary after; a `RevertJson`/`RevertedTargetJson` object (run id, response level, the
+    target P/I/D values, success, and an error message) on `--output json`, with no prose
+    printed ahead of it.
+
+  **Testing approach.** Eleven dedicated tests. Six need no mock backend at all, since
+  `revert`'s validation runs before it ever connects: no such run; the run used a
+  non-`Opcda` backend; no `Write`-kind row recorded; the recorded write's `previous` is
+  `None`; `--yes` not passed; the run's tags have no PID constant tags configured; and a
+  genuine connection failure (an unreachable host, proving every check above passed). Two
+  use the shared mock gRPC `Bridge` service from `crate::test_support`: a full success
+  (asserting the resulting row's `kind = Revert`, all three written/readback values, and
+  `rollback_state = None`), and a partial failure using the mock's existing
+  `failing_read_from_call(n)` builder to fail exactly Integral's post-write verification
+  readback (call 5 of 6: three pre-reads plus Proportional's own verification succeed
+  first), proving Derivative is never attempted and the failure is still fully audited. A
+  final test exercises the `--output json` success path directly (`bhtune-cli`'s own
+  subprocess-level "stdout is exactly one JSON object" contract remains
+  `safety-json-contract`'s responsibility, not re-proven per command here).
 
 ## Logging (`cli-logging`)
 

@@ -1,14 +1,20 @@
-//! `bhtune history list/show`.
+//! `bhtune history list/show/revert`.
 
+use bhtune_backend::OpcDaBackend;
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    Pagination, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
+    NewTuneWrite, Pagination, TuneBackend, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow,
+    TuneWriteRow, WriteKind,
 };
 
 use crate::args::HistoryCommand;
 use crate::output::OutputFormat;
 
-pub async fn run(pool: &SqlitePool, command: HistoryCommand) -> anyhow::Result<()> {
+pub async fn run(
+    pool: &SqlitePool,
+    command: HistoryCommand,
+    config: &crate::config::BhtuneConfig,
+) -> anyhow::Result<()> {
     match command {
         HistoryCommand::List {
             outcome,
@@ -17,6 +23,13 @@ pub async fn run(pool: &SqlitePool, command: HistoryCommand) -> anyhow::Result<(
             output,
         } => list(pool, outcome.map(Into::into), limit, offset, output).await,
         HistoryCommand::Show { run_id, output } => show(pool, run_id, output).await,
+        HistoryCommand::Revert {
+            run_id,
+            bridge_host,
+            server,
+            yes,
+            output,
+        } => revert(pool, config, run_id, bridge_host, server, yes, output).await,
     }
 }
 
@@ -109,6 +122,9 @@ impl From<&TuneResultRow> for ResultJson {
 /// directly).
 #[derive(serde::Serialize)]
 struct WriteJson {
+    /// Whether this is an original write-back of freshly calculated PID parameters, or a
+    /// `bhtune history revert` undoing one (see [`WriteKind`]).
+    kind: WriteKind,
     response_level: bhtune_core::ResponseLevel,
     written_at: chrono::DateTime<chrono::Utc>,
     /// The P/I/D values read from the backend before any write was attempted. `None` only
@@ -127,8 +143,9 @@ struct WriteJson {
     success: bool,
     error_message: Option<String>,
     /// `None` means no rollback was applicable -- either every constant wrote successfully
-    /// or the pre-read failed before any write was attempted. See `rollback_error` for what
-    /// went wrong when this is `Some(RollbackState::Failed)`.
+    /// or the pre-read failed before any write was attempted; always `None` for a `Revert`
+    /// row. See `rollback_error` for what went wrong when this is
+    /// `Some(RollbackState::Failed)`.
     rollback_state: Option<bhtune_db::models::RollbackState>,
     rollback_error: Option<String>,
 }
@@ -136,6 +153,7 @@ struct WriteJson {
 impl From<&TuneWriteRow> for WriteJson {
     fn from(w: &TuneWriteRow) -> Self {
         Self {
+            kind: w.kind,
             response_level: w.response_level,
             written_at: w.written_at,
             proportional_previous: w.previous.map(|p| p.proportional),
@@ -339,9 +357,10 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 println!("  PID write-back audit:");
                 for w in &writes {
                     println!(
-                        "    [{}] {:?} level: success={} previous(P={} I={} D={}) \
+                        "    [{}] {:?} ({:?} level): success={} previous(P={} I={} D={}) \
                          written(P={} I={} D={}) readback(P={} I={} D={}){}",
                         w.written_at.to_rfc3339(),
+                        w.kind,
                         w.response_level,
                         w.success,
                         fmt_opt_f32(w.previous.map(|p| p.proportional)),
@@ -394,6 +413,207 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
     }
 
     Ok(())
+}
+
+/// The result of an attempted revert, in `--output json` mode -- `history revert`'s
+/// equivalent of `tune`'s [`WriteBackOutcome`], but never printed as prose ahead of it (see
+/// this function's own doc comment for why).
+#[derive(serde::Serialize)]
+struct RevertJson {
+    run_id: i64,
+    /// The response level of the write-back being undone (recorded on the original `Write`
+    /// row; the revert's own audit row is written under the same response level).
+    response_level: bhtune_core::ResponseLevel,
+    reverted_to: RevertedTargetJson,
+    success: bool,
+    error_message: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct RevertedTargetJson {
+    proportional: f32,
+    integral: f32,
+    derivative: f32,
+}
+
+/// `bhtune history revert <run-id>`: writes a run's recorded pre-write-back PID values back
+/// to the live loop, undoing whichever [`WriteKind::Write`] write-back that run last
+/// recorded (`safety-writeback-rollback`, finding 6's revert companion command). Reuses
+/// `commands::tune`'s own pre-read/write-and-verify machinery
+/// ([`crate::commands::tune::read_previous_pid_values`]/
+/// [`crate::commands::tune::write_and_verify_pid_value`]), so a revert is audited exactly
+/// like an original write -- a new [`TuneWriteRow`] with `kind = WriteKind::Revert` -- the
+/// one difference being that a revert never attempts a nested rollback of itself if it
+/// fails partway through (see [`WriteKind`]'s doc comment for why).
+///
+/// Every rejection that happens *before* anything is attempted (no such run, wrong backend,
+/// no write-back recorded, its pre-read failed so there is nothing to revert to, missing
+/// `--yes`, no PID constant tags, or a failed connection) is a plain `Err`, which
+/// `lib.rs`'s existing `fail()` reports through `--output json`'s own error contract --
+/// exactly the same path `history show`'s "no such run" error already takes. Only the
+/// outcome of an *attempted* revert is reported here, and only ever as prose gated on
+/// `output == OutputFormat::Table` (never unconditionally, unlike `tune`'s own write-back
+/// step -- see finding 8) or as the one `RevertJson` object printed on success.
+#[allow(clippy::too_many_arguments)]
+async fn revert(
+    pool: &SqlitePool,
+    config: &crate::config::BhtuneConfig,
+    run_id: i64,
+    bridge_host: Option<String>,
+    server: Option<String>,
+    yes: bool,
+    output: OutputFormat,
+) -> anyhow::Result<()> {
+    let run = TuneRunRow::get(pool, run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no run with id {run_id}"))?;
+
+    if run.backend != TuneBackend::Opcda {
+        anyhow::bail!(
+            "run {run_id} used the {:?} backend, which has no live loop to revert a write \
+             against",
+            run.backend
+        );
+    }
+
+    let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
+    let last_write = writes
+        .iter()
+        .rev()
+        .find(|w| w.kind == WriteKind::Write)
+        .ok_or_else(|| anyhow::anyhow!("run {run_id} has no recorded PID write-back to revert"))?;
+    let response_level = last_write.response_level;
+    let target = last_write.previous.ok_or_else(|| {
+        anyhow::anyhow!(
+            "run {run_id}'s {response_level:?} PID write-back never recorded pre-write \
+             values (its pre-read failed at the time); nothing to revert to"
+        )
+    })?;
+
+    if !yes {
+        anyhow::bail!("reverting writes PID constants back to a live loop; pass --yes to confirm");
+    }
+
+    let (Some(p_tag), Some(i_tag), Some(d_tag)) = (
+        &run.tags.proportional_constant,
+        &run.tags.integral_constant,
+        &run.tags.derivative_constant,
+    ) else {
+        anyhow::bail!("run {run_id}'s snapshotted tags have no PID constant tags configured");
+    };
+
+    let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+    let server = crate::config::resolve_server(server, config)?;
+    let backend = OpcDaBackend::connect(&bridge_host, &server).await?;
+
+    if output == OutputFormat::Table {
+        println!(
+            "Reverting run {run_id}'s {response_level:?} PID write-back on '{}' to \
+             P={:.4} I={:.4} D={:.4}...",
+            run.loop_name, target.proportional, target.integral, target.derivative
+        );
+    }
+
+    let written_at = chrono::Utc::now();
+    let mut new_write = NewTuneWrite::new(response_level, written_at);
+    new_write.kind = WriteKind::Revert;
+
+    // Pre-read the loop's *current* values before writing -- same rationale as `tune`'s own
+    // write-back: whatever is live right now becomes this revert row's `previous`, so a
+    // second `history revert` could undo this one too if it ever turned out to be wrong.
+    let live_previous = match crate::commands::tune::read_previous_pid_values(
+        &backend,
+        p_tag,
+        i_tag,
+        d_tag,
+        run.allow_uncertain_quality,
+    )
+    .await
+    {
+        Ok(previous) => previous,
+        Err(e) => {
+            let message = e.to_string();
+            new_write.error_message = Some(message.clone());
+            TuneWriteRow::insert(pool, run_id, new_write).await?;
+            anyhow::bail!("revert pre-read failed: {message}");
+        }
+    };
+    new_write.previous = Some(live_previous);
+
+    let steps: [(&str, &str, f32); 3] = [
+        ("Proportional", p_tag.as_str(), target.proportional),
+        ("Integral", i_tag.as_str(), target.integral),
+        ("Derivative", d_tag.as_str(), target.derivative),
+    ];
+    let mut written_vals: [Option<f32>; 3] = [None; 3];
+    let mut readback_vals: [Option<f32>; 3] = [None; 3];
+    let mut failure: Option<String> = None;
+
+    for (i, (label, tag, value)) in steps.into_iter().enumerate() {
+        written_vals[i] = Some(value);
+        match crate::commands::tune::write_and_verify_pid_value(
+            &backend,
+            label,
+            tag,
+            value,
+            run.allow_uncertain_quality,
+        )
+        .await
+        {
+            Ok(readback) => readback_vals[i] = Some(readback),
+            Err(e) => {
+                failure = Some(e);
+                break;
+            }
+        }
+    }
+
+    new_write.proportional_written = written_vals[0];
+    new_write.integral_written = written_vals[1];
+    new_write.derivative_written = written_vals[2];
+    new_write.proportional_readback = readback_vals[0];
+    new_write.integral_readback = readback_vals[1];
+    new_write.derivative_readback = readback_vals[2];
+    new_write.success = failure.is_none();
+    new_write.error_message = failure.clone();
+
+    TuneWriteRow::insert(pool, run_id, new_write).await?;
+
+    match failure {
+        None => {
+            tracing::info!(run_id, ?response_level, "PID revert succeeded");
+            match output {
+                OutputFormat::Table => {
+                    println!(
+                        "Reverted and confirmed run {run_id}'s {response_level:?} PID write-back."
+                    );
+                }
+                OutputFormat::Json => {
+                    let json = RevertJson {
+                        run_id,
+                        response_level,
+                        reverted_to: RevertedTargetJson {
+                            proportional: target.proportional,
+                            integral: target.integral,
+                            derivative: target.derivative,
+                        },
+                        success: true,
+                        error_message: None,
+                    };
+                    println!("{}", serde_json::to_string_pretty(&json)?);
+                }
+            }
+            Ok(())
+        }
+        Some(error_message) => {
+            tracing::error!(run_id, ?response_level, %error_message, "PID revert failed partway through; the loop may hold a mismatched set of PID constants -- see `history show` for the recorded partial state");
+            anyhow::bail!(
+                "revert failed partway through: {error_message} (the loop may now hold a \
+                 mismatched set of PID constants -- see `history show {run_id}` for the \
+                 recorded partial state)"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -622,6 +842,7 @@ mod tests {
     #[tokio::test]
     async fn run_dispatches_list_and_show_in_both_output_formats() {
         let (pool, run_id) = run_with_results_and_writes().await;
+        let config = crate::config::BhtuneConfig::default();
         run(
             &pool,
             HistoryCommand::List {
@@ -630,6 +851,7 @@ mod tests {
                 offset: 0,
                 output: OutputFormat::Table,
             },
+            &config,
         )
         .await
         .unwrap();
@@ -641,6 +863,7 @@ mod tests {
                 offset: 0,
                 output: OutputFormat::Json,
             },
+            &config,
         )
         .await
         .unwrap();
@@ -650,6 +873,7 @@ mod tests {
                 run_id,
                 output: OutputFormat::Table,
             },
+            &config,
         )
         .await
         .unwrap();
@@ -659,8 +883,465 @@ mod tests {
                 run_id,
                 output: OutputFormat::Json,
             },
+            &config,
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_dispatches_revert_and_surfaces_its_error() {
+        // No live gateway is running, so `revert` fails while connecting -- but this still
+        // proves `run` actually dispatches `HistoryCommand::Revert` to the `revert` function
+        // rather than, say, silently no-op'ing. `revert`'s own success/failure/validation
+        // behavior is covered directly by the `revert_*` tests below.
+        let (pool, run_id) = run_with_results_and_writes().await;
+        let config = crate::config::BhtuneConfig::default();
+        let err = run(
+            &pool,
+            HistoryCommand::Revert {
+                run_id,
+                bridge_host: Some("127.0.0.1:1".to_string()),
+                server: Some("Sim.Server".to_string()),
+                yes: true,
+                output: OutputFormat::Table,
+            },
+            &config,
+        )
+        .await
+        .unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    /// Starts an `Opcda`-backend run (using the sample template/tags, which have PID
+    /// constant tags configured) and returns it alongside the `BhtuneConfig` `revert`'s
+    /// tests dispatch against, without recording any write-back yet -- each `revert_*` test
+    /// below inserts whatever `TuneWriteRow` fixture its scenario needs.
+    async fn opcda_run_with_no_writes() -> (SqlitePool, crate::config::BhtuneConfig, i64) {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "Unit1.LIC101.PV",
+            TuneBackend::Opcda,
+            sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &sample_tags(),
+            now,
+        )
+        .await
+        .unwrap();
+        let config = crate::config::BhtuneConfig::default();
+        (pool, config, run.id)
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_no_such_run_exists() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let config = crate::config::BhtuneConfig::default();
+        let err = revert(&pool, &config, 999, None, None, true, OutputFormat::Table)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no run with id 999"));
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_the_run_did_not_use_the_opcda_backend() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "Unit1.LIC101.PV",
+            TuneBackend::Simulator,
+            sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &sample_tags(),
+            now,
+        )
+        .await
+        .unwrap();
+        let config = crate::config::BhtuneConfig::default();
+        let err = revert(
+            &pool,
+            &config,
+            run.id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("Simulator"));
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_no_write_back_is_recorded() {
+        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let err = revert(
+            &pool,
+            &config,
+            run_id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("no recorded PID write-back"));
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_the_original_writes_pre_read_failed() {
+        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let now = chrono::Utc::now();
+        let mut failed_pre_read =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        failed_pre_read.error_message = Some("pre-read of Proportional tag 'X' failed".to_string());
+        TuneWriteRow::insert(&pool, run_id, failed_pre_read)
+            .await
+            .unwrap();
+
+        let err = revert(
+            &pool,
+            &config,
+            run_id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("nothing to revert to"));
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_yes_is_not_set() {
+        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let now = chrono::Utc::now();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 2.0,
+            derivative: 0.5,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run_id, successful)
+            .await
+            .unwrap();
+
+        let err = revert(
+            &pool,
+            &config,
+            run_id,
+            None,
+            None,
+            false,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("--yes"));
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_the_snapshotted_tags_have_no_pid_constant_tags() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let mut tags = sample_tags();
+        tags.proportional_constant = None;
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "Unit1.LIC101.PV",
+            TuneBackend::Opcda,
+            sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &tags,
+            now,
+        )
+        .await
+        .unwrap();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 2.0,
+            derivative: 0.5,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run.id, successful)
+            .await
+            .unwrap();
+
+        let config = crate::config::BhtuneConfig::default();
+        let err = revert(
+            &pool,
+            &config,
+            run.id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("no PID constant tags"));
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_the_backend_connection_fails() {
+        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let now = chrono::Utc::now();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 2.0,
+            derivative: 0.5,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run_id, successful)
+            .await
+            .unwrap();
+
+        // Port 1 is a privileged/unlikely-bound port; connecting should fail promptly,
+        // proving every validation step above passed and `revert` genuinely reached the
+        // connect step.
+        let err = revert(
+            &pool,
+            &config,
+            run_id,
+            Some("127.0.0.1:1".to_string()),
+            Some("Sim.Server".to_string()),
+            true,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn revert_succeeds_and_records_a_revert_kind_write() {
+        use crate::test_support::{MockBridgeService, start_mock_server};
+        use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue, WriteResponse};
+
+        // Every read (both the live pre-read and every write's confirmation readback)
+        // returns this same fixed "10.0"/Good response regardless of which tag was
+        // requested -- so the fixture's recorded `previous` values are all set to 10.0 too,
+        // ensuring `write_and_verify_pid_value`'s tolerance check always sees a matching
+        // readback no matter which constant is being reverted.
+        let (host, server) = start_mock_server(MockBridgeService {
+            read_response: ReadResponse {
+                values: vec![ProtoTagValue {
+                    tag_id: "ignored".to_string(),
+                    value: "10.0".to_string(),
+                    quality: "Good".to_string(),
+                    timestamp: "2024-01-15 10:23:45".to_string(),
+                }],
+            },
+            write_response: WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let now = chrono::Utc::now();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 10.0,
+            derivative: 10.0,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run_id, successful)
+            .await
+            .unwrap();
+
+        revert(
+            &pool,
+            &config,
+            run_id,
+            Some(host),
+            Some("Sim.Server".to_string()),
+            true,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        let revert_row = writes.iter().find(|w| w.kind == WriteKind::Revert).unwrap();
+        assert!(revert_row.success);
+        assert_eq!(revert_row.proportional_written, Some(10.0));
+        assert_eq!(revert_row.integral_written, Some(10.0));
+        assert_eq!(revert_row.derivative_written, Some(10.0));
+        assert_eq!(revert_row.proportional_readback, Some(10.0));
+        assert_eq!(revert_row.integral_readback, Some(10.0));
+        assert_eq!(revert_row.derivative_readback, Some(10.0));
+        // Reverts never chain a nested rollback-of-a-revert.
+        assert_eq!(revert_row.rollback_state, None);
+        // The pre-read of the *live* current value (also fed by the fixed mock response)
+        // becomes this revert row's own `previous`, so a second revert could undo it too.
+        assert_eq!(
+            revert_row.previous,
+            Some(bhtune_db::models::WriteReadback {
+                proportional: 10.0,
+                integral: 10.0,
+                derivative: 10.0,
+            })
+        );
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn revert_records_a_failed_audit_row_when_a_later_constant_fails_verification() {
+        use crate::test_support::{MockBridgeService, start_mock_server};
+        use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue, WriteResponse};
+
+        // Calls 1-3: the live pre-read of P/I/D (all succeed). Call 4: Proportional's
+        // post-write verification readback (succeeds). Call 5: Integral's post-write
+        // verification readback -- fails, per `failing_read_from_call(5)`. Derivative is
+        // never attempted, since the loop breaks on the first failure.
+        let (host, server) = start_mock_server(
+            MockBridgeService {
+                read_response: ReadResponse {
+                    values: vec![ProtoTagValue {
+                        tag_id: "ignored".to_string(),
+                        value: "10.0".to_string(),
+                        quality: "Good".to_string(),
+                        timestamp: "2024-01-15 10:23:45".to_string(),
+                    }],
+                },
+                write_response: WriteResponse {
+                    tag_id: "ignored".to_string(),
+                    success: true,
+                    error: None,
+                },
+                ..Default::default()
+            }
+            .failing_read_from_call(5),
+        )
+        .await;
+
+        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let now = chrono::Utc::now();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 10.0,
+            derivative: 10.0,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run_id, successful)
+            .await
+            .unwrap();
+
+        let err = revert(
+            &pool,
+            &config,
+            run_id,
+            Some(host),
+            Some("Sim.Server".to_string()),
+            true,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("revert failed partway through"));
+
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        let revert_row = writes.iter().find(|w| w.kind == WriteKind::Revert).unwrap();
+        assert!(!revert_row.success);
+        assert!(
+            revert_row
+                .error_message
+                .as_ref()
+                .unwrap()
+                .contains("Integral")
+        );
+        assert_eq!(revert_row.proportional_written, Some(10.0));
+        assert_eq!(revert_row.proportional_readback, Some(10.0));
+        assert_eq!(revert_row.integral_written, Some(10.0));
+        assert_eq!(revert_row.integral_readback, None);
+        assert_eq!(revert_row.derivative_written, None);
+        assert_eq!(revert_row.derivative_readback, None);
+        assert_eq!(revert_row.rollback_state, None);
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn revert_succeeds_with_json_output_format() {
+        use crate::test_support::{MockBridgeService, start_mock_server};
+        use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue, WriteResponse};
+
+        // This isn't a substitute for a real stdout-capture test proving JSON mode never
+        // interleaves prose ahead of the final object (that end-to-end contract belongs to
+        // `safety-json-contract`'s subprocess test, across every subcommand at once) -- it
+        // only proves `revert`'s `OutputFormat::Json` branch itself runs to completion
+        // without erroring, i.e. that constructing and serializing `RevertJson` from a real
+        // successful revert actually works, which the Table-mode test above never exercises.
+        let (host, server) = start_mock_server(MockBridgeService {
+            read_response: ReadResponse {
+                values: vec![ProtoTagValue {
+                    tag_id: "ignored".to_string(),
+                    value: "10.0".to_string(),
+                    quality: "Good".to_string(),
+                    timestamp: "2024-01-15 10:23:45".to_string(),
+                }],
+            },
+            write_response: WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let now = chrono::Utc::now();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 10.0,
+            derivative: 10.0,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run_id, successful)
+            .await
+            .unwrap();
+
+        revert(
+            &pool,
+            &config,
+            run_id,
+            Some(host),
+            Some("Sim.Server".to_string()),
+            true,
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap();
+
+        server.shutdown().await;
     }
 }

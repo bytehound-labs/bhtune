@@ -544,6 +544,28 @@ pub enum HistoryCommand {
         #[arg(long, value_enum, default_value = "table")]
         output: crate::output::OutputFormat,
     },
+    /// Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the
+    /// live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses
+    /// if the run has none, if that write-back's pre-read itself failed (nothing to revert
+    /// to), or if the run did not use the `opcda` backend (nothing live to revert against).
+    Revert {
+        run_id: i64,
+        /// (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST`
+        /// or the config file's `bridge_host` key.)
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+        /// (default: the config file's `server` key; errors if neither is set.)
+        #[arg(long)]
+        server: Option<String>,
+        /// Confirm writing to a live loop. Required -- there is no interactive prompt for
+        /// reverting, since there is no calculated result to choose between as there is for
+        /// `tune`'s own write-back step.
+        #[arg(long)]
+        yes: bool,
+        /// How to print the revert outcome.
+        #[arg(long, value_enum, default_value = "table")]
+        output: crate::output::OutputFormat,
+    },
 }
 
 impl HistoryCommand {
@@ -551,6 +573,7 @@ impl HistoryCommand {
         match self {
             HistoryCommand::List { output, .. } => *output,
             HistoryCommand::Show { output, .. } => *output,
+            HistoryCommand::Revert { output, .. } => *output,
         }
     }
 }
