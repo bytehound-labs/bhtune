@@ -23,6 +23,22 @@ pub struct BhtuneConfig {
     /// fields there is no built-in default -- if this is unset and `--server` is omitted,
     /// the command errors (see [`resolve_server`]).
     pub server: Option<String>,
+    /// `[log]` sub-table: level/directory/format/rotation for `crate::logging`'s tracing
+    /// setup, mirroring `opcda-bridge-gateway`'s own `log.*` config conventions.
+    #[serde(default)]
+    pub log: LogConfig,
+}
+
+/// Logging configuration keys (a `[log]` table in `bhtune.toml`), consumed by
+/// `crate::logging::resolve_log_settings`. Every field is optional and falls back through
+/// the same `CLI flag > env var > config file > default` precedence as the rest of
+/// [`BhtuneConfig`].
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct LogConfig {
+    pub level: Option<String>,
+    pub dir: Option<String>,
+    pub format: Option<String>,
+    pub rotation: Option<String>,
 }
 
 /// Derive bhtune's config file location from raw environment values rather than reading
@@ -85,6 +101,41 @@ pub fn default_db_path_from(
             .join("bhtune.db")
     })
     .unwrap_or_else(|| PathBuf::from("bhtune.db"))
+}
+
+/// Derive bhtune's default *log directory* the same way the database path is derived (see
+/// [`default_db_path_from`]) -- under the platform data directory, not next to the compiled
+/// binary. Unlike `opcda-bridge-gateway`'s equivalent (`log_dir_from_exe`), a `cargo
+/// install`ed binary's own directory (e.g. `~/.cargo/bin/`) isn't a sensible place to write
+/// logs, and bhtune already has this exact precedence machinery for the database, so the log
+/// directory reuses it rather than inventing a second convention.
+///
+/// - Windows (`is_windows = true`): `%APPDATA%\bhtune\logs`.
+/// - Elsewhere: `$XDG_DATA_HOME/bhtune/logs`, falling back to `$HOME/.local/share/bhtune/logs`.
+/// - Falls back further to `logs` in the current directory if none of the above are
+///   available, matching [`default_db_path_from`]'s own final fallback.
+pub fn default_log_dir_from(
+    xdg_data_home: Option<&str>,
+    home: Option<&str>,
+    appdata: Option<&str>,
+    is_windows: bool,
+) -> PathBuf {
+    if is_windows {
+        return appdata
+            .map(|dir| Path::new(dir).join("bhtune").join("logs"))
+            .unwrap_or_else(|| PathBuf::from("logs"));
+    }
+    if let Some(dir) = xdg_data_home {
+        return Path::new(dir).join("bhtune").join("logs");
+    }
+    home.map(|dir| {
+        Path::new(dir)
+            .join(".local")
+            .join("share")
+            .join("bhtune")
+            .join("logs")
+    })
+    .unwrap_or_else(|| PathBuf::from("logs"))
 }
 
 /// Load a bhtune config from `path`.
@@ -269,6 +320,43 @@ mod tests {
     }
 
     #[test]
+    fn default_log_dir_from_windows_with_appdata() {
+        let path = default_log_dir_from(None, None, Some(r"C:\Users\me\AppData\Roaming"), true);
+        assert_eq!(
+            path,
+            PathBuf::from(r"C:\Users\me\AppData\Roaming/bhtune/logs")
+        );
+    }
+
+    #[test]
+    fn default_log_dir_from_windows_no_appdata_falls_back_to_cwd() {
+        assert_eq!(
+            default_log_dir_from(None, None, None, true),
+            PathBuf::from("logs")
+        );
+    }
+
+    #[test]
+    fn default_log_dir_from_unix_xdg_data_home() {
+        let path = default_log_dir_from(Some("/xdg-data"), Some("/home/me"), None, false);
+        assert_eq!(path, PathBuf::from("/xdg-data/bhtune/logs"));
+    }
+
+    #[test]
+    fn default_log_dir_from_unix_falls_back_to_home() {
+        let path = default_log_dir_from(None, Some("/home/me"), None, false);
+        assert_eq!(path, PathBuf::from("/home/me/.local/share/bhtune/logs"));
+    }
+
+    #[test]
+    fn default_log_dir_from_unix_no_env_vars_falls_back_to_cwd() {
+        assert_eq!(
+            default_log_dir_from(None, None, None, false),
+            PathBuf::from("logs")
+        );
+    }
+
+    #[test]
     fn load_config_file_valid() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         writeln!(
@@ -280,6 +368,27 @@ mod tests {
         assert_eq!(config.db, Some(PathBuf::from("/data/bhtune.db")));
         assert_eq!(config.bridge_host, Some("gateway:7600".to_string()));
         assert_eq!(config.server, Some("Kepware.KEPServerEX.V6".to_string()));
+        assert_eq!(config.log, LogConfig::default());
+    }
+
+    #[test]
+    fn load_config_file_parses_the_log_table() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[log]\nlevel = \"debug\"\ndir = \"/var/log/bhtune\"\nformat = \"json\"\nrotation = \"hourly\""
+        )
+        .unwrap();
+        let config = load_config_file(file.path(), true).unwrap();
+        assert_eq!(
+            config.log,
+            LogConfig {
+                level: Some("debug".to_string()),
+                dir: Some("/var/log/bhtune".to_string()),
+                format: Some("json".to_string()),
+                rotation: Some("hourly".to_string()),
+            }
+        );
     }
 
     #[test]

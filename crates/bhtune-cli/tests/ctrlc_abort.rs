@@ -21,10 +21,18 @@ use std::time::Duration;
 async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
     let db_dir = tempfile::tempdir().unwrap();
     let db_path = db_dir.path().join("bhtune.db");
+    // Without this, `run()`'s logging setup (see `bhtune_cli::logging`) would resolve the
+    // real platform default log directory (`~/.local/share/bhtune/logs` or similar) using
+    // this test process's *actual* inherited environment, since `Command::new` inherits the
+    // parent's env by default -- writing real files under the developer/CI machine's actual
+    // home directory as a side effect of running this test.
+    let log_dir = tempfile::tempdir().unwrap();
 
     let child = Command::new(env!("CARGO_BIN_EXE_bhtune"))
         .arg("--db")
         .arg(&db_path)
+        .arg("--log-dir")
+        .arg(log_dir.path())
         .args([
             "tune",
             "--tagname",
@@ -110,6 +118,26 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
     assert!(
         stdout.contains("Tune aborted"),
         "expected the abort message on stdout, got: {stdout:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("Tune aborted"),
+        "the tune's own result output must stay on stdout only -- tracing's stderr mirroring \
+         must never carry it, or a scheduler parsing stdout as `--output json` could be \
+         corrupted by an interleaved copy on the other stream"
+    );
+
+    // The real subprocess is the one place `logging::init_tracing` actually installs a
+    // subscriber in a fresh, conflict-free process (see `logging`'s own test module doc
+    // comment on why unit tests can't assert this) -- confirms real log output actually
+    // reached the rotating file under `--log-dir`, not just that the flag was accepted.
+    let log_files: Vec<_> = std::fs::read_dir(log_dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(
+        !log_files.is_empty(),
+        "expected at least one log file under --log-dir {:?}",
+        log_dir.path()
     );
 
     let pool = bhtune_db::connect(&db_path).await.unwrap();

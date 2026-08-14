@@ -24,6 +24,25 @@ pub struct Cli {
     #[arg(long, global = true, env = "BHTUNE_DB", value_name = "PATH")]
     pub db: Option<PathBuf>,
 
+    /// Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default:
+    /// info). Diagnostic detail only -- never printed to stdout, so it can never interleave
+    /// with `--output json`'s single-object contract; see `crate::logging`.
+    #[arg(long, global = true, env = "RUST_LOG")]
+    pub log_level: Option<String>,
+
+    /// Directory to write log files to (default: a platform-standard data directory, see
+    /// `crate::config::default_log_dir_from`).
+    #[arg(long, global = true, value_name = "PATH")]
+    pub log_dir: Option<PathBuf>,
+
+    /// Log file format: "pretty" or "json" (default: pretty).
+    #[arg(long, global = true)]
+    pub log_format: Option<String>,
+
+    /// Log file rotation: "hourly", "daily", or "never" (default: daily).
+    #[arg(long, global = true)]
+    pub log_rotation: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -836,6 +855,35 @@ mod tests {
         ]);
         assert_eq!(cli.db, Some(PathBuf::from("/data/bhtune.db")));
         assert_eq!(cli.config, Some(PathBuf::from("/etc/bhtune.toml")));
+    }
+
+    #[test]
+    fn cli_log_flags_default_to_none() {
+        let cli = Cli::parse_from(["bhtune", "simulate"]);
+        assert_eq!(cli.log_level, None);
+        assert_eq!(cli.log_dir, None);
+        assert_eq!(cli.log_format, None);
+        assert_eq!(cli.log_rotation, None);
+    }
+
+    #[test]
+    fn cli_parses_explicit_log_flags() {
+        let cli = Cli::parse_from([
+            "bhtune",
+            "--log-level",
+            "debug",
+            "--log-dir",
+            "/var/log/bhtune",
+            "--log-format",
+            "json",
+            "--log-rotation",
+            "hourly",
+            "simulate",
+        ]);
+        assert_eq!(cli.log_level, Some("debug".to_string()));
+        assert_eq!(cli.log_dir, Some(PathBuf::from("/var/log/bhtune")));
+        assert_eq!(cli.log_format, Some("json".to_string()));
+        assert_eq!(cli.log_rotation, Some("hourly".to_string()));
     }
 
     #[test]

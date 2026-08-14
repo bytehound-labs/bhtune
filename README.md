@@ -107,6 +107,10 @@ available key.
 | Database path         | `--db`          | `BHTUNE_DB`          | `db`          | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (or `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db` |
 | opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host` | `localhost:7600`                                                                            |
 | Default OPC DA server | `--server`      | —                    | `server`      | none — must be set one way or another                                                      |
+| Log level             | `--log-level`   | `RUST_LOG`           | `log.level`   | `info`                                                                                      |
+| Log directory         | `--log-dir`     | —                     | `log.dir`     | Linux/macOS: `$XDG_DATA_HOME/bhtune/logs` (or `$HOME/.local/share/bhtune/logs`); Windows: `%APPDATA%\bhtune\logs` |
+| Log format            | `--log-format`  | —                     | `log.format`  | `pretty`                                                                                    |
+| Log rotation          | `--log-rotation`| —                     | `log.rotation`| `daily`                                                                                     |
 
 ## Automation
 
@@ -139,6 +143,16 @@ unattended runs against live plant equipment fail safe:
 - **`--dry-run`** rehearses the full write-back — resolving the response level, validating tags
   and calculated results — without ever writing to the DCS/PLC, and lifts the
   `--write-pid`-requires-`--yes` requirement, since nothing live is touched.
+
+## Logging
+
+Every `bhtune` invocation writes structured logs to a rotating file, using `--log-level`/
+`--log-dir`/`--log-format`/`--log-rotation` (see the Configuration table above for the matching
+env vars/config keys and defaults). Log lines never go to stdout: `bhtune tune`/`simulate
+--output json` documents stdout as a single machine-readable JSON object, so logs are written to
+the log file and, only when an actual console is attached (never for a `cron`/Task Scheduler
+invocation), mirrored to stderr — stdout stays exactly what a scheduler expects to parse either
+way.
 
 ## Validation
 

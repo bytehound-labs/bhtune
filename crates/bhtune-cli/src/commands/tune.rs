@@ -115,6 +115,14 @@ pub async fn run(
     };
     let started_at = Utc::now();
     let run = TuneRunRow::start(pool, None, &run_name, db_backend, config, started_at).await?;
+    tracing::info!(
+        run_id = run.id,
+        template = %args.template,
+        process_type = ?config.process_type,
+        controller_type = ?config.controller_type,
+        backend = ?db_backend,
+        "starting tune run"
+    );
 
     let write_pid: Option<ResponseLevel> = args.write_pid.map(Into::into);
 
@@ -132,8 +140,18 @@ pub async fn run(
     .await;
 
     match outcome {
-        Ok(run_outcome) => Ok(print_summary(run.id, &run_outcome, args.output)),
+        Ok(run_outcome) => {
+            let tune_outcome = print_summary(run.id, &run_outcome, args.output);
+            let outcome_label = tune_outcome.label();
+            tracing::info!(
+                run_id = run.id,
+                outcome = outcome_label,
+                "tune run finished"
+            );
+            Ok(tune_outcome)
+        }
         Err(e) => {
+            tracing::error!(run_id = run.id, error = %e, "tune run failed");
             TuneRunRow::fail(pool, run.id, Utc::now(), &e.to_string())
                 .await
                 .ok();
@@ -742,6 +760,11 @@ async fn run_polling_loop(
                     match action {
                         Action::WriteMv(v) => write_value(backend, &tags.manipulated_variable, v).await?,
                         Action::Complete { .. } => {
+                            tracing::info!(
+                                run_id,
+                                tick_index,
+                                "MRFT engine reported completion; recording post-test padding"
+                            );
                             completion = Some(action);
                             post_delay_end =
                                 Some(now + chrono::Duration::seconds(args.mrft_delay as i64));
@@ -749,6 +772,7 @@ async fn run_polling_loop(
                     }
                 }
 
+                tracing::trace!(run_id, tick_index, pv, "recorded tune sample");
                 TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state()).await?;
                 tick_index += 1;
 
@@ -759,9 +783,16 @@ async fn run_polling_loop(
                 }
             }
             _ = tokio::signal::ctrl_c() => {
+                tracing::warn!(run_id, tick_index, "Ctrl+C received; aborting run");
                 return Ok(PollOutcome::Aborted(AbortReason::UserInterrupt));
             }
             _ = &mut timeout => {
+                tracing::warn!(
+                    run_id,
+                    tick_index,
+                    timeout_secs = args.timeout_secs,
+                    "--timeout-secs elapsed before completion; aborting run"
+                );
                 return Ok(PollOutcome::Aborted(AbortReason::Timeout {
                     timeout_secs: args.timeout_secs,
                 }));
@@ -948,6 +979,7 @@ async fn maybe_write_back(
                 };
                 TuneWriteRow::insert_success(pool, run_id, written, readback, written_at).await?;
                 println!("Wrote and confirmed {response_level:?} PID parameters.");
+                tracing::info!(run_id, ?response_level, "PID write-back succeeded");
                 Ok(WriteBackOutcome::Written { response_level })
             }
             _ => {
@@ -960,6 +992,7 @@ async fn maybe_write_back(
                 )
                 .await?;
                 println!("Wrote PID parameters, but the confirmation readback failed.");
+                tracing::error!(run_id, ?response_level, "PID write-back readback failed");
                 Ok(WriteBackOutcome::Failed)
             }
         }
@@ -981,6 +1014,7 @@ async fn maybe_write_back(
             .join("; ");
         TuneWriteRow::insert_failure(pool, run_id, written, written_at, &error_message).await?;
         println!("PID write-back failed: {error_message}");
+        tracing::error!(run_id, ?response_level, %error_message, "PID write-back rejected");
         Ok(WriteBackOutcome::Failed)
     }
 }

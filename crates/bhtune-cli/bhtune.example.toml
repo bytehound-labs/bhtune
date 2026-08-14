@@ -37,3 +37,36 @@ bridge_host = "localhost:7600"
 # command errors.
 # CLI flag: --server
 server = "Kepware.KepServerEX.V5"
+
+# Structured logging. Every key here is optional and falls back to its own
+# CLI flag / built-in default independently -- e.g. you can set only
+# log.format here and still pass --log-level on the command line. Logs
+# never go to stdout (that stream is reserved for --output json); they
+# always go to the rotating file below, and additionally mirror to stderr
+# only when an actual console is attached.
+[log]
+# Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn".
+# CLI flag: --log-level
+# Env var: RUST_LOG
+# Default: info
+level = "info"
+
+# Directory to write log files to.
+# CLI flag: --log-dir
+# Default:
+#   Linux/macOS: $XDG_DATA_HOME/bhtune/logs
+#                (falls back to $HOME/.local/share/bhtune/logs)
+#   Windows:     %APPDATA%\bhtune\logs
+dir = "/var/log/bhtune"
+
+# Log file format: "pretty" (human-readable, default) or "json"
+# (newline-delimited, for log shippers).
+# CLI flag: --log-format
+# Default: pretty
+format = "pretty"
+
+# Log file rotation: "hourly", "daily" (default), or "never".
+# CLI flag: --log-rotation
+# Default: daily
+rotation = "daily"
+

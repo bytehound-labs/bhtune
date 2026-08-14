@@ -38,11 +38,14 @@ range validation on `--relay-amp` at the `LoopConfig` model/construction level (
 itself so it fires even mid-hung-read (auto-abort-and-restore, its own distinguished
 `EXIT_TIMED_OUT` exit code), and `--dry-run` (rehearses the full write-back validation path
 with no live DCS write, and lifts the `--write-pid`-requires-`--yes` gate) — see "Safety"
-below. Structured logging remains a separate, not-yet-started phase (`cli-logging`) —
-`cli-commands` is the subcommands and orchestration only. `backend-replay`, the replay
-harness, and the web GUI are not yet — the GUI plan reversed from a Tauri desktop app to a
-browser UI served by `bhtune-server` before any Tauri code was written (see "Key
-architectural decisions"). See "Phases and todos" below for what's next.
+below. `cli-logging` is done: `tracing`/`tracing-subscriber` structured logging to a rotating
+file, resolved through the same `CLI > env > TOML > default` precedence as every other
+setting, with console mirroring confined to stderr so it can never corrupt the `--output
+json` stdout contract — see "Logging" below. This completes all five `bhtune-cli` sub-phases;
+the CLI is a fully headless, scriptable adapter on its own, no server required.
+`backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan reversed
+from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri code was
+written (see "Key architectural decisions"). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -495,13 +498,13 @@ discretization and its numerical cross-check against that reference.
   gateway (via `opcda_bridge::Client`, bypassing the tuning engine entirely) for diagnostics —
   the CLI equivalent of the legacy app's ad-hoc tag testing.
 
-**What `cli-commands` deliberately does not cover** — its own later phase, not an
-oversight: `tracing`-based structured logging (`cli-logging`). Non-interactive automation
-flags (`--yes`/`--write-pid`/`--output json`) and distinguished exit codes shipped separately
-as `cli-automation` — see "Automation" below. Unattended-run safety guardrails
-(`--timeout-secs`/`--dry-run`/`LoopConfig::validate`) shipped separately as `cli-safety` — see
-"Safety" below. Platform-standard config file/data-directory precedence shipped separately as
-`cli-config` — see "Config precedence" below.
+**What `cli-commands` deliberately does not cover** — each shipped as its own later phase,
+not an oversight: `tracing`-based structured logging shipped separately as `cli-logging` —
+see "Logging" below. Non-interactive automation flags (`--yes`/`--write-pid`/`--output json`)
+and distinguished exit codes shipped separately as `cli-automation` — see "Automation" below.
+Unattended-run safety guardrails (`--timeout-secs`/`--dry-run`/`LoopConfig::validate`) shipped
+separately as `cli-safety` — see "Safety" below. Platform-standard config file/data-directory
+precedence shipped separately as `cli-config` — see "Config precedence" below.
 
 **Testing approach.** `commands/tune.rs`'s tests use a `MockBackend` (an in-memory
 `Backend` impl with canned/erroring responses) for setup-and-validation-error paths, a real
@@ -716,6 +719,72 @@ bypass itself. `build_loop_config_rejects_an_out_of_range_relay_amp_before_any_b
 io` mirrors the existing "no I/O before the fail-fast check" pattern already proven for
 `--write-pid`/`--yes`.
 
+## Logging (`cli-logging`)
+
+Structured `tracing`/`tracing-subscriber` logging, matching `opcda-bridge-gateway`'s own
+stack and `log.*` config conventions (level/directory/format/rotation, resolved through the
+same `CLI flag > env var > TOML config file > default` precedence as every other setting —
+see "Config precedence" above), adapted for one hard constraint: it must never be able to
+corrupt `--output json`'s single-object stdout contract (see "Automation" above).
+
+- **`--log-level`** (env `RUST_LOG`) — an `EnvFilter` directive spec, e.g. `"debug"` or
+  `"bhtune_cli=debug,sqlx=warn"`; defaults to `info`, and falls back to `info` on a spec that
+  fails to parse rather than erroring — a config typo shouldn't stop a tune from running.
+- **`--log-dir`** — defaults to a platform-standard data directory
+  (`config::default_log_dir_from`, the same precedence machinery `cli-config`'s DB path
+  already uses, not a directory next to the binary).
+- **`--log-format`** — `pretty` (human-readable, ANSI-free — log files aren't a terminal) or
+  `json` (newline-delimited, for log shippers). Defaults to `pretty`.
+- **`--log-rotation`** — `hourly`, `daily`, or `never`. Defaults to `daily`.
+- **`[log]` in `bhtune.toml`** — `level`/`dir`/`format`/`rotation` keys underneath config-file
+  precedence, mirrored 1:1 with the flags above via `LogConfig` in `config.rs`.
+
+**Deliberately never writes to stdout — the single load-bearing design decision.** Log lines
+always go to the rotating file (`tracing_appender::rolling`, non-blocking); they *also*
+mirror to **stderr**, and only when a console is actually attached (`std::io::stderr().
+is_terminal()` — false for a `cron`/Task-Scheduler invocation), never to stdout.
+`opcda-bridge-gateway`'s equivalent mirrors to stdout safely, because it owns stdout outright;
+bhtune's CLI does not, since `--output json` documents stdout as a single machine-readable
+object. Verified end-to-end, not just by inspection: `tests/ctrlc_abort.rs` asserts the real
+spawned subprocess's stderr never contains the product-output string, and a manual run of the
+compiled binary with `--log-level debug` against the simulator backend confirmed the log file
+captured every instrumented line while stderr stayed silent (no attached console).
+
+**Wired into `run()`, not `run_with_cli`.** `lib.rs::run()` loads the config, resolves
+`default_log_dir`, calls `logging::resolve_log_settings`/`logging::init_tracing`, holds the
+returned `WorkerGuard` for the rest of the process's life (dropping it early would silently
+truncate buffered lines not yet flushed on exit), then delegates to `run_with_cli`. This
+keeps logging setup fully decoupled from `run_with_cli`'s own large, injection-based test
+suite (zero existing tests call `run()` directly) and means `cargo test` never touches a real
+platform log directory. `init_tracing`'s result is soft-failed (`let _log_guard = ...`, no
+`?`) — an unwritable log directory shouldn't prevent a user from getting their tune's actual
+result, a deliberate deviation from the gateway's hard-error approach.
+
+**Instrumentation added at meaningful points**, not exhaustively: database open and template
+seed count (`db.rs`), backend construction for both the OPC DA and simulator branches
+(`backend.rs`), and in `commands/tune.rs` — run start/finish, the `Err` path, both abort
+branches (Ctrl+C and `--timeout-secs`), MRFT engine completion, a per-tick trace event, and
+write-back outcomes (success/readback-failure/rejected) in `maybe_write_back`. Bare
+`tracing::*!` calls are always safe to sprinkle through already-tested code with no dedicated
+new tests, because `tracing`'s global-subscriber single-assignment semantics mean events are
+silently dropped whenever no subscriber is installed (as in every other test in the suite) —
+they only do anything once a real `init_tracing` call succeeds, which only happens in
+`tests/ctrlc_abort.rs`'s one real subprocess.
+
+**Testing approach.** `logging.rs`'s 18 unit tests cover `parse_log_format`/`parse_rotation`
+(including the graceful-degradation defaults), `build_env_filter`, and `resolve_log_settings`'s
+full CLI/config/default precedence directly; two tests exercise `init_tracing`/
+`init_tracing_with_stderr` themselves (both stderr-attached and stderr-detached layer wiring)
+using `level: Some("off")` rather than a real level — deliberately, since `tracing_subscriber`'s
+global-subscriber install only succeeds once per shared test-binary process, so whichever test
+wins that race stays installed (and its filter level applies) for every other, unrelated test
+in the same `cargo test` invocation; an earlier `Some("debug")` version of these tests was
+found leaking unrelated `sqlx` DEBUG query noise into other tests' output for exactly this
+reason. `tests/ctrlc_abort.rs` is the one real, conflict-free, end-to-end exercise of
+`init_tracing` in a fresh process — it passes its own `--log-dir` tempdir and asserts the
+directory is non-empty after the run, alongside the stderr-never-contains-product-output
+assertion above.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -870,7 +939,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | `cli-commands` + `cli-config` + `cli-automation` + `cli-safety` done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation, mandatory `--timeout-secs`, and `--dry-run`, see "Safety" above); structured logging pending |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation, mandatory `--timeout-secs`, and `--dry-run`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -913,7 +982,10 @@ that binary does something real and gains its own targeted tests.
    mode (`cli-automation`, done: `--yes`/`--write-pid`/`--output json` and distinguished exit
    codes — see "Automation" above), safety guardrails (`cli-safety`, done: relay-amp range
    validation, mandatory `--timeout-secs` with auto-abort-and-restore, `--dry-run` — see
-   "Safety" above), structured logging (`cli-logging`, pending).
+   "Safety" above), and structured logging (`cli-logging`, done: `tracing`/`tracing-subscriber`
+   to a rotating file plus stderr-only console mirroring — see "Logging" above). All five
+   sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
+   own, with no server required.
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS

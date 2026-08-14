@@ -29,10 +29,17 @@ pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Backend>> {
                 .bridge_host
                 .as_deref()
                 .unwrap_or(crate::config::DEFAULT_BRIDGE_HOST);
+            tracing::info!(bridge_host, server = %server, "connecting to opcda-bridge gateway");
             let backend = OpcDaBackend::connect(bridge_host, server).await?;
             Ok(Box::new(backend))
         }
         BackendKindArg::Simulator => {
+            tracing::info!(
+                gain = args.sim_gain,
+                tau = args.sim_tau,
+                dead_time = args.sim_dead_time,
+                "constructing simulator backend"
+            );
             let config = FopdtConfig::new(
                 args.sim_gain,
                 args.sim_tau,

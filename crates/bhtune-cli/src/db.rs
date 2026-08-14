@@ -14,9 +14,11 @@ use bhtune_db::SqlitePool;
 /// `crate::config::default_db_path_from`) is a nested, not-yet-existing platform directory
 /// (e.g. `~/.local/share/bhtune/`) on a genuinely fresh install.
 pub async fn open(path: &Path) -> anyhow::Result<SqlitePool> {
+    tracing::info!(db_path = %path.display(), "opening database");
     ensure_parent_dir(path)?;
     let pool = bhtune_db::connect(path).await?;
-    bhtune_db::seed_builtin_templates(&pool, chrono::Utc::now()).await?;
+    let seeded = bhtune_db::seed_builtin_templates(&pool, chrono::Utc::now()).await?;
+    tracing::debug!(templates = seeded.len(), "seeded built-in DCS templates");
     Ok(pool)
 }
 

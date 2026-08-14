@@ -14,11 +14,17 @@
 //!   `history`, `export`, `opc`.
 //! - [`output`] — the `--output table|json` format shared by `history list`/`history show`
 //!   and `tune`/`simulate`'s final summary, plus error formatting.
+//! - [`logging`] — `tracing`/`tracing-subscriber` structured logging (`cli-logging`),
+//!   initialized once in [`run`], never touching stdout so it can never interleave with
+//!   `--output json`'s single-object contract.
 //!
 //! `main.rs` stays a one-line delegator to [`run`]; [`run_with_cli`] is the actual entry
 //! point, kept separate so tests can exercise it against an already-parsed [`args::Cli`]
 //! without needing to control `std::env::args()` — mirroring `opcda-bridge-client`'s
-//! `run`/`run_with_cli` split.
+//! `run`/`run_with_cli` split. Logging is initialized in [`run`], not [`run_with_cli`], for
+//! the same reason: it keeps tracing setup (and its process-global, only-succeeds-once
+//! subscriber installation) entirely out of `run_with_cli`'s own large, injection-based test
+//! suite -- see `logging`'s test module doc comment.
 //!
 //! Non-interactive/scheduled use (cron, CI, batch campaigns) is `tune`/`simulate`'s
 //! `--yes`/`--write-pid <level>`/`--dry-run`/`--timeout-secs` flags (bypassing the
@@ -33,6 +39,7 @@ pub mod backend;
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod logging;
 pub mod output;
 #[cfg(test)]
 mod test_support;
@@ -72,9 +79,41 @@ pub const EXIT_WRITE_BACK_FAILED: u8 = 3;
 /// `cli-safety` section.
 pub const EXIT_TIMED_OUT: u8 = 4;
 
-/// Parses real CLI arguments and runs, returning a process exit code.
+/// Parses real CLI arguments, initializes structured logging, and runs, returning a process
+/// exit code.
+///
+/// Logging is resolved and initialized here rather than in [`run_with_cli`] -- see the crate
+/// doc comment. It reads the config file once, purely for `[log]` settings; `run_with_cli`
+/// reads it again moments later for the database path and other settings. That small,
+/// one-time duplication keeps `run_with_cli`'s own extensively unit-tested call path (which
+/// never touches a real log directory) fully decoupled from tracing setup, which can only
+/// ever be installed once per process. A logging setup failure (e.g. an unwritable log
+/// directory) is deliberately non-fatal -- see [`logging::init_tracing`] -- so it never
+/// prevents the actual command (and its `println!`-based result) from running.
 pub async fn run() -> ExitCode {
-    run_with_cli(Cli::parse()).await
+    let cli = Cli::parse();
+
+    let config = config::load_config(cli.config.as_deref()).unwrap_or_default();
+    let default_log_dir = config::default_log_dir_from(
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        std::env::var("APPDATA").ok().as_deref(),
+        cfg!(target_os = "windows"),
+    );
+    let log_settings = logging::resolve_log_settings(
+        cli.log_level.clone(),
+        cli.log_dir.clone(),
+        cli.log_format.clone(),
+        cli.log_rotation.clone(),
+        &config.log,
+        &default_log_dir,
+    );
+    // Held for the rest of this function's scope, which is the whole remaining lifetime of
+    // the process (`main.rs` immediately returns whatever `ExitCode` this call resolves to)
+    // -- dropping it any earlier would risk silently truncating buffered log lines.
+    let _log_guard = logging::init_tracing(&log_settings);
+
+    run_with_cli(cli).await
 }
 
 /// Loads the config file, resolves the database path, dispatches to the requested
@@ -170,6 +209,10 @@ mod tests {
         let cli = Cli {
             db: Some(PathBuf::from("/nonexistent-dir/bhtune.db")),
             config: None,
+            log_level: None,
+            log_dir: None,
+            log_format: None,
+            log_rotation: None,
             command: Command::Template {
                 command: crate::args::TemplateCommand::List,
             },
@@ -185,6 +228,10 @@ mod tests {
         let cli = Cli {
             db: None,
             config: Some(PathBuf::from("/nonexistent/bhtune.toml")),
+            log_level: None,
+            log_dir: None,
+            log_format: None,
+            log_rotation: None,
             command: Command::Template {
                 command: crate::args::TemplateCommand::List,
             },
@@ -198,6 +245,10 @@ mod tests {
         let cli = Cli {
             db: Some(db),
             config: None,
+            log_level: None,
+            log_dir: None,
+            log_format: None,
+            log_rotation: None,
             command: Command::Template {
                 command: crate::args::TemplateCommand::List,
             },
@@ -211,6 +262,10 @@ mod tests {
         let cli = Cli {
             db: Some(db),
             config: None,
+            log_level: None,
+            log_dir: None,
+            log_format: None,
+            log_rotation: None,
             command: Command::Tune(TuneArgs {
                 tagname: "Unit1.LIC101.PV".to_string(),
                 template: "Nonexistent Template".to_string(),
@@ -321,6 +376,10 @@ mod tests {
             run_with_cli(Cli {
                 db: Some(db.clone()),
                 config: None,
+                log_level: None,
+                log_dir: None,
+                log_format: None,
+                log_rotation: None,
                 command: Command::Simulate(fast_simulate_args()),
             })
             .await,
@@ -344,6 +403,10 @@ mod tests {
             run_with_cli(Cli {
                 db: Some(db.clone()),
                 config: None,
+                log_level: None,
+                log_dir: None,
+                log_format: None,
+                log_rotation: None,
                 command: Command::History {
                     command: crate::args::HistoryCommand::Show {
                         run_id,
@@ -359,6 +422,10 @@ mod tests {
             run_with_cli(Cli {
                 db: Some(db.clone()),
                 config: None,
+                log_level: None,
+                log_dir: None,
+                log_format: None,
+                log_rotation: None,
                 command: Command::Export(crate::args::ExportArgs {
                     run_id,
                     format: crate::args::ExportFormat::Json,
@@ -376,6 +443,10 @@ mod tests {
             run_with_cli(Cli {
                 db: Some(db),
                 config: None,
+                log_level: None,
+                log_dir: None,
+                log_format: None,
+                log_rotation: None,
                 command: Command::Opc {
                     command: crate::args::OpcCommand::Read {
                         bridge_host: Some("127.0.0.1:1".to_string()),
@@ -399,6 +470,10 @@ mod tests {
         let cli = Cli {
             db: None,
             config: Some(config_file.path().to_path_buf()),
+            log_level: None,
+            log_dir: None,
+            log_format: None,
+            log_rotation: None,
             command: Command::Template {
                 command: crate::args::TemplateCommand::List,
             },

@@ -39,6 +39,15 @@ toml = "1"
 # polling-interval ticker; `signal` for Ctrl+C-triggered graceful abort (the CLI's one
 # concession to interactivity — see AGENTS.md's `cli-commands`/`cli-safety` scope split).
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+# Structured logging (`cli-logging`), matching `opcda-bridge-gateway`'s own `tracing`
+# stack/versions/features exactly so both projects' logging conventions stay recognizable to
+# the same user -- see `crate::logging`. Single-consumer within this workspace so far
+# (`bhtune-core`/`-backend`/`-db`/`-server` have no `tracing` calls yet), so pinned directly
+# here rather than promoted to `[workspace.dependencies]`, matching this crate's existing
+# `clap`/`csv`/`toml` convention; promote it if a second crate needs it.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
