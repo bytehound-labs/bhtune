@@ -120,9 +120,25 @@ Windows Task Scheduler, CI):
 - **`--output json`** (also on `history list`/`show`) prints a single machine-readable JSON
   object or array to stdout instead of the plain-text table, for scripting.
 - **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
-  (bad flags, unreachable backend/database), `2` aborted (Ctrl+C), `3` the test completed but
-  the requested PID write-back failed. A caller never has to parse stdout just to find out
-  whether a scheduled tune actually wrote anything.
+  (bad flags, unreachable backend/database), `2` aborted (Ctrl+C or `--timeout-secs` elapsing),
+  `3` the test completed but the requested PID write-back failed, `4` the test was forcibly
+  stopped for running past `--timeout-secs`. A caller never has to parse stdout just to find out
+  whether a scheduled tune actually wrote anything, or why it stopped early.
+
+## Safety
+
+Scheduled/scripted tuning removes the one safeguard the interactive app always had: an operator
+watching the trend, able to hit Stop. `bhtune tune`/`bhtune simulate` build in guardrails so
+unattended runs against live plant equipment fail safe:
+
+- **Relay amplitude is range-checked**, not just required to be non-blank — an out-of-range value
+  is rejected before any backend connection or database write.
+- **`--timeout-secs <seconds>`** (default `3600`) is a mandatory wall-clock limit on the whole
+  test — there is no way to disable it. If it elapses, the loop is automatically restored to its
+  pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`).
+- **`--dry-run`** rehearses the full write-back — resolving the response level, validating tags
+  and calculated results — without ever writing to the DCS/PLC, and lifts the
+  `--write-pid`-requires-`--yes` requirement, since nothing live is touched.
 
 ## Validation
 

@@ -33,12 +33,17 @@ use crate::output::OutputFormat;
 /// exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuneOutcome {
-    /// The test completed. Either no write-back was requested/possible, or a requested
-    /// write-back succeeded.
+    /// The test completed. Either no write-back was requested/possible/attempted (including
+    /// a `--dry-run` rehearsal), or a requested write-back succeeded.
     Completed,
     /// The user pressed Ctrl+C; the loop was restored to its original mode/setpoint before
     /// returning.
     Aborted,
+    /// `--timeout-secs` elapsed before the engine reported completion; the loop was restored
+    /// to its original mode/setpoint before returning, exactly like [`TuneOutcome::Aborted`]
+    /// but distinguished so a scheduler's alerting can tell "this run had to be killed for
+    /// running too long" apart from "an operator stopped it on purpose".
+    TimedOut,
     /// The test itself completed, but writing the chosen PID parameters back to the DCS
     /// failed (rejected write, failed confirmation readback, or -- defensively -- a
     /// `--write-pid` level with no matching calculated result).
@@ -51,6 +56,7 @@ impl TuneOutcome {
         match self {
             TuneOutcome::Completed => "completed",
             TuneOutcome::Aborted => "aborted",
+            TuneOutcome::TimedOut => "timed_out",
             TuneOutcome::WriteBackFailed => "write_back_failed",
         }
     }
@@ -73,11 +79,12 @@ pub async fn run(
 ) -> anyhow::Result<TuneOutcome> {
     // Fails before any backend/database I/O at all: an unattended write-back must be an
     // explicit, deliberate choice, not something a stray `--write-pid` without `--yes` can
-    // trigger by accident.
-    if args.write_pid.is_some() && !args.yes {
+    // trigger by accident. `--dry-run` lifts this requirement -- it never touches the DCS
+    // regardless of `--write-pid`/`--yes`, so there is nothing for `--yes` to confirm.
+    if args.write_pid.is_some() && !args.yes && !args.dry_run {
         anyhow::bail!(
-            "--write-pid requires --yes: writing PID constants back to the DCS with no \
-             human present to confirm must be an explicit, deliberate choice"
+            "--write-pid requires --yes (or --dry-run): writing PID constants back to the \
+             DCS with no human present to confirm must be an explicit, deliberate choice"
         );
     }
 
@@ -137,14 +144,24 @@ pub async fn run(
 
 enum RunOutcome {
     Completed { write_back: WriteBackOutcome },
-    Aborted,
+    Aborted(AbortReason),
+}
+
+/// Why a run ended via [`RunOutcome::Aborted`] instead of a normal engine completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AbortReason {
+    /// Ctrl+C.
+    UserInterrupt,
+    /// `--timeout-secs` elapsed before the engine reported completion. Carries the
+    /// configured limit that was hit, for the printed/JSON summary.
+    Timeout { timeout_secs: u64 },
 }
 
 /// The result of `maybe_write_back`'s attempt (or non-attempt) to write calculated PID
-/// parameters back to the DCS. The write itself is always fully recorded in `tune_writes`
-/// regardless of this value (a DB row exists for `Written`/`Failed`, never for `Skipped`
-/// since nothing was attempted at the backend at all); this enum exists purely to drive the
-/// printed summary and the process exit code.
+/// parameters back to the DCS. A real write (`Written`/`Failed`) is always fully recorded in
+/// `tune_writes`; `Skipped` and `DryRun` never touch the backend at all, so neither leaves a
+/// row there. This enum exists purely to drive the printed summary and the process exit
+/// code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WriteBackOutcome {
     /// No write was attempted: no PID constant tags configured, no results recorded, or
@@ -156,6 +173,10 @@ enum WriteBackOutcome {
     /// failed -- the backend rejected it, the confirmation readback failed, or (defensively)
     /// `--write-pid` named a response level with no recorded calculated result.
     Failed,
+    /// `--dry-run` was given: a response level was resolved and validated (tags configured,
+    /// a calculated result exists) exactly as a real write-back would be, but the actual
+    /// `backend.write` call and confirmation readback were skipped entirely.
+    DryRun { response_level: ResponseLevel },
 }
 
 /// Maps one run's full outcome down to the coarser [`TuneOutcome`] that drives the process
@@ -168,7 +189,8 @@ fn tune_outcome_for_run(outcome: &RunOutcome) -> TuneOutcome {
             write_back: WriteBackOutcome::Failed,
         } => TuneOutcome::WriteBackFailed,
         RunOutcome::Completed { .. } => TuneOutcome::Completed,
-        RunOutcome::Aborted => TuneOutcome::Aborted,
+        RunOutcome::Aborted(AbortReason::UserInterrupt) => TuneOutcome::Aborted,
+        RunOutcome::Aborted(AbortReason::Timeout { .. }) => TuneOutcome::TimedOut,
     }
 }
 
@@ -198,8 +220,20 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                     "Tune completed successfully (run id {run_id}), but PID write-back failed; the loop was left with its previous PID constants."
                 );
             }
-            RunOutcome::Aborted => {
+            RunOutcome::Completed {
+                write_back: WriteBackOutcome::DryRun { response_level },
+            } => {
+                println!(
+                    "Tune completed successfully (run id {run_id}); --dry-run: would have written {response_level:?} PID parameters (no write performed)."
+                );
+            }
+            RunOutcome::Aborted(AbortReason::UserInterrupt) => {
                 println!("Tune aborted (Ctrl+C received; loop restored).");
+            }
+            RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => {
+                println!(
+                    "Tune aborted: exceeded the {timeout_secs}s --timeout-secs limit before completing; loop restored."
+                );
             }
         },
         OutputFormat::Json => {
@@ -213,13 +247,21 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                 RunOutcome::Completed {
                     write_back: WriteBackOutcome::Failed,
                 } => ("failed", None),
-                RunOutcome::Aborted => ("not_attempted", None),
+                RunOutcome::Completed {
+                    write_back: WriteBackOutcome::DryRun { response_level },
+                } => ("dry_run", Some(*response_level)),
+                RunOutcome::Aborted(_) => ("not_attempted", None),
+            };
+            let timeout_secs = match outcome {
+                RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => Some(*timeout_secs),
+                _ => None,
             };
             let json = serde_json::json!({
                 "run_id": run_id,
                 "outcome": tune_outcome.label(),
                 "write_back": write_back,
                 "write_back_response_level": response_level,
+                "timeout_secs": timeout_secs,
             });
             println!(
                 "{}",
@@ -241,7 +283,7 @@ fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
         );
     }
 
-    Ok(LoopConfig {
+    let config = LoopConfig {
         process_type,
         controller_type,
         relay_amp_percent: args.relay_amp,
@@ -255,7 +297,13 @@ fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
             .noise_protection_secs
             .unwrap_or_else(|| process_type.default_noise_protection_secs()),
         mrft_delay_secs: args.mrft_delay,
-    })
+    };
+    // Real range validation at the model level (see `LoopConfig::validate`), not just this
+    // flag parse -- catches an out-of-range `--relay-amp` (including the legacy predecessor's
+    // "not blank" bug of a stray debug shortcut reaching this field) before any backend
+    // connection or database write.
+    config.validate()?;
+    Ok(config)
 }
 
 /// Builds the loop's full tag set. For `--backend opcda`, derives from `--tagname` and the
@@ -408,7 +456,7 @@ async fn execute(
         run_polling_loop(pool, run_id, args, tags, backend, &mut engine, started_at).await;
 
     match poll_result {
-        Ok(Some(completion)) => {
+        Ok(PollOutcome::Completed(completion)) => {
             let pv_range = PvRange {
                 high: initial.pv_range_high,
                 low: initial.pv_range_low,
@@ -433,15 +481,16 @@ async fn execute(
                 backend,
                 config,
                 write_pid,
+                args.dry_run,
                 &mut std::io::stdin().lock(),
             )
             .await?;
             Ok(RunOutcome::Completed { write_back })
         }
-        Ok(None) => {
+        Ok(PollOutcome::Aborted(reason)) => {
             restore(backend, tags, template, &initial, &mode_state).await?;
             TuneRunRow::abort(pool, run_id, Utc::now()).await?;
-            Ok(RunOutcome::Aborted)
+            Ok(RunOutcome::Aborted(reason))
         }
         Err(e) => {
             // Best-effort: a failed test still stroked the valve, so try to put it back even
@@ -633,10 +682,24 @@ async fn restore(
     Ok(())
 }
 
+/// Distinguishes *why* [`run_polling_loop`] ended without a normal engine completion, so
+/// `execute` can record and report the right [`AbortReason`].
+enum PollOutcome {
+    /// The engine reported [`Action::Complete`] and any post-completion `--mrft-delay`
+    /// padding has elapsed.
+    Completed(Action),
+    /// Ctrl+C or `--timeout-secs` fired first.
+    Aborted(AbortReason),
+}
+
 /// Polls the backend on `args.poll_interval_ms`, driving `engine` once the pre-test
 /// `--mrft-delay` padding period has elapsed, and continuing to record (but not evaluate)
-/// samples for the same padding period after completion. Returns `Ok(Some(completion))` on a
-/// normal finish, `Ok(None)` if interrupted by Ctrl+C before completion.
+/// samples for the same padding period after completion. Returns `Ok(PollOutcome::Completed`
+/// on a normal finish, `Ok(PollOutcome::Aborted)` if interrupted by Ctrl+C or by
+/// `args.timeout_secs` elapsing first -- whichever the caller should prefer, the whole
+/// `tokio::select!` races the interval tick against *both* interrupt sources, so a timeout
+/// fires even if a single backend read call is itself hung (e.g. a stalled network read),
+/// not only in between completed ticks.
 async fn run_polling_loop(
     pool: &SqlitePool,
     run_id: i64,
@@ -645,7 +708,7 @@ async fn run_polling_loop(
     backend: &dyn Backend,
     engine: &mut MrftEngine,
     start_time: DateTime<Utc>,
-) -> anyhow::Result<Option<Action>> {
+) -> anyhow::Result<PollOutcome> {
     let mut interval = tokio::time::interval(Duration::from_millis(args.poll_interval_ms.max(1)));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -653,6 +716,14 @@ async fn run_polling_loop(
     let mut tick_index: i64 = 0;
     let mut completion: Option<Action> = None;
     let mut post_delay_end: Option<DateTime<Utc>> = None;
+
+    // A mandatory safety net for unattended operation: an unattended run must never be able
+    // to perturb a live process indefinitely (a stuck relay, a misconfigured tag mapping that
+    // never crosses hysteresis, a stalled backend read). Created once and raced via
+    // `tokio::select!` on every iteration below, rather than checked only after each
+    // completed tick, so it fires even if a single `read_f32` call itself hangs.
+    let timeout = tokio::time::sleep(Duration::from_secs(args.timeout_secs));
+    tokio::pin!(timeout);
 
     loop {
         tokio::select! {
@@ -688,12 +759,19 @@ async fn run_polling_loop(
                 }
             }
             _ = tokio::signal::ctrl_c() => {
-                return Ok(None);
+                return Ok(PollOutcome::Aborted(AbortReason::UserInterrupt));
+            }
+            _ = &mut timeout => {
+                return Ok(PollOutcome::Aborted(AbortReason::Timeout {
+                    timeout_secs: args.timeout_secs,
+                }));
             }
         }
     }
 
-    Ok(completion)
+    Ok(PollOutcome::Completed(completion.expect(
+        "the loop only `break`s after `completion` is set",
+    )))
 }
 
 async fn persist_results(
@@ -737,13 +815,20 @@ async fn persist_results(
 
 /// Writes back the calculated PID parameters for one response level -- chosen either
 /// interactively (prompting on `reader`) or non-interactively via `write_pid`
-/// (`--write-pid`; the caller has already validated `--yes` was also given before the tune
-/// even started). Skips with an informational message (rather than prompting/writing)
-/// whenever any of the three PID constant tags is unconfigured — true for the simulator
-/// backend, and also a sane guard for any real template missing one — or when no results
-/// were recorded at all. `reader` is injected (rather than reading `std::io::stdin()`
-/// directly) so tests can supply a fixed `Cursor` in place of the process's real stdin; it
-/// is never read from at all when `write_pid` is `Some`.
+/// (`--write-pid`; the caller has already validated `--yes`/`--dry-run` was also given
+/// before the tune even started). Skips with an informational message (rather than
+/// prompting/writing) whenever any of the three PID constant tags is unconfigured — true
+/// for the simulator backend, and also a sane guard for any real template missing one — or
+/// when no results were recorded at all. `reader` is injected (rather than reading
+/// `std::io::stdin()` directly) so tests can supply a fixed `Cursor` in place of the
+/// process's real stdin; it is never read from at all when `write_pid` is `Some`.
+///
+/// When `dry_run` is set, every validation step above still runs exactly as it would for a
+/// real write-back (tags configured, a result exists for the resolved response level), but
+/// the function returns right before the actual `backend.write`/confirmation-readback calls
+/// -- proving the write-back *would* have succeeded without ever touching the live DCS. No
+/// `tune_writes` row is recorded for a dry run, matching `Skipped`'s "nothing was attempted
+/// at the backend" rule.
 #[allow(clippy::too_many_arguments)]
 async fn maybe_write_back(
     pool: &SqlitePool,
@@ -753,6 +838,7 @@ async fn maybe_write_back(
     backend: &dyn Backend,
     config: LoopConfig,
     write_pid: Option<ResponseLevel>,
+    dry_run: bool,
     reader: &mut impl std::io::BufRead,
 ) -> anyhow::Result<WriteBackOutcome> {
     let (Some(p_tag), Some(i_tag), Some(d_tag)) = (
@@ -830,6 +916,14 @@ async fn maybe_write_back(
     };
     let written = opc_write_values(pid, config.controller_type, template.integral_type);
     let written_at = Utc::now();
+
+    if dry_run {
+        println!(
+            "--dry-run: would write {response_level:?} PID parameters (P={:.4} I={:.4} D={:.4}); skipping the actual write.",
+            written.proportional, written.integral, written.derivative
+        );
+        return Ok(WriteBackOutcome::DryRun { response_level });
+    }
 
     let p_outcome = backend
         .write(&p_tag.clone(), TagWrite::Float(written.proportional))
@@ -944,7 +1038,9 @@ mod tests {
             mv_range_low: Some(0.0),
             direction: Some(DirectionArg::Reverse),
             poll_interval_ms: 5,
+            timeout_secs: 3600,
             name: Some("test-loop".to_string()),
+            dry_run: false,
             yes: false,
             write_pid: None,
             output: OutputFormat::Table,
@@ -1183,6 +1279,27 @@ mod tests {
             config.noise_protection_secs,
             ProcessType::Flow.default_noise_protection_secs()
         );
+    }
+
+    #[test]
+    fn build_loop_config_rejects_an_out_of_range_relay_amp_before_any_backend_or_db_io() {
+        // Mirrors the `--write-pid`-requires-`--yes` fail-fast precedent: a bad
+        // `--relay-amp` (including a leftover legacy debug-code magic number like 2014) must
+        // be caught by `LoopConfig::validate` here, at construction time, not discovered
+        // later against a live backend.
+        let mut args = fast_simulator_args();
+        args.relay_amp = 2014.0;
+        let err = build_loop_config(&args).unwrap_err();
+        assert!(err.to_string().contains("relay amplitude 2014"));
+        assert!(err.to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn build_loop_config_rejects_a_relay_amp_below_the_minimum() {
+        let mut args = fast_simulator_args();
+        args.relay_amp = 0.0;
+        let err = build_loop_config(&args).unwrap_err();
+        assert!(err.to_string().contains("out of range"));
     }
 
     #[test]
@@ -1830,6 +1947,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -1870,6 +1988,7 @@ mod tests {
             &backend,
             config,
             None,
+            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -1903,6 +2022,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            false,
             &mut std::io::Cursor::new(input),
         )
         .await
@@ -1980,6 +2100,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2009,6 +2130,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2041,6 +2163,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             Some(ResponseLevel::Aggressive),
+            false,
             &mut std::io::Cursor::new(b"".as_slice()),
         )
         .await
@@ -2109,6 +2232,7 @@ mod tests {
             &backend,
             config,
             Some(ResponseLevel::Sluggish),
+            false,
             &mut std::io::Cursor::new(b"".as_slice()),
         )
         .await
@@ -2142,19 +2266,33 @@ mod tests {
         );
         assert_eq!(
             tune_outcome_for_run(&RunOutcome::Completed {
+                write_back: WriteBackOutcome::DryRun {
+                    response_level: ResponseLevel::Moderate
+                }
+            }),
+            TuneOutcome::Completed
+        );
+        assert_eq!(
+            tune_outcome_for_run(&RunOutcome::Completed {
                 write_back: WriteBackOutcome::Failed
             }),
             TuneOutcome::WriteBackFailed
         );
         assert_eq!(
-            tune_outcome_for_run(&RunOutcome::Aborted),
+            tune_outcome_for_run(&RunOutcome::Aborted(AbortReason::UserInterrupt)),
             TuneOutcome::Aborted
+        );
+        assert_eq!(
+            tune_outcome_for_run(&RunOutcome::Aborted(AbortReason::Timeout {
+                timeout_secs: 3600
+            })),
+            TuneOutcome::TimedOut
         );
     }
 
     #[test]
     fn print_summary_returns_the_tune_outcome_matching_the_run_outcome_in_every_output_format() {
-        // Full 4 (RunOutcome shape) x 2 (OutputFormat) matrix, so every `println!` arm in
+        // Full 6 (RunOutcome shape) x 2 (OutputFormat) matrix, so every `println!` arm in
         // both `match output` branches is exercised directly here rather than relying on
         // incidental coverage from `run()`-level tests (which never reach `Written`/`Failed`
         // write-back outcomes -- see the module doc comment on why that's structurally hard
@@ -2207,6 +2345,30 @@ mod tests {
             print_summary(
                 1,
                 &RunOutcome::Completed {
+                    write_back: WriteBackOutcome::DryRun {
+                        response_level: ResponseLevel::Aggressive
+                    }
+                },
+                OutputFormat::Table
+            ),
+            TuneOutcome::Completed
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::Completed {
+                    write_back: WriteBackOutcome::DryRun {
+                        response_level: ResponseLevel::Aggressive
+                    }
+                },
+                OutputFormat::Json
+            ),
+            TuneOutcome::Completed
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::Completed {
                     write_back: WriteBackOutcome::Failed
                 },
                 OutputFormat::Table
@@ -2224,12 +2386,36 @@ mod tests {
             TuneOutcome::WriteBackFailed
         );
         assert_eq!(
-            print_summary(1, &RunOutcome::Aborted, OutputFormat::Table),
+            print_summary(
+                1,
+                &RunOutcome::Aborted(AbortReason::UserInterrupt),
+                OutputFormat::Table
+            ),
             TuneOutcome::Aborted
         );
         assert_eq!(
-            print_summary(1, &RunOutcome::Aborted, OutputFormat::Json),
+            print_summary(
+                1,
+                &RunOutcome::Aborted(AbortReason::UserInterrupt),
+                OutputFormat::Json
+            ),
             TuneOutcome::Aborted
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::Aborted(AbortReason::Timeout { timeout_secs: 3600 }),
+                OutputFormat::Table
+            ),
+            TuneOutcome::TimedOut
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::Aborted(AbortReason::Timeout { timeout_secs: 3600 }),
+                OutputFormat::Json
+            ),
+            TuneOutcome::TimedOut
         );
     }
 
@@ -2266,5 +2452,141 @@ mod tests {
 
         let outcome = run(&pool, args, &test_config()).await.unwrap();
         assert_eq!(outcome, TuneOutcome::Completed);
+    }
+
+    #[tokio::test]
+    async fn run_allows_write_pid_without_yes_when_dry_run_is_set() {
+        // `--dry-run` never touches the DCS regardless of `--write-pid`, so there is nothing
+        // for `--yes` to confirm -- contrast with `run_rejects_write_pid_without_yes_before_
+        // starting_the_tune` above, which asserts the opposite (an error) when `--dry-run` is
+        // *not* given.
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.write_pid = Some(crate::args::ResponseLevelArg::Aggressive);
+        args.yes = false;
+        args.dry_run = true;
+
+        let outcome = run(&pool, args, &test_config()).await.unwrap();
+        assert_eq!(outcome, TuneOutcome::Completed);
+    }
+
+    #[tokio::test]
+    async fn run_times_out_and_aborts_when_timeout_secs_elapses_before_completion() {
+        // Real (unpaused) time: `start_paused` was tried here first but interacts badly with
+        // the real sqlx `SqlitePool` -- pausing tokio's clock also fast-forwards the pool's
+        // own internal connection-acquire timeout, which fires instantly and turns every
+        // query into a spurious `PoolTimedOut` error. So this test pays a real ~1s wall-clock
+        // cost instead, matching `tests/ctrlc_abort.rs`'s existing precedent of a similar
+        // real-time cost for the same reason (an actual signal/timeout has to actually
+        // elapse). `poll_interval_ms: 3` is not a divisor of `timeout_secs: 1`'s 1000ms, so
+        // the timeout can never land exactly on a tick boundary. `cycles_count: 100_000`
+        // makes it impossible for the MRFT test to legitimately finish within the handful of
+        // ticks that occur in one real second at this poll rate (a real oscillation cycle
+        // needs at least 2 ticks, so 100,000 cycles needs at least 200,000 -- nowhere near
+        // reachable in ~333 ticks).
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.poll_interval_ms = 3;
+        args.timeout_secs = 1;
+        args.cycles_count = Some(100_000);
+
+        let outcome = run(&pool, args, &test_config()).await.unwrap();
+        assert_eq!(outcome, TuneOutcome::TimedOut);
+
+        let runs = TuneRunRow::list(
+            &pool,
+            &bhtune_db::models::TuneRunFilter::default(),
+            bhtune_db::models::Pagination::first(10),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.len(), 1);
+        // A timeout-triggered abort reuses the exact same DB outcome as Ctrl+C -- only the
+        // CLI-level `TuneOutcome`/exit code/printed message distinguish *why*.
+        assert_eq!(runs[0].outcome, bhtune_db::models::TuneOutcome::Aborted);
+
+        // Ticks were actually recorded before the timeout fired, proving the loop really ran
+        // rather than aborting instantly with nothing sampled.
+        let samples = TuneSampleRow::list_for_run(&pool, runs[0].id)
+            .await
+            .unwrap();
+        assert!(!samples.is_empty());
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_dry_run_validates_but_does_not_write_via_interactive_selection() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto();
+
+        let outcome = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            None,
+            true,
+            &mut std::io::Cursor::new(b"2\n".as_slice()), // Moderate (index 1)
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome,
+            WriteBackOutcome::DryRun {
+                response_level: ResponseLevel::Moderate
+            }
+        );
+        // No PID constant was actually written to the backend...
+        assert!(backend.write_log().is_empty());
+        // ...and no audit row was recorded either, matching `Skipped`'s "nothing was
+        // attempted at the backend" rule.
+        assert!(
+            TuneWriteRow::list_for_run(&pool, run_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_dry_run_validates_but_does_not_write_via_write_pid() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto();
+
+        // An empty reader proves `--dry-run` + `--write-pid` never touches stdin, exactly
+        // like the real (non-dry-run) `--write-pid` path already does.
+        let outcome = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            Some(ResponseLevel::Aggressive),
+            true,
+            &mut std::io::Cursor::new(b"".as_slice()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome,
+            WriteBackOutcome::DryRun {
+                response_level: ResponseLevel::Aggressive
+            }
+        );
+        assert!(backend.write_log().is_empty());
+        assert!(
+            TuneWriteRow::list_for_run(&pool, run_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

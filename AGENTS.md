@@ -32,13 +32,17 @@ address, and default OPC server, mirroring `opcda-bridge-client`'s own config co
 `--output json` on `tune`/`simulate`, `--output json` on `history list`/`show`, and
 distinguished process exit codes (`EXIT_ABORTED`, `EXIT_WRITE_BACK_FAILED`) so scheduled/
 scripted callers can tell a Ctrl+C abort or a failed PID write-back apart from a clean
-completion without parsing stdout (see "Automation" below). Unattended-operation safety
-guardrails and structured logging remain separate, not-yet-started phases
-(`cli-safety`/`cli-logging`) — `cli-commands` is the subcommands and
-orchestration only. `backend-replay`, the replay harness, and the web GUI are not yet — the
-GUI plan reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before
-any Tauri code was written (see "Key architectural decisions"). See "Phases and todos" below
-for what's next.
+completion without parsing stdout (see "Automation" below). `cli-safety` is done: real
+range validation on `--relay-amp` at the `LoopConfig` model/construction level (not just a
+"not blank" check), a mandatory `--timeout-secs` wall-clock limit racing the poll loop
+itself so it fires even mid-hung-read (auto-abort-and-restore, its own distinguished
+`EXIT_TIMED_OUT` exit code), and `--dry-run` (rehearses the full write-back validation path
+with no live DCS write, and lifts the `--write-pid`-requires-`--yes` gate) — see "Safety"
+below. Structured logging remains a separate, not-yet-started phase (`cli-logging`) —
+`cli-commands` is the subcommands and orchestration only. `backend-replay`, the replay
+harness, and the web GUI are not yet — the GUI plan reversed from a Tauri desktop app to a
+browser UI served by `bhtune-server` before any Tauri code was written (see "Key
+architectural decisions"). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -106,7 +110,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   into an audit row with no translation. `BackendError` splits `Connect` (nothing was
   attempted) from `Operation` (reached the backend, failed there) from `Unsupported` (this
   backend has no such capability, e.g. `browse` on the simulator/replay backends) so callers
-  like the planned `cli-safety` guardrails can react differently to each. The trait never
+  like the `cli-safety` guardrails can react differently to each. The trait never
   references a `bhtune-core` type: reading/writing named string tags has no domain meaning by
   itself — gluing `Backend` to `LoopTags`/`ControllerDirection`/etc. is each concrete
   backend's own job (`backend-opcda`, `backend-simulator`), not this trait's.
@@ -470,9 +474,10 @@ discretization and its numerical cross-check against that reference.
   response level's PID constants with a stdin confirmation prompt (`maybe_write_back`) —
   audited via `TuneWriteRow`. `--mrft-delay <seconds>` pads the run with pre-/post-test
   recording-only ticks (PV still read and logged; no switch evaluation), mirroring the legacy
-  `--mrftDelayTime` flag. A run's outcome (`Completed`/`Aborted` on Ctrl+C/`Failed` on any
-  setup or mid-poll error) is always recorded in `tune_runs` before the process returns, even
-  on failure.
+  `--mrftDelayTime` flag. `--timeout-secs`/`--dry-run` add mandatory-unattended-operation
+  guardrails — see "Safety" below. A run's outcome (`Completed`/`Aborted` on Ctrl+C or
+  `--timeout-secs`/`Failed` on any setup or mid-poll error) is always recorded in `tune_runs`
+  before the process returns, even on failure.
 - **`bhtune simulate`** — a zero-configuration wrapper around `tune` that forces
   `--backend simulator` against a synthetic FOPDT process (`SIMULATOR_PV_TAG`/
   `SIMULATOR_MV_TAG`), for a demo/smoke-test run with no real DCS/PLC needed.
@@ -490,13 +495,13 @@ discretization and its numerical cross-check against that reference.
   gateway (via `opcda_bridge::Client`, bypassing the tuning engine entirely) for diagnostics —
   the CLI equivalent of the legacy app's ad-hoc tag testing.
 
-**What `cli-commands` deliberately does not cover** — each is its own later phase, not an
-oversight: mandatory unattended-run timeouts and auto-abort-and-restore (`cli-safety`), and
-`tracing`-based structured logging (`cli-logging`). Non-interactive automation flags
-(`--yes`/`--write-pid`/`--output json`) and distinguished exit codes shipped separately as
-`cli-automation` — see "Automation" below. Platform-standard config file/data-directory
-precedence shipped separately as `cli-config` — see "Config
-precedence" below.
+**What `cli-commands` deliberately does not cover** — its own later phase, not an
+oversight: `tracing`-based structured logging (`cli-logging`). Non-interactive automation
+flags (`--yes`/`--write-pid`/`--output json`) and distinguished exit codes shipped separately
+as `cli-automation` — see "Automation" below. Unattended-run safety guardrails
+(`--timeout-secs`/`--dry-run`/`LoopConfig::validate`) shipped separately as `cli-safety` — see
+"Safety" below. Platform-standard config file/data-directory precedence shipped separately as
+`cli-config` — see "Config precedence" below.
 
 **Testing approach.** `commands/tune.rs`'s tests use a `MockBackend` (an in-memory
 `Backend` impl with canned/erroring responses) for setup-and-validation-error paths, a real
@@ -655,6 +660,62 @@ full E2E. `tests/ctrlc_abort.rs` (see below) asserts the real subprocess exits w
 `EXIT_ABORTED`, not `0`, closing the loop on the one `TuneOutcome` variant `print_summary`'s
 own unit tests can't reach through a real `run_polling_loop` execution.
 
+## Safety (`cli-safety`)
+
+Guardrails for unattended operation against live plant equipment — the legacy app is always
+human-attended (an operator watches the trend and can hit Stop); scheduled/scripted tuning
+removes that supervision while still stroking a live valve, so these are not optional polish:
+
+- **`LoopConfig::validate`** (`bhtune-core`) — real range validation on `relay_amp_percent` at
+  the model/construction level, not just a client-side keystroke filter or a single "not
+  blank" check (the legacy predecessor's bug: a leftover 2014/2015/2016 debug code left in the
+  Relay Amplitude box passed its only check). `RELAY_AMP_PERCENT_MIN = 0.1`/
+  `RELAY_AMP_PERCENT_MAX = 50.0` (both `pub const f32` on `LoopConfig`) reject non-finite
+  values and anything outside that range; `LoopConfigError` is a hand-rolled `Display`/
+  `std::error::Error` enum (no `thiserror` — `bhtune-core` stays dependency-minimal) — the
+  crate's first fallible-construction pattern (previously only `Option`-returning functions
+  existed, e.g. `derive_tag`). `build_loop_config` (`commands/tune.rs`) calls `.validate()?`
+  immediately after constructing the `LoopConfig`, before any backend connection or database
+  write, mirroring the `--write-pid`-requires-`--yes` fail-fast precedent below.
+- **`--timeout-secs <seconds>`** (default `3600`) — a mandatory wall-clock limit on the whole
+  test, with no disable/unlimited option; a value of `0` just means an (essentially unusable)
+  instant timeout, preserving genuine "mandatory" semantics. Implemented in
+  `run_polling_loop` as a `tokio::time::sleep` created once before the loop and raced via a
+  third `tokio::select!` arm alongside `interval.tick()` and `tokio::signal::ctrl_c()` —
+  deliberately a genuine race, not a check performed only after each completed tick, so the
+  timeout still fires even if a single backend read call itself hangs (e.g. a stalled network
+  read), which is the realistic failure mode this guardrail exists to catch. On firing, the
+  loop is restored to its pre-test mode via the exact same path as a Ctrl+C abort (`restore` +
+  `TuneRunRow::abort`, recording plain `Aborted` in `tune_runs.outcome` — no new DB state) and
+  reported to the caller as the distinct `TuneOutcome::TimedOut` / `EXIT_TIMED_OUT = 4`, so a
+  scheduler's alerting can tell "this run had to be forcibly killed for running too long"
+  (possibly a stuck relay, a misconfigured tag mapping, or a stalled backend read — worth
+  investigating) apart from "an operator stopped it on purpose" (`EXIT_ABORTED`, routine).
+- **`--dry-run`** — rehearses a complete write-back: tags configured, a calculated result
+  exists for the resolved response level (via `--write-pid` or the interactive prompt) — every
+  validation step a real write-back performs — but returns immediately before the actual
+  `backend.write`/confirmation-readback calls, as `WriteBackOutcome::DryRun { response_level }`.
+  No `tune_writes` row is recorded, matching `Skipped`'s "nothing was attempted at the
+  backend" rule. Lifts the `--write-pid`-requires-`--yes` gate in `run()` (`args.write_pid.
+  is_some() && !args.yes && !args.dry_run`): nothing live is touched, so there is nothing for
+  `--yes` to confirm.
+
+**Testing approach.** `run_times_out_and_aborts_when_timeout_secs_elapses_before_completion`
+exercises the real timeout end-to-end (`poll_interval_ms: 3`/`timeout_secs: 1`, deliberately
+not a multiple of each other so the deadline never lands exactly on a tick boundary, plus a
+`cycles_count` far too high to legitimately complete in the ~333 ticks available) — this pays
+a real ~1s wall-clock cost rather than using `#[tokio::test(start_paused = true)]`, because
+pausing tokio's clock also fast-forwards the real `SqlitePool`'s own internal connection-
+acquire timeout, turning every query into a spurious `PoolTimedOut` error; `tests/
+ctrlc_abort.rs` already accepts a similar real-time cost for the same underlying reason (an
+actual signal/timeout has to actually elapse). `--dry-run`'s short-circuit is covered directly
+against `maybe_write_back` (both the interactive-selection and `--write-pid` resolution paths,
+asserting the mock backend's write log stays empty and no `tune_writes` row is recorded) and
+end-to-end via `run_allows_write_pid_without_yes_when_dry_run_is_set`, which proves the gate
+bypass itself. `build_loop_config_rejects_an_out_of_range_relay_amp_before_any_backend_or_db_
+io` mirrors the existing "no I/O before the fail-fast check" pattern already proven for
+`--write-pid`/`--yes`.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -809,7 +870,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | `cli-commands` + `cli-config` + `cli-automation` done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above); safety guardrails and structured logging pending |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | `cli-commands` + `cli-config` + `cli-automation` + `cli-safety` done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation, mandatory `--timeout-secs`, and `--dry-run`, see "Safety" above); structured logging pending |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -850,9 +911,9 @@ that binary does something real and gains its own targeted tests.
    (`cli-commands`, done — see "CLI reference" above), `CLI > env > TOML > default` config
    precedence (`cli-config`, done — see "Config precedence" above), non-interactive automation
    mode (`cli-automation`, done: `--yes`/`--write-pid`/`--output json` and distinguished exit
-   codes — see "Automation" above), safety guardrails (`cli-safety`: mandatory timeout +
-   auto-restore, explicit opt-in for unattended PID writes), structured logging
-   (`cli-logging`).
+   codes — see "Automation" above), safety guardrails (`cli-safety`, done: relay-amp range
+   validation, mandatory `--timeout-secs` with auto-abort-and-restore, `--dry-run` — see
+   "Safety" above), structured logging (`cli-logging`, pending).
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS
@@ -896,9 +957,10 @@ that binary does something real and gains its own targeted tests.
   Step Test — rather than inventing a different mechanism for each.
 - **Safety is a first-class requirement, not polish.** Scheduled/scripted tuning against a live,
   running process removes human supervision (no operator watching the trend, able to hit Stop)
-  while still stroking a real control valve. `cli-safety` guardrails (dry-run mode, mandatory
-  wall-clock timeout with automatic abort-and-restore, explicit opt-in required for any run that
-  writes PID constants unattended) are required for the CLI/automation surface, not optional.
+  while still stroking a real control valve. `cli-safety` (done — see "Safety" above) ships
+  real relay-amp range validation, a mandatory wall-clock timeout with automatic
+  abort-and-restore, and `--dry-run` for rehearsing a write-back with no live DCS write; none
+  of it is optional polish.
 - **Chart library**: `uPlot` over `Recharts` for the frontend trend chart — handles high-rate
   streaming data (multiple updates/second) far better.
 - **Naming**: `bytehound` is an established Rust memory-profiler brand. `bhtune` avoids a direct

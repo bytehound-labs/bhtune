@@ -36,7 +36,7 @@ reflected in code and docs, not just here).
 
 ## 2. Relay amplitude validation
 
-- [ ] REQUIRED — Relay Amplitude must have real, enforced range validation at the
+- [x] REQUIRED — Relay Amplitude must have real, enforced range validation at the
       model/construction level, not just client-side keystroke filtering or a single "not blank"
       check. An unvalidated numeric field is exactly how a nonsensical value reaches a live
       control loop.
@@ -198,6 +198,6 @@ Everything in this section is deferred past v1, not permanently out of scope.
 - [ ] REQUIRED — one unified async concurrency model in `bhtune-core` for both MRFT (polling) and
       Step Test (subscription, once implemented) — not two different mechanisms for conceptually
       the same job.
-- [ ] REQUIRED — `cli-safety` guardrails for unattended/scheduled tuning: dry-run mode, mandatory
+- [x] REQUIRED — `cli-safety` guardrails for unattended/scheduled tuning: dry-run mode, mandatory
       wall-clock timeout with automatic abort-and-restore, explicit opt-in required for any run
       that writes PID constants without a human present.

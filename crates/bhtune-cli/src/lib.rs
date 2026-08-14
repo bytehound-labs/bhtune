@@ -21,10 +21,12 @@
 //! `run`/`run_with_cli` split.
 //!
 //! Non-interactive/scheduled use (cron, CI, batch campaigns) is `tune`/`simulate`'s
-//! `--yes`/`--write-pid <level>` flags (bypassing the interactive write-back prompt) plus
-//! this module's distinguished exit codes ([`EXIT_ABORTED`], [`EXIT_WRITE_BACK_FAILED`]), so
-//! a scheduler can tell "aborted", "test ran but the write-back failed", and "never ran at
-//! all" apart without parsing stdout. See AGENTS.md's `cli-automation` section.
+//! `--yes`/`--write-pid <level>`/`--dry-run`/`--timeout-secs` flags (bypassing the
+//! interactive write-back prompt, rehearsing a write-back, and mandatorily bounding an
+//! unattended run's wall-clock duration) plus this module's distinguished exit codes
+//! ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`], [`EXIT_WRITE_BACK_FAILED`]), so a scheduler can tell
+//! "aborted", "timed out", "test ran but the write-back failed", and "never ran at
+//! all" apart without parsing stdout. See AGENTS.md's `cli-automation`/`cli-safety` sections.
 
 pub mod args;
 pub mod backend;
@@ -61,6 +63,14 @@ pub const EXIT_ABORTED: u8 = 2;
 /// from either of those. See `commands::tune::TuneOutcome` and AGENTS.md's `cli-automation`
 /// section.
 pub const EXIT_WRITE_BACK_FAILED: u8 = 3;
+/// A `tune`/`simulate` run was aborted because `--timeout-secs` elapsed before the engine
+/// reported completion; the loop was restored to its pre-test mode, exactly like
+/// [`EXIT_ABORTED`]. Distinct from it so a scheduler's alerting can tell "this run had to be
+/// killed for running too long" (possibly a stuck relay, a misconfigured tag mapping, or a
+/// stalled backend read -- worth investigating) apart from "an operator stopped it on
+/// purpose" (routine). See `commands::tune::TuneOutcome::TimedOut` and AGENTS.md's
+/// `cli-safety` section.
+pub const EXIT_TIMED_OUT: u8 = 4;
 
 /// Parses real CLI arguments and runs, returning a process exit code.
 pub async fn run() -> ExitCode {
@@ -132,6 +142,7 @@ fn tune_outcome_exit_code(outcome: commands::tune::TuneOutcome) -> ExitCode {
     match outcome {
         commands::tune::TuneOutcome::Completed => ExitCode::SUCCESS,
         commands::tune::TuneOutcome::Aborted => ExitCode::from(EXIT_ABORTED),
+        commands::tune::TuneOutcome::TimedOut => ExitCode::from(EXIT_TIMED_OUT),
         commands::tune::TuneOutcome::WriteBackFailed => ExitCode::from(EXIT_WRITE_BACK_FAILED),
     }
 }
@@ -226,7 +237,9 @@ mod tests {
                 mv_range_low: Some(0.0),
                 direction: Some(crate::args::DirectionArg::Reverse),
                 poll_interval_ms: 800,
+                timeout_secs: 3600,
                 name: None,
+                dry_run: false,
                 yes: false,
                 write_pid: None,
                 output: OutputFormat::Table,
@@ -260,6 +273,10 @@ mod tests {
             ExitCode::from(EXIT_ABORTED)
         );
         assert_eq!(
+            tune_outcome_exit_code(commands::tune::TuneOutcome::TimedOut),
+            ExitCode::from(EXIT_TIMED_OUT)
+        );
+        assert_eq!(
             tune_outcome_exit_code(commands::tune::TuneOutcome::WriteBackFailed),
             ExitCode::from(EXIT_WRITE_BACK_FAILED)
         );
@@ -287,7 +304,9 @@ mod tests {
             sim_initial_pv: 50.0,
             sim_initial_mv: 50.0,
             poll_interval_ms: 5,
+            timeout_secs: 3600,
             name: Some("dispatch-test".to_string()),
+            dry_run: false,
             yes: false,
             write_pid: None,
             output: OutputFormat::Table,

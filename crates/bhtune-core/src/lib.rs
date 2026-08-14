@@ -30,7 +30,7 @@ pub mod tuning_math;
 pub use constants::{ResponseLevel, TuningConstants, lookup};
 pub use controller_type::ControllerType;
 pub use direction::ControllerDirection;
-pub use loop_config::LoopConfig;
+pub use loop_config::{LoopConfig, LoopConfigError};
 pub use mrft::{Action, InitialReadings, MrftCompat, MrftEngine, MrftState, Tick};
 pub use pid_config::{DerivativeType, IntegralType, ProportionalType, TimeUnit};
 pub use process_type::ProcessType;
