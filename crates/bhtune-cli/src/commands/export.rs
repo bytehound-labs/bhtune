@@ -17,6 +17,7 @@ struct SampleRecord {
     tick: i64,
     time: chrono::DateTime<chrono::Utc>,
     pv: f32,
+    pv_quality: bhtune_db::models::SampleQuality,
     hysteresis: f32,
     mv_value_current: f32,
     mv_sign_next_step: i8,
@@ -31,6 +32,7 @@ impl From<&TuneSampleRow> for SampleRecord {
             tick: row.tick_index,
             time: row.sample.time,
             pv: row.sample.pv,
+            pv_quality: row.pv_quality,
             hysteresis: row.state.hysteresis,
             mv_value_current: row.state.mv_value_current,
             mv_sign_next_step: row.state.mv_sign_next_step,
@@ -128,6 +130,7 @@ mod tests {
                 cycles_completed: 0,
                 cycles_remaining: 2,
             },
+            bhtune_db::models::SampleQuality::Good,
         )
         .await
         .unwrap();
@@ -171,13 +174,14 @@ mod tests {
         let header = lines.next().unwrap();
         assert_eq!(
             header,
-            "tick,time,pv,hysteresis,mv_value_current,mv_sign_next_step,counter_all_switches,cycles_completed,cycles_remaining"
+            "tick,time,pv,pv_quality,hysteresis,mv_value_current,mv_sign_next_step,counter_all_switches,cycles_completed,cycles_remaining"
         );
         let data = lines.next().unwrap();
         let fields: Vec<&str> = data.split(',').collect();
         assert_eq!(fields[0], "0"); // tick
         assert_eq!(fields[2], "50.0"); // pv, not swapped with mv
-        assert_eq!(fields[4], "50.0"); // mv_value_current
+        assert_eq!(fields[3], "good"); // pv_quality
+        assert_eq!(fields[5], "50.0"); // mv_value_current
     }
 
     #[tokio::test]

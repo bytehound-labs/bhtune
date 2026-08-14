@@ -794,6 +794,38 @@ time; this section is updated as each lands, with a full pass once all are done:
   show` (not `list`, to keep the list view narrow) prints the snapshotted template name and
   origin alongside the run's other identity fields, from `RunDetailJson`/the plain-text
   table.
+- **OPC quality now enforced on every tuning-critical read** — done
+  (`commands::tune::check_quality`, `bhtune_db::models::SampleQuality`). Previously
+  `bhtune_backend::Quality`/`is_trustworthy()` existed but nothing in the tune path ever
+  called it — a tag reporting `Uncertain` (a stale held-last-value during a comms hiccup) or
+  outright `Bad` quality flowed into the MRFT engine and a PID write-back exactly like a
+  trustworthy `Good` reading. `check_quality` is now the single choke point: `Good` always
+  passes; `Bad` is never accepted, `--allow-uncertain-quality` or not; `Uncertain` is
+  accepted only with that flag set, logging a loud `tracing::warn!` every time so a run
+  executed under relaxed rules is never silently indistinguishable from a normal one. Wired
+  through every read that feeds a tuning decision:
+  - `read_initial_values`/`transition_to_manual`'s setpoint read — a poor-quality reading
+    before any mutation of the loop is a hard failure (a plain `anyhow::Error`), since
+    nothing has been mutated yet and there is no loop state to restore.
+  - The in-flight MRFT poll loop (`run_polling_loop`) — a poor-quality PV sample here *does*
+    abort the run (a new `AbortReason::PoorQuality { tag, quality }`, restored and recorded
+    exactly like a Ctrl+C/timeout abort), but the triggering sample is still recorded to
+    `tune_samples` (with its real, poor quality) *before* the abort, via a new
+    `read_pv_sample` helper that returns quality without hard-failing on it, so the future
+    history explorer can show exactly what was seen when the run gave up.
+  - The PID write-back confirmation readback (`maybe_write_back`) — a poor-quality readback
+    is classified as a write-back failure (`WriteBackOutcome::Failed`, audited via
+    `TuneWriteRow`), never silently accepted as proof the write landed. Does not attempt a
+    rollback of the write itself; that is finding 6 (`safety-writeback-rollback`, not yet
+    implemented).
+
+  `tune_samples` gained a `pv_quality` column (`SampleQuality`: `Good`/`Uncertain`/`Bad`, the
+  DB-side mirror of `bhtune_backend::Quality` — two separate enums since `bhtune-backend` and
+  `bhtune-db` are sibling crates, neither depending on the other) and `tune_runs` gained
+  `allow_uncertain_quality`, so a run's quality posture is part of its permanent history.
+  `bhtune tune --allow-uncertain-quality` is the CLI flag; a poor-quality abort exits with
+  `EXIT_POOR_QUALITY` (5), distinct from a Ctrl+C/timeout abort, and `--output json` carries
+  nullable `poor_quality_tag`/`poor_quality` fields alongside the existing `timeout_secs`.
 
 ## Logging (`cli-logging`)
 

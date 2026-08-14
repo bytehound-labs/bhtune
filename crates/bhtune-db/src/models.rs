@@ -394,6 +394,13 @@ pub struct TuneRunRow {
     /// `tags_json`.
     pub tags: LoopTags,
     pub initial_readings: Option<TuneRunInitialReadings>,
+    /// Whether this run permitted `Quality::Uncertain` OPC readings via
+    /// `--allow-uncertain-quality` (finding 5 of the live-plant safety review;
+    /// `Quality::Bad` is never accepted regardless). `false` for every run started before
+    /// [`TuneRunRow::record_allow_uncertain_quality`] is called -- see that method's doc
+    /// comment for why it's a separate post-`start()` update rather than a `start()`
+    /// parameter.
+    pub allow_uncertain_quality: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -582,6 +589,37 @@ impl TuneRunRow {
         .bind(readings.pv_range_high)
         .bind(readings.pv_range_low)
         .bind(enum_to_text(&readings.controller_direction))
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Records whether this run permitted `Quality::Uncertain` OPC readings, via
+    /// `--allow-uncertain-quality` (finding 5 of the live-plant safety review). A separate
+    /// post-`start()` update rather than a new `start()` parameter deliberately: `start()`
+    /// already has 8 positional parameters across 28 call sites in this crate's own test
+    /// suite alone, and this is a rarely-used escape hatch, not information every caller
+    /// naturally has on hand at the moment a run begins the way `template_origin`/`template`/
+    /// `tags` are. The column defaults to `0`/`false` (see the migration), so every existing
+    /// `start()` call site keeps compiling and behaving exactly as before; only the one
+    /// production caller in `bhtune-cli`'s `run()` needs to call this, right after `start()`
+    /// succeeds.
+    pub async fn record_allow_uncertain_quality(
+        pool: &SqlitePool,
+        run_id: i64,
+        allow_uncertain_quality: bool,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs SET allow_uncertain_quality = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(allow_uncertain_quality)
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -819,12 +857,33 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         template,
         tags,
         initial_readings,
+        allow_uncertain_quality: row
+            .try_get("allow_uncertain_quality")
+            .map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
     })
 }
 // }}}1
 
 // tune_samples {{{1
+
+/// How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the
+/// moment it was read (finding 5 of the live-plant safety review).
+///
+/// A `bhtune-db`-local mirror of [`bhtune_backend::Quality`], not a reuse of it directly:
+/// `bhtune-db` deliberately doesn't depend on `bhtune-backend` (a leaf I/O-adapter crate with
+/// a much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business
+/// in the persistence crate just to name one three-variant enum), so `bhtune-cli`, which
+/// already depends on both, is the one place that converts between them. This mirrors
+/// [`TemplateOrigin`]'s own precedent: a small, persistence-local enum rather than a second
+/// dependency edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SampleQuality {
+    Good,
+    Uncertain,
+    Bad,
+}
 
 /// One row of `tune_samples`: a single tick's [`Tick`] input and resulting [`MrftState`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -836,26 +895,31 @@ pub struct TuneSampleRow {
     pub tick_index: i64,
     pub sample: Tick,
     pub state: MrftState,
+    /// The backend-reported quality of `sample.pv` at the moment it was read. See
+    /// [`SampleQuality`].
+    pub pv_quality: SampleQuality,
 }
 
 impl TuneSampleRow {
     /// Records one tick of a run, taking the exact [`Tick`]/[`MrftState`] pair
-    /// [`bhtune_core::mrft::MrftEngine::step`] produced. `(run_id, tick_index)` is unique
-    /// (see the migration), so re-recording the same tick twice is a caller bug, not a
-    /// silent overwrite.
+    /// [`bhtune_core::mrft::MrftEngine::step`] produced, plus the [`SampleQuality`] the
+    /// backend reported for `sample.pv` at read time. `(run_id, tick_index)` is unique (see
+    /// the migration), so re-recording the same tick twice is a caller bug, not a silent
+    /// overwrite.
     pub async fn insert(
         pool: &SqlitePool,
         run_id: i64,
         tick_index: i64,
         sample: Tick,
         state: MrftState,
+        pv_quality: SampleQuality,
     ) -> DbResult<TuneSampleRow> {
         let row = sqlx::query(
             r#"
             INSERT INTO tune_samples (
-                run_id, tick, time, pv, hysteresis, mv_value_current, mv_sign_next_step,
-                counter_all_switches, cycles_completed, cycles_remaining
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                run_id, tick, time, pv, pv_quality, hysteresis, mv_value_current,
+                mv_sign_next_step, counter_all_switches, cycles_completed, cycles_remaining
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
@@ -863,6 +927,7 @@ impl TuneSampleRow {
         .bind(tick_index)
         .bind(sample.time)
         .bind(sample.pv)
+        .bind(enum_to_text(&pv_quality))
         .bind(state.hysteresis)
         .bind(state.mv_value_current)
         .bind(state.mv_sign_next_step)
@@ -906,6 +971,10 @@ fn row_to_tune_sample(row: SqliteRow) -> DbResult<TuneSampleRow> {
                 .map_err(DbError::Query)?,
             cycles_completed: row.try_get("cycles_completed").map_err(DbError::Query)?,
             cycles_remaining: row.try_get("cycles_remaining").map_err(DbError::Query)?,
+        },
+        pv_quality: {
+            let pv_quality: String = row.try_get("pv_quality").map_err(DbError::Query)?;
+            text_to_enum("pv_quality", &pv_quality)?
         },
     })
 }

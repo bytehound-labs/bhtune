@@ -150,6 +150,14 @@ CREATE TABLE tune_runs (
 
     test_type               TEXT NOT NULL DEFAULT 'mrft' CHECK (test_type IN ('mrft')),
     backend                  TEXT NOT NULL CHECK (backend IN ('opcda', 'simulator', 'replay')),
+    -- Whether this run permitted `Quality::Uncertain` OPC readings via
+    -- `--allow-uncertain-quality` (`Quality::Bad` is never accepted, flag or
+    -- no flag). Defaults to 0/false, set via a follow-up
+    -- `record_allow_uncertain_quality` call rather than a `start()`
+    -- parameter -- see that method's doc comment -- so history can show a
+    -- run was executed under relaxed rules instead of silently looking
+    -- identical to a normal one.
+    allow_uncertain_quality  INTEGER NOT NULL DEFAULT 0 CHECK (allow_uncertain_quality IN (0, 1)),
 
     started_at               TEXT NOT NULL,
     completed_at             TEXT,
@@ -199,6 +207,13 @@ CREATE TABLE tune_samples (
     tick                    INTEGER NOT NULL,
     time                    TEXT NOT NULL,
     pv                      REAL NOT NULL,
+    -- Backend-reported quality of this tick's `pv` reading (finding 5 of the
+    -- live-plant safety review). A non-`Good` sample (unless the run set
+    -- `allow_uncertain_quality` and this is merely `uncertain`) aborts the
+    -- run before this row is even the last one written -- see
+    -- `run_polling_loop` in bhtune-cli -- so most rows here are `good`, and
+    -- a non-`good` row is always the final sample of an aborted run.
+    pv_quality              TEXT NOT NULL CHECK (pv_quality IN ('good', 'uncertain', 'bad')),
     hysteresis              REAL NOT NULL,
     mv_value_current        REAL NOT NULL,
     mv_sign_next_step       INTEGER NOT NULL,

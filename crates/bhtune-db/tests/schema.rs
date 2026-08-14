@@ -342,6 +342,69 @@ async fn tune_runs_reject_invalid_template_origin_and_invalid_json() {
     );
 }
 
+/// Covers the `CHECK` constraints `safety-quality` added: `tune_runs.allow_uncertain_quality`
+/// must be `0` or `1`, and `tune_samples.pv_quality` must be one of `good`/`uncertain`/`bad`.
+#[tokio::test]
+async fn tune_runs_and_tune_samples_reject_invalid_quality_columns() {
+    let pool = connect_in_memory().await.unwrap();
+    let loop_id = seed_loop(&pool).await;
+
+    let insert_run = |allow_uncertain_quality: i64| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                r#"
+                INSERT INTO tune_runs (
+                    loop_id, loop_name, backend, started_at, outcome,
+                    process_type, controller_type, relay_amp_percent, num_cycles_skip,
+                    num_cycles_count, noise_protection_secs, mrft_delay_secs,
+                    template_name, template_origin, template_snapshot_json, tags_json,
+                    allow_uncertain_quality, created_at
+                ) VALUES (?, 'LIC101', 'opcda', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
+                          'Test Template', 'builtin', '{}', '{}', ?, ?)
+                "#,
+            )
+            .bind(loop_id)
+            .bind(Utc::now())
+            .bind(allow_uncertain_quality)
+            .bind(Utc::now())
+            .execute(&pool)
+            .await
+        }
+    };
+    assert!(
+        insert_run(2).await.is_err(),
+        "allow_uncertain_quality outside 0/1 must be rejected"
+    );
+    assert!(insert_run(0).await.is_ok());
+    assert!(insert_run(1).await.is_ok());
+
+    let run_id = seed_failed_run(&pool, Some(loop_id)).await;
+    let insert_sample = |pv_quality: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                r#"
+                INSERT INTO tune_samples (
+                    run_id, tick, time, pv, pv_quality, hysteresis, mv_value_current,
+                    mv_sign_next_step, counter_all_switches, cycles_completed, cycles_remaining
+                ) VALUES (?, 0, ?, 50.0, ?, 1.0, 55.0, 1, 0, 0, 2)
+                "#,
+            )
+            .bind(run_id)
+            .bind(Utc::now())
+            .bind(pv_quality)
+            .execute(&pool)
+            .await
+        }
+    };
+    assert!(
+        insert_sample("stale").await.is_err(),
+        "pv_quality outside good/uncertain/bad must be rejected"
+    );
+    assert!(insert_sample("good").await.is_ok());
+}
+
 #[tokio::test]
 async fn deleting_a_loop_sets_tune_runs_loop_id_null_but_keeps_the_run() {
     let pool = connect_in_memory().await.unwrap();
@@ -377,9 +440,9 @@ async fn tune_samples_enforce_unique_tick_and_cascade_delete_with_the_run() {
         sqlx::query(
             r#"
             INSERT INTO tune_samples (
-                run_id, tick, time, pv, hysteresis, mv_value_current, mv_sign_next_step,
-                counter_all_switches, cycles_completed, cycles_remaining
-            ) VALUES (?, ?, ?, 50.0, 1.0, 55.0, 1, 0, 0, 2)
+                run_id, tick, time, pv, pv_quality, hysteresis, mv_value_current,
+                mv_sign_next_step, counter_all_switches, cycles_completed, cycles_remaining
+            ) VALUES (?, ?, ?, 50.0, 'good', 1.0, 55.0, 1, 0, 0, 2)
             "#,
         )
         .bind(run_id)
@@ -393,9 +456,9 @@ async fn tune_samples_enforce_unique_tick_and_cascade_delete_with_the_run() {
     let dup = sqlx::query(
         r#"
         INSERT INTO tune_samples (
-            run_id, tick, time, pv, hysteresis, mv_value_current, mv_sign_next_step,
-            counter_all_switches, cycles_completed, cycles_remaining
-        ) VALUES (?, 0, ?, 50.0, 1.0, 55.0, 1, 0, 0, 2)
+            run_id, tick, time, pv, pv_quality, hysteresis, mv_value_current,
+            mv_sign_next_step, counter_all_switches, cycles_completed, cycles_remaining
+        ) VALUES (?, 0, ?, 50.0, 'good', 1.0, 55.0, 1, 0, 0, 2)
         "#,
     )
     .bind(run_id)

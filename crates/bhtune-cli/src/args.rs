@@ -350,6 +350,16 @@ pub struct TuneArgs {
     #[arg(long, value_enum)]
     pub write_pid: Option<ResponseLevelArg>,
 
+    /// Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. Off by
+    /// default: a stale/held value is indistinguishable from a live one to the MRFT engine,
+    /// so tolerating it can silently corrupt the switch-period measurement the whole test
+    /// depends on. Only for sites whose gateway reports `Uncertain` as a matter of course --
+    /// `Quality::Bad` is never accepted, with or without this flag. Logged loudly when used
+    /// and recorded on the run (`tune_runs.allow_uncertain_quality`), so history shows a run
+    /// executed under relaxed rules.
+    #[arg(long)]
+    pub allow_uncertain_quality: bool,
+
     /// How to print this run's final outcome line.
     #[arg(long, value_enum, default_value = "table")]
     pub output: crate::output::OutputFormat,
@@ -418,6 +428,10 @@ pub struct SimulateArgs {
     #[arg(long, value_enum)]
     pub write_pid: Option<ResponseLevelArg>,
 
+    /// See `TuneArgs::allow_uncertain_quality`.
+    #[arg(long)]
+    pub allow_uncertain_quality: bool,
+
     /// See `TuneArgs::output`.
     #[arg(long, value_enum, default_value = "table")]
     pub output: crate::output::OutputFormat,
@@ -461,6 +475,7 @@ impl SimulateArgs {
             name: self.name,
             yes: self.yes,
             write_pid: self.write_pid,
+            allow_uncertain_quality: self.allow_uncertain_quality,
             output: self.output,
         }
     }

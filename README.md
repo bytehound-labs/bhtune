@@ -150,6 +150,11 @@ unattended runs against live plant equipment fail safe:
 - **Every run snapshots the exact template and resolved tags it used** — a historical run
   (`bhtune history show <run>`) stays interpretable even after the template it was configured
   against is later edited, re-versioned, or deleted from the catalog.
+- **OPC quality is enforced on every tuning-critical read** — a tag reporting bad quality is
+  never trusted for tuning, and a tag reporting uncertain quality is rejected unless
+  `--allow-uncertain-quality` is explicitly passed (logged and recorded on the run either way).
+  A poor-quality reading during the in-flight test aborts and restores the loop just like a
+  Ctrl+C, and the exit code (`5`) is distinct from every other abort reason.
 
 ## Logging
 

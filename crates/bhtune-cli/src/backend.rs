@@ -96,6 +96,7 @@ mod tests {
             name: None,
             yes: false,
             write_pid: None,
+            allow_uncertain_quality: false,
             output: crate::output::OutputFormat::Table,
         }
     }

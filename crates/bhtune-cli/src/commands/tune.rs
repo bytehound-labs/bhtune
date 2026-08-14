@@ -19,8 +19,8 @@ use bhtune_core::{
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, TemplateOrigin, TuneBackend, TuneResultRow, TuneRunInitialReadings, TuneRunRow,
-    TuneSampleRow, TuneWriteRow, WriteReadback,
+    DcsTemplateRow, SampleQuality, TemplateOrigin, TuneBackend, TuneResultRow,
+    TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
 };
 use chrono::{DateTime, Utc};
 
@@ -44,6 +44,14 @@ pub enum TuneOutcome {
     /// but distinguished so a scheduler's alerting can tell "this run had to be killed for
     /// running too long" apart from "an operator stopped it on purpose".
     TimedOut,
+    /// A backend reported a non-`Good` OPC quality for a tuning-critical reading -- an
+    /// initial reading, the transition-to-manual setpoint capture, or an in-flight PV poll
+    /// sample without `--allow-uncertain-quality` (or with it, but the quality was `Bad`
+    /// rather than merely `Uncertain`) -- and the run was aborted and the loop restored
+    /// before returning, exactly like [`TuneOutcome::Aborted`]/[`TuneOutcome::TimedOut`] but
+    /// distinguished so a scheduler's alerting can tell "the plant data itself couldn't be
+    /// trusted" apart from either of those. See `safety-quality` in AGENTS.md.
+    PoorQuality,
     /// The test itself completed, but writing the chosen PID parameters back to the DCS
     /// failed (rejected write, failed confirmation readback, or -- defensively -- a
     /// `--write-pid` level with no matching calculated result).
@@ -57,6 +65,7 @@ impl TuneOutcome {
             TuneOutcome::Completed => "completed",
             TuneOutcome::Aborted => "aborted",
             TuneOutcome::TimedOut => "timed_out",
+            TuneOutcome::PoorQuality => "poor_quality",
             TuneOutcome::WriteBackFailed => "write_back_failed",
         }
     }
@@ -126,12 +135,14 @@ pub async fn run(
         started_at,
     )
     .await?;
+    TuneRunRow::record_allow_uncertain_quality(pool, run.id, args.allow_uncertain_quality).await?;
     tracing::info!(
         run_id = run.id,
         template = %args.template,
         process_type = ?config.process_type,
         controller_type = ?config.controller_type,
         backend = ?db_backend,
+        allow_uncertain_quality = args.allow_uncertain_quality,
         "starting tune run"
     );
 
@@ -178,13 +189,27 @@ enum RunOutcome {
 }
 
 /// Why a run ended via [`RunOutcome::Aborted`] instead of a normal engine completion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AbortReason {
     /// Ctrl+C.
     UserInterrupt,
     /// `--timeout-secs` elapsed before the engine reported completion. Carries the
     /// configured limit that was hit, for the printed/JSON summary.
     Timeout { timeout_secs: u64 },
+    /// An in-flight PV poll sample's quality was `Bad`, or `Uncertain` without
+    /// `--allow-uncertain-quality` set (finding 5 of the live-plant safety review). Unlike
+    /// the two variants above, this is checked and constructed from inside
+    /// [`run_polling_loop`] itself rather than from [`execute`]'s outer `tokio::select!`,
+    /// since it depends on the value just read, not an independent timer/signal. A poor
+    /// quality reading *before* the mode transition (initial readings, the
+    /// transition-to-manual setpoint capture) is instead a hard failure via a plain
+    /// `anyhow::Error` -- see `check_quality` -- since nothing has been mutated yet at that
+    /// point, so there's no loop state to restore and no reason to route it through this
+    /// enum. Carries `tag`/`quality` for the printed/JSON summary.
+    PoorQuality {
+        tag: String,
+        quality: bhtune_backend::Quality,
+    },
 }
 
 /// The result of `maybe_write_back`'s attempt (or non-attempt) to write calculated PID
@@ -216,6 +241,7 @@ fn tune_outcome_for_run(outcome: &RunOutcome) -> TuneOutcome {
         RunOutcome::Completed { .. } => TuneOutcome::Completed,
         RunOutcome::Aborted(AbortReason::UserInterrupt) => TuneOutcome::Aborted,
         RunOutcome::Aborted(AbortReason::Timeout { .. }) => TuneOutcome::TimedOut,
+        RunOutcome::Aborted(AbortReason::PoorQuality { .. }) => TuneOutcome::PoorQuality,
     }
 }
 
@@ -253,6 +279,11 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                     "Tune aborted: exceeded the {timeout_secs}s --timeout-secs limit before completing; loop restored."
                 );
             }
+            RunOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => {
+                println!(
+                    "Tune aborted: tag '{tag}' reported OPC quality {quality:?} during polling; loop restored."
+                );
+            }
         },
         OutputFormat::Json => {
             let (write_back, response_level) = match outcome {
@@ -271,12 +302,21 @@ fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> Tun
                 RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => Some(*timeout_secs),
                 _ => None,
             };
+            let (poor_quality_tag, poor_quality) = match outcome {
+                RunOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => (
+                    Some(tag.clone()),
+                    Some(format!("{quality:?}").to_lowercase()),
+                ),
+                _ => (None, None),
+            };
             let json = serde_json::json!({
                 "run_id": run_id,
                 "outcome": tune_outcome.label(),
                 "write_back": write_back,
                 "write_back_response_level": response_level,
                 "timeout_secs": timeout_secs,
+                "poor_quality_tag": poor_quality_tag,
+                "poor_quality": poor_quality,
             });
             println!(
                 "{}",
@@ -411,7 +451,7 @@ struct InitialState {
 
 /// State captured during `transition_to_manual` that `restore` needs later — currently just
 /// the setpoint read while transitioning out of Auto (`SvValueIni` in the legacy app).
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct ModeRestoreState {
     setpoint_ini: Option<f32>,
 }
@@ -428,9 +468,11 @@ async fn execute(
     started_at: DateTime<Utc>,
     write_pid: Option<ResponseLevel>,
 ) -> anyhow::Result<RunOutcome> {
-    let initial = read_initial_values(backend, tags, template).await?;
+    let allow_uncertain = args.allow_uncertain_quality;
+    let initial = read_initial_values(backend, tags, template, allow_uncertain).await?;
     validate_initial_state(&initial)?;
-    let mode_state = transition_to_manual(backend, tags, template, &initial).await?;
+    let mode_state =
+        transition_to_manual(backend, tags, template, &initial, allow_uncertain).await?;
 
     TuneRunRow::record_initial_readings(
         pool,
@@ -497,6 +539,7 @@ async fn execute(
                 backend,
                 config,
                 write_pid,
+                allow_uncertain,
                 &mut std::io::stdin().lock(),
             )
             .await?;
@@ -516,17 +559,71 @@ async fn execute(
     }
 }
 
-async fn read_raw(backend: &dyn Backend, tag: &str) -> anyhow::Result<String> {
+/// The single choke point enforcing finding 5 of the live-plant safety review
+/// ("`Quality::is_trustworthy()` exists and is documented as the rule; nothing in the tune
+/// path calls it"): `Quality::Bad` is never accepted, flag or no flag; `Quality::Uncertain`
+/// is accepted only when `allow_uncertain` is set (`--allow-uncertain-quality`), and each use
+/// of it is logged loudly so a run executed under relaxed rules is never silently
+/// indistinguishable from a normal one; `Quality::Good` always passes.
+fn check_quality(
+    tag: &str,
+    quality: bhtune_backend::Quality,
+    allow_uncertain: bool,
+) -> anyhow::Result<()> {
+    match quality {
+        bhtune_backend::Quality::Good => Ok(()),
+        bhtune_backend::Quality::Uncertain if allow_uncertain => {
+            tracing::warn!(
+                tag,
+                "accepting Uncertain-quality reading because --allow-uncertain-quality is set"
+            );
+            Ok(())
+        }
+        bhtune_backend::Quality::Uncertain => {
+            anyhow::bail!(
+                "tag '{tag}' reported OPC quality Uncertain; refusing to trust it for a \
+                 tuning-critical reading (pass --allow-uncertain-quality to accept Uncertain \
+                 readings; Bad is never accepted)"
+            )
+        }
+        bhtune_backend::Quality::Bad => {
+            anyhow::bail!(
+                "tag '{tag}' reported OPC quality Bad; refusing to trust it for a \
+                 tuning-critical reading"
+            )
+        }
+    }
+}
+
+/// Maps the backend's live [`bhtune_backend::Quality`] to the database's persisted
+/// [`SampleQuality`] -- two separate enums (rather than one shared type) because
+/// `bhtune-backend` and `bhtune-db` are sibling crates that each depend only on
+/// `bhtune-core`, not on each other; only `bhtune-cli`, which depends on both, needs this
+/// mapping, so it lives here rather than forcing a new cross-dependency onto either crate.
+fn sample_quality_from_backend(quality: bhtune_backend::Quality) -> SampleQuality {
+    match quality {
+        bhtune_backend::Quality::Good => SampleQuality::Good,
+        bhtune_backend::Quality::Uncertain => SampleQuality::Uncertain,
+        bhtune_backend::Quality::Bad => SampleQuality::Bad,
+    }
+}
+
+async fn read_raw(
+    backend: &dyn Backend,
+    tag: &str,
+    allow_uncertain: bool,
+) -> anyhow::Result<String> {
     let values = backend.read(&[tag.to_string()]).await?;
     let value = values
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("backend returned no value for tag '{tag}'"))?;
+    check_quality(tag, value.quality, allow_uncertain)?;
     Ok(value.value)
 }
 
-async fn read_f32(backend: &dyn Backend, tag: &str) -> anyhow::Result<f32> {
-    let raw = read_raw(backend, tag).await?;
+async fn read_f32(backend: &dyn Backend, tag: &str, allow_uncertain: bool) -> anyhow::Result<f32> {
+    let raw = read_raw(backend, tag, allow_uncertain).await?;
     let value: f32 = raw
         .trim()
         .parse::<f32>()
@@ -537,7 +634,11 @@ async fn read_f32(backend: &dyn Backend, tag: &str) -> anyhow::Result<f32> {
     Ok(value)
 }
 
-async fn resolve_f32(backend: &dyn Backend, tag_or_value: &TagOrValue<f32>) -> anyhow::Result<f32> {
+async fn resolve_f32(
+    backend: &dyn Backend,
+    tag_or_value: &TagOrValue<f32>,
+    allow_uncertain: bool,
+) -> anyhow::Result<f32> {
     match tag_or_value {
         TagOrValue::Value(v) => {
             if !v.is_finite() {
@@ -545,7 +646,7 @@ async fn resolve_f32(backend: &dyn Backend, tag_or_value: &TagOrValue<f32>) -> a
             }
             Ok(*v)
         }
-        TagOrValue::Tag(tag) => read_f32(backend, tag).await,
+        TagOrValue::Tag(tag) => read_f32(backend, tag, allow_uncertain).await,
     }
 }
 
@@ -553,17 +654,45 @@ async fn resolve_direction(
     backend: &dyn Backend,
     tag_or_value: &TagOrValue<ControllerDirection>,
     template: &DcsTemplate,
+    allow_uncertain: bool,
 ) -> anyhow::Result<ControllerDirection> {
     match tag_or_value {
         TagOrValue::Value(d) => Ok(*d),
         TagOrValue::Tag(tag) => {
-            let raw = read_raw(backend, tag).await?;
+            let raw = read_raw(backend, tag, allow_uncertain).await?;
             Ok(ControllerDirection::from_raw_tag_value(
                 &raw,
                 &template.controller_action_direct_value,
             ))
         }
     }
+}
+
+/// Reads the PV tag for one in-flight MRFT poll tick, without hard-failing on its
+/// [`bhtune_backend::Quality`] the way [`read_f32`] does. `run_polling_loop` needs the raw
+/// quality alongside the value so it can record the sample (with its quality) *before*
+/// deciding whether to abort -- finding 5 requires "the sample that triggered it is
+/// recorded", which a propagated `anyhow::Error` from a `check_quality`-enforcing read would
+/// lose. Still hard-fails on a non-numeric/non-finite value regardless of quality, exactly
+/// like [`read_f32`], since that's a data-shape problem no quality flag can excuse.
+async fn read_pv_sample(
+    backend: &dyn Backend,
+    tag: &str,
+) -> anyhow::Result<(f32, bhtune_backend::Quality)> {
+    let values = backend.read(&[tag.to_string()]).await?;
+    let value = values
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("backend returned no value for tag '{tag}'"))?;
+    let pv: f32 = value
+        .value
+        .trim()
+        .parse::<f32>()
+        .map_err(|_| anyhow::anyhow!("tag '{tag}' value '{}' is not a number", value.value))?;
+    if !pv.is_finite() {
+        anyhow::bail!("tag '{tag}' value '{}' is not a finite number", value.value);
+    }
+    Ok((pv, value.quality))
 }
 
 async fn write_raw(backend: &dyn Backend, tag: &str, value: String) -> anyhow::Result<()> {
@@ -603,24 +732,31 @@ async fn read_initial_values(
     backend: &dyn Backend,
     tags: &LoopTags,
     template: &DcsTemplate,
+    allow_uncertain: bool,
 ) -> anyhow::Result<InitialState> {
-    let pv_ini = read_f32(backend, &tags.process_variable).await?;
-    let mv_ini = read_f32(backend, &tags.manipulated_variable).await?;
+    let pv_ini = read_f32(backend, &tags.process_variable, allow_uncertain).await?;
+    let mv_ini = read_f32(backend, &tags.manipulated_variable, allow_uncertain).await?;
 
     let mode_raw = match &tags.controller_mode {
-        Some(tag) => Some(read_raw(backend, tag).await?),
+        Some(tag) => Some(read_raw(backend, tag, allow_uncertain).await?),
         None => None,
     };
     let mode_attribute_raw = match &tags.mode_attribute {
-        Some(tag) => Some(read_raw(backend, tag).await?),
+        Some(tag) => Some(read_raw(backend, tag, allow_uncertain).await?),
         None => None,
     };
 
-    let direction = resolve_direction(backend, &tags.controller_direction, template).await?;
-    let pv_range_high = resolve_f32(backend, &tags.upper_pv_range).await?;
-    let pv_range_low = resolve_f32(backend, &tags.lower_pv_range).await?;
-    let mv_range_high = resolve_f32(backend, &tags.upper_mv_range).await?;
-    let mv_range_low = resolve_f32(backend, &tags.lower_mv_range).await?;
+    let direction = resolve_direction(
+        backend,
+        &tags.controller_direction,
+        template,
+        allow_uncertain,
+    )
+    .await?;
+    let pv_range_high = resolve_f32(backend, &tags.upper_pv_range, allow_uncertain).await?;
+    let pv_range_low = resolve_f32(backend, &tags.lower_pv_range, allow_uncertain).await?;
+    let mv_range_high = resolve_f32(backend, &tags.upper_mv_range, allow_uncertain).await?;
+    let mv_range_low = resolve_f32(backend, &tags.lower_mv_range, allow_uncertain).await?;
 
     Ok(InitialState {
         pv_ini,
@@ -665,6 +801,7 @@ async fn transition_to_manual(
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
+    allow_uncertain: bool,
 ) -> anyhow::Result<ModeRestoreState> {
     if let (Some(attr_tag), Some(program_value)) =
         (&tags.mode_attribute, &template.mode_attribute_program_value)
@@ -680,7 +817,7 @@ async fn transition_to_manual(
             if mode_raw == template.mode_auto_value
                 && let Some(sv_tag) = &tags.setpoint_variable
             {
-                setpoint_ini = Some(read_f32(backend, sv_tag).await?);
+                setpoint_ini = Some(read_f32(backend, sv_tag, allow_uncertain).await?);
             }
             write_raw(backend, mode_tag, template.mode_manual_value.clone()).await?;
         }
@@ -777,11 +914,30 @@ async fn run_polling_loop(
         tokio::select! {
             _ = interval.tick() => {
                 let now = Utc::now();
-                let pv = read_f32(backend, &tags.process_variable).await?;
+                let (pv, quality) = read_pv_sample(backend, &tags.process_variable).await?;
                 let tick = Tick { time: now, pv };
+                let sample_quality = sample_quality_from_backend(quality);
+
+                if let Err(e) = check_quality(&tags.process_variable, quality, args.allow_uncertain_quality) {
+                    tracing::warn!(
+                        run_id,
+                        tick_index,
+                        tag = %tags.process_variable,
+                        quality = ?quality,
+                        error = %e,
+                        "PV quality check failed; aborting run"
+                    );
+                    // Record the triggering sample (with its real quality) before aborting, so
+                    // the history explorer can show exactly what was seen when the run gave up.
+                    TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
+                    return Ok(PollOutcome::Aborted(AbortReason::PoorQuality {
+                        tag: tags.process_variable.clone(),
+                        quality,
+                    }));
+                }
 
                 if completion.is_none() && now < pre_delay_end {
-                    TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state()).await?;
+                    TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
                     tick_index += 1;
                     continue;
                 }
@@ -803,7 +959,7 @@ async fn run_polling_loop(
                 }
 
                 tracing::trace!(run_id, tick_index, pv, "recorded tune sample");
-                TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state()).await?;
+                TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
                 tick_index += 1;
 
                 if let Some(end) = post_delay_end
@@ -892,6 +1048,7 @@ async fn maybe_write_back(
     backend: &dyn Backend,
     config: LoopConfig,
     write_pid: Option<ResponseLevel>,
+    allow_uncertain: bool,
     reader: &mut impl std::io::BufRead,
 ) -> anyhow::Result<WriteBackOutcome> {
     let (Some(p_tag), Some(i_tag), Some(d_tag)) = (
@@ -986,6 +1143,32 @@ async fn maybe_write_back(
             .await
         {
             Ok(values) if values.len() == 3 => {
+                // Finding 5's rule applies to the confirmation readback too: a clamped or
+                // stale value is worse than no value at all if it's silently accepted as
+                // proof the write landed. This doesn't attempt a rollback (that's finding 6,
+                // `safety-writeback-rollback`, not yet implemented) -- it only makes sure a
+                // poor-quality confirmation is never mistaken for a good one.
+                let poor_quality = values
+                    .iter()
+                    .find(|v| check_quality(&v.tag, v.quality, allow_uncertain).is_err());
+                if let Some(v) = poor_quality {
+                    let message = format!(
+                        "confirmation readback for tag '{}' reported OPC quality {:?}; write not confirmed",
+                        v.tag, v.quality
+                    );
+                    TuneWriteRow::insert_failure(pool, run_id, written, written_at, &message)
+                        .await?;
+                    println!("Wrote PID parameters, but {message}.");
+                    tracing::error!(
+                        run_id,
+                        ?response_level,
+                        tag = %v.tag,
+                        quality = ?v.quality,
+                        "PID write-back confirmation reported poor OPC quality"
+                    );
+                    return Ok(WriteBackOutcome::Failed);
+                }
+
                 let readback = WriteReadback {
                     proportional: values[0].value.trim().parse().unwrap_or(f32::NAN),
                     integral: values[1].value.trim().parse().unwrap_or(f32::NAN),
@@ -1090,6 +1273,7 @@ mod tests {
             name: Some("test-loop".to_string()),
             yes: false,
             write_pid: None,
+            allow_uncertain_quality: false,
             output: OutputFormat::Table,
         }
     }
@@ -1455,10 +1639,10 @@ mod tests {
         .await
         .unwrap();
 
-        let initial = read_initial_values(backend.as_ref(), &tags, &template)
+        let initial = read_initial_values(backend.as_ref(), &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(backend.as_ref(), &tags, &template, &initial)
+        let mode_state = transition_to_manual(backend.as_ref(), &tags, &template, &initial, false)
             .await
             .unwrap();
         restore(backend.as_ref(), &tags, &template, &initial, &mode_state)
@@ -1468,6 +1652,109 @@ mod tests {
 
         let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
         assert_eq!(stored.outcome, bhtune_db::models::TuneOutcome::Aborted);
+    }
+
+    /// Unlike Ctrl+C/timeout (which need a real signal or elapsed wall-clock time and so are
+    /// only exercised indirectly, see the test above), finding 5's `PoorQuality` abort is
+    /// purely data-driven -- the backend just has to report a non-`Good` reading -- so this
+    /// test drives `run_polling_loop` for real and checks its returned `PollOutcome`
+    /// directly, then confirms `restore` leaves the loop in the same consistent state
+    /// `execute`'s `Aborted` branch would.
+    #[tokio::test]
+    async fn poor_quality_pv_during_polling_aborts_records_the_sample_and_restores() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto()
+            .with_quality(&tags.process_variable, bhtune_backend::Quality::Bad);
+        let args = fast_simulator_args();
+        let config = build_loop_config(&args).unwrap();
+
+        let started_at = Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "poor-quality-poll",
+            TuneBackend::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
+        .await
+        .unwrap();
+
+        // Built directly (bypassing `read_initial_values`) using `honeywell_backend_auto()`'s
+        // own fixture values (see `sample_initial_state`, defined below), because
+        // `read_initial_values` itself enforces finding 5 on this very same PV tag and would
+        // hard-fail before ever reaching the polling loop this test targets.
+        let initial = sample_initial_state();
+        let beta = lookup(
+            config.process_type,
+            config.controller_type,
+            ResponseLevel::Aggressive,
+        )
+        .beta;
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &backend,
+            &mut engine,
+            started_at,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            PollOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => {
+                assert_eq!(tag, tags.process_variable);
+                assert_eq!(quality, bhtune_backend::Quality::Bad);
+            }
+            _ => panic!("expected PollOutcome::Aborted(AbortReason::PoorQuality)"),
+        }
+
+        // The triggering sample was recorded (with its real, poor quality) before the abort
+        // -- finding 5 explicitly requires the operator can see exactly what was seen when
+        // the run gave up, not just that it gave up.
+        let samples = TuneSampleRow::list_for_run(&pool, run.id).await.unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].pv_quality, SampleQuality::Bad);
+
+        // Same DB-shape check the Ctrl+C-style test above uses: a `PoorQuality` abort must
+        // be indistinguishable in its cleanup guarantees from any other abort reason.
+        let mode_state = ModeRestoreState::default();
+        restore(&backend, &tags, &template, &initial, &mode_state)
+            .await
+            .unwrap();
+        TuneRunRow::abort(&pool, run.id, Utc::now()).await.unwrap();
+
+        let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
+        assert_eq!(stored.outcome, bhtune_db::models::TuneOutcome::Aborted);
+
+        // The MV was actually written back to its initial value during restore.
+        assert!(
+            backend
+                .write_log()
+                .iter()
+                .any(|(tag, value)| tag == &tags.manipulated_variable && value == "45")
+        );
     }
 
     // --- opcda-style mode-transition/restore/write-back coverage ---------------------------
@@ -1491,6 +1778,10 @@ mod tests {
         error_reads: std::collections::HashSet<String>,
         error_writes: std::collections::HashSet<String>,
         empty_reads: std::collections::HashSet<String>,
+        /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
+        /// listed -- matching a healthy real backend and letting most tests ignore quality
+        /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
+        qualities: std::sync::Mutex<std::collections::HashMap<String, bhtune_backend::Quality>>,
     }
 
     impl MockBackend {
@@ -1536,6 +1827,16 @@ mod tests {
             self
         }
 
+        /// Overrides a single tag's reported [`bhtune_backend::Quality`] -- every other tag
+        /// keeps reporting `Quality::Good`, matching a healthy real backend.
+        fn with_quality(self, tag: &str, quality: bhtune_backend::Quality) -> MockBackend {
+            self.qualities
+                .lock()
+                .unwrap()
+                .insert(tag.to_string(), quality);
+            self
+        }
+
         fn value_of(&self, tag: &str) -> Option<String> {
             self.values.lock().unwrap().get(tag).cloned()
         }
@@ -1565,7 +1866,13 @@ mod tests {
                 out.push(bhtune_backend::TagValue {
                     tag: tag.clone(),
                     value: store.get(tag).cloned().unwrap_or_default(),
-                    quality: bhtune_backend::Quality::Good,
+                    quality: self
+                        .qualities
+                        .lock()
+                        .unwrap()
+                        .get(tag)
+                        .copied()
+                        .unwrap_or(bhtune_backend::Quality::Good),
                     timestamp: None,
                 });
             }
@@ -1621,6 +1928,33 @@ mod tests {
         ));
     }
 
+    // --- `check_quality`: finding 5's single enforcement choke point ------------------------
+
+    #[test]
+    fn check_quality_accepts_good_regardless_of_the_allow_uncertain_flag() {
+        assert!(check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Good, false).is_ok());
+        assert!(check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Good, true).is_ok());
+    }
+
+    #[test]
+    fn check_quality_rejects_uncertain_unless_the_flag_is_set() {
+        let err = check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Uncertain, false)
+            .unwrap_err();
+        assert!(err.to_string().contains("Uncertain"));
+        assert!(err.to_string().contains("Unit1.LIC101.PV"));
+        assert!(check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Uncertain, true).is_ok());
+    }
+
+    #[test]
+    fn check_quality_never_accepts_bad_regardless_of_the_flag() {
+        let err_without_flag =
+            check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Bad, false).unwrap_err();
+        assert!(err_without_flag.to_string().contains("Bad"));
+        let err_with_flag =
+            check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Bad, true).unwrap_err();
+        assert!(err_with_flag.to_string().contains("Bad"));
+    }
+
     /// "Honeywell Experion" is the one built-in template with every optional tag (setpoint,
     /// mode, mode attribute, PID constants) configured, making it the right fixture for
     /// exercising every opcda-style branch in one place.
@@ -1663,7 +1997,7 @@ mod tests {
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto();
 
-        let initial = read_initial_values(&backend, &tags, &template)
+        let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
         assert_eq!(initial.pv_ini, 50.0);
@@ -1683,7 +2017,7 @@ mod tests {
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto().empty_read("Unit1.LIC101.PV");
 
-        let err = read_initial_values(&backend, &tags, &template)
+        let err = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no value"));
@@ -1751,6 +2085,135 @@ mod tests {
         assert!(validate_initial_state(&initial).is_ok());
     }
 
+    // --- finding 5, end to end: a poor-quality initial reading must fail `execute` before --
+    // --- any mutation of the loop, exactly like finding 4's invalid-range checks below -----
+
+    #[tokio::test]
+    async fn execute_hard_fails_when_the_pv_tag_reports_bad_quality() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto()
+            .with_quality(&tags.process_variable, bhtune_backend::Quality::Bad);
+        let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "bad-quality-initial",
+            TuneBackend::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let err = execute(
+            &pool,
+            run.id,
+            &fast_simulator_args(),
+            &template,
+            &tags,
+            &backend,
+            config,
+            Utc::now(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains(&tags.process_variable));
+        assert!(err.to_string().contains("Bad"));
+        // Nothing was mutated -- the mode transition never ran, matching the invalid-range
+        // test's own safety assertion below.
+        assert!(backend.write_log().is_empty());
+    }
+
+    #[tokio::test]
+    async fn execute_hard_fails_when_the_pv_tag_reports_uncertain_quality_without_the_flag() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto()
+            .with_quality(&tags.process_variable, bhtune_backend::Quality::Uncertain);
+        let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "uncertain-quality-initial",
+            TuneBackend::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let err = execute(
+            &pool,
+            run.id,
+            &fast_simulator_args(),
+            &template,
+            &tags,
+            &backend,
+            config,
+            Utc::now(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains(&tags.process_variable));
+        assert!(err.to_string().contains("Uncertain"));
+        assert!(backend.write_log().is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_initial_values_and_transition_accept_uncertain_pv_quality_when_the_flag_is_set() {
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto()
+            .with_quality(&tags.process_variable, bhtune_backend::Quality::Uncertain);
+
+        let initial = read_initial_values(&backend, &tags, &template, true)
+            .await
+            .unwrap();
+        assert_eq!(initial.pv_ini, 50.0);
+
+        transition_to_manual(&backend, &tags, &template, &initial, true)
+            .await
+            .unwrap();
+        // Proves the run actually proceeded to mutate the loop (the mode/mode-attribute
+        // writes `transition_to_manual` performs), not just that `read_initial_values`
+        // alone returned `Ok` -- the real proof `--allow-uncertain-quality` has an effect,
+        // not just that this specific error string disappeared.
+        assert!(!backend.write_log().is_empty());
+    }
+
+    #[tokio::test]
+    async fn transition_to_manual_hard_fails_when_the_setpoint_tag_reports_bad_quality() {
+        // The Honeywell fixture starts in Auto (`MODE=1` == `mode_auto_value`), so
+        // `transition_to_manual` reads the setpoint tag before flipping to Manual -- finding
+        // 5 applies to that read exactly as it does to every other tuning-critical read.
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let sp_tag = tags.setpoint_variable.clone().unwrap();
+        let backend = honeywell_backend_auto().with_quality(&sp_tag, bhtune_backend::Quality::Bad);
+
+        let initial = read_initial_values(&backend, &tags, &template, false)
+            .await
+            .unwrap();
+        let err = transition_to_manual(&backend, &tags, &template, &initial, false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains(&sp_tag));
+        assert!(err.to_string().contains("Bad"));
+    }
+
     /// The end-to-end proof that finding 4's fix closes the actual safety gap, not just the
     /// isolated unit: a backend reporting an MV range with `low >= high` must fail `execute`
     /// before `transition_to_manual`'s first write -- i.e. before the loop is touched at
@@ -1803,7 +2266,9 @@ mod tests {
     #[tokio::test]
     async fn read_f32_errors_on_a_non_numeric_value() {
         let backend = MockBackend::new(&[("Unit1.LIC101.PV", "not-a-number")]);
-        let err = read_f32(&backend, "Unit1.LIC101.PV").await.unwrap_err();
+        let err = read_f32(&backend, "Unit1.LIC101.PV", false)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("not a number"));
     }
 
@@ -1814,21 +2279,25 @@ mod tests {
     #[tokio::test]
     async fn read_f32_rejects_nan() {
         let backend = MockBackend::new(&[("Unit1.LIC101.PV", "nan")]);
-        let err = read_f32(&backend, "Unit1.LIC101.PV").await.unwrap_err();
+        let err = read_f32(&backend, "Unit1.LIC101.PV", false)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("finite"));
     }
 
     #[tokio::test]
     async fn read_f32_rejects_infinity() {
         let backend = MockBackend::new(&[("Unit1.LIC101.PV", "inf")]);
-        let err = read_f32(&backend, "Unit1.LIC101.PV").await.unwrap_err();
+        let err = read_f32(&backend, "Unit1.LIC101.PV", false)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("finite"));
     }
 
     #[tokio::test]
     async fn resolve_f32_accepts_a_finite_tag_or_value() {
         let backend = MockBackend::new(&[]);
-        let value = resolve_f32(&backend, &TagOrValue::Value(42.0))
+        let value = resolve_f32(&backend, &TagOrValue::Value(42.0), false)
             .await
             .unwrap();
         assert_eq!(value, 42.0);
@@ -1840,7 +2309,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_f32_rejects_a_non_finite_direct_value() {
         let backend = MockBackend::new(&[]);
-        let err = resolve_f32(&backend, &TagOrValue::Value(f32::NAN))
+        let err = resolve_f32(&backend, &TagOrValue::Value(f32::NAN), false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("finite"));
@@ -1855,7 +2324,9 @@ mod tests {
             .erroring_read("Unit1.LIC101.PV")
             .erroring_write("Unit1.LIC101.OP");
 
-        let read_err = read_raw(&backend, "Unit1.LIC101.PV").await.unwrap_err();
+        let read_err = read_raw(&backend, "Unit1.LIC101.PV", false)
+            .await
+            .unwrap_err();
         assert!(read_err.to_string().contains("backend operation failed"));
 
         let write_err = write_value(&backend, "Unit1.LIC101.OP", 45.0)
@@ -1869,11 +2340,11 @@ mod tests {
         let template = honeywell_template();
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto();
-        let initial = read_initial_values(&backend, &tags, &template)
+        let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
 
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial)
+        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
             .await
             .unwrap();
 
@@ -1914,11 +2385,11 @@ mod tests {
             ("Unit1.LIC101.CVEULO", "0.0"),
             ("Unit1.LIC101.SP", "55.0"),
         ]);
-        let initial = read_initial_values(&backend, &tags, &template)
+        let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
 
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial)
+        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
             .await
             .unwrap();
 
@@ -1942,11 +2413,11 @@ mod tests {
             ("Unit1.LIC101.CVEULO", "0.0"),
             ("Unit1.LIC101.SP", "55.0"),
         ]);
-        let initial = read_initial_values(&backend, &tags, &template)
+        let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
 
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial)
+        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
             .await
             .unwrap();
 
@@ -1966,10 +2437,10 @@ mod tests {
         let template = honeywell_template();
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto();
-        let initial = read_initial_values(&backend, &tags, &template)
+        let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial)
+        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
             .await
             .unwrap();
 
@@ -1992,10 +2463,10 @@ mod tests {
         template.revert_mode = false;
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto();
-        let initial = read_initial_values(&backend, &tags, &template)
+        let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial)
+        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
             .await
             .unwrap();
         let writes_before_restore = backend.write_log().len();
@@ -2028,10 +2499,10 @@ mod tests {
             ("Unit1.LIC101.CVEULO", "0.0"),
             ("Unit1.LIC101.SP", "55.0"),
         ]);
-        let initial = read_initial_values(&backend, &tags, &template)
+        let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial)
+        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
             .await
             .unwrap();
         let writes_before_restore = backend.write_log().len();
@@ -2061,10 +2532,10 @@ mod tests {
             ("Unit1.LIC101.CVEULO", "0.0"),
             ("Unit1.LIC101.SP", "55.0"),
         ]);
-        let initial = read_initial_values(&backend, &tags, &template)
+        let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial)
+        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
             .await
             .unwrap();
         let writes_before_restore = backend.write_log().len();
@@ -2175,6 +2646,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2218,6 +2690,7 @@ mod tests {
             &backend,
             config,
             None,
+            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2251,6 +2724,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            false,
             &mut std::io::Cursor::new(input),
         )
         .await
@@ -2328,6 +2802,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2357,6 +2832,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
+            false,
             &mut std::io::Cursor::new(b"1\n".as_slice()),
         )
         .await
@@ -2370,6 +2846,74 @@ mod tests {
             writes[0].error_message.as_deref(),
             Some("readback after write failed")
         );
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_records_failure_when_the_readback_reports_poor_quality() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        // The 3 PID-constant writes themselves succeed (quality only affects `read`, never
+        // `write`); only the confirmation re-read of the P tag reports a poor OPC quality --
+        // finding 5's rule applies to this readback exactly as it does to any other
+        // tuning-critical read, so a stale/clamped value must not be mistaken for proof the
+        // write actually landed.
+        let backend =
+            honeywell_backend_auto().with_quality("Unit1.LIC101.K", bhtune_backend::Quality::Bad);
+
+        let outcome = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            None,
+            false,
+            &mut std::io::Cursor::new(b"1\n".as_slice()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, WriteBackOutcome::Failed);
+
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        assert_eq!(writes.len(), 1);
+        assert!(!writes[0].success);
+        let message = writes[0].error_message.as_deref().unwrap_or_default();
+        assert!(message.contains("quality"));
+        assert!(message.contains("Unit1.LIC101.K"));
+        // Distinguishable from the generic "readback after write failed" message the
+        // read-error branch above produces, so an operator (or the history explorer) can
+        // tell a poor-quality confirmation apart from an outright read failure.
+        assert_ne!(message, "readback after write failed");
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_accepts_an_uncertain_readback_when_the_flag_is_set() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto()
+            .with_quality("Unit1.LIC101.K", bhtune_backend::Quality::Uncertain);
+
+        let outcome = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &backend,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            None,
+            true, // allow_uncertain
+            &mut std::io::Cursor::new(b"1\n".as_slice()),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(outcome, WriteBackOutcome::Written { .. }));
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        assert_eq!(writes.len(), 1);
+        assert!(writes[0].success);
     }
 
     #[tokio::test]
@@ -2389,6 +2933,7 @@ mod tests {
             &backend,
             build_loop_config(&fast_simulator_args()).unwrap(),
             Some(ResponseLevel::Aggressive),
+            false,
             &mut std::io::Cursor::new(b"".as_slice()),
         )
         .await
@@ -2460,6 +3005,7 @@ mod tests {
             &backend,
             config,
             Some(ResponseLevel::Sluggish),
+            false,
             &mut std::io::Cursor::new(b"".as_slice()),
         )
         .await
@@ -2506,6 +3052,13 @@ mod tests {
                 timeout_secs: 3600
             })),
             TuneOutcome::TimedOut
+        );
+        assert_eq!(
+            tune_outcome_for_run(&RunOutcome::Aborted(AbortReason::PoorQuality {
+                tag: "Unit1.LIC101.PV".to_string(),
+                quality: bhtune_backend::Quality::Bad,
+            })),
+            TuneOutcome::PoorQuality
         );
     }
 
@@ -2611,6 +3164,28 @@ mod tests {
                 OutputFormat::Json
             ),
             TuneOutcome::TimedOut
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::Aborted(AbortReason::PoorQuality {
+                    tag: "Unit1.LIC101.PV".to_string(),
+                    quality: bhtune_backend::Quality::Uncertain,
+                }),
+                OutputFormat::Table
+            ),
+            TuneOutcome::PoorQuality
+        );
+        assert_eq!(
+            print_summary(
+                1,
+                &RunOutcome::Aborted(AbortReason::PoorQuality {
+                    tag: "Unit1.LIC101.PV".to_string(),
+                    quality: bhtune_backend::Quality::Uncertain,
+                }),
+                OutputFormat::Json
+            ),
+            TuneOutcome::PoorQuality
         );
     }
 

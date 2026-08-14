@@ -78,6 +78,16 @@ pub const EXIT_WRITE_BACK_FAILED: u8 = 3;
 /// purpose" (routine). See `commands::tune::TuneOutcome::TimedOut` and AGENTS.md's
 /// `cli-safety` section.
 pub const EXIT_TIMED_OUT: u8 = 4;
+/// A `tune`/`simulate` run was aborted because a backend reported a non-`Good` OPC quality
+/// for a tuning-critical reading (finding 5 of the live-plant safety review): an initial
+/// reading, the transition-to-manual setpoint capture, or an in-flight PV poll sample, and
+/// (for the in-flight case) `--allow-uncertain-quality` either wasn't set or the quality was
+/// `Bad` rather than merely `Uncertain`. The loop was restored to its pre-test mode, exactly
+/// like [`EXIT_ABORTED`]/[`EXIT_TIMED_OUT`]. Distinct from both so a scheduler's alerting can
+/// tell "the plant data itself couldn't be trusted" apart from a user-initiated stop or a
+/// run that simply took too long. See `commands::tune::TuneOutcome::PoorQuality` and
+/// AGENTS.md's `safety-quality` section.
+pub const EXIT_POOR_QUALITY: u8 = 5;
 
 /// Parses real CLI arguments, initializes structured logging, and runs, returning a process
 /// exit code.
@@ -183,6 +193,7 @@ fn tune_outcome_exit_code(outcome: commands::tune::TuneOutcome) -> ExitCode {
         commands::tune::TuneOutcome::Aborted => ExitCode::from(EXIT_ABORTED),
         commands::tune::TuneOutcome::TimedOut => ExitCode::from(EXIT_TIMED_OUT),
         commands::tune::TuneOutcome::WriteBackFailed => ExitCode::from(EXIT_WRITE_BACK_FAILED),
+        commands::tune::TuneOutcome::PoorQuality => ExitCode::from(EXIT_POOR_QUALITY),
     }
 }
 
@@ -296,6 +307,7 @@ mod tests {
                 name: None,
                 yes: false,
                 write_pid: None,
+                allow_uncertain_quality: false,
                 output: OutputFormat::Table,
             }),
         };
@@ -334,6 +346,10 @@ mod tests {
             tune_outcome_exit_code(commands::tune::TuneOutcome::WriteBackFailed),
             ExitCode::from(EXIT_WRITE_BACK_FAILED)
         );
+        assert_eq!(
+            tune_outcome_exit_code(commands::tune::TuneOutcome::PoorQuality),
+            ExitCode::from(EXIT_POOR_QUALITY)
+        );
     }
 
     /// Every `SimulateArgs` field explicitly set to a fast-converging demo run (mirroring
@@ -362,6 +378,7 @@ mod tests {
             name: Some("dispatch-test".to_string()),
             yes: false,
             write_pid: None,
+            allow_uncertain_quality: false,
             output: OutputFormat::Table,
         }
     }

@@ -12,9 +12,9 @@ use bhtune_core::{
 use bhtune_db::{
     connect_in_memory,
     models::{
-        DcsTemplateRow, Pagination, TemplateOrigin, TuneBackend, TuneOutcome, TuneResultRow,
-        TuneRunFilter, TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow,
-        WriteReadback,
+        DcsTemplateRow, Pagination, SampleQuality, TemplateOrigin, TuneBackend, TuneOutcome,
+        TuneResultRow, TuneRunFilter, TuneRunInitialReadings, TuneRunRow, TuneSampleRow,
+        TuneWriteRow, WriteReadback,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -744,9 +744,10 @@ async fn tune_sample_insert_and_list_for_run_orders_by_tick() {
             cycles_completed: 0,
             cycles_remaining: 2,
         };
-        let inserted = TuneSampleRow::insert(&pool, run.id, tick, sample, state)
-            .await
-            .unwrap();
+        let inserted =
+            TuneSampleRow::insert(&pool, run.id, tick, sample, state, SampleQuality::Good)
+                .await
+                .unwrap();
         assert_eq!(inserted.tick_index, tick);
         assert_eq!(inserted.sample, sample);
         assert_eq!(inserted.state, state);
@@ -813,10 +814,10 @@ async fn tune_sample_rejects_duplicate_tick_for_the_same_run() {
         cycles_completed: 0,
         cycles_remaining: 2,
     };
-    TuneSampleRow::insert(&pool, run.id, 0, sample, state)
+    TuneSampleRow::insert(&pool, run.id, 0, sample, state, SampleQuality::Good)
         .await
         .unwrap();
-    let dup = TuneSampleRow::insert(&pool, run.id, 0, sample, state).await;
+    let dup = TuneSampleRow::insert(&pool, run.id, 0, sample, state, SampleQuality::Good).await;
     assert!(dup.is_err(), "duplicate (run_id, tick) must be rejected");
 }
 // }}}1
