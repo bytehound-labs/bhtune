@@ -44,6 +44,12 @@ file, resolved through the same `CLI > env > TOML > default` precedence as every
 setting, with console mirroring confined to stderr so it can never corrupt the `--output
 json` stdout contract — see "Logging" below. This completes all five `bhtune-cli` sub-phases;
 the CLI is a fully headless, scriptable adapter on its own, no server required.
+The Phase 6.5 live-plant safety hardening pass is done (see "Live-plant safety hardening"
+below). Phase 6.6's `template-catalog` is also done: the four built-in DCS templates moved
+from hardcoded Rust constructors to an embedded, contributable TOML catalog
+(`crates/bhtune-core/templates/builtin.toml`) with a `DcsTemplate::validate()` and new
+`versions`/`description`/`source` fields — see "Community DCS/PLC template catalog" below;
+`template-provenance`/`template-user-catalog`/`template-cli`/`template-docs` remain.
 `backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan reversed
 from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri code was
 written (see "Key architectural decisions"). See "Phases and todos" below for what's next.
@@ -1316,6 +1322,108 @@ reason. `tests/ctrlc_abort.rs` is the one real, conflict-free, end-to-end exerci
 directory is non-empty after the run, alongside the stderr-never-contains-product-output
 assertion above.
 
+## Community DCS/PLC template catalog (`template-catalog`)
+
+Turns the four built-in DCS/PLC templates from hardcoded Rust constructor functions into a
+contributable data file, so adding a new control-system family becomes a TOML pull request
+rather than a Rust change — motivated by the goal of eventually shipping a full library of
+DCS/PLC systems, which doesn't scale if every contributor has to learn the workspace layout
+and get a Rust PR reviewed.
+
+- **Format: TOML, not JSON or YAML.** The legacy app's `SettingsTemplates.json` had the right
+  *content* but the wrong *shape* for a community catalog. JSON has no comments, and a shared
+  catalog needs inline provenance (which manual a suffix came from, why a field is blank) —
+  that alone rules it out as an authoring format. YAML's implicit typing is an active footgun
+  here: `mode_manual_value`/`mode_auto_value`/`controller_action_direct_value` are, for some
+  templates, literally the *strings* `"true"`/`"false"`/`"0"` — YAML would silently coerce
+  unquoted forms of these to bool/int on exactly the fields that decide whether a loop gets
+  put into Manual. `toml` was already a dependency (`bhtune-cli`'s single-template import/
+  export); the mainstream YAML crates are unusable under this project's `cargo deny` gate
+  (`serde_yaml` is deprecated/archived, its `serde_yml` fork carries RUSTSEC-2025-0068). JSON
+  import/export stays supported for interop; a `toml` export format is planned in
+  `template-cli` (still pending) so the contribution loop becomes export → annotate → PR.
+- **Embedded, not read from disk.** `crates/bhtune-core/templates/builtin.toml` is
+  `include_str!`-compiled into the binary, so a shipped binary can never be broken by a
+  missing or hand-edited data file, while contributors still edit a plain text file, not
+  Rust. `built_in_templates()` is now `parse_catalog(BUILTIN_CATALOG).expect(...)`; a unit
+  test parses and validates the embedded file, so a malformed contribution fails CI rather
+  than shipping.
+- **`parse_catalog(&str) -> Result<Vec<DcsTemplate>, TemplateError>`** is the pure parsing
+  entry point — deserializes a private `Catalog { #[serde(rename = "template")] templates:
+  Vec<DcsTemplate> }` wrapper (TOML's array-of-tables idiom, one `[[template]]` block per
+  entry) and then calls `.validate()` on every template, so a syntactically valid but
+  semantically incomplete contribution (e.g. a mode suffix with no manual/auto value) is
+  rejected at parse time, not mid-tune. Parsing a `&'static str` embedded at compile time is
+  not I/O, so `bhtune-core`'s "no I/O, no clock, no async" purity rule is preserved — all
+  *file* reading stays in `bhtune-cli` (loading a user catalog from disk is
+  `template-user-catalog`, still pending).
+- **`DcsTemplate::validate()`** mirrors the `LoopConfig::validate` precedent from
+  `cli-safety`: non-empty `name` (trimmed); non-empty `process_variable_suffix`; non-empty
+  `manipulated_variable_suffix`; if `controller_mode_suffix` is set, both
+  `mode_manual_value` and `mode_auto_value` must be non-empty; if `mode_attribute_suffix` is
+  set, `mode_attribute_program_value` must be `Some`. Runs on every catalog template today
+  (built-in or, eventually, contributed); it will also run on user-imported/user-catalog
+  templates once `template-cli`/`template-user-catalog` land — today, importing a garbage
+  template via `template import` succeeds and only fails much later, mid-tune.
+- **`TemplateError`** is a hand-rolled `Display`/`std::error::Error` enum (no `thiserror`,
+  matching `bhtune-core`'s existing `RangeError`/`LoopConfigError` convention): `Toml(toml::
+  de::Error)` (`source()` delegates to the wrapped error), `EmptyName`, `EmptyField { name,
+  field }`, `MissingModeValue { name, field }`, `MissingModeAttributeProgramValue { name }`.
+  `toml::de::Error` (the resolved `toml 1.1.4+spec-1.1.0`) already derives `Clone`/`PartialEq`
+  and implements `Display`/`Error`, so it's stored directly rather than flattened into a
+  `String` — no information is lost converting a parse error into this crate's own error type.
+- **New `DcsTemplate` fields, all `#[serde(default)]`** so both the TOML catalog and any
+  existing JSON import/export stay backward-compatible: `versions: Vec<String>` (the DCS/PLC
+  releases a template's tag conventions are known to apply to — see "Per-version templates"
+  below), `description: Option<String>`, `source: Option<String>` (a documentation citation
+  for where the tag mapping came from). Deliberately **no "verified" trust field** — an
+  earlier draft proposed a hardware/documentation/unverified enum, dropped because it would
+  need someone to adjudicate and maintain it per template, and a stale "verified" badge is
+  worse than none; everything accepted into the catalog is treated as verified, and real
+  errors get fixed as bugs when they surface.
+- **Per-version templates, not per-vendor.** DCS vendors change tag conventions across major
+  releases, so a single "Yokogawa CentumVP" entry can silently be wrong for a newer release.
+  Each template carries a `versions` list of the releases it's known to apply to (e.g.
+  `["R5", "R6"]`); when a release changes conventions, the contribution pattern is a **new
+  template entry** with its own name and `versions` list, never editing an existing one in
+  place, since sites on the older release still depend on that exact mapping. `name` stays
+  the single unique key, so no lookup code has to change. The four seeded templates'
+  `versions` reflect when each mapping was actually authored (~2015–2016), not an exhaustive
+  tested matrix — recorded with a "current as of authoring" comment in `builtin.toml` so a
+  later reader doesn't over-read the list as a coverage guarantee: Yokogawa CentumVP `["R5",
+  "R6"]` (field-confirmed), Honeywell Experion `["R400", "R410", "R430"]`, Schneider Modicon
+  `["Unity Pro V8.0", "Unity Pro V8.1", "Unity Pro V11.0"]`, Allen-Bradley PlantPAx `["3.0",
+  "3.5", "4.0"]`.
+- **`toml` promoted to `[workspace.dependencies]`** now that both `bhtune-cli` (single-
+  template JSON/TOML import/export) and `bhtune-core` (the embedded catalog) consume it, per
+  the root `Cargo.toml`'s own documented convention of promoting on a second consumer.
+- **`bhtune-db` fallout, deliberately a temporary placeholder.** `DcsTemplate` is `bhtune-
+  db`'s own row type for `dcs_templates` (no separate DTO — see `db-schema`'s design note),
+  so `row_to_dcs_template` had to start constructing the three new fields; since
+  `dcs_templates` has no columns for them yet, they're always read back as empty/`None`,
+  documented in place as a stopgap pending `template-provenance` (which adds real
+  `versions_json`/`description`/`source` columns). Nothing has ever been persisted for these
+  fields, so this loses no data. Two tests asserting full `DcsTemplate` equality between a
+  `built_in_templates()` value and a value read back from a `dcs_templates` row
+  (`bhtune-db`'s `seed::tests::seeds_all_builtins_into_empty_database` and `tests/schema.rs`'s
+  `dcs_template_round_trips_every_built_in_template`) were updated to normalize those three
+  fields to their placeholder values on the comparison side, each with a comment pointing at
+  `template-provenance` as the real fix. `tests/history_query.rs`'s equivalent assertion
+  (`started.template == sample_template()`) needed **no change at all** — it round-trips
+  through `tune_runs.template_snapshot_json` (a full JSON serialization of `DcsTemplate`, per
+  `safety-run-snapshot`'s design), which stays naturally lossless for any new `serde` field
+  with no database column of its own to fall behind.
+
+**Testing approach.** 24 tests in `bhtune-core/src/template.rs` (18 new): the embedded
+catalog parses and every built-in validates; each built-in's `versions`/`description`/
+`source` match the researched seed values above; a minimal valid TOML template parses;
+malformed TOML is rejected as `TemplateError::Toml`; every `validate()` branch is exercised
+individually via targeted `str::replace` edits on a shared minimal-valid-TOML fixture (empty
+PV suffix, empty MV suffix, mode suffix missing manual value, mode suffix missing auto value,
+mode-attribute suffix missing program value); `TemplateError`'s `Display`/`std::error::Error`/
+`source()` behavior is covered for every variant, not just the ones a validation branch
+happens to construct. `cargo llvm-cov` confirms 100% line coverage of the new code.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -1467,7 +1575,7 @@ that binary does something real and gains its own targeted tests.
 
 | Crate            | Phase                                                                   | Status                                                                       |
 | ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`core-replay-harness`       | `core-model` + `core-mrft` + `core-tuning-math` done, replay harness pending |
+| `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness` | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; see "Live-plant safety hardening" below) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below |
@@ -1517,7 +1625,11 @@ that binary does something real and gains its own targeted tests.
    to a rotating file plus stderr-only console mirroring — see "Logging" above). All five
    sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
    own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done —
-   see "Live-plant safety hardening" above.
+   see "Live-plant safety hardening" above. Phase 6.6, turning the built-in DCS/PLC templates
+   into a community-contributable catalog, has started: `template-catalog` (`bhtune-core`,
+   done — see "Community DCS/PLC template catalog" above); `template-provenance` (`bhtune-db`
+   schema), `template-user-catalog` (auto-loading a user catalog file), `template-cli`
+   (multi-template import/export, `template delete`), and `template-docs` remain.
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS

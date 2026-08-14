@@ -9,6 +9,11 @@ repository.workspace = true
 [dependencies]
 chrono.workspace = true
 serde = { version = "1", features = ["derive"] }
+# Parses the embedded DCS/PLC template catalog (`crates/bhtune-core/templates/builtin.toml`,
+# `template-catalog`) via `toml::from_str` on an `include_str!`-embedded `&'static str` --
+# not I/O, so this doesn't violate this crate's "no I/O" rule (see the description above);
+# all real file reading (the user catalog, imports) stays in bhtune-cli.
+toml.workspace = true
 
 [dev-dependencies]
 serde_json = "1"

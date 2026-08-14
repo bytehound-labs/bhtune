@@ -29,3 +29,8 @@ chrono = { version = "0.4", default-features = false, features = ["std", "alloc"
 # matchable variants) as opposed to `anyhow`, which is reserved for binary crates that only
 # need to propagate/print errors, never match on them.
 thiserror = "2"
+# `bhtune-core` parses the embedded DCS/PLC template catalog
+# (`crates/bhtune-core/templates/builtin.toml`, `template-catalog`) and `bhtune-cli` parses
+# `bhtune.toml`/the user template catalog (`cli-config`/`template-user-catalog`) -- promoted
+# here once bhtune-core became a second consumer. Same major version `opcda-bridge` uses.
+toml = "1"

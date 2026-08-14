@@ -264,6 +264,13 @@ fn row_to_dcs_template(row: SqliteRow) -> DbResult<DcsTemplateRow> {
         controller_action_direct_value: row
             .try_get("controller_action_direct_value")
             .map_err(DbError::Query)?,
+        // No `versions`/`description`/`source` columns exist yet -- `template-provenance`
+        // adds `versions_json`/`description`/`source` and reads them back for real. Until
+        // then this is an honest placeholder, not a lossy round-trip: nothing has ever been
+        // persisted for these fields, so there is nothing to lose.
+        versions: Vec::new(),
+        description: None,
+        source: None,
     };
 
     Ok(DcsTemplateRow {

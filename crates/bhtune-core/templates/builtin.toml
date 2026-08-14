@@ -1,0 +1,149 @@
+# BHTune built-in DCS/PLC template catalog.
+#
+# This file is compiled into the `bhtune` binary via `include_str!` (see
+# `crates/bhtune-core/src/template.rs::built_in_templates`), so a shipped binary never
+# depends on this file being present on disk -- only *contributing* a new template requires
+# editing it.
+#
+# Contribution rules (see docs/dcs-templates.md for the full worked-example writeup once it
+# exists):
+#   - `name` is the unique key. Adding a template never removes or edits an existing
+#     `[[template]]` block's suffix mapping in place.
+#   - `versions` records the DCS/PLC releases this mapping is known to apply to, in that
+#     vendor's own version-naming convention. When a newer release changes tag conventions,
+#     add a *new* `[[template]]` entry with its own `name` and `versions` list -- never edit
+#     an existing entry's suffixes to match the newer release, since sites still running the
+#     older release depend on the mapping as originally written.
+#   - There is no "verified" trust field. Everything merged into this catalog is treated as
+#     verified; genuine mapping errors are fixed as bugs when they surface.
+#   - Every template must pass `DcsTemplate::validate()`: non-empty `name`,
+#     `process_variable_suffix`, and `manipulated_variable_suffix`; `mode_manual_value` and
+#     `mode_auto_value` both set whenever `controller_mode_suffix` is non-empty;
+#     `mode_attribute_program_value` set whenever `mode_attribute_suffix` is non-empty. A
+#     unit test in `template.rs` parses and validates this exact file, so a mistake here
+#     fails CI rather than shipping.
+#   - An empty suffix string means "this DCS has no such concept" (e.g. no mode-attribute
+#     tag), not "unknown" -- leave it as `""` rather than guessing a value.
+
+# Field-confirmed. `versions` reflects the CentumVP releases current when this mapping was
+# authored (~2015-2016): R5 was current through ~2014, R6.01 released Feb 2015, R6.03 June
+# 2016 -- not an exhaustively tested compatibility matrix.
+[[template]]
+name = "Yokogawa CentumVP"
+revert_mode = true
+proportional_type = "band"
+integral_type = "reset_time"
+integral_unit = "seconds"
+derivative_type = "derivative_time"
+derivative_unit = "seconds"
+process_variable_suffix = "PV"
+manipulated_variable_suffix = "MV"
+setpoint_variable_suffix = "SV"
+controller_direction_suffix = "DR"
+controller_mode_suffix = "MODE"
+mode_attribute_suffix = ""
+upper_pv_range_suffix = "SH"
+lower_pv_range_suffix = "SL"
+upper_mv_range_suffix = "MSH"
+lower_mv_range_suffix = "MSL"
+proportional_constant_suffix = "P"
+integral_constant_suffix = "I"
+derivative_constant_suffix = "D"
+mode_manual_value = "MAN"
+mode_auto_value = "AUT"
+controller_action_direct_value = "0"
+versions = ["R5", "R6"]
+description = "Yokogawa CENTUM VP DCS: PID station function block, proportional-band convention, MAN/AUT mode tag."
+source = "Field-confirmed tag mapping from a live CENTUM VP deployment."
+
+# Experion PKS major releases R400/R410/R430 were current for calendar years 2014/2015/2016
+# -- the period this mapping was authored against.
+[[template]]
+name = "Honeywell Experion"
+revert_mode = true
+proportional_type = "gain"
+integral_type = "reset_time"
+integral_unit = "minutes"
+derivative_type = "derivative_time"
+derivative_unit = "minutes"
+process_variable_suffix = "PV"
+manipulated_variable_suffix = "OP"
+setpoint_variable_suffix = "SP"
+controller_direction_suffix = "CTLACTN"
+controller_mode_suffix = "MODE"
+mode_attribute_suffix = "MODEATTR"
+upper_pv_range_suffix = "PVEUHI"
+lower_pv_range_suffix = "PVEULO"
+upper_mv_range_suffix = "CVEUHI"
+lower_mv_range_suffix = "CVEULO"
+proportional_constant_suffix = "K"
+integral_constant_suffix = "T1"
+derivative_constant_suffix = "T2"
+mode_manual_value = "0"
+mode_auto_value = "1"
+mode_attribute_program_value = "2"
+controller_action_direct_value = "0"
+versions = ["R400", "R410", "R430"]
+description = "Honeywell Experion PKS PID controller block: K/T1/T2 gain-reset-derivative convention, with a separate MODEATTR tag that must read Program before OPC writes are accepted."
+source = "Experion PKS PID/MODEATTR block reference, cross-checked against a live PKS deployment."
+
+# Unity Pro is the programming software whose PID/PIDFF function block defines these tag
+# names -- Modicon PLCs have no single "DCS version" of their own, so the version is stated
+# as a Unity Pro release. V8.0/V8.1/V11.0 were current for 2014/2015/2016.
+[[template]]
+name = "Schneider Modicon"
+revert_mode = true
+proportional_type = "gain"
+integral_type = "reset_time"
+integral_unit = "seconds"
+derivative_type = "derivative_time"
+derivative_unit = "seconds"
+process_variable_suffix = "PV"
+manipulated_variable_suffix = "OUT"
+setpoint_variable_suffix = "SP"
+controller_direction_suffix = "DR"
+controller_mode_suffix = "MAN_AUT"
+mode_attribute_suffix = ""
+upper_pv_range_suffix = "PV_SUP"
+lower_pv_range_suffix = "PV_INF"
+upper_mv_range_suffix = "OUT_SUP"
+lower_mv_range_suffix = "OUT_INF"
+proportional_constant_suffix = "KP"
+integral_constant_suffix = "TI"
+derivative_constant_suffix = "TD"
+mode_manual_value = "false"
+mode_auto_value = "true"
+controller_action_direct_value = "0"
+versions = ["Unity Pro V8.0", "Unity Pro V8.1", "Unity Pro V11.0"]
+description = "Schneider Modicon PLC programmed with Unity Pro's PID/PIDFF function block: PV_SUP/PV_INF process range, OUT_SUP/OUT_INF output range, boolean MAN_AUT mode tag."
+source = "Unity Pro PID/PIDFF function block reference, cross-checked against a live Modicon deployment."
+
+# PlantPAx Library of Process Objects releases 3.0/3.5/4.0 were current for 2014/2015/2016
+# -- the library whose P_PIDE instruction defines these tag names.
+[[template]]
+name = "Allen-Bradley PlantPAx"
+revert_mode = true
+proportional_type = "gain"
+integral_type = "reset_time"
+integral_unit = "minutes"
+derivative_type = "derivative_time"
+derivative_unit = "minutes"
+process_variable_suffix = "Inp_PV"
+manipulated_variable_suffix = "PSet_SP"
+setpoint_variable_suffix = "PSet_CV"
+controller_direction_suffix = "Cfg_CtrlAction"
+controller_mode_suffix = "Inp_OvrdCmd"
+mode_attribute_suffix = ""
+upper_pv_range_suffix = "Val_PVEUMax"
+lower_pv_range_suffix = "Val_PVEUMin"
+upper_mv_range_suffix = "Val_CVEUMax"
+lower_mv_range_suffix = "Val_CVEUMin"
+proportional_constant_suffix = "Cfg_PGain"
+integral_constant_suffix = "Cfg_IGain"
+derivative_constant_suffix = "Cfg_DGain"
+mode_manual_value = "1"
+mode_auto_value = "2"
+controller_action_direct_value = "0"
+versions = ["3.0", "3.5", "4.0"]
+description = "Allen-Bradley PlantPAx Library of Process Objects P_PIDE instruction: Inp_/Cfg_/Val_/PSet_ prefixed tags."
+source = "PlantPAx Library of Process Objects P_PIDE instruction reference, cross-checked against a live PlantPAx deployment."

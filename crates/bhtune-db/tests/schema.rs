@@ -14,12 +14,18 @@ async fn dcs_template_round_trips_every_built_in_template() {
     let pool = connect_in_memory().await.unwrap();
     let now = Utc::now();
 
-    for template in built_in_templates() {
+    for mut template in built_in_templates() {
         let inserted = DcsTemplateRow::insert(&pool, &template, true, now)
             .await
             .unwrap();
         assert!(inserted.id > 0);
         assert!(inserted.is_builtin);
+        // `versions`/`description`/`source` have no columns yet -- `template-provenance`
+        // adds `versions_json`/`description`/`source` and makes this a full round-trip;
+        // until then every fetched template comes back with them empty/`None`.
+        template.versions = Vec::new();
+        template.description = None;
+        template.source = None;
         assert_eq!(inserted.template, template);
 
         let fetched = DcsTemplateRow::get(&pool, inserted.id)

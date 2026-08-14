@@ -2,6 +2,11 @@
 //! Honeywell, etc.), describing how that DCS expresses PID parameters and the OPC
 //! item-name suffix convention used to derive a full tag set from a single PV tag (see
 //! [`crate::tags::derive_tag`]).
+//!
+//! The built-in templates are not hardcoded Rust -- they are parsed from an embedded TOML
+//! catalog (`templates/builtin.toml`), so adding support for a new DCS/PLC family is a data
+//! file change, not a Rust change. See AGENTS.md's "Community DCS/PLC template catalog"
+//! section for the full design and contribution rationale.
 
 use serde::{Deserialize, Serialize};
 
@@ -50,132 +55,161 @@ pub struct DcsTemplate {
     /// The raw value a Controller Direction tag holds when the controller is Direct
     /// acting; see [`crate::direction::ControllerDirection::from_raw_tag_value`].
     pub controller_action_direct_value: String,
+
+    /// DCS/PLC releases this mapping is known to apply to (e.g. `["R5", "R6"]`), in each
+    /// vendor's own version-naming convention rather than a normalized scheme. A newer
+    /// release that changes tag conventions gets its *own* template entry with its own
+    /// `name` and `versions` list -- never an edit to this one in place, since sites still
+    /// running the older release depend on the existing mapping (see
+    /// `docs/dcs-templates.md`). May be empty for a contribution whose version coverage
+    /// isn't yet known; `name` is what makes a template unique, not `versions`.
+    #[serde(default)]
+    pub versions: Vec<String>,
+    /// Free-text description of the control system this template targets.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Citation for where this mapping came from (a manual, a field deployment).
+    /// Provenance, not a correctness guarantee -- there is deliberately no separate
+    /// "verified" trust field; everything accepted into the catalog is treated as verified,
+    /// and real mapping errors are fixed as bugs when they surface.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
-/// The DCS/PLC templates shipped by default.
+impl DcsTemplate {
+    /// Validates cross-field invariants a data file can't express on its own: a name, a PV
+    /// suffix, and an MV suffix are always required (without them tag derivation is
+    /// impossible); a mode suffix requires both a manual and an auto value; a
+    /// mode-attribute suffix requires its program value. Mirrors `LoopConfig::validate`'s
+    /// rationale (see AGENTS.md's "Live-plant safety hardening") -- a half-configured
+    /// template should fail loudly at parse/import time, not mid-tune against a live loop.
+    /// Called on every template parsed from the embedded catalog
+    /// ([`parse_catalog`]), an imported file, or the user catalog.
+    pub fn validate(&self) -> Result<(), TemplateError> {
+        if self.name.trim().is_empty() {
+            return Err(TemplateError::EmptyName);
+        }
+        if self.process_variable_suffix.is_empty() {
+            return Err(TemplateError::EmptyField {
+                name: self.name.clone(),
+                field: "process_variable_suffix",
+            });
+        }
+        if self.manipulated_variable_suffix.is_empty() {
+            return Err(TemplateError::EmptyField {
+                name: self.name.clone(),
+                field: "manipulated_variable_suffix",
+            });
+        }
+        if !self.controller_mode_suffix.is_empty() {
+            if self.mode_manual_value.is_empty() {
+                return Err(TemplateError::MissingModeValue {
+                    name: self.name.clone(),
+                    field: "mode_manual_value",
+                });
+            }
+            if self.mode_auto_value.is_empty() {
+                return Err(TemplateError::MissingModeValue {
+                    name: self.name.clone(),
+                    field: "mode_auto_value",
+                });
+            }
+        }
+        if !self.mode_attribute_suffix.is_empty() && self.mode_attribute_program_value.is_none() {
+            return Err(TemplateError::MissingModeAttributeProgramValue {
+                name: self.name.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Why [`DcsTemplate::validate`] or [`parse_catalog`] rejected a template.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TemplateError {
+    /// The catalog's TOML could not be parsed at all (malformed syntax, wrong shape).
+    Toml(toml::de::Error),
+    /// `name` was empty or all whitespace.
+    EmptyName,
+    /// A required suffix field was empty.
+    EmptyField { name: String, field: &'static str },
+    /// `controller_mode_suffix` was set but the manual or auto value for it was empty.
+    MissingModeValue { name: String, field: &'static str },
+    /// `mode_attribute_suffix` was set but `mode_attribute_program_value` was `None`.
+    MissingModeAttributeProgramValue { name: String },
+}
+
+impl std::fmt::Display for TemplateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TemplateError::Toml(e) => write!(f, "invalid template catalog: {e}"),
+            TemplateError::EmptyName => write!(f, "template name must not be empty"),
+            TemplateError::EmptyField { name, field } => {
+                write!(f, "template '{name}': {field} must not be empty")
+            }
+            TemplateError::MissingModeValue { name, field } => write!(
+                f,
+                "template '{name}': controller_mode_suffix is set but {field} is empty"
+            ),
+            TemplateError::MissingModeAttributeProgramValue { name } => write!(
+                f,
+                "template '{name}': mode_attribute_suffix is set but \
+                 mode_attribute_program_value is missing"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TemplateError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TemplateError::Toml(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<toml::de::Error> for TemplateError {
+    fn from(error: toml::de::Error) -> Self {
+        TemplateError::Toml(error)
+    }
+}
+
+/// The embedded/user catalog's top-level shape: a TOML `[[template]]` array of tables.
+#[derive(Debug, Deserialize)]
+struct Catalog {
+    #[serde(rename = "template")]
+    templates: Vec<DcsTemplate>,
+}
+
+/// Parses a TOML catalog (the `[[template]]` array-of-tables format used by
+/// `templates/builtin.toml` and the user catalog file bhtune-cli auto-loads) and validates
+/// every template it contains. Pure -- takes an in-memory string and does no I/O itself;
+/// all file reading is the caller's job (bhtune-cli's `template-user-catalog`/
+/// `template-cli`), keeping this crate's "no I/O" rule intact.
+pub fn parse_catalog(input: &str) -> Result<Vec<DcsTemplate>, TemplateError> {
+    let catalog: Catalog = toml::from_str(input)?;
+    for template in &catalog.templates {
+        template.validate()?;
+    }
+    Ok(catalog.templates)
+}
+
+/// The embedded catalog TOML, compiled into the binary so it can never go missing from a
+/// shipped install -- see `templates/builtin.toml` for the actual data and its contribution
+/// rules.
+const BUILTIN_CATALOG: &str = include_str!("../templates/builtin.toml");
+
+/// The DCS/PLC templates shipped by default, parsed from the embedded catalog.
+///
+/// # Panics
+///
+/// Panics if the embedded catalog fails to parse or validate. This can only happen from a
+/// bad edit to `templates/builtin.toml` itself; this module's
+/// `embedded_catalog_parses_and_validates` test proves it never does in practice, so a
+/// malformed contribution fails CI rather than shipping.
 pub fn built_in_templates() -> Vec<DcsTemplate> {
-    vec![
-        yokogawa_centum_vp(),
-        honeywell_experion(),
-        schneider_modicon(),
-        allen_bradley_plantpax(),
-    ]
-}
-
-fn yokogawa_centum_vp() -> DcsTemplate {
-    DcsTemplate {
-        name: "Yokogawa CentumVP".to_string(),
-        revert_mode: true,
-        proportional_type: ProportionalType::Band,
-        integral_type: IntegralType::ResetTime,
-        integral_unit: TimeUnit::Seconds,
-        derivative_type: DerivativeType::DerivativeTime,
-        derivative_unit: TimeUnit::Seconds,
-        process_variable_suffix: "PV".to_string(),
-        manipulated_variable_suffix: "MV".to_string(),
-        setpoint_variable_suffix: "SV".to_string(),
-        controller_direction_suffix: "DR".to_string(),
-        controller_mode_suffix: "MODE".to_string(),
-        mode_attribute_suffix: String::new(),
-        upper_pv_range_suffix: "SH".to_string(),
-        lower_pv_range_suffix: "SL".to_string(),
-        upper_mv_range_suffix: "MSH".to_string(),
-        lower_mv_range_suffix: "MSL".to_string(),
-        proportional_constant_suffix: "P".to_string(),
-        integral_constant_suffix: "I".to_string(),
-        derivative_constant_suffix: "D".to_string(),
-        mode_manual_value: "MAN".to_string(),
-        mode_auto_value: "AUT".to_string(),
-        mode_attribute_program_value: None,
-        controller_action_direct_value: "0".to_string(),
-    }
-}
-
-fn honeywell_experion() -> DcsTemplate {
-    DcsTemplate {
-        name: "Honeywell Experion".to_string(),
-        revert_mode: true,
-        proportional_type: ProportionalType::Gain,
-        integral_type: IntegralType::ResetTime,
-        integral_unit: TimeUnit::Minutes,
-        derivative_type: DerivativeType::DerivativeTime,
-        derivative_unit: TimeUnit::Minutes,
-        process_variable_suffix: "PV".to_string(),
-        manipulated_variable_suffix: "OP".to_string(),
-        setpoint_variable_suffix: "SP".to_string(),
-        controller_direction_suffix: "CTLACTN".to_string(),
-        controller_mode_suffix: "MODE".to_string(),
-        mode_attribute_suffix: "MODEATTR".to_string(),
-        upper_pv_range_suffix: "PVEUHI".to_string(),
-        lower_pv_range_suffix: "PVEULO".to_string(),
-        upper_mv_range_suffix: "CVEUHI".to_string(),
-        lower_mv_range_suffix: "CVEULO".to_string(),
-        proportional_constant_suffix: "K".to_string(),
-        integral_constant_suffix: "T1".to_string(),
-        derivative_constant_suffix: "T2".to_string(),
-        mode_manual_value: "0".to_string(),
-        mode_auto_value: "1".to_string(),
-        mode_attribute_program_value: Some("2".to_string()),
-        controller_action_direct_value: "0".to_string(),
-    }
-}
-
-fn schneider_modicon() -> DcsTemplate {
-    DcsTemplate {
-        name: "Schneider Modicon".to_string(),
-        revert_mode: true,
-        proportional_type: ProportionalType::Gain,
-        integral_type: IntegralType::ResetTime,
-        integral_unit: TimeUnit::Seconds,
-        derivative_type: DerivativeType::DerivativeTime,
-        derivative_unit: TimeUnit::Seconds,
-        process_variable_suffix: "PV".to_string(),
-        manipulated_variable_suffix: "OUT".to_string(),
-        setpoint_variable_suffix: "SP".to_string(),
-        controller_direction_suffix: "DR".to_string(),
-        controller_mode_suffix: "MAN_AUT".to_string(),
-        mode_attribute_suffix: String::new(),
-        upper_pv_range_suffix: "PV_SUP".to_string(),
-        lower_pv_range_suffix: "PV_INF".to_string(),
-        upper_mv_range_suffix: "OUT_SUP".to_string(),
-        lower_mv_range_suffix: "OUT_INF".to_string(),
-        proportional_constant_suffix: "KP".to_string(),
-        integral_constant_suffix: "TI".to_string(),
-        derivative_constant_suffix: "TD".to_string(),
-        mode_manual_value: "false".to_string(),
-        mode_auto_value: "true".to_string(),
-        mode_attribute_program_value: None,
-        controller_action_direct_value: "0".to_string(),
-    }
-}
-
-fn allen_bradley_plantpax() -> DcsTemplate {
-    DcsTemplate {
-        name: "Allen-Bradley PlantPAx".to_string(),
-        revert_mode: true,
-        proportional_type: ProportionalType::Gain,
-        integral_type: IntegralType::ResetTime,
-        integral_unit: TimeUnit::Minutes,
-        derivative_type: DerivativeType::DerivativeTime,
-        derivative_unit: TimeUnit::Minutes,
-        process_variable_suffix: "Inp_PV".to_string(),
-        manipulated_variable_suffix: "PSet_SP".to_string(),
-        setpoint_variable_suffix: "PSet_CV".to_string(),
-        controller_direction_suffix: "Cfg_CtrlAction".to_string(),
-        controller_mode_suffix: "Inp_OvrdCmd".to_string(),
-        mode_attribute_suffix: String::new(),
-        upper_pv_range_suffix: "Val_PVEUMax".to_string(),
-        lower_pv_range_suffix: "Val_PVEUMin".to_string(),
-        upper_mv_range_suffix: "Val_CVEUMax".to_string(),
-        lower_mv_range_suffix: "Val_CVEUMin".to_string(),
-        proportional_constant_suffix: "Cfg_PGain".to_string(),
-        integral_constant_suffix: "Cfg_IGain".to_string(),
-        derivative_constant_suffix: "Cfg_DGain".to_string(),
-        mode_manual_value: "1".to_string(),
-        mode_auto_value: "2".to_string(),
-        mode_attribute_program_value: None,
-        controller_action_direct_value: "0".to_string(),
-    }
+    parse_catalog(BUILTIN_CATALOG).expect("embedded builtin.toml catalog must parse and validate")
 }
 
 #[cfg(test)]
@@ -251,5 +285,247 @@ mod tests {
             let back: DcsTemplate = serde_json::from_str(&json).unwrap();
             assert_eq!(template, back);
         }
+    }
+
+    #[test]
+    fn embedded_catalog_parses_and_validates() {
+        // `built_in_templates()` already calls `parse_catalog(...).expect(...)`
+        // internally, so simply calling it without panicking proves this -- but assert on
+        // the result explicitly too, so a future refactor that swallows the panic still
+        // gets caught here.
+        let templates = parse_catalog(BUILTIN_CATALOG).unwrap();
+        for template in &templates {
+            assert!(template.validate().is_ok(), "{}", template.name);
+        }
+    }
+
+    #[test]
+    fn built_in_templates_carry_their_researched_versions() {
+        let templates = built_in_templates();
+        let versions = |name: &str| -> Vec<String> {
+            templates
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap()
+                .versions
+                .clone()
+        };
+        assert_eq!(versions("Yokogawa CentumVP"), vec!["R5", "R6"]);
+        assert_eq!(versions("Honeywell Experion"), vec!["R400", "R410", "R430"]);
+        assert_eq!(
+            versions("Schneider Modicon"),
+            vec!["Unity Pro V8.0", "Unity Pro V8.1", "Unity Pro V11.0"]
+        );
+        assert_eq!(
+            versions("Allen-Bradley PlantPAx"),
+            vec!["3.0", "3.5", "4.0"]
+        );
+    }
+
+    #[test]
+    fn built_in_templates_have_a_description_and_source() {
+        for template in built_in_templates() {
+            assert!(template.description.is_some(), "{}", template.name);
+            assert!(template.source.is_some(), "{}", template.name);
+        }
+    }
+
+    /// A minimal single-template TOML document that passes `validate()` as-is, used as a
+    /// base for the `parse_catalog` rejection tests below via targeted `str::replace`
+    /// edits. `controller_mode_suffix`/`mode_manual_value`/`mode_auto_value` are left blank
+    /// (no mode concept) and `mode_attribute_suffix` is blank too, so none of
+    /// `validate()`'s conditional checks fire unless a test deliberately arms them.
+    fn minimal_valid_toml() -> &'static str {
+        r#"
+[[template]]
+name = "Test DCS"
+revert_mode = false
+proportional_type = "gain"
+integral_type = "reset_time"
+integral_unit = "seconds"
+derivative_type = "derivative_time"
+derivative_unit = "seconds"
+process_variable_suffix = "PV"
+manipulated_variable_suffix = "MV"
+setpoint_variable_suffix = "SV"
+controller_direction_suffix = "DR"
+controller_mode_suffix = ""
+mode_attribute_suffix = ""
+upper_pv_range_suffix = "SH"
+lower_pv_range_suffix = "SL"
+upper_mv_range_suffix = "MSH"
+lower_mv_range_suffix = "MSL"
+proportional_constant_suffix = "P"
+integral_constant_suffix = "I"
+derivative_constant_suffix = "D"
+mode_manual_value = ""
+mode_auto_value = ""
+controller_action_direct_value = "0"
+"#
+    }
+
+    #[test]
+    fn parse_catalog_accepts_a_minimal_valid_template() {
+        let templates = parse_catalog(minimal_valid_toml()).unwrap();
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].name, "Test DCS");
+        assert!(templates[0].versions.is_empty());
+        assert_eq!(templates[0].description, None);
+        assert_eq!(templates[0].source, None);
+    }
+
+    #[test]
+    fn parse_catalog_rejects_malformed_toml() {
+        let err = parse_catalog("this is not [[ valid toml").unwrap_err();
+        assert!(matches!(err, TemplateError::Toml(_)));
+    }
+
+    #[test]
+    fn parse_catalog_rejects_an_empty_pv_suffix() {
+        let toml = minimal_valid_toml().replace(
+            r#"process_variable_suffix = "PV""#,
+            r#"process_variable_suffix = """#,
+        );
+        let err = parse_catalog(&toml).unwrap_err();
+        assert!(matches!(
+            err,
+            TemplateError::EmptyField {
+                field: "process_variable_suffix",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_catalog_rejects_an_empty_mv_suffix() {
+        let toml = minimal_valid_toml().replace(
+            r#"manipulated_variable_suffix = "MV""#,
+            r#"manipulated_variable_suffix = """#,
+        );
+        let err = parse_catalog(&toml).unwrap_err();
+        assert!(matches!(
+            err,
+            TemplateError::EmptyField {
+                field: "manipulated_variable_suffix",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_catalog_rejects_a_mode_suffix_without_manual_value() {
+        let toml = minimal_valid_toml().replace(
+            r#"controller_mode_suffix = """#,
+            r#"controller_mode_suffix = "MODE""#,
+        );
+        // mode_manual_value/mode_auto_value are still "" in this variant.
+        let err = parse_catalog(&toml).unwrap_err();
+        assert!(matches!(
+            err,
+            TemplateError::MissingModeValue {
+                field: "mode_manual_value",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_catalog_rejects_a_mode_suffix_without_auto_value() {
+        let toml = minimal_valid_toml()
+            .replace(
+                r#"controller_mode_suffix = """#,
+                r#"controller_mode_suffix = "MODE""#,
+            )
+            .replace(r#"mode_manual_value = """#, r#"mode_manual_value = "MAN""#);
+        // mode_auto_value stays "" in this variant.
+        let err = parse_catalog(&toml).unwrap_err();
+        assert!(matches!(
+            err,
+            TemplateError::MissingModeValue {
+                field: "mode_auto_value",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_catalog_rejects_a_mode_attribute_suffix_without_program_value() {
+        let toml = minimal_valid_toml().replace(
+            r#"mode_attribute_suffix = """#,
+            r#"mode_attribute_suffix = "MODEATTR""#,
+        );
+        let err = parse_catalog(&toml).unwrap_err();
+        assert!(matches!(
+            err,
+            TemplateError::MissingModeAttributeProgramValue { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_name() {
+        let mut template = built_in_templates().remove(0);
+        template.name = "   ".to_string();
+        assert_eq!(template.validate(), Err(TemplateError::EmptyName));
+    }
+
+    #[test]
+    fn validate_accepts_every_built_in_template() {
+        for template in built_in_templates() {
+            assert!(template.validate().is_ok(), "{}", template.name);
+        }
+    }
+
+    #[test]
+    fn template_error_is_a_std_error() {
+        let err = TemplateError::EmptyName;
+        let _: Box<dyn std::error::Error> = Box::new(err);
+    }
+
+    #[test]
+    fn template_error_display_names_the_template_and_field() {
+        let err = TemplateError::EmptyField {
+            name: "My DCS".to_string(),
+            field: "process_variable_suffix",
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("My DCS"));
+        assert!(msg.contains("process_variable_suffix"));
+    }
+
+    #[test]
+    fn template_error_toml_variant_has_a_source() {
+        use std::error::Error as _;
+        let err = parse_catalog("this is not [[ valid toml").unwrap_err();
+        assert!(err.source().is_some());
+    }
+
+    #[test]
+    fn template_error_display_covers_every_remaining_variant() {
+        let toml_err = parse_catalog("this is not [[ valid toml").unwrap_err();
+        assert!(toml_err.to_string().contains("invalid template catalog"));
+
+        assert_eq!(
+            TemplateError::EmptyName.to_string(),
+            "template name must not be empty"
+        );
+
+        let mode_value_err = TemplateError::MissingModeValue {
+            name: "My DCS".to_string(),
+            field: "mode_manual_value",
+        };
+        let msg = mode_value_err.to_string();
+        assert!(msg.contains("My DCS"));
+        assert!(msg.contains("mode_manual_value"));
+
+        let mode_attr_err = TemplateError::MissingModeAttributeProgramValue {
+            name: "My DCS".to_string(),
+        };
+        assert!(mode_attr_err.to_string().contains("My DCS"));
+    }
+
+    #[test]
+    fn template_error_non_toml_variants_have_no_source() {
+        use std::error::Error as _;
+        assert!(TemplateError::EmptyName.source().is_none());
     }
 }
