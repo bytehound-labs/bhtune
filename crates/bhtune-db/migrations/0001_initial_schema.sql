@@ -129,6 +129,25 @@ CREATE TABLE tune_runs (
     -- since a historical run should still show what it was run against.
     loop_name               TEXT NOT NULL,
 
+    -- Snapshot of the DCS/PLC template (and the tags resolved from it) this
+    -- run was actually configured against, so a historical run stays
+    -- interpretable after the template catalog changes underneath it --
+    -- renamed, edited, or deleted (see `template-provenance`). Deliberately
+    -- not a foreign key to `dcs_templates`, unlike `loops.dcs_template_id`:
+    -- a run must remain readable even once the referenced template row is
+    -- gone. `template_name`/`template_origin` are flat, denormalized copies
+    -- of fields already inside `template_snapshot_json`, present purely so
+    -- they're filterable/indexable without `json_extract`; the JSON blobs
+    -- are what's actually deserialized back into `DcsTemplate`/`LoopTags`
+    -- for display or reproduction.
+    template_name           TEXT NOT NULL,
+    template_origin         TEXT NOT NULL CHECK (template_origin IN ('builtin', 'catalog', 'user')),
+    template_snapshot_json  TEXT NOT NULL CHECK (json_valid(template_snapshot_json)),
+    -- Serialized `bhtune_core::tags::LoopTags` this run actually resolved
+    -- and used -- same shape as `loops.tags_json`, but a point-in-time
+    -- snapshot rather than a live "current" mapping.
+    tags_json               TEXT NOT NULL CHECK (json_valid(tags_json)),
+
     test_type               TEXT NOT NULL DEFAULT 'mrft' CHECK (test_type IN ('mrft')),
     backend                  TEXT NOT NULL CHECK (backend IN ('opcda', 'simulator', 'replay')),
 
@@ -166,6 +185,7 @@ CREATE INDEX idx_tune_runs_loop_started ON tune_runs(loop_id, started_at);
 CREATE INDEX idx_tune_runs_started_at ON tune_runs(started_at);
 CREATE INDEX idx_tune_runs_outcome ON tune_runs(outcome);
 CREATE INDEX idx_tune_runs_process_controller ON tune_runs(process_type, controller_type);
+CREATE INDEX idx_tune_runs_template_name ON tune_runs(template_name);
 
 -- Per-tick engine state during a run -- mirrors
 -- `bhtune_core::mrft::MrftState` plus the `Tick` that produced it. This is

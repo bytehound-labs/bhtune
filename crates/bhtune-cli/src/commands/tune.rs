@@ -19,8 +19,8 @@ use bhtune_core::{
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, TuneBackend, TuneResultRow, TuneRunInitialReadings, TuneRunRow, TuneSampleRow,
-    TuneWriteRow, WriteReadback,
+    DcsTemplateRow, TemplateOrigin, TuneBackend, TuneResultRow, TuneRunInitialReadings, TuneRunRow,
+    TuneSampleRow, TuneWriteRow, WriteReadback,
 };
 use chrono::{DateTime, Utc};
 
@@ -101,6 +101,7 @@ pub async fn run(
     let template_row = DcsTemplateRow::get_by_name(pool, &args.template)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no template named '{}'", args.template))?;
+    let template_origin = TemplateOrigin::from_is_builtin(template_row.is_builtin);
     let template = template_row.template;
 
     let config = build_loop_config(&args)?;
@@ -113,7 +114,18 @@ pub async fn run(
         BackendKindArg::Simulator => TuneBackend::Simulator,
     };
     let started_at = Utc::now();
-    let run = TuneRunRow::start(pool, None, &run_name, db_backend, config, started_at).await?;
+    let run = TuneRunRow::start(
+        pool,
+        None,
+        &run_name,
+        db_backend,
+        config,
+        template_origin,
+        &template,
+        &tags,
+        started_at,
+    )
+    .await?;
     tracing::info!(
         run_id = run.id,
         template = %args.template,
@@ -1435,6 +1447,9 @@ mod tests {
             "abort-test",
             TuneBackend::Simulator,
             config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
             started_at,
         )
         .await
@@ -1757,6 +1772,9 @@ mod tests {
             "invalid-mv-range",
             TuneBackend::Opcda,
             config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
             Utc::now(),
         )
         .await
@@ -2109,6 +2127,9 @@ mod tests {
             "write-back-test",
             TuneBackend::Opcda,
             config,
+            TemplateOrigin::Builtin,
+            &honeywell_template(),
+            &honeywell_tags(),
             Utc::now(),
         )
         .await
@@ -2172,18 +2193,21 @@ mod tests {
     async fn maybe_write_back_skips_when_no_results_were_recorded() {
         let pool = seeded_pool().await;
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let template = honeywell_template();
+        let tags = honeywell_tags();
         let run = TuneRunRow::start(
             &pool,
             None,
             "no-results",
             TuneBackend::Opcda,
             config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
             Utc::now(),
         )
         .await
         .unwrap();
-        let template = honeywell_template();
-        let tags = honeywell_tags();
         let backend = honeywell_backend_auto();
 
         let outcome = maybe_write_back(
@@ -2386,12 +2410,17 @@ mod tests {
     async fn maybe_write_back_fails_when_write_pid_names_a_level_with_no_recorded_result() {
         let pool = seeded_pool().await;
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let template = honeywell_template();
+        let tags = honeywell_tags();
         let run = TuneRunRow::start(
             &pool,
             None,
             "partial-results",
             TuneBackend::Opcda,
             config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
             Utc::now(),
         )
         .await
@@ -2421,8 +2450,6 @@ mod tests {
             .await
             .unwrap();
         }
-        let template = honeywell_template();
-        let tags = honeywell_tags();
         let backend = honeywell_backend_auto();
 
         let outcome = maybe_write_back(

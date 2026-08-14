@@ -88,6 +88,8 @@ mod tests {
     async fn pool_with_one_sample() -> (SqlitePool, i64) {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
         let now = chrono::Utc::now();
+        let template = bhtune_core::built_in_templates().remove(0);
+        let tags = bhtune_core::LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &template);
         let run = bhtune_db::models::TuneRunRow::start(
             &pool,
             None,
@@ -102,6 +104,9 @@ mod tests {
                 noise_protection_secs: 3,
                 mrft_delay_secs: 0,
             },
+            bhtune_db::models::TemplateOrigin::Builtin,
+            &template,
+            &tags,
             now,
         )
         .await

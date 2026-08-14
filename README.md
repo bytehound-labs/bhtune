@@ -147,6 +147,9 @@ unattended runs against live plant equipment fail safe:
   pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`).
 - **`--write-pid <level>` always requires `--yes`** — there is no way to write PID constants to
   a live loop without explicitly confirming it, whether interactively or from a script.
+- **Every run snapshots the exact template and resolved tags it used** — a historical run
+  (`bhtune history show <run>`) stays interpretable even after the template it was configured
+  against is later edited, re-versioned, or deleted from the catalog.
 
 ## Logging
 

@@ -5,15 +5,16 @@
 //! depend on.
 
 use bhtune_core::{
-    ControllerDirection, ControllerType, LoopConfig, MrftState, ProcessType, ResponseLevel, Tick,
-    built_in_templates,
+    ControllerDirection, ControllerType, DcsTemplate, LoopConfig, LoopTags, MrftState, ProcessType,
+    ResponseLevel, Tick, built_in_templates,
     tuning_math::{OpcWriteValues, PidParameters, TuningResult},
 };
 use bhtune_db::{
     connect_in_memory,
     models::{
-        DcsTemplateRow, Pagination, TuneBackend, TuneOutcome, TuneResultRow, TuneRunFilter,
-        TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
+        DcsTemplateRow, Pagination, TemplateOrigin, TuneBackend, TuneOutcome, TuneResultRow,
+        TuneRunFilter, TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow,
+        WriteReadback,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -71,6 +72,17 @@ fn sample_config() -> LoopConfig {
     }
 }
 
+/// The template every [`seed_run`]/direct `TuneRunRow::start` call in this file snapshots --
+/// none of these tests care *which* template was used, only that the run/filter/pagination
+/// machinery around it behaves correctly, so one fixed built-in is enough.
+fn sample_template() -> DcsTemplate {
+    built_in_templates().remove(0)
+}
+
+fn sample_tags() -> LoopTags {
+    LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &sample_template())
+}
+
 fn sample_initial_readings() -> TuneRunInitialReadings {
     TuneRunInitialReadings {
         pv_ini: 50.0,
@@ -94,9 +106,19 @@ async fn seed_run(
     outcome: TuneOutcome,
     started_at: DateTime<Utc>,
 ) -> TuneRunRow {
-    let started = TuneRunRow::start(pool, loop_id, "LIC-X", backend, config, started_at)
-        .await
-        .unwrap();
+    let started = TuneRunRow::start(
+        pool,
+        loop_id,
+        "LIC-X",
+        backend,
+        config,
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        started_at,
+    )
+    .await
+    .unwrap();
     match outcome {
         TuneOutcome::Running => started,
         TuneOutcome::Completed => TuneRunRow::complete(pool, started.id, started_at)
@@ -127,6 +149,9 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
         "LIC101",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         now,
     )
     .await
@@ -136,6 +161,9 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
     assert_eq!(started.loop_id, Some(loop_id));
     assert_eq!(started.loop_name, "LIC101");
     assert_eq!(started.config, sample_config());
+    assert_eq!(started.template_origin, TemplateOrigin::Builtin);
+    assert_eq!(started.template, sample_template());
+    assert_eq!(started.tags, sample_tags());
     assert!(started.initial_readings.is_none());
     assert!(started.completed_at.is_none());
     assert_eq!(started.started_at, now);
@@ -179,6 +207,9 @@ async fn run_can_fail_before_initial_readings_are_ever_recorded() {
         "LIC102",
         TuneBackend::Opcda,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         now,
     )
     .await
@@ -214,6 +245,9 @@ async fn run_can_fail_after_initial_readings_were_recorded() {
         "LIC103",
         TuneBackend::Opcda,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         now,
     )
     .await
@@ -242,6 +276,9 @@ async fn run_can_be_aborted() {
         "LIC104",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         now,
     )
     .await
@@ -372,6 +409,100 @@ async fn list_filters_by_process_type_controller_type_outcome_and_backend() {
     .unwrap();
     assert_eq!(combined.len(), 1);
     assert_eq!(combined[0].id, flow_pid_running_replay.id);
+}
+
+/// Mirrors the test above but for the two filter fields findings 9 (`safety-run-snapshot`)
+/// added -- seeded with `TuneRunRow::start` directly rather than [`seed_run`], since this is
+/// the one test in the file that actually needs to vary the snapshotted template/origin
+/// per-run rather than using the fixed [`sample_template`]/[`sample_tags`] pair.
+#[tokio::test]
+async fn list_filters_by_template_name_and_template_origin() {
+    let pool = connect_in_memory().await.unwrap();
+    let t0 = Utc::now();
+
+    let yokogawa = built_in_templates().remove(0);
+    let honeywell = built_in_templates()
+        .into_iter()
+        .find(|t| t.name == "Honeywell Experion")
+        .expect("Honeywell Experion is a built-in template");
+
+    let yokogawa_builtin = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC201",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &yokogawa,
+        &LoopTags::derive_from_pv_tag("Unit1.LIC201.PV", &yokogawa),
+        t0,
+    )
+    .await
+    .unwrap();
+    let honeywell_builtin = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC202",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &honeywell,
+        &LoopTags::derive_from_pv_tag("Unit1.LIC202.PV", &honeywell),
+        t0 + Duration::seconds(1),
+    )
+    .await
+    .unwrap();
+    let yokogawa_user = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC203",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::User,
+        &yokogawa,
+        &LoopTags::derive_from_pv_tag("Unit1.LIC203.PV", &yokogawa),
+        t0 + Duration::seconds(2),
+    )
+    .await
+    .unwrap();
+
+    let yokogawa_only = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_template_name(yokogawa.name.as_str()),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        yokogawa_only.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![yokogawa_user.id, yokogawa_builtin.id],
+        "newest-started first"
+    );
+
+    let builtin_only = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_template_origin(TemplateOrigin::Builtin),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        builtin_only.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![honeywell_builtin.id, yokogawa_builtin.id],
+        "newest-started first"
+    );
+
+    let combined = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default()
+            .with_template_name(yokogawa.name.as_str())
+            .with_template_origin(TemplateOrigin::User),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(combined.len(), 1);
+    assert_eq!(combined[0].id, yokogawa_user.id);
 }
 
 #[tokio::test]
@@ -592,6 +723,9 @@ async fn tune_sample_insert_and_list_for_run_orders_by_tick() {
         "LIC105",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         now,
     )
     .await
@@ -635,6 +769,9 @@ async fn tune_sample_list_for_run_is_empty_for_a_run_with_no_samples() {
         "LIC106",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         Utc::now(),
     )
     .await
@@ -657,6 +794,9 @@ async fn tune_sample_rejects_duplicate_tick_for_the_same_run() {
         "LIC107",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         now,
     )
     .await
@@ -710,6 +850,9 @@ async fn tune_result_insert_and_list_for_run_orders_by_response_level() {
         "LIC108",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         Utc::now(),
     )
     .await
@@ -752,6 +895,9 @@ async fn tune_result_rejects_duplicate_response_level_for_the_same_run() {
         "LIC109",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         Utc::now(),
     )
     .await
@@ -778,6 +924,9 @@ async fn tune_result_list_for_run_is_empty_for_an_incomplete_run() {
         "LIC110",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         Utc::now(),
     )
     .await
@@ -802,6 +951,9 @@ async fn tune_write_insert_success_records_readback_and_no_error() {
         "LIC111",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         Utc::now(),
     )
     .await
@@ -840,6 +992,9 @@ async fn tune_write_insert_failure_records_error_and_no_readback() {
         "LIC112",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         Utc::now(),
     )
     .await
@@ -871,6 +1026,9 @@ async fn tune_write_list_for_run_orders_oldest_first() {
         "LIC113",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         Utc::now(),
     )
     .await
@@ -920,6 +1078,9 @@ async fn tune_write_list_for_run_is_empty_when_nothing_was_written() {
         "LIC114",
         TuneBackend::Simulator,
         sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
         Utc::now(),
     )
     .await

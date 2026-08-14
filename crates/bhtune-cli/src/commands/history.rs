@@ -141,6 +141,11 @@ struct RunDetailJson {
     failure_reason: Option<String>,
     started_at: chrono::DateTime<chrono::Utc>,
     completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Name of the template snapshotted onto this run at start time -- not necessarily the
+    /// template `template_name` currently resolves to in the catalog, since templates can be
+    /// edited or re-versioned after a run is recorded (`safety-run-snapshot`).
+    template_name: String,
+    template_origin: bhtune_db::models::TemplateOrigin,
     config: bhtune_core::LoopConfig,
     initial_readings: Option<InitialReadingsJson>,
     samples_recorded: usize,
@@ -230,6 +235,10 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 println!("  Completed at:     {}", completed_at.to_rfc3339());
             }
             println!(
+                "  Template:         {} ({:?})",
+                run.template.name, run.template_origin
+            );
+            println!(
                 "  Process/controller: {:?} / {:?}",
                 run.config.process_type, run.config.controller_type
             );
@@ -305,6 +314,8 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 failure_reason: run.failure_reason.clone(),
                 started_at: run.started_at,
                 completed_at: run.completed_at,
+                template_name: run.template.name.clone(),
+                template_origin: run.template_origin,
                 config: run.config,
                 initial_readings: run.initial_readings.map(InitialReadingsJson::from),
                 samples_recorded: samples.len(),
@@ -321,8 +332,8 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bhtune_core::{ControllerType, LoopConfig, ProcessType};
-    use bhtune_db::models::{TuneBackend, TuneRunInitialReadings};
+    use bhtune_core::{ControllerType, DcsTemplate, LoopConfig, LoopTags, ProcessType};
+    use bhtune_db::models::{TemplateOrigin, TuneBackend, TuneRunInitialReadings};
 
     fn sample_config() -> LoopConfig {
         LoopConfig {
@@ -334,6 +345,14 @@ mod tests {
             noise_protection_secs: 3,
             mrft_delay_secs: 0,
         }
+    }
+
+    fn sample_template() -> DcsTemplate {
+        bhtune_core::built_in_templates().remove(0)
+    }
+
+    fn sample_tags() -> LoopTags {
+        LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &sample_template())
     }
 
     #[tokio::test]
@@ -353,6 +372,9 @@ mod tests {
             "Unit1.LIC101.PV",
             TuneBackend::Simulator,
             sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &sample_tags(),
             now,
         )
         .await
@@ -410,6 +432,9 @@ mod tests {
             "Unit1.LIC101.PV",
             TuneBackend::Simulator,
             sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &sample_tags(),
             now,
         )
         .await
@@ -434,6 +459,9 @@ mod tests {
             "Unit1.LIC101.PV",
             TuneBackend::Opcda,
             sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &sample_tags(),
             now,
         )
         .await

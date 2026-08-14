@@ -22,6 +22,18 @@ pub enum DbError {
     #[error("column {column:?} held an unrecognized value: {value:?}")]
     InvalidEnumValue { column: &'static str, value: String },
 
+    /// A JSON column (`tune_runs.template_snapshot_json`/`tags_json`) held syntactically
+    /// valid JSON -- the schema's `CHECK (json_valid(...))` already guarantees that much --
+    /// but it didn't deserialize into the Rust shape the column is supposed to hold. This
+    /// can happen honestly, not just from external tampering: an older snapshot can predate
+    /// a field a later `bhtune-core` release added to `DcsTemplate`/`LoopTags`.
+    #[error("column {column:?} held JSON that didn't match the expected shape: {source}")]
+    InvalidJsonShape {
+        column: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+
     /// [`crate::backup::backup_to`]'s destination already exists. Refused rather than
     /// silently overwritten — clobbering a previous backup because of a reused filename
     /// would itself be a data-loss bug.

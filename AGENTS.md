@@ -205,7 +205,9 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   `bhtune_core::tags::LoopTags` (nested, template-conditional, no stated SQL-filtering need) is
   stored as one `CHECK (json_valid(...))`-constrained JSON column, reusing its `serde` impl
   verbatim. Apply this same test to any future domain type that needs a place in the schema,
-  rather than deciding case-by-case.
+  rather than deciding case-by-case. `tune_runs`'s own `template_name`/`template_origin`
+  (flat) plus `template_snapshot_json`/`tags_json` (JSON) columns (`safety-run-snapshot`, see
+  "Live-plant safety hardening" below) are a second application of the exact same rule.
 - **`tune_results` (calculated) and `tune_writes` (actually written to the DCS) are separate
   tables.** A run can produce three calculated candidate results and zero or more writes;
   conflating "the tool suggested this" with "this went into the controller" would lose the one
@@ -773,6 +775,25 @@ time; this section is updated as each lands, with a full pass once all are done:
   backend reporting an inverted MV range (`low >= high`) causes `execute` to fail with no
   entries at all in the backend's write log — i.e. `transition_to_manual` never runs, not
   merely "the tuning math never runs".
+- **Every run now snapshots the template it was configured against, not just its name** —
+  done. `tune_runs` recorded no template or tag information at all, so a historical run
+  could not be reinterpreted once the template catalog underneath it changed — a real
+  concern given Phase 6.6 makes catalog edits routine. `tune_runs` gained four columns:
+  `template_name`/`template_origin` (flat, filterable — the same denormalized-for-`WHERE`
+  precedent as the existing `loop_name` column) plus `template_snapshot_json`/`tags_json`
+  (the full serialized `DcsTemplate`/`LoopTags`, `CHECK (json_valid(...))`-constrained, for
+  exact reproduction even after the template type itself gains fields). No foreign key to
+  `dcs_templates`: a run must stay interpretable even if that row is later renamed or
+  deleted. `bhtune_db::models::TemplateOrigin` (`Builtin`/`Catalog`/`User`) captures where a
+  template came from; `TuneRunRow::start` now takes `template_origin`/`template: &DcsTemplate`/
+  `tags: &LoopTags` alongside the existing `config`, serializing the latter two with
+  `.expect(...)` on the same "infallible because upstream validation already guarantees
+  every `f32` is finite" basis as `enum_to_text`. A new `DbError::InvalidJsonShape` variant
+  covers the case where a stored blob is syntactically valid JSON (guaranteed by the schema)
+  but no longer deserializes into the current `DcsTemplate`/`LoopTags` shape. `bhtune history
+  show` (not `list`, to keep the list view narrow) prints the snapshotted template name and
+  origin alongside the run's other identity fields, from `RunDetailJson`/the plain-text
+  table.
 
 ## Logging (`cli-logging`)
 

@@ -314,6 +314,40 @@ pub enum TuneOutcome {
     Aborted,
 }
 
+/// Where a [`TuneRunRow`]'s snapshotted template came from, at the moment the run started.
+/// Mirrors the origin the community template catalog gives a `dcs_templates` row (see
+/// `template-provenance`), captured here so a run's own history never needs to look that row
+/// back up -- which matters precisely because it might no longer exist, or might have been
+/// re-imported under a different origin since.
+///
+/// `Catalog` isn't produced anywhere yet -- that lands with `template-provenance` itself --
+/// but all three variants are defined together now so that landing doesn't require a
+/// non-exhaustive-match-breaking enum change here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateOrigin {
+    /// One of the templates `bhtune-core` ships built in.
+    Builtin,
+    /// Loaded from the community template catalog (`template-provenance`; not yet
+    /// implemented).
+    Catalog,
+    /// Hand-imported or otherwise created by whoever is running bhtune.
+    User,
+}
+
+impl TemplateOrigin {
+    /// Bridges today's [`DcsTemplateRow::is_builtin`] boolean to this richer enum, until
+    /// `template-provenance` gives `dcs_templates` its own real `origin` column that this
+    /// type mirrors directly.
+    pub fn from_is_builtin(is_builtin: bool) -> TemplateOrigin {
+        if is_builtin {
+            TemplateOrigin::Builtin
+        } else {
+            TemplateOrigin::User
+        }
+    }
+}
+
 /// The initial-readings snapshot for a [`TuneRunRow`] — known only once the backend's initial
 /// read actually succeeds (`ReadInitialOPCvalues` in the legacy app); `None` for a run that
 /// failed before or during that step. Combines
@@ -346,6 +380,19 @@ pub struct TuneRunRow {
     /// Snapshot of the `LoopConfig` this run was started with — always known up front, since
     /// it's user/schedule input rather than something read from the backend.
     pub config: LoopConfig,
+    /// Where the snapshotted `template` below came from (see [`TemplateOrigin`]).
+    pub template_origin: TemplateOrigin,
+    /// Snapshot of the exact [`DcsTemplate`] this run was configured against, deserialized
+    /// from `template_snapshot_json`. Held as the full struct rather than just its `name` --
+    /// which is what makes a historical run stay interpretable once the template catalog
+    /// changes underneath it (`safety-run-snapshot`). There's no separate `template_name`
+    /// field here even though the table has a `template_name` column: `.name` on this field
+    /// already carries that value, and the column exists purely so it's filterable/indexable
+    /// without `json_extract` (see this module's own doc comment).
+    pub template: DcsTemplate,
+    /// Snapshot of the resolved [`LoopTags`] this run actually used, deserialized from
+    /// `tags_json`.
+    pub tags: LoopTags,
     pub initial_readings: Option<TuneRunInitialReadings>,
     pub created_at: DateTime<Utc>,
 }
@@ -364,6 +411,8 @@ pub struct TuneRunFilter {
     pub started_after: Option<DateTime<Utc>>,
     /// Matches runs with `started_at <= started_before` (inclusive).
     pub started_before: Option<DateTime<Utc>>,
+    pub template_name: Option<String>,
+    pub template_origin: Option<TemplateOrigin>,
 }
 
 impl TuneRunFilter {
@@ -399,6 +448,16 @@ impl TuneRunFilter {
 
     pub fn with_started_before(mut self, started_before: DateTime<Utc>) -> TuneRunFilter {
         self.started_before = Some(started_before);
+        self
+    }
+
+    pub fn with_template_name(mut self, template_name: impl Into<String>) -> TuneRunFilter {
+        self.template_name = Some(template_name.into());
+        self
+    }
+
+    pub fn with_template_origin(mut self, template_origin: TemplateOrigin) -> TuneRunFilter {
+        self.template_origin = Some(template_origin);
         self
     }
 }
@@ -438,21 +497,40 @@ impl TuneRunRow {
     /// `started_at` and `created_at`, which are naturally the same instant for a run that's
     /// only just begun. `loop_id` may be `None` for an ad-hoc run against tags that were
     /// never saved as a reusable [`LoopRow`].
+    ///
+    /// `template_origin`/`template`/`tags` snapshot exactly what this run was configured
+    /// against (`safety-run-snapshot`), so a historical run stays interpretable even after
+    /// the template catalog changes underneath it. Serializing `template`/`tags` is treated
+    /// as infallible here, the same way [`enum_to_text`] treats enum serialization as
+    /// infallible: both types are plain, `derive`d, string/enum-only structures with no maps,
+    /// and every `f32` field they can carry is validated finite well before a run reaches
+    /// this call (see `safety-validation`) -- a panic here would mean that contract regressed
+    /// upstream, not a normal runtime failure this function's `DbResult` should model.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         pool: &SqlitePool,
         loop_id: Option<i64>,
         loop_name: &str,
         backend: TuneBackend,
         config: LoopConfig,
+        template_origin: TemplateOrigin,
+        template: &DcsTemplate,
+        tags: &LoopTags,
         now: DateTime<Utc>,
     ) -> DbResult<TuneRunRow> {
+        let template_snapshot_json =
+            serde_json::to_string(template).expect("DcsTemplate serialization is infallible");
+        let tags_json = serde_json::to_string(tags).expect("LoopTags serialization is infallible");
+
         let row = sqlx::query(
             r#"
             INSERT INTO tune_runs (
                 loop_id, loop_name, backend, started_at, outcome,
                 process_type, controller_type, relay_amp_percent, num_cycles_skip,
-                num_cycles_count, noise_protection_secs, mrft_delay_secs, created_at
-            ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?)
+                num_cycles_count, noise_protection_secs, mrft_delay_secs,
+                template_name, template_origin, template_snapshot_json, tags_json,
+                created_at
+            ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
@@ -467,6 +545,10 @@ impl TuneRunRow {
         .bind(config.num_cycles_count)
         .bind(config.noise_protection_secs)
         .bind(config.mrft_delay_secs)
+        .bind(&template.name)
+        .bind(enum_to_text(&template_origin))
+        .bind(template_snapshot_json)
+        .bind(tags_json)
         .bind(now)
         .fetch_one(pool)
         .await
@@ -656,6 +738,16 @@ fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) {
             .push(" AND started_at <= ")
             .push_bind(started_before);
     }
+    if let Some(template_name) = &filter.template_name {
+        builder
+            .push(" AND template_name = ")
+            .push_bind(template_name.clone());
+    }
+    if let Some(template_origin) = filter.template_origin {
+        builder
+            .push(" AND template_origin = ")
+            .push_bind(enum_to_text(&template_origin));
+    }
 }
 
 fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
@@ -695,6 +787,24 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
     let backend: String = row.try_get("backend").map_err(DbError::Query)?;
     let outcome: String = row.try_get("outcome").map_err(DbError::Query)?;
 
+    let template_origin: String = row.try_get("template_origin").map_err(DbError::Query)?;
+    let template_snapshot_json: String = row
+        .try_get("template_snapshot_json")
+        .map_err(DbError::Query)?;
+    let tags_json: String = row.try_get("tags_json").map_err(DbError::Query)?;
+    let template: DcsTemplate =
+        serde_json::from_str(&template_snapshot_json).map_err(|source| {
+            DbError::InvalidJsonShape {
+                column: "template_snapshot_json",
+                source,
+            }
+        })?;
+    let tags: LoopTags =
+        serde_json::from_str(&tags_json).map_err(|source| DbError::InvalidJsonShape {
+            column: "tags_json",
+            source,
+        })?;
+
     Ok(TuneRunRow {
         id: row.try_get("id").map_err(DbError::Query)?,
         loop_id: row.try_get("loop_id").map_err(DbError::Query)?,
@@ -705,6 +815,9 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         outcome: text_to_enum("outcome", &outcome)?,
         failure_reason: row.try_get("failure_reason").map_err(DbError::Query)?,
         config,
+        template_origin: text_to_enum("template_origin", &template_origin)?,
+        template,
+        tags,
         initial_readings,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
     })

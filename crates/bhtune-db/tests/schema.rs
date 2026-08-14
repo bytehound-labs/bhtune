@@ -205,9 +205,10 @@ async fn seed_failed_run(pool: &sqlx::SqlitePool, loop_id: Option<i64>) -> i64 {
         INSERT INTO tune_runs (
             loop_id, loop_name, backend, started_at, outcome, failure_reason,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
-            num_cycles_count, noise_protection_secs, mrft_delay_secs, created_at
+            num_cycles_count, noise_protection_secs, mrft_delay_secs,
+            template_name, template_origin, template_snapshot_json, tags_json, created_at
         ) VALUES (?, 'LIC101', 'opcda', ?, 'failed', 'InvalidCastException reading initial values',
-                  'flow', 'pi', 5.0, 1, 2, 3, 0, ?)
+                  'flow', 'pi', 5.0, 1, 2, 3, 0, 'Test Template', 'builtin', '{}', '{}', ?)
         RETURNING id
         "#,
     )
@@ -252,8 +253,10 @@ async fn tune_run_rejects_invalid_outcome_and_backend() {
         INSERT INTO tune_runs (
             loop_id, loop_name, backend, started_at, outcome,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
-            num_cycles_count, noise_protection_secs, mrft_delay_secs, created_at
-        ) VALUES (?, 'LIC101', 'opcda', ?, 'not_a_real_outcome', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?)
+            num_cycles_count, noise_protection_secs, mrft_delay_secs,
+            template_name, template_origin, template_snapshot_json, tags_json, created_at
+        ) VALUES (?, 'LIC101', 'opcda', ?, 'not_a_real_outcome', 'flow', 'pi', 5.0, 1, 2, 3, 0,
+                  'Test Template', 'builtin', '{}', '{}', ?)
         "#,
     )
     .bind(loop_id)
@@ -268,8 +271,10 @@ async fn tune_run_rejects_invalid_outcome_and_backend() {
         INSERT INTO tune_runs (
             loop_id, loop_name, backend, started_at, outcome,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
-            num_cycles_count, noise_protection_secs, mrft_delay_secs, created_at
-        ) VALUES (?, 'LIC101', 'modbus', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?)
+            num_cycles_count, noise_protection_secs, mrft_delay_secs,
+            template_name, template_origin, template_snapshot_json, tags_json, created_at
+        ) VALUES (?, 'LIC101', 'modbus', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
+                  'Test Template', 'builtin', '{}', '{}', ?)
         "#,
     )
     .bind(loop_id)
@@ -280,6 +285,60 @@ async fn tune_run_rejects_invalid_outcome_and_backend() {
     assert!(
         bad_backend.is_err(),
         "backend outside the current roadmap must be rejected"
+    );
+}
+
+/// Covers the three `CHECK` constraints `safety-run-snapshot` added to `tune_runs`: a
+/// `template_origin` outside the three known values, and invalid JSON in either of the two
+/// new JSON blob columns. Mirrors `loops_reject_invalid_json_and_invalid_enum_values` above,
+/// which covers the same shape of constraint on `loops.tags_json`/`process_type`.
+#[tokio::test]
+async fn tune_runs_reject_invalid_template_origin_and_invalid_json() {
+    let pool = connect_in_memory().await.unwrap();
+    let loop_id = seed_loop(&pool).await;
+
+    let insert = |template_origin: &'static str,
+                  template_snapshot_json: &'static str,
+                  tags_json: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                r#"
+                INSERT INTO tune_runs (
+                    loop_id, loop_name, backend, started_at, outcome,
+                    process_type, controller_type, relay_amp_percent, num_cycles_skip,
+                    num_cycles_count, noise_protection_secs, mrft_delay_secs,
+                    template_name, template_origin, template_snapshot_json, tags_json, created_at
+                ) VALUES (?, 'LIC101', 'opcda', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
+                          'Test Template', ?, ?, ?, ?)
+                "#,
+            )
+            .bind(loop_id)
+            .bind(Utc::now())
+            .bind(template_origin)
+            .bind(template_snapshot_json)
+            .bind(tags_json)
+            .bind(Utc::now())
+            .execute(&pool)
+            .await
+        }
+    };
+
+    assert!(
+        insert("not_a_real_origin", "{}", "{}").await.is_err(),
+        "template_origin outside builtin/catalog/user must be rejected"
+    );
+    assert!(
+        insert("builtin", "not valid json", "{}").await.is_err(),
+        "invalid JSON in template_snapshot_json must be rejected"
+    );
+    assert!(
+        insert("builtin", "{}", "not valid json").await.is_err(),
+        "invalid JSON in tags_json must be rejected"
+    );
+    assert!(
+        insert("builtin", "{}", "{}").await.is_ok(),
+        "the same statement with valid values must succeed"
     );
 }
 
