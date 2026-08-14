@@ -314,6 +314,23 @@ pub enum TuneOutcome {
     Aborted,
 }
 
+/// The outcome of a best-effort loop-restore attempt made after a run ended --
+/// `safety-restore-guard` (finding 3 of the live-plant safety review). Recorded via
+/// [`TuneRunRow::record_restore_status`]; `NULL` in the database (mapped to `None` on
+/// [`TuneRunRow::restore_status`]) means no restore was ever attempted -- either the run
+/// never mutated the loop at all, or it hasn't ended yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreStatus {
+    /// `restore()` ran every applicable step to completion with no failures.
+    Confirmed,
+    /// A second Ctrl+C arrived, `--restore-timeout-secs` elapsed, or one or more individual
+    /// restore steps themselves failed, before the restore could be confirmed complete. The
+    /// loop may still be at a relay-test MV/mode -- see `restore_detail` for what an
+    /// operator (or `bhtune restore-loop`) needs to check by hand.
+    Incomplete,
+}
+
 /// Where a [`TuneRunRow`]'s snapshotted template came from, at the moment the run started.
 /// Mirrors the origin the community template catalog gives a `dcs_templates` row (see
 /// `template-provenance`), captured here so a run's own history never needs to look that row
@@ -355,7 +372,7 @@ impl TemplateOrigin {
 /// resolved [`ControllerDirection`] `core-tuning-math` needs alongside them, as one bespoke
 /// type, since gluing the two existing structs together with one extra field isn't any
 /// simpler than a purpose-built one here.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TuneRunInitialReadings {
     pub pv_ini: f32,
     pub mv_ini: f32,
@@ -364,6 +381,20 @@ pub struct TuneRunInitialReadings {
     pub pv_range_high: f32,
     pub pv_range_low: f32,
     pub controller_direction: ControllerDirection,
+    /// The controller mode tag's raw value at read time, before any mutation --
+    /// `None` when the template/loop has no mode tag at all. Persisted (rather than kept
+    /// only in-process) so a crashed run's restore intent survives the process dying
+    /// outright -- `safety-restore-guard` (finding 3 of the live-plant safety review).
+    pub mode_raw: Option<String>,
+    /// The mode-attribute tag's raw value at read time, before any mutation -- `None` when
+    /// the template/loop has no mode-attribute tag at all. See `mode_raw`.
+    pub mode_attribute_raw: Option<String>,
+    /// The setpoint read while the loop was still in its original mode, captured only when
+    /// that mode was Auto (mirrors `SvValueIni` in the legacy app) -- `None` otherwise. Read
+    /// here rather than during the mode transition itself (unlike the legacy app), since a
+    /// plain read has no mutation risk and can safely happen before the loop is touched at
+    /// all. See `mode_raw`.
+    pub setpoint_ini: Option<f32>,
 }
 
 /// One row of `tune_runs`: a single MRFT (or future Step Test) execution against a loop.
@@ -401,6 +432,14 @@ pub struct TuneRunRow {
     /// comment for why it's a separate post-`start()` update rather than a `start()`
     /// parameter.
     pub allow_uncertain_quality: bool,
+    /// Outcome of the best-effort restore attempted after this run ended -- `None` if no
+    /// restore was ever attempted (the run never mutated the loop, or hasn't ended yet). See
+    /// [`RestoreStatus`] and [`TuneRunRow::record_restore_status`].
+    pub restore_status: Option<RestoreStatus>,
+    /// Set only alongside `restore_status = Some(RestoreStatus::Incomplete)`: what a second
+    /// Ctrl+C, `--restore-timeout-secs`, or an individual failed restore step prevented from
+    /// being confirmed.
+    pub restore_detail: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -566,8 +605,12 @@ impl TuneRunRow {
 
     /// Records the backend's initial-readings snapshot (`ReadInitialOPCvalues` in the legacy
     /// app) for an already-started run. Called at most once per run, right after that read
-    /// succeeds; a run that fails before or during it instead goes straight to [`Self::fail`]
-    /// with `initial_readings` left `None`.
+    /// succeeds -- and, deliberately, *before* `transition_to_manual`'s first mutating write
+    /// rather than after it (`safety-restore-guard`, finding 3 of the live-plant safety
+    /// review), so `mode_raw`/`mode_attribute_raw`/`setpoint_ini` are always durably
+    /// persisted before the loop is touched at all, letting a crashed run be reconstructed
+    /// and restored later via `bhtune restore-loop`. A run that fails before or during the
+    /// read instead goes straight to [`Self::fail`] with `initial_readings` left `None`.
     pub async fn record_initial_readings(
         pool: &SqlitePool,
         run_id: i64,
@@ -577,7 +620,8 @@ impl TuneRunRow {
             r#"
             UPDATE tune_runs SET
                 pv_ini = ?, mv_ini = ?, mv_range_low = ?, mv_range_high = ?,
-                pv_range_high = ?, pv_range_low = ?, controller_direction = ?
+                pv_range_high = ?, pv_range_low = ?, controller_direction = ?,
+                mode_raw = ?, mode_attribute_raw = ?, setpoint_ini = ?
             WHERE id = ?
             RETURNING *
             "#,
@@ -589,6 +633,9 @@ impl TuneRunRow {
         .bind(readings.pv_range_high)
         .bind(readings.pv_range_low)
         .bind(enum_to_text(&readings.controller_direction))
+        .bind(readings.mode_raw)
+        .bind(readings.mode_attribute_raw)
+        .bind(readings.setpoint_ini)
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -620,6 +667,39 @@ impl TuneRunRow {
             "#,
         )
         .bind(allow_uncertain_quality)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Records the outcome of a best-effort loop-restore attempt made after this run ended
+    /// (`safety-restore-guard`, finding 3 of the live-plant safety review). Called once,
+    /// after `complete`/`fail`/`abort` (whichever applies) and after `attempt_restore` has
+    /// actually run -- never before, and never for a run that ended without ever mutating
+    /// the loop (nothing to restore, so nothing to record). `detail` should be `Some(..)`
+    /// whenever `status` is [`RestoreStatus::Incomplete`], naming what could not be
+    /// confirmed; pass `None` for [`RestoreStatus::Confirmed`]. A separate post-hoc update
+    /// rather than a `complete`/`fail`/`abort` parameter, matching
+    /// [`Self::record_allow_uncertain_quality`]'s precedent: the restore attempt always
+    /// happens strictly after one of those three, never alongside it.
+    pub async fn record_restore_status(
+        pool: &SqlitePool,
+        run_id: i64,
+        status: RestoreStatus,
+        detail: Option<&str>,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs SET restore_status = ?, restore_detail = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(enum_to_text(&status))
+        .bind(detail)
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -803,6 +883,9 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
                 pv_range_high: row.try_get("pv_range_high").map_err(DbError::Query)?,
                 pv_range_low: row.try_get("pv_range_low").map_err(DbError::Query)?,
                 controller_direction: text_to_enum("controller_direction", &controller_direction)?,
+                mode_raw: row.try_get("mode_raw").map_err(DbError::Query)?,
+                mode_attribute_raw: row.try_get("mode_attribute_raw").map_err(DbError::Query)?,
+                setpoint_ini: row.try_get("setpoint_ini").map_err(DbError::Query)?,
             })
         }
         None => None,
@@ -824,6 +907,12 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
 
     let backend: String = row.try_get("backend").map_err(DbError::Query)?;
     let outcome: String = row.try_get("outcome").map_err(DbError::Query)?;
+
+    let restore_status_text: Option<String> =
+        row.try_get("restore_status").map_err(DbError::Query)?;
+    let restore_status = restore_status_text
+        .map(|text| text_to_enum("restore_status", &text))
+        .transpose()?;
 
     let template_origin: String = row.try_get("template_origin").map_err(DbError::Query)?;
     let template_snapshot_json: String = row
@@ -860,6 +949,8 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         allow_uncertain_quality: row
             .try_get("allow_uncertain_quality")
             .map_err(DbError::Query)?,
+        restore_status,
+        restore_detail: row.try_get("restore_detail").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
     })
 }

@@ -92,6 +92,9 @@ fn sample_initial_readings() -> TuneRunInitialReadings {
         pv_range_high: 100.0,
         pv_range_low: 0.0,
         controller_direction: ControllerDirection::Direct,
+        mode_raw: Some("1".to_string()),
+        mode_attribute_raw: None,
+        setpoint_ini: Some(50.0),
     }
 }
 
@@ -170,10 +173,10 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
     assert_eq!(started.created_at, now);
 
     let readings = sample_initial_readings();
-    let with_readings = TuneRunRow::record_initial_readings(&pool, started.id, readings)
+    let with_readings = TuneRunRow::record_initial_readings(&pool, started.id, readings.clone())
         .await
         .unwrap();
-    assert_eq!(with_readings.initial_readings, Some(readings));
+    assert_eq!(with_readings.initial_readings, Some(readings.clone()));
     assert_eq!(
         with_readings.outcome,
         TuneOutcome::Running,

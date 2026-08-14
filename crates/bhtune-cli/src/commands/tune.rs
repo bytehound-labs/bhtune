@@ -47,12 +47,13 @@ pub enum TuneOutcome {
     /// running too long" apart from "an operator stopped it on purpose".
     TimedOut,
     /// A backend reported a non-`Good` OPC quality for a tuning-critical reading -- an
-    /// initial reading, the transition-to-manual setpoint capture, or an in-flight PV poll
-    /// sample without `--allow-uncertain-quality` (or with it, but the quality was `Bad`
-    /// rather than merely `Uncertain`) -- and the run was aborted and the loop restored
-    /// before returning, exactly like [`TuneOutcome::Aborted`]/[`TuneOutcome::TimedOut`] but
-    /// distinguished so a scheduler's alerting can tell "the plant data itself couldn't be
-    /// trusted" apart from either of those. See `safety-quality` in AGENTS.md.
+    /// initial reading (including the setpoint capture, when the loop starts in Auto) or an
+    /// in-flight PV poll sample without `--allow-uncertain-quality` (or with it, but the
+    /// quality was `Bad` rather than merely `Uncertain`) -- and the run was aborted and the
+    /// loop restored before returning, exactly like
+    /// [`TuneOutcome::Aborted`]/[`TuneOutcome::TimedOut`] but distinguished so a scheduler's
+    /// alerting can tell "the plant data itself couldn't be trusted" apart from either of
+    /// those. See `safety-quality` in AGENTS.md.
     PoorQuality,
     /// The test itself completed, but writing the chosen PID parameters back to the DCS
     /// failed (rejected write, failed confirmation readback, or -- defensively -- a
@@ -253,8 +254,8 @@ enum AbortReason {
     /// the two variants above, this is checked and constructed from inside
     /// [`run_polling_loop`] itself rather than from [`execute`]'s outer `tokio::select!`,
     /// since it depends on the value just read, not an independent timer/signal. A poor
-    /// quality reading *before* the mode transition (initial readings, the
-    /// transition-to-manual setpoint capture) is instead a hard failure via a plain
+    /// quality reading *before* the mode transition (any of `read_initial_values`'s
+    /// readings, including the setpoint capture) is instead a hard failure via a plain
     /// `anyhow::Error` -- see `check_quality` -- since nothing has been mutated yet at that
     /// point, so there's no loop state to restore and no reason to route it through this
     /// enum. Carries `tag`/`quality` for the printed/JSON summary.
@@ -529,13 +530,63 @@ struct InitialState {
     direction: ControllerDirection,
     mode_raw: Option<String>,
     mode_attribute_raw: Option<String>,
+    /// The setpoint, captured here -- before any mutation of the loop -- whenever the loop's
+    /// original mode is Auto and both a mode and a setpoint tag are configured (mirrors
+    /// `SvValueIni` in the legacy app, which captured it later, at the moment of actually
+    /// transitioning out of Auto). Hoisting the read this early means it's durably persisted
+    /// via [`TuneRunRow::record_initial_readings`] before `transition_to_manual`'s first
+    /// mutating write is even attempted, so a crashed run's restore intent survives the
+    /// process dying outright (`safety-restore-guard`, finding 3 of the live-plant safety
+    /// review). Note that this field being `Some(..)` only proves the loop *was* in Auto --
+    /// not that a mode transition was actually attempted, since `read_initial_values` runs
+    /// unconditionally, before any such decision is made -- so `restore`'s setpoint-revert
+    /// step is additionally gated on [`MutationGuard::mode_written`], not on this field
+    /// alone.
+    setpoint_ini: Option<f32>,
 }
 
-/// State captured during `transition_to_manual` that `restore` needs later — currently just
-/// the setpoint read while transitioning out of Auto (`SvValueIni` in the legacy app).
+/// Tracks which of `transition_to_manual`'s mutations were actually *attempted* -- armed
+/// immediately before each write is issued, not after it succeeds -- so `restore` can
+/// independently decide what's safe/necessary to revert even when `transition_to_manual`
+/// itself returns partway through with an error (`safety-restore-guard`, finding 3 of the
+/// live-plant safety review). Renamed from the former `ModeRestoreState`, which held only
+/// the captured setpoint; that value now lives on [`InitialState`] instead, read before any
+/// mutation rather than during `transition_to_manual` -- see that field's doc comment for
+/// why.
 #[derive(Debug, Default)]
-struct ModeRestoreState {
-    setpoint_ini: Option<f32>,
+struct MutationGuard {
+    /// The mode-attribute tag's "put in program/computer mode" write was attempted.
+    mode_attribute_written: bool,
+    /// The mode tag's "put in Manual" write was attempted.
+    mode_written: bool,
+    /// A relay-test MV write was attempted at least once during `run_polling_loop`. Tracked
+    /// for completeness/audit parity with the other two flags -- `restore`'s MV-revert step
+    /// is unconditional and never gated by this flag, since a redundant write-back is always
+    /// harmless (idempotent if the pre-test value is already there, or safely rejected by
+    /// the DCS if the loop never actually left Auto), so there is no correctness reason to
+    /// skip attempting it even while this is still `false`.
+    mv_written: bool,
+}
+
+/// Small, private helper bundling the two DB writes that follow a completed MRFT test, so
+/// `execute` can route a failure in either one through a single best-effort restore attempt
+/// instead of silently skipping it (`safety-restore-guard`, finding 3 of the live-plant
+/// safety review) -- previously, both ran ahead of `attempt_restore` with a bare `?` each.
+async fn finish_completed_run(
+    pool: &SqlitePool,
+    run_id: i64,
+    completion: Action,
+    direction: ControllerDirection,
+    config: LoopConfig,
+    pv_range: PvRange,
+    template: &DcsTemplate,
+) -> anyhow::Result<()> {
+    persist_results(
+        pool, run_id, completion, direction, config, pv_range, template,
+    )
+    .await?;
+    TuneRunRow::complete(pool, run_id, Utc::now()).await?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -554,9 +605,11 @@ async fn execute(
     let allow_uncertain = args.allow_uncertain_quality;
     let initial = read_initial_values(backend, tags, template, allow_uncertain).await?;
     validate_initial_state(&initial)?;
-    let mode_state =
-        transition_to_manual(backend, tags, template, &initial, allow_uncertain).await?;
 
+    // Persisted before any mutation is attempted (`safety-restore-guard`): a crash between
+    // here and a confirmed restore still leaves a durable record of the mode/mode-attribute/
+    // setpoint as they were *before* anything was written, so `bhtune restore-loop` can
+    // reconstruct and restore the loop later even if the process never gets to do so itself.
     TuneRunRow::record_initial_readings(
         pool,
         run_id,
@@ -568,9 +621,29 @@ async fn execute(
             pv_range_high: initial.pv_range_high,
             pv_range_low: initial.pv_range_low,
             controller_direction: initial.direction,
+            mode_raw: initial.mode_raw.clone(),
+            mode_attribute_raw: initial.mode_attribute_raw.clone(),
+            setpoint_ini: initial.setpoint_ini,
         },
     )
     .await?;
+
+    let mut guard = MutationGuard::default();
+    if let Err(e) = transition_to_manual(backend, tags, template, &initial, &mut guard).await {
+        return Err(restore_best_effort_then_propagate(
+            pool,
+            run_id,
+            backend,
+            tags,
+            template,
+            &initial,
+            &guard,
+            args.restore_timeout_secs,
+            ctrl_c,
+            e,
+        )
+        .await);
+    }
 
     let beta = lookup(
         config.process_type,
@@ -602,6 +675,7 @@ async fn execute(
         &mut engine,
         started_at,
         ctrl_c,
+        &mut guard,
     )
     .await;
 
@@ -611,7 +685,7 @@ async fn execute(
                 high: initial.pv_range_high,
                 low: initial.pv_range_low,
             };
-            persist_results(
+            if let Err(e) = finish_completed_run(
                 pool,
                 run_id,
                 completion,
@@ -620,19 +694,35 @@ async fn execute(
                 pv_range,
                 template,
             )
-            .await?;
-            TuneRunRow::complete(pool, run_id, Utc::now()).await?;
-            match attempt_restore(
+            .await
+            {
+                return Err(restore_best_effort_then_propagate(
+                    pool,
+                    run_id,
+                    backend,
+                    tags,
+                    template,
+                    &initial,
+                    &guard,
+                    args.restore_timeout_secs,
+                    ctrl_c,
+                    e,
+                )
+                .await);
+            }
+
+            let restore_attempt = attempt_restore(
                 backend,
                 tags,
                 template,
                 &initial,
-                &mode_state,
+                &guard,
                 args.restore_timeout_secs,
                 ctrl_c,
             )
-            .await?
-            {
+            .await;
+            record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
+            match restore_attempt {
                 RestoreAttempt::Confirmed => {
                     let write_back = maybe_write_back(
                         pool,
@@ -659,11 +749,12 @@ async fn execute(
                 tags,
                 template,
                 &initial,
-                &mode_state,
+                &guard,
                 args.restore_timeout_secs,
                 ctrl_c,
             )
-            .await?;
+            .await;
+            record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
             TuneRunRow::abort(pool, run_id, Utc::now()).await?;
             match restore_attempt {
                 RestoreAttempt::Confirmed => Ok(RunOutcome::Aborted(reason)),
@@ -678,20 +769,20 @@ async fn execute(
             // Best-effort: a failed test still stroked the valve, so try to put it back even
             // though the overall run is going to be reported as failed regardless. Still
             // bounded/interruptible (a second Ctrl+C or `--restore-timeout-secs` still cuts
-            // it short) and still warns loudly on an incomplete restore -- only the return
-            // value is discarded, since there's no `RunOutcome` to report it through on this
-            // path.
-            let _ = attempt_restore(
+            // it short) and still warns loudly on an incomplete restore.
+            Err(restore_best_effort_then_propagate(
+                pool,
+                run_id,
                 backend,
                 tags,
                 template,
                 &initial,
-                &mode_state,
+                &guard,
                 args.restore_timeout_secs,
                 ctrl_c,
+                e,
             )
-            .await;
-            Err(e)
+            .await)
         }
     }
 }
@@ -883,6 +974,16 @@ async fn read_initial_values(
         None => None,
     };
 
+    // Captured here, before any mutation, whenever the loop's original mode is Auto -- see
+    // `InitialState::setpoint_ini`'s doc comment for why this read is hoisted out of
+    // `transition_to_manual`, where the legacy app captures the analogous `SvValueIni`.
+    let setpoint_ini = match (&tags.setpoint_variable, &mode_raw) {
+        (Some(sv_tag), Some(mode_raw)) if mode_raw == &template.mode_auto_value => {
+            Some(read_f32(backend, sv_tag, allow_uncertain).await?)
+        }
+        _ => None,
+    };
+
     let direction = resolve_direction(
         backend,
         &tags.controller_direction,
@@ -905,6 +1006,7 @@ async fn read_initial_values(
         direction,
         mode_raw,
         mode_attribute_raw,
+        setpoint_ini,
     })
 }
 
@@ -932,76 +1034,161 @@ fn validate_initial_state(initial: &InitialState) -> anyhow::Result<()> {
 }
 
 /// Pure port of `ChangeControllerModeToMan`. No-ops entirely when `tags.controller_mode` and
-/// `tags.mode_attribute` are both `None` (the simulator's case).
+/// `tags.mode_attribute` are both `None` (the simulator's case). `guard`'s flags are armed
+/// immediately before each write is attempted, not after it succeeds -- see
+/// [`MutationGuard`]'s doc comment for why that ordering matters -- so a caller still knows
+/// exactly what was attempted even if this function returns partway through with an error.
 async fn transition_to_manual(
     backend: &dyn Backend,
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
-    allow_uncertain: bool,
-) -> anyhow::Result<ModeRestoreState> {
+    guard: &mut MutationGuard,
+) -> anyhow::Result<()> {
     if let (Some(attr_tag), Some(program_value)) =
         (&tags.mode_attribute, &template.mode_attribute_program_value)
     {
+        guard.mode_attribute_written = true;
         write_raw(backend, attr_tag, program_value.clone()).await?;
         tokio::time::sleep(Duration::from_millis(1000)).await;
     }
 
-    let mut setpoint_ini = None;
     if let Some(mode_tag) = &tags.controller_mode {
         let mode_raw = initial.mode_raw.as_deref().unwrap_or_default();
         if mode_raw != template.mode_manual_value {
-            if mode_raw == template.mode_auto_value
-                && let Some(sv_tag) = &tags.setpoint_variable
-            {
-                setpoint_ini = Some(read_f32(backend, sv_tag, allow_uncertain).await?);
-            }
+            guard.mode_written = true;
             write_raw(backend, mode_tag, template.mode_manual_value.clone()).await?;
         }
     }
 
-    Ok(ModeRestoreState { setpoint_ini })
+    Ok(())
+}
+
+/// One step of a [`RestoreReport`]. `NotNeeded` means the step's precondition wasn't met --
+/// the loop wasn't in a state requiring reverting that aspect, or the corresponding mutation
+/// was never attempted per [`MutationGuard`] -- not that it failed.
+#[derive(Debug, Clone, PartialEq, Default)]
+enum RestoreStepOutcome {
+    #[default]
+    NotNeeded,
+    Succeeded,
+    Failed(String),
+}
+
+/// The result of one [`restore`] call: each of the (up to) four independent revert steps,
+/// attempted regardless of whether an earlier one failed (`safety-restore-guard`, finding 3
+/// of the live-plant safety review, "aggregated best-effort restore") -- so a rejected MV
+/// write, say, can never prevent the mode from also being put back.
+#[derive(Debug, Clone, Default)]
+struct RestoreReport {
+    mv: RestoreStepOutcome,
+    mode: RestoreStepOutcome,
+    setpoint: RestoreStepOutcome,
+    mode_attribute: RestoreStepOutcome,
+}
+
+impl RestoreReport {
+    /// `true` only if every step that was attempted succeeded -- a step that was
+    /// [`RestoreStepOutcome::NotNeeded`] doesn't count against this, since nothing needed
+    /// doing there in the first place.
+    fn all_succeeded(&self) -> bool {
+        [&self.mv, &self.mode, &self.setpoint, &self.mode_attribute]
+            .into_iter()
+            .all(|step| !matches!(step, RestoreStepOutcome::Failed(_)))
+    }
+
+    /// A human-readable summary of every step that failed, or `None` if none did. Used both
+    /// for [`bhtune_db::models::RestoreStatus::Incomplete`]'s persisted `detail` and the
+    /// operator-facing warning.
+    fn failure_summary(&self) -> Option<String> {
+        let labelled = [
+            ("MV", &self.mv),
+            ("mode", &self.mode),
+            ("setpoint", &self.setpoint),
+            ("mode attribute", &self.mode_attribute),
+        ];
+        let failures: Vec<String> = labelled
+            .into_iter()
+            .filter_map(|(label, step)| match step {
+                RestoreStepOutcome::Failed(e) => Some(format!("{label}: {e}")),
+                _ => None,
+            })
+            .collect();
+        if failures.is_empty() {
+            None
+        } else {
+            Some(failures.join("; "))
+        }
+    }
 }
 
 /// Pure port of `ResetOPC` (minus the dead Python-model branch, which is not being ported —
-/// see AGENTS.md). Writing the MV back always happens; the mode/setpoint/mode-attribute
-/// reverts each naturally no-op when their tag is `None`.
+/// see AGENTS.md), restructured for `safety-restore-guard` (finding 3 of the live-plant
+/// safety review): every step is attempted independently, via a per-step `match` rather than
+/// `?`, so one step failing can never prevent the others from being tried. The MV write-back
+/// is unconditional and never gated by `guard` at all -- proven safe by the fact that a
+/// no-op MV write-back is always harmless (idempotent if the pre-test value is already
+/// there, or safely rejected by the DCS if the loop never actually left Auto) -- while the
+/// mode/setpoint/mode-attribute reverts are each gated by both their original value-based
+/// condition (as before) *and* the matching `guard` flag, so nothing is "restored" that was
+/// never actually mutated in the first place.
 async fn restore(
     backend: &dyn Backend,
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
-    mode_state: &ModeRestoreState,
-) -> anyhow::Result<()> {
-    write_value(backend, &tags.manipulated_variable, initial.mv_ini).await?;
+    guard: &MutationGuard,
+) -> RestoreReport {
+    let mv = match write_value(backend, &tags.manipulated_variable, initial.mv_ini).await {
+        Ok(()) => RestoreStepOutcome::Succeeded,
+        Err(e) => RestoreStepOutcome::Failed(e.to_string()),
+    };
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
+    let mut mode = RestoreStepOutcome::NotNeeded;
     if let Some(mode_tag) = &tags.controller_mode {
         let mode_raw = initial.mode_raw.as_deref().unwrap_or_default();
-        if template.revert_mode && mode_raw != template.mode_manual_value {
-            write_raw(backend, mode_tag, mode_raw.to_string()).await?;
-            if mode_raw == template.mode_auto_value
-                && let (Some(sv_tag), Some(sv_ini)) =
-                    (&tags.setpoint_variable, mode_state.setpoint_ini)
-            {
-                tokio::time::sleep(Duration::from_millis(1000)).await;
-                write_value(backend, sv_tag, sv_ini).await?;
-            }
+        if guard.mode_written && template.revert_mode && mode_raw != template.mode_manual_value {
+            mode = match write_raw(backend, mode_tag, mode_raw.to_string()).await {
+                Ok(()) => RestoreStepOutcome::Succeeded,
+                Err(e) => RestoreStepOutcome::Failed(e.to_string()),
+            };
         }
     }
 
+    let mut setpoint = RestoreStepOutcome::NotNeeded;
+    if guard.mode_written
+        && template.revert_mode
+        && let (Some(sv_tag), Some(sv_ini)) = (&tags.setpoint_variable, initial.setpoint_ini)
+    {
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        setpoint = match write_value(backend, sv_tag, sv_ini).await {
+            Ok(()) => RestoreStepOutcome::Succeeded,
+            Err(e) => RestoreStepOutcome::Failed(e.to_string()),
+        };
+    }
+
+    let mut mode_attribute = RestoreStepOutcome::NotNeeded;
     if let Some(attr_tag) = &tags.mode_attribute {
         let attr_raw = initial.mode_attribute_raw.as_deref().unwrap_or_default();
         let program_value = template
             .mode_attribute_program_value
             .as_deref()
             .unwrap_or_default();
-        if attr_raw != program_value {
-            write_raw(backend, attr_tag, attr_raw.to_string()).await?;
+        if guard.mode_attribute_written && attr_raw != program_value {
+            mode_attribute = match write_raw(backend, attr_tag, attr_raw.to_string()).await {
+                Ok(()) => RestoreStepOutcome::Succeeded,
+                Err(e) => RestoreStepOutcome::Failed(e.to_string()),
+            };
         }
     }
 
-    Ok(())
+    RestoreReport {
+        mv,
+        mode,
+        setpoint,
+        mode_attribute,
+    }
 }
 
 /// The outcome of racing one backend call ([`read_pv_sample`]/[`write_value`], during a poll
@@ -1041,17 +1228,21 @@ async fn bounded_backend_call<T>(
     }
 }
 
-/// The outcome of [`attempt_restore`] -- whether `restore()` itself was confirmed to run to
-/// completion, or was abandoned because a second Ctrl+C arrived or `--restore-timeout-secs`
-/// elapsed first.
+/// The outcome of [`attempt_restore`] -- whether `restore()` itself was confirmed to run
+/// every applicable step to completion, or was abandoned/only partially successful because a
+/// second Ctrl+C arrived, `--restore-timeout-secs` elapsed, or one or more individual restore
+/// steps themselves failed.
 enum RestoreAttempt {
-    /// `restore()` returned `Ok(())`. A genuine `Err` from `restore()` itself is not part of
-    /// this enum at all -- it still propagates via `?`, distinct from "gave up waiting".
+    /// `restore()` ran to completion and [`RestoreReport::all_succeeded`] was `true`. A
+    /// per-step failure inside `restore()` itself is not a separate `Err` case any more --
+    /// see [`restore`]'s doc comment -- it's folded into [`RestoreAttempt::Incomplete`]
+    /// below via the report's own failure summary.
     Confirmed,
-    /// The restore could not be confirmed within `restore_timeout_secs`, or a second Ctrl+C
-    /// arrived first. `reason` is a human-readable description of which, for composing into
-    /// the final [`RunOutcome::RestoreIncomplete`] message and the stderr warning already
-    /// printed by [`warn_restore_incomplete`] before this variant is returned.
+    /// The restore could not be confirmed: a second Ctrl+C arrived, `--restore-timeout-secs`
+    /// elapsed, or `restore()` ran to completion but one or more steps failed. `reason` is a
+    /// human-readable description of which, for composing into the final
+    /// [`RunOutcome::RestoreIncomplete`] message and the stderr warning already printed by
+    /// [`warn_restore_incomplete`] before this variant is returned.
     Incomplete { reason: String },
 }
 
@@ -1060,7 +1251,12 @@ enum RestoreAttempt {
 /// guards the polling loop against) can never block the process indefinitely. Unlike
 /// [`bounded_backend_call`], this takes `restore`'s exact parameters directly rather than a
 /// generic `impl Future` -- there is only one real call shape (one `restore(...)` call per
-/// run), so a generic signature would add no value. On [`RestoreAttempt::Incomplete`], calls
+/// run), so a generic signature would add no value. Infallible: [`restore`] itself no longer
+/// returns a `Result` (every step is now attempted independently and reported via
+/// [`RestoreReport`] instead of short-circuiting), so this function's only remaining
+/// "failure" shapes are the two abandonment cases already covered by
+/// [`RestoreAttempt::Incomplete`], plus a completed-but-not-fully-successful report, which
+/// maps to that same variant. On [`RestoreAttempt::Incomplete`], calls
 /// [`warn_restore_incomplete`] before returning, so the operator-facing warning is printed
 /// exactly once, at the one place that decides a restore could not be confirmed -- callers
 /// only need to fold the returned `reason` into their own context (e.g. the original
@@ -1070,26 +1266,33 @@ async fn attempt_restore(
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
-    mode_state: &ModeRestoreState,
+    guard: &MutationGuard,
     restore_timeout_secs: u64,
     ctrl_c: &mut CtrlC,
-) -> anyhow::Result<RestoreAttempt> {
+) -> RestoreAttempt {
     tokio::select! {
-        result = restore(backend, tags, template, initial, mode_state) => {
-            result?;
-            Ok(RestoreAttempt::Confirmed)
+        report = restore(backend, tags, template, initial, guard) => {
+            if report.all_succeeded() {
+                RestoreAttempt::Confirmed
+            } else {
+                let reason = report
+                    .failure_summary()
+                    .unwrap_or_else(|| "one or more restore steps failed".to_string());
+                warn_restore_incomplete(tags, initial, &reason);
+                RestoreAttempt::Incomplete { reason }
+            }
         }
         () = ctrl_c.signalled() => {
             let reason = "a second Ctrl+C was received while restoring the loop".to_string();
             warn_restore_incomplete(tags, initial, &reason);
-            Ok(RestoreAttempt::Incomplete { reason })
+            RestoreAttempt::Incomplete { reason }
         }
         () = tokio::time::sleep(Duration::from_secs(restore_timeout_secs)) => {
             let reason = format!(
                 "the restore did not complete within the {restore_timeout_secs}s --restore-timeout-secs limit"
             );
             warn_restore_incomplete(tags, initial, &reason);
-            Ok(RestoreAttempt::Incomplete { reason })
+            RestoreAttempt::Incomplete { reason }
         }
     }
 }
@@ -1112,6 +1315,63 @@ fn warn_restore_incomplete(tags: &LoopTags, initial: &InitialState, reason: &str
         reason,
         "loop restore could not be confirmed"
     );
+}
+
+/// Best-effort records a restore attempt's outcome on the run (`safety-restore-guard`,
+/// finding 3 of the live-plant safety review) -- logs and swallows its own failure rather
+/// than propagating, since failing to *record* that a restore was attempted must never
+/// itself change what error (if any) a run reports.
+async fn record_restore_status_best_effort(
+    pool: &SqlitePool,
+    run_id: i64,
+    attempt: &RestoreAttempt,
+) {
+    let (status, detail) = match attempt {
+        RestoreAttempt::Confirmed => (bhtune_db::models::RestoreStatus::Confirmed, None),
+        RestoreAttempt::Incomplete { reason } => (
+            bhtune_db::models::RestoreStatus::Incomplete,
+            Some(reason.as_str()),
+        ),
+    };
+    if let Err(e) = TuneRunRow::record_restore_status(pool, run_id, status, detail).await {
+        tracing::error!(run_id, error = %e, "failed to record restore status");
+    }
+}
+
+/// Attempts a best-effort restore, records its outcome, then returns `err` **unchanged** --
+/// the single choke point every early-return error path in `execute` funnels through, so a
+/// partial mutation is never left un-restored just because the step that failed came before
+/// `attempt_restore` was reached (`safety-restore-guard`, finding 3 of the live-plant safety
+/// review, fixing three such gaps: a failed `transition_to_manual`, a failed
+/// `record_initial_readings`/`persist_results`/`complete` after a successful test, and any
+/// other hard failure from `run_polling_loop` itself). Always returns the *original* `err`:
+/// neither an incomplete restore nor a failure recording its status should ever mask the
+/// real reason the run is failing.
+#[allow(clippy::too_many_arguments)]
+async fn restore_best_effort_then_propagate(
+    pool: &SqlitePool,
+    run_id: i64,
+    backend: &dyn Backend,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    restore_timeout_secs: u64,
+    ctrl_c: &mut CtrlC,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    let attempt = attempt_restore(
+        backend,
+        tags,
+        template,
+        initial,
+        guard,
+        restore_timeout_secs,
+        ctrl_c,
+    )
+    .await;
+    record_restore_status_best_effort(pool, run_id, &attempt).await;
+    err
 }
 
 /// Distinguishes *why* [`run_polling_loop`] ended without a normal engine completion, so
@@ -1147,6 +1407,7 @@ async fn run_polling_loop(
     engine: &mut MrftEngine,
     start_time: DateTime<Utc>,
     ctrl_c: &mut CtrlC,
+    guard: &mut MutationGuard,
 ) -> anyhow::Result<PollOutcome> {
     let mut interval = tokio::time::interval(Duration::from_millis(args.poll_interval_ms.max(1)));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1224,6 +1485,7 @@ async fn run_polling_loop(
                 for action in engine.step(tick) {
                     match action {
                         Action::WriteMv(v) => {
+                            guard.mv_written = true;
                             match bounded_backend_call(
                                 args.op_timeout_secs,
                                 ctrl_c,
@@ -1957,12 +2219,12 @@ mod tests {
         let initial = read_initial_values(backend.as_ref(), &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(backend.as_ref(), &tags, &template, &initial, false)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(backend.as_ref(), &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
-        restore(backend.as_ref(), &tags, &template, &initial, &mode_state)
-            .await
-            .unwrap();
+        let report = restore(backend.as_ref(), &tags, &template, &initial, &guard).await;
+        assert!(report.all_succeeded());
         TuneRunRow::abort(&pool, run.id, Utc::now()).await.unwrap();
 
         let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
@@ -2034,6 +2296,7 @@ mod tests {
             &mut engine,
             started_at,
             &mut CtrlC::never(),
+            &mut MutationGuard::default(),
         )
         .await
         .unwrap();
@@ -2054,11 +2317,18 @@ mod tests {
         assert_eq!(samples[0].pv_quality, SampleQuality::Bad);
 
         // Same DB-shape check the Ctrl+C-style test above uses: a `PoorQuality` abort must
-        // be indistinguishable in its cleanup guarantees from any other abort reason.
-        let mode_state = ModeRestoreState::default();
-        restore(&backend, &tags, &template, &initial, &mode_state)
-            .await
-            .unwrap();
+        // be indistinguishable in its cleanup guarantees from any other abort reason. Uses a
+        // bare default `MutationGuard` -- `transition_to_manual` was never called on this
+        // path -- which is exactly what proves `restore`'s MV-revert step is unconditional
+        // and never gated by the guard: it still succeeds and writes the MV back even though
+        // `guard.mv_written` is `false`, while the guard-gated mode/setpoint/mode-attribute
+        // steps correctly report `NotNeeded` since nothing was ever attempted for them.
+        let guard = MutationGuard::default();
+        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        assert_eq!(report.mv, RestoreStepOutcome::Succeeded);
+        assert_eq!(report.mode, RestoreStepOutcome::NotNeeded);
+        assert_eq!(report.setpoint, RestoreStepOutcome::NotNeeded);
+        assert_eq!(report.mode_attribute, RestoreStepOutcome::NotNeeded);
         TuneRunRow::abort(&pool, run.id, Utc::now()).await.unwrap();
 
         let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
@@ -2140,6 +2410,7 @@ mod tests {
             &mut engine,
             started_at,
             &mut CtrlC::never(),
+            &mut MutationGuard::default(),
         )
         .await
         .unwrap();
@@ -2237,6 +2508,7 @@ mod tests {
             &mut engine,
             started_at,
             &mut ctrl_c,
+            &mut MutationGuard::default(),
         )
         .await
         .unwrap();
@@ -2289,6 +2561,17 @@ mod tests {
         /// listed -- matching a healthy real backend and letting most tests ignore quality
         /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
         qualities: std::sync::Mutex<std::collections::HashMap<String, bhtune_backend::Quality>>,
+        /// Per-tag: reports the tag's ordinarily-configured quality (from `qualities`,
+        /// defaulting to `Good`) for the tag's first `usize` reads, then switches to the
+        /// paired [`bhtune_backend::Quality`] for every read after that. Lets a test put a
+        /// tag's *initial* read (before any mutation is attempted, subject to finding 5 the
+        /// same as every other read) in good standing while still forcing quality to
+        /// degrade partway through polling -- deterministically, with no reliance on real
+        /// elapsed time or a Ctrl+C race, unlike `--timeout-secs`/`--op-timeout-secs`-driven
+        /// aborts.
+        degrade_quality_after: std::collections::HashMap<String, (usize, bhtune_backend::Quality)>,
+        /// Tracks how many times each tag has been read so far, for `degrade_quality_after`.
+        read_counts: std::sync::Mutex<std::collections::HashMap<String, usize>>,
     }
 
     impl MockBackend {
@@ -2356,6 +2639,20 @@ mod tests {
             self
         }
 
+        /// See the `degrade_quality_after` field doc comment: `tag`'s first `good_reads`
+        /// reads keep reporting `Good` (or whatever `with_quality` set), then every read
+        /// after that reports `degraded` instead.
+        fn degrade_quality_after(
+            mut self,
+            tag: &str,
+            good_reads: usize,
+            degraded: bhtune_backend::Quality,
+        ) -> MockBackend {
+            self.degrade_quality_after
+                .insert(tag.to_string(), (good_reads, degraded));
+            self
+        }
+
         fn value_of(&self, tag: &str) -> Option<String> {
             self.values.lock().unwrap().get(tag).cloned()
         }
@@ -2385,16 +2682,30 @@ mod tests {
                 if self.empty_reads.contains(tag) {
                     continue;
                 }
+                let baseline_quality = self
+                    .qualities
+                    .lock()
+                    .unwrap()
+                    .get(tag)
+                    .copied()
+                    .unwrap_or(bhtune_backend::Quality::Good);
+                let quality = match self.degrade_quality_after.get(tag) {
+                    Some((good_reads, degraded)) => {
+                        let mut counts = self.read_counts.lock().unwrap();
+                        let count = counts.entry(tag.clone()).or_insert(0);
+                        *count += 1;
+                        if *count > *good_reads {
+                            *degraded
+                        } else {
+                            baseline_quality
+                        }
+                    }
+                    None => baseline_quality,
+                };
                 out.push(bhtune_backend::TagValue {
                     tag: tag.clone(),
                     value: store.get(tag).cloned().unwrap_or_default(),
-                    quality: self
-                        .qualities
-                        .lock()
-                        .unwrap()
-                        .get(tag)
-                        .copied()
-                        .unwrap_or(bhtune_backend::Quality::Good),
+                    quality,
                     timestamp: None,
                 });
             }
@@ -2549,7 +2860,10 @@ mod tests {
     }
 
     /// Matches `honeywell_backend_auto()`'s values -- a valid baseline for
-    /// `validate_initial_state` tests to mutate one field at a time from.
+    /// `validate_initial_state` tests to mutate one field at a time from. `setpoint_ini` is
+    /// `Some(55.0)`, matching the fixture's `SP` tag, since `mode_raw` ("1") equals the
+    /// template's `mode_auto_value` -- exactly the condition `read_initial_values` itself
+    /// checks before reading the setpoint.
     fn sample_initial_state() -> InitialState {
         InitialState {
             pv_ini: 50.0,
@@ -2561,6 +2875,7 @@ mod tests {
             direction: ControllerDirection::Direct,
             mode_raw: Some("1".to_string()),
             mode_attribute_raw: Some("1".to_string()),
+            setpoint_ini: Some(55.0),
         }
     }
 
@@ -2711,7 +3026,8 @@ mod tests {
             .unwrap();
         assert_eq!(initial.pv_ini, 50.0);
 
-        transition_to_manual(&backend, &tags, &template, &initial, true)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
         // Proves the run actually proceeded to mutate the loop (the mode/mode-attribute
@@ -2722,19 +3038,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transition_to_manual_hard_fails_when_the_setpoint_tag_reports_bad_quality() {
+    async fn read_initial_values_hard_fails_when_the_setpoint_tag_reports_bad_quality() {
         // The Honeywell fixture starts in Auto (`MODE=1` == `mode_auto_value`), so
-        // `transition_to_manual` reads the setpoint tag before flipping to Manual -- finding
-        // 5 applies to that read exactly as it does to every other tuning-critical read.
+        // `read_initial_values` reads the setpoint tag as part of computing
+        // `InitialState::setpoint_ini` -- finding 5 applies to that read exactly as it does
+        // to every other tuning-critical read. This read was hoisted out of
+        // `transition_to_manual` (see `InitialState::setpoint_ini`'s doc comment) so it can
+        // be persisted before any mutation is attempted; this test moved with it.
         let template = honeywell_template();
         let tags = honeywell_tags();
         let sp_tag = tags.setpoint_variable.clone().unwrap();
         let backend = honeywell_backend_auto().with_quality(&sp_tag, bhtune_backend::Quality::Bad);
 
-        let initial = read_initial_values(&backend, &tags, &template, false)
-            .await
-            .unwrap();
-        let err = transition_to_manual(&backend, &tags, &template, &initial, false)
+        let err = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains(&sp_tag));
@@ -2789,6 +3105,235 @@ mod tests {
         // The real safety property: no write ever reached the backend -- not the mode
         // attribute, not the mode, not the MV. `transition_to_manual` never ran.
         assert!(backend.write_log().is_empty());
+    }
+
+    /// Covers `execute`'s first `restore_best_effort_then_propagate` call site: a failure
+    /// from `transition_to_manual` itself, partway through (the mode-attribute write, the
+    /// very first write it attempts) must still trigger a best-effort restore rather than
+    /// propagating the error with the loop left half-mutated. `honeywell_backend_auto()`
+    /// starts in Auto with `MODEATTR` not yet at the Program value, so `transition_to_manual`
+    /// always attempts the mode-attribute write first.
+    #[tokio::test]
+    async fn execute_attempts_restore_when_transition_to_manual_fails_partway() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto().erroring_write("Unit1.LIC101.MODEATTR");
+        let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "transition-to-manual-fails",
+            TuneBackend::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let err = execute(
+            &pool,
+            run.id,
+            &fast_simulator_args(),
+            &template,
+            &tags,
+            &backend,
+            config,
+            Utc::now(),
+            None,
+            &mut CtrlC::never(),
+        )
+        .await
+        .unwrap_err();
+
+        // `restore_best_effort_then_propagate` always returns the *original* error
+        // unchanged -- this is that original `transition_to_manual` failure, not some
+        // restore-side error masking it.
+        assert!(err.to_string().contains("backend operation failed"));
+
+        // `restore()`'s MV step is unconditional (never gated by the guard), so it still ran
+        // despite `transition_to_manual` never getting anywhere near the MV -- proving the
+        // restore was genuinely attempted, not skipped because "nothing was mutated yet".
+        assert!(
+            backend
+                .write_log()
+                .iter()
+                .any(|(tag, _)| tag == "Unit1.LIC101.OP")
+        );
+        // `guard.mode_written` was correctly never armed: `transition_to_manual` failed on
+        // the mode-attribute write, before it ever reached the mode write, so `restore()`
+        // must not attempt to revert a mode change that was never made.
+        assert!(
+            backend
+                .write_log()
+                .iter()
+                .all(|(tag, _)| tag != "Unit1.LIC101.MODE")
+        );
+
+        // The mode-attribute *restore* step, unlike mode/setpoint, retries the same
+        // permanently-erroring tag and fails again -- so the restore is recorded as
+        // incomplete, naming exactly which step could not be confirmed.
+        let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.restore_status,
+            Some(bhtune_db::models::RestoreStatus::Incomplete)
+        );
+        assert!(
+            stored
+                .restore_detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("mode attribute")
+        );
+    }
+
+    /// Covers `execute`'s second `restore_best_effort_then_propagate` call site: a failure in
+    /// `finish_completed_run` (here, `persist_results` colliding with the
+    /// `UNIQUE (run_id, response_level)` constraint) *after* a real, successful MRFT
+    /// completion must still trigger a best-effort restore. Uses the real `SimulatorBackend`
+    /// (via `crate::backend::build`, exactly like `a_ctrl_c_style_abort_restores_and_records_aborted`
+    /// above) rather than a scripted `MockBackend`, since this needs an actual engine
+    /// completion, not just a mocked one -- the simulator's `LoopTags` has no mode/setpoint/
+    /// mode-attribute tags at all, so its restore only ever has the MV step to confirm.
+    #[tokio::test]
+    async fn execute_attempts_restore_when_finish_completed_run_fails_after_a_successful_test() {
+        let pool = seeded_pool().await;
+        let template = bhtune_core::built_in_templates().remove(0);
+        let args = fast_simulator_args();
+        let config = build_loop_config(&args).unwrap();
+        let tags = build_loop_tags(&args, &template).unwrap();
+        let backend = crate::backend::build(&args).await.unwrap();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "finish-completed-run-fails",
+            TuneBackend::Simulator,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        // Pre-inserts a conflicting row so `persist_results`'s own insert of the same
+        // `(run_id, Aggressive)` pair -- once the simulator tune genuinely completes --
+        // collides with the `UNIQUE (run_id, response_level)` constraint and fails
+        // deterministically, without needing to fake or corrupt anything about the tune
+        // itself.
+        TuneResultRow::insert(
+            &pool,
+            &TuneResultRow {
+                id: 0,
+                run_id: run.id,
+                response_level: ResponseLevel::Aggressive,
+                kp: 1.0,
+                ti_minutes: 1.0,
+                td_minutes: 1.0,
+                proportional: 1.0,
+                integral: 1.0,
+                derivative: 1.0,
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = execute(
+            &pool,
+            run.id,
+            &args,
+            &template,
+            &tags,
+            backend.as_ref(),
+            config,
+            Utc::now(),
+            None,
+            &mut CtrlC::never(),
+        )
+        .await;
+
+        // Loose assertion by design, matching this codebase's existing convention for
+        // constraint-violation tests (see `tests/schema.rs`): SQLite's exact wording for a
+        // UNIQUE-constraint violation is version/implementation detail, not part of this
+        // test's contract.
+        assert!(result.is_err());
+
+        // The simulator backend has no mode/setpoint/mode-attribute tags, so the only
+        // applicable restore step is the always-succeeding MV write -- confirming the
+        // restore ran to completion despite the DB-level failure that follows it.
+        let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.restore_status,
+            Some(bhtune_db::models::RestoreStatus::Confirmed)
+        );
+    }
+
+    /// Covers the `Aborted` branch's `RestoreAttempt::Incomplete` mapping -- the sibling of
+    /// the `Completed` branch's equivalent (deliberately not separately covered; see
+    /// AGENTS.md's `safety-restore-guard` notes) -- with a real, deterministic abort: the PV
+    /// tag's quality degrades to `Bad` starting on the very first poll tick (its one
+    /// `read_initial_values` read stays `Good`, via `degrade_quality_after`), and the MV tag
+    /// is error-injected so the subsequent restore's unconditional MV step fails while
+    /// mode/setpoint/mode-attribute all succeed normally. Deliberately plain `#[tokio::test]`
+    /// rather than `start_paused = true`: pairing a paused clock with `seeded_pool()`'s real
+    /// `sqlx` connection pool reliably deadlocks (`PoolTimedOut`), so -- matching every other
+    /// `execute`-level test in this module that needs a real pool -- this test pays the real
+    /// wall-clock cost of `transition_to_manual`/`restore`'s inter-write pacing sleeps
+    /// instead (~3s: one in `transition_to_manual`, two more in `restore`).
+    #[tokio::test]
+    async fn execute_reports_restore_incomplete_after_a_poor_quality_abort() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto()
+            .erroring_write("Unit1.LIC101.OP")
+            .degrade_quality_after(&tags.process_variable, 1, bhtune_backend::Quality::Bad);
+        let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "poor-quality-abort-restore-incomplete",
+            TuneBackend::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let outcome = execute(
+            &pool,
+            run.id,
+            &fast_simulator_args(),
+            &template,
+            &tags,
+            &backend,
+            config,
+            Utc::now(),
+            None,
+            &mut CtrlC::never(),
+        )
+        .await
+        .unwrap();
+
+        let RunOutcome::RestoreIncomplete { reason } = outcome else {
+            panic!("expected RunOutcome::RestoreIncomplete, got {outcome:?}");
+        };
+        assert!(reason.contains("run aborted"));
+        assert!(reason.contains("PoorQuality"));
+        assert!(reason.contains("MV"));
+
+        let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.restore_status,
+            Some(bhtune_db::models::RestoreStatus::Incomplete)
+        );
     }
 
     #[tokio::test]
@@ -2864,24 +3409,30 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn transition_to_manual_writes_program_value_and_captures_setpoint_from_auto() {
+    async fn transition_to_manual_writes_program_value_and_mode_when_starting_in_auto() {
         let template = honeywell_template();
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto();
         let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
+        // The setpoint is captured here, in `read_initial_values`, before any mutation of
+        // the loop -- see `InitialState::setpoint_ini`'s doc comment for why -- not during
+        // `transition_to_manual` any more.
+        assert_eq!(initial.setpoint_ini, Some(55.0));
 
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
-        assert_eq!(mode_state.setpoint_ini, Some(55.0));
         assert_eq!(
             backend.value_of("Unit1.LIC101.MODEATTR").as_deref(),
             Some("2")
         );
         assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("0"));
+        assert!(guard.mode_attribute_written);
+        assert!(guard.mode_written);
         // Order matters (mode attribute unlocked before the mode itself is switched), per
         // `ChangeControllerModeToMan`.
         let log = backend.write_log();
@@ -2897,7 +3448,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn transition_to_manual_skips_setpoint_capture_when_original_mode_is_not_auto() {
+    async fn read_initial_values_skips_setpoint_capture_when_original_mode_is_not_auto() {
         let template = honeywell_template();
         let tags = honeywell_tags();
         // "2" is neither the manual ("0") nor auto ("1") raw value — e.g. Cascade.
@@ -2917,11 +3468,13 @@ mod tests {
             .await
             .unwrap();
 
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+        assert_eq!(initial.setpoint_ini, None);
+
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
-        assert_eq!(mode_state.setpoint_ini, None);
         assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("0"));
     }
 
@@ -2944,12 +3497,13 @@ mod tests {
         let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
+        assert_eq!(initial.setpoint_ini, None);
 
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
-        assert_eq!(mode_state.setpoint_ini, None);
         // The Mode Attribute write always fires unconditionally (there's no "already at the
         // program value" guard on it), but Mode itself is already Manual, so its own
         // conditional `write_raw` must not fire a second time.
@@ -2958,6 +3512,8 @@ mod tests {
             log,
             vec![("Unit1.LIC101.MODEATTR".to_string(), "2".to_string())]
         );
+        assert!(guard.mode_attribute_written);
+        assert!(!guard.mode_written);
     }
 
     #[tokio::test(start_paused = true)]
@@ -2968,13 +3524,13 @@ mod tests {
         let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
-        restore(&backend, &tags, &template, &initial, &mode_state)
-            .await
-            .unwrap();
+        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        assert!(report.all_succeeded());
 
         assert_eq!(backend.value_of("Unit1.LIC101.OP").as_deref(), Some("45")); // mv_ini
         assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("1")); // original raw
@@ -2994,14 +3550,14 @@ mod tests {
         let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
         let writes_before_restore = backend.write_log().len();
 
-        restore(&backend, &tags, &template, &initial, &mode_state)
-            .await
-            .unwrap();
+        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        assert!(report.all_succeeded());
 
         // MV is always written back regardless of `revert_mode`; Mode/Setpoint are not.
         assert_eq!(backend.value_of("Unit1.LIC101.OP").as_deref(), Some("45"));
@@ -3030,14 +3586,14 @@ mod tests {
         let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
         let writes_before_restore = backend.write_log().len();
 
-        restore(&backend, &tags, &template, &initial, &mode_state)
-            .await
-            .unwrap();
+        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        assert!(report.all_succeeded());
 
         assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("2")); // reverted
         let new_writes = &backend.write_log()[writes_before_restore..];
@@ -3063,17 +3619,72 @@ mod tests {
         let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
         let writes_before_restore = backend.write_log().len();
 
-        restore(&backend, &tags, &template, &initial, &mode_state)
-            .await
-            .unwrap();
+        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        assert!(report.all_succeeded());
 
         let new_writes = &backend.write_log()[writes_before_restore..];
         assert!(new_writes.iter().all(|(t, _)| t != "Unit1.LIC101.MODEATTR"));
+    }
+
+    /// The heart of `safety-restore-guard`'s "aggregated best-effort restore" (Option C): one
+    /// step failing must never prevent the others from being *attempted*, even in the
+    /// pathological case where every single one of them also fails. Calls `restore` directly
+    /// with a fully-armed `guard` (bypassing `transition_to_manual` entirely, since this test
+    /// is only interested in `restore`'s own aggregation behavior in isolation, not in
+    /// propagating any one mutation's own error -- that's covered by the `execute`-level
+    /// tests around `restore_best_effort_then_propagate` instead).
+    #[tokio::test(start_paused = true)]
+    async fn restore_reports_each_step_failed_independently_without_short_circuiting() {
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let backend = honeywell_backend_auto()
+            .erroring_write("Unit1.LIC101.OP")
+            .erroring_write("Unit1.LIC101.MODE")
+            .erroring_write("Unit1.LIC101.SP")
+            .erroring_write("Unit1.LIC101.MODEATTR");
+        let initial = read_initial_values(&backend, &tags, &template, false)
+            .await
+            .unwrap();
+        let guard = MutationGuard {
+            mode_attribute_written: true,
+            mode_written: true,
+            mv_written: true,
+        };
+
+        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+
+        assert!(!report.all_succeeded());
+        assert!(matches!(report.mv, RestoreStepOutcome::Failed(_)));
+        assert!(matches!(report.mode, RestoreStepOutcome::Failed(_)));
+        assert!(matches!(report.setpoint, RestoreStepOutcome::Failed(_)));
+        assert!(matches!(
+            report.mode_attribute,
+            RestoreStepOutcome::Failed(_)
+        ));
+
+        // Every step's own failure is independently attributable in the summary -- an
+        // operator reading this must be able to tell all four apart, not just "something
+        // failed".
+        let summary = report.failure_summary().unwrap();
+        assert!(summary.contains("MV:"));
+        assert!(summary.contains("mode:"));
+        assert!(summary.contains("setpoint:"));
+        assert!(summary.contains("mode attribute:"));
+    }
+
+    #[test]
+    fn restore_report_failure_summary_is_none_when_nothing_failed() {
+        // The complement of the all-failed test above: a report where every step is
+        // `NotNeeded` (the `Default`) has nothing to summarize.
+        let report = RestoreReport::default();
+        assert!(report.all_succeeded());
+        assert!(report.failure_summary().is_none());
     }
 
     #[tokio::test(start_paused = true)]
@@ -3903,7 +4514,8 @@ mod tests {
         let initial = read_initial_values(&backend, &tags, &template, false)
             .await
             .unwrap();
-        let mode_state = transition_to_manual(&backend, &tags, &template, &initial, false)
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
@@ -3912,12 +4524,11 @@ mod tests {
             &tags,
             &template,
             &initial,
-            &mode_state,
+            &guard,
             30,
             &mut CtrlC::never(),
         )
-        .await
-        .unwrap();
+        .await;
 
         assert!(matches!(outcome, RestoreAttempt::Confirmed));
         assert_eq!(
@@ -3934,19 +4545,18 @@ mod tests {
         // can never resolve on its own, so only the timeout branch can win this race.
         let backend = honeywell_backend_auto().hanging_write(&tags.manipulated_variable);
         let initial = sample_initial_state();
-        let mode_state = ModeRestoreState::default();
+        let guard = MutationGuard::default();
 
         let outcome = attempt_restore(
             &backend,
             &tags,
             &template,
             &initial,
-            &mode_state,
+            &guard,
             1,
             &mut CtrlC::never(),
         )
-        .await
-        .unwrap();
+        .await;
 
         match outcome {
             RestoreAttempt::Incomplete { reason } => {
@@ -3962,7 +4572,7 @@ mod tests {
         let tags = honeywell_tags();
         let backend = honeywell_backend_auto().hanging_write(&tags.manipulated_variable);
         let initial = sample_initial_state();
-        let mode_state = ModeRestoreState::default();
+        let guard = MutationGuard::default();
         let (mut ctrl_c, tx) = CtrlC::test_pair();
         tx.send(1).unwrap();
 
@@ -3971,12 +4581,11 @@ mod tests {
             &tags,
             &template,
             &initial,
-            &mode_state,
+            &guard,
             30,
             &mut ctrl_c,
         )
-        .await
-        .unwrap();
+        .await;
 
         match outcome {
             RestoreAttempt::Incomplete { reason } => {

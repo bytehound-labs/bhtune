@@ -186,6 +186,26 @@ CREATE TABLE tune_runs (
     pv_range_high             REAL,
     pv_range_low              REAL,
     controller_direction      TEXT CHECK (controller_direction IS NULL OR controller_direction IN ('direct', 'reverse')),
+    -- Raw mode/mode-attribute tag values and the captured setpoint, read
+    -- (never written) before `transition_to_manual`'s first mutating write
+    -- and persisted here in the same call as the columns above -- i.e.
+    -- before the loop is touched at all (`safety-restore-guard`, finding 3
+    -- of the live-plant safety review). This is what lets a crashed run be
+    -- reconstructed and restored later via `bhtune restore-loop`, without
+    -- needing to have survived to record anything else.
+    mode_raw                  TEXT,
+    mode_attribute_raw        TEXT,
+    setpoint_ini              REAL,
+
+    -- Outcome of the best-effort restore attempted after this run ended
+    -- (`safety-restore-guard`). NULL means no restore was ever attempted --
+    -- either the run never mutated the loop in the first place, or it's
+    -- still genuinely in progress; `restore_detail` is only ever set
+    -- alongside `incomplete`, naming what a second Ctrl+C,
+    -- `--restore-timeout-secs`, or an individual failed restore step
+    -- prevented from being confirmed.
+    restore_status             TEXT CHECK (restore_status IS NULL OR restore_status IN ('confirmed', 'incomplete')),
+    restore_detail              TEXT,
 
     created_at                TEXT NOT NULL
 );

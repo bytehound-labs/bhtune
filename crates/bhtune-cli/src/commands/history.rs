@@ -54,6 +54,9 @@ struct InitialReadingsJson {
     pv_range_high: f32,
     pv_range_low: f32,
     controller_direction: bhtune_core::ControllerDirection,
+    mode_raw: Option<String>,
+    mode_attribute_raw: Option<String>,
+    setpoint_ini: Option<f32>,
 }
 
 impl From<bhtune_db::models::TuneRunInitialReadings> for InitialReadingsJson {
@@ -66,6 +69,9 @@ impl From<bhtune_db::models::TuneRunInitialReadings> for InitialReadingsJson {
             pv_range_high: r.pv_range_high,
             pv_range_low: r.pv_range_low,
             controller_direction: r.controller_direction,
+            mode_raw: r.mode_raw,
+            mode_attribute_raw: r.mode_attribute_raw,
+            setpoint_ini: r.setpoint_ini,
         }
     }
 }
@@ -151,6 +157,10 @@ struct RunDetailJson {
     samples_recorded: usize,
     results: Vec<ResultJson>,
     writes: Vec<WriteJson>,
+    /// Outcome of the best-effort restore attempted after this run ended -- `None` if the
+    /// run never mutated the loop, or hasn't ended yet (`safety-restore-guard`).
+    restore_status: Option<bhtune_db::models::RestoreStatus>,
+    restore_detail: Option<String>,
 }
 
 async fn list(
@@ -266,6 +276,19 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
 
             println!("  Samples recorded: {}", samples.len());
 
+            match (run.restore_status, &run.restore_detail) {
+                (Some(bhtune_db::models::RestoreStatus::Confirmed), _) => {
+                    println!("  Restore:          confirmed");
+                }
+                (Some(bhtune_db::models::RestoreStatus::Incomplete), detail) => {
+                    println!(
+                        "  Restore:          INCOMPLETE -- {}",
+                        detail.as_deref().unwrap_or("no detail recorded")
+                    );
+                }
+                (None, _) => {}
+            }
+
             if !results.is_empty() {
                 println!("  Calculated results:");
                 println!(
@@ -321,6 +344,8 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 samples_recorded: samples.len(),
                 results: results.iter().map(ResultJson::from).collect(),
                 writes: writes.iter().map(WriteJson::from).collect(),
+                restore_status: run.restore_status,
+                restore_detail: run.restore_detail.clone(),
             };
             println!("{}", serde_json::to_string_pretty(&json)?);
         }
@@ -391,6 +416,9 @@ mod tests {
                 pv_range_high: 100.0,
                 pv_range_low: 0.0,
                 controller_direction: bhtune_core::ControllerDirection::Reverse,
+                mode_raw: Some("1".to_string()),
+                mode_attribute_raw: None,
+                setpoint_ini: Some(50.0),
             },
         )
         .await
