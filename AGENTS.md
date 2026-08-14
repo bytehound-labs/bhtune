@@ -901,6 +901,68 @@ time; this section is updated as each lands, with a full pass once all are done:
   and one `run_with_ctrl_c` test exercises the real (non-test-only) entry point end-to-end
   with a simulated signal, rather than only through the `CtrlC::never()`-backed `run` every
   other test in the module uses.
+- **Every exit path now funnels through one best-effort, all-steps-attempted restore** — done
+  (`commands::tune::{MutationGuard, RestoreReport, RestoreStepOutcome, restore, execute}`,
+  `bhtune_db::models::{RestoreStatus, TuneRunRow::record_restore_status}`). Previously
+  `execute()` could transition a loop to manual and then return without ever calling
+  `restore()` at all — any `?` between the transition and the polling loop (the
+  `record_initial_readings` DB write, engine construction), or a `persist_results`/`complete`
+  failure *after* a genuinely completed test — and `restore()` itself returned on its first
+  failure, so a single rejected MV write pre-empted even *attempting* to put the mode back.
+  Closed in three parts, matching the design's "A + C + D" decision:
+  - **`MutationGuard`** (Option A) — a plain struct of four booleans
+    (`mode_attribute_written`/`mode_written`/`mv_written`/tracks whether a setpoint was
+    captured), armed the instant each corresponding write actually succeeds, never
+    optimistically before. `execute()`'s mutating body was split into an inner function
+    returning `Result<_, (anyhow::Error, MutationGuard)>` — the guard travels *with* the
+    error on every failure path — so the outer function can unconditionally consume
+    whatever guard state exists (fully armed, partially armed, or the zero value from a
+    failure before any write) and call `restore()` accordingly on every single exit, with no
+    path that skips it. Nothing is ever "restored" that the guard doesn't say was actually
+    changed.
+  - **`RestoreReport`/`RestoreStepOutcome`** (Option C) — `restore()` now attempts all four
+    steps (MV, mode, setpoint, mode attribute) unconditionally rather than returning on the
+    first `Err`, collecting each step's own `RestoreStepOutcome`
+    (`NotNeeded`/`Succeeded`/`Failed(String)`). The MV step is never gated by the guard (a
+    relay-stroked MV always gets written back, since nothing else in the guard implies it
+    wasn't touched); the mode/setpoint/mode-attribute steps are each gated by their own
+    guard flag *and* a value-based precondition (e.g. the mode-attribute step only fires if
+    the read-back program value actually differs from what's already there), so a step whose
+    guard flag was never armed correctly reports `NotNeeded`, distinct from an armed-but-
+    failed `Failed`. `RestoreReport::failure_summary()` names every failed step by label
+    (`"MV: ...; mode: ...; setpoint: ...; mode attribute: ..."`) rather than collapsing to
+    "something failed", so an operator reading `bhtune history show` knows exactly what to
+    check by hand.
+  - **Durable restore intent** (Option D, partially done) — `TuneRunRow::record_initial_readings`
+    now persists `mode_raw`/`mode_attribute_raw`/`setpoint_ini` (the loop's pre-mutation
+    mode/mode-attribute/setpoint, mirroring the existing `pv_ini`/`mv_ini`/range columns)
+    *before* `transition_to_manual`'s first write, not after — so a process that dies
+    outright (SIGKILL, power loss, a second Ctrl+C during an already-incomplete restore) still
+    leaves a durable, reconstructable record of what needs to be put back, not just an
+    in-memory `MutationGuard` that dies with the process. New `restore_status`
+    (`RestoreStatus::Confirmed`/`Incomplete`) and `restore_detail` columns on `tune_runs`
+    record the outcome of the post-run restore attempt itself (`None` means no restore was
+    ever attempted — either nothing was mutated, or the run is still in progress), surfaced
+    in `bhtune history show`'s table and JSON output. **Not yet done:** the
+    `bhtune restore-loop --run <id>` replay command the design calls for, to actually act on
+    that persisted intent later. Deliberately deferred and bundled with finding 6's
+    `bhtune history revert <run-id>` (`safety-writeback-rollback`, not yet implemented) —
+    both commands have the same shape (read historical values off a past run, write them back
+    to the live loop, under the same confirmation gate), so they're worth building together
+    rather than as two near-duplicate one-off commands.
+
+  **Testing approach.** A direct unit test on `restore()` (bypassing `execute()` entirely,
+  via a hand-constructed fully-armed `MutationGuard` and a backend where all four writes
+  fail) proves every step is attempted independently and the summary names all four. Three
+  `execute()`-level integration tests cover the guard's actual exit paths:
+  `transition_to_manual` failing on its very first write (before the mode-revert path is
+  ever armed) still runs the unconditional MV restore step, leaves `MODE` untouched, and
+  records `Incomplete` with a "mode attribute" detail; a `persist_results`/`complete`
+  failure after a genuinely completed simulator test still attempts the restore and records
+  `Confirmed`; and a poor-quality abort partway through polling (via a new
+  `MockBackend::degrade_quality_after` test-harness extension, returning a tag's quality as
+  `Good` for the first N reads and a chosen `Quality` after) still runs the restore end to
+  end and records `Incomplete`.
 
 ## Logging (`cli-logging`)
 

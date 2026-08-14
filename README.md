@@ -157,6 +157,13 @@ unattended runs against live plant equipment fail safe:
   *second* Ctrl+C arrives while it's in progress, the process prints which tag and value to
   check by hand and exits `6` — distinct from `2`, since "aborted and restored" and "aborted,
   restore abandoned" call for very different responses.
+- **Restoration is guaranteed on every exit path and never gives up early** — a run only ever
+  mutates a loop after switching it to manual, and *any* way that run can end (a clean
+  completion, an abort, or an error partway through setup) always attempts to put back exactly
+  what was actually changed, never more and never less. If one part of the restore fails (say,
+  the mode write is rejected), the rest are still attempted independently rather than the whole
+  restore giving up — an operator checking `bhtune history show <run>` sees `confirmed` or
+  `incomplete`, and an `incomplete` restore names every step that couldn't be confirmed.
 - **`--write-pid <level>` always requires `--yes`** — there is no way to write PID constants to
   a live loop without explicitly confirming it, whether interactively or from a script.
 - **Every run snapshots the exact template and resolved tags it used** — a historical run
