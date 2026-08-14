@@ -137,6 +137,11 @@ unattended runs against live plant equipment fail safe:
 
 - **Relay amplitude is range-checked**, not just required to be non-blank — an out-of-range value
   is rejected before any backend connection or database write.
+- **Every numeric input is validated before it can reach a live loop** — CLI flags reject
+  non-finite (`NaN`/infinite), zero, or negative values at parse time with a clear error; loop
+  configuration rejects an out-of-range cycle count or MRFT delay; and the PV/MV ranges plus the
+  initial MV, whether they came from a flag or a backend tag read, are checked for finiteness and
+  correct ordering immediately after the initial read and before the loop is switched to manual.
 - **`--timeout-secs <seconds>`** (default `3600`) is a mandatory wall-clock limit on the whole
   test — there is no way to disable it. If it elapses, the loop is automatically restored to its
   pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`).

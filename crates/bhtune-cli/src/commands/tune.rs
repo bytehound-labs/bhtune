@@ -14,7 +14,7 @@ use std::time::Duration;
 use bhtune_backend::{Backend, TagWrite};
 use bhtune_core::{
     Action, ControllerDirection, ControllerType, DcsTemplate, InitialReadings, LoopConfig,
-    LoopTags, MrftCompat, MrftEngine, PidParameters, ProcessType, PvRange, ResponseLevel,
+    LoopTags, MrftCompat, MrftEngine, MvRange, PidParameters, ProcessType, PvRange, ResponseLevel,
     TagOrValue, Tick, TuningMathCompat, calculate_all, lookup, opc_write_values,
 };
 use bhtune_db::SqlitePool;
@@ -159,6 +159,7 @@ pub async fn run(
     }
 }
 
+#[derive(Debug)]
 enum RunOutcome {
     Completed { write_back: WriteBackOutcome },
     Aborted(AbortReason),
@@ -416,6 +417,7 @@ async fn execute(
     write_pid: Option<ResponseLevel>,
 ) -> anyhow::Result<RunOutcome> {
     let initial = read_initial_values(backend, tags, template).await?;
+    validate_initial_state(&initial)?;
     let mode_state = transition_to_manual(backend, tags, template, &initial).await?;
 
     TuneRunRow::record_initial_readings(
@@ -513,14 +515,24 @@ async fn read_raw(backend: &dyn Backend, tag: &str) -> anyhow::Result<String> {
 
 async fn read_f32(backend: &dyn Backend, tag: &str) -> anyhow::Result<f32> {
     let raw = read_raw(backend, tag).await?;
-    raw.trim()
+    let value: f32 = raw
+        .trim()
         .parse::<f32>()
-        .map_err(|_| anyhow::anyhow!("tag '{tag}' value '{raw}' is not a number"))
+        .map_err(|_| anyhow::anyhow!("tag '{tag}' value '{raw}' is not a number"))?;
+    if !value.is_finite() {
+        anyhow::bail!("tag '{tag}' value '{raw}' is not a finite number");
+    }
+    Ok(value)
 }
 
 async fn resolve_f32(backend: &dyn Backend, tag_or_value: &TagOrValue<f32>) -> anyhow::Result<f32> {
     match tag_or_value {
-        TagOrValue::Value(v) => Ok(*v),
+        TagOrValue::Value(v) => {
+            if !v.is_finite() {
+                anyhow::bail!("value {v} is not a finite number");
+            }
+            Ok(*v)
+        }
         TagOrValue::Tag(tag) => read_f32(backend, tag).await,
     }
 }
@@ -609,6 +621,29 @@ async fn read_initial_values(
         mode_raw,
         mode_attribute_raw,
     })
+}
+
+/// The single choke point validating an `InitialState` -- from live backend tags and/or CLI
+/// flag overrides alike -- before any mutation of the loop happens (i.e. called between
+/// `read_initial_values` and `transition_to_manual` in `execute`, never after). `read_f32`/
+/// `resolve_f32` already reject a non-finite individual value as it's read; this additionally
+/// checks values *together*: range ordering, zero span, and that the initial MV actually
+/// lies inside its own reported range. Closes finding 4 of the live-plant safety review --
+/// see AGENTS.md's "Live-plant safety hardening" section.
+fn validate_initial_state(initial: &InitialState) -> anyhow::Result<()> {
+    PvRange::new(initial.pv_range_high, initial.pv_range_low)
+        .map_err(|e| anyhow::anyhow!("invalid PV range: {e}"))?;
+    let mv_range = MvRange::new(initial.mv_range_high, initial.mv_range_low)
+        .map_err(|e| anyhow::anyhow!("invalid MV range: {e}"))?;
+    if !mv_range.contains(initial.mv_ini) {
+        anyhow::bail!(
+            "initial MV {} is outside the MV range [{}, {}]",
+            initial.mv_ini,
+            initial.mv_range_low,
+            initial.mv_range_high
+        );
+    }
+    Ok(())
 }
 
 /// Pure port of `ChangeControllerModeToMan`. No-ops entirely when `tags.controller_mode` and
@@ -1302,6 +1337,21 @@ mod tests {
         assert!(err.to_string().contains("out of range"));
     }
 
+    /// The reproduced panic: `--cycles-count 0` used to reach
+    /// `bhtune_core::measure_oscillation`'s internal `assert!` and panic mid-run, after the
+    /// loop had already been switched to manual and stroked. `LoopConfig::validate` (called
+    /// from `build_loop_config`, before any backend or DB I/O) must reject it cleanly
+    /// instead. The clap-level `positive_u32` parser (see `args.rs`) also rejects `0` for
+    /// this flag before it ever reaches here, but this test exercises the model-level
+    /// guarantee directly, independent of how the value arrived.
+    #[test]
+    fn build_loop_config_rejects_zero_cycles_count_before_any_backend_or_db_io() {
+        let mut args = fast_simulator_args();
+        args.cycles_count = Some(0);
+        let err = build_loop_config(&args).unwrap_err();
+        assert!(err.to_string().contains("at least 1"));
+    }
+
     #[test]
     fn build_loop_tags_simulator_requires_all_overrides() {
         let template = bhtune_core::built_in_templates().remove(0);
@@ -1461,6 +1511,16 @@ mod tests {
             self
         }
 
+        /// Overrides a single tag's fixture value -- e.g. to make an otherwise-valid
+        /// baseline backend (like `honeywell_backend_auto()`) report one bad reading.
+        fn with_value(self, tag: &str, value: &str) -> MockBackend {
+            self.values
+                .lock()
+                .unwrap()
+                .insert(tag.to_string(), value.to_string());
+            self
+        }
+
         fn value_of(&self, tag: &str) -> Option<String> {
             self.values.lock().unwrap().get(tag).cloned()
         }
@@ -1614,11 +1674,158 @@ mod tests {
         assert!(err.to_string().contains("no value"));
     }
 
+    /// Matches `honeywell_backend_auto()`'s values -- a valid baseline for
+    /// `validate_initial_state` tests to mutate one field at a time from.
+    fn sample_initial_state() -> InitialState {
+        InitialState {
+            pv_ini: 50.0,
+            mv_ini: 45.0,
+            pv_range_high: 100.0,
+            pv_range_low: 0.0,
+            mv_range_high: 100.0,
+            mv_range_low: 0.0,
+            direction: ControllerDirection::Direct,
+            mode_raw: Some("1".to_string()),
+            mode_attribute_raw: Some("1".to_string()),
+        }
+    }
+
+    #[test]
+    fn validate_initial_state_accepts_a_typical_reading() {
+        assert!(validate_initial_state(&sample_initial_state()).is_ok());
+    }
+
+    #[test]
+    fn validate_initial_state_rejects_a_zero_span_pv_range() {
+        let mut initial = sample_initial_state();
+        initial.pv_range_high = 50.0;
+        initial.pv_range_low = 50.0;
+        let err = validate_initial_state(&initial).unwrap_err();
+        assert!(err.to_string().contains("PV range"));
+    }
+
+    #[test]
+    fn validate_initial_state_rejects_an_mv_range_with_low_not_below_high() {
+        let mut initial = sample_initial_state();
+        initial.mv_range_high = 0.0;
+        initial.mv_range_low = 100.0;
+        let err = validate_initial_state(&initial).unwrap_err();
+        assert!(err.to_string().contains("MV range"));
+    }
+
+    #[test]
+    fn validate_initial_state_rejects_equal_mv_range_bounds() {
+        let mut initial = sample_initial_state();
+        initial.mv_range_high = 50.0;
+        initial.mv_range_low = 50.0;
+        assert!(validate_initial_state(&initial).is_err());
+    }
+
+    #[test]
+    fn validate_initial_state_rejects_an_initial_mv_outside_the_mv_range() {
+        let mut initial = sample_initial_state();
+        initial.mv_ini = 150.0;
+        let err = validate_initial_state(&initial).unwrap_err();
+        assert!(err.to_string().contains("outside the MV range"));
+    }
+
+    #[test]
+    fn validate_initial_state_accepts_the_initial_mv_on_the_range_boundary() {
+        let mut initial = sample_initial_state();
+        initial.mv_ini = initial.mv_range_high;
+        assert!(validate_initial_state(&initial).is_ok());
+    }
+
+    /// The end-to-end proof that finding 4's fix closes the actual safety gap, not just the
+    /// isolated unit: a backend reporting an MV range with `low >= high` must fail `execute`
+    /// before `transition_to_manual`'s first write -- i.e. before the loop is touched at
+    /// all, not merely before the tuning math runs.
+    #[tokio::test]
+    async fn execute_rejects_an_invalid_mv_range_before_any_mutation_of_the_loop() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        // Swaps CVEUHI/CVEULO so mv_range_high (0.0) < mv_range_low (100.0), violating
+        // MvRange::new's low-strictly-below-high requirement.
+        let backend = honeywell_backend_auto()
+            .with_value("Unit1.LIC101.CVEUHI", "0.0")
+            .with_value("Unit1.LIC101.CVEULO", "100.0");
+        let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "invalid-mv-range",
+            TuneBackend::Opcda,
+            config,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let err = execute(
+            &pool,
+            run.id,
+            &fast_simulator_args(),
+            &template,
+            &tags,
+            &backend,
+            config,
+            Utc::now(),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("MV range"));
+        // The real safety property: no write ever reached the backend -- not the mode
+        // attribute, not the mode, not the MV. `transition_to_manual` never ran.
+        assert!(backend.write_log().is_empty());
+    }
+
     #[tokio::test]
     async fn read_f32_errors_on_a_non_numeric_value() {
         let backend = MockBackend::new(&[("Unit1.LIC101.PV", "not-a-number")]);
         let err = read_f32(&backend, "Unit1.LIC101.PV").await.unwrap_err();
         assert!(err.to_string().contains("not a number"));
+    }
+
+    /// Rust's `f32::from_str` happily parses the literal strings `"nan"`/`"inf"` --
+    /// confirming this gap is what motivated hardening `read_f32` (finding 4 of the
+    /// live-plant safety review): a backend tag returning either string used to flow
+    /// unchecked into the engine.
+    #[tokio::test]
+    async fn read_f32_rejects_nan() {
+        let backend = MockBackend::new(&[("Unit1.LIC101.PV", "nan")]);
+        let err = read_f32(&backend, "Unit1.LIC101.PV").await.unwrap_err();
+        assert!(err.to_string().contains("finite"));
+    }
+
+    #[tokio::test]
+    async fn read_f32_rejects_infinity() {
+        let backend = MockBackend::new(&[("Unit1.LIC101.PV", "inf")]);
+        let err = read_f32(&backend, "Unit1.LIC101.PV").await.unwrap_err();
+        assert!(err.to_string().contains("finite"));
+    }
+
+    #[tokio::test]
+    async fn resolve_f32_accepts_a_finite_tag_or_value() {
+        let backend = MockBackend::new(&[]);
+        let value = resolve_f32(&backend, &TagOrValue::Value(42.0))
+            .await
+            .unwrap();
+        assert_eq!(value, 42.0);
+    }
+
+    /// Defense in depth against a hypothetical future caller (e.g. a `bhtune-server` HTTP
+    /// handler) constructing a `TagOrValue::Value` directly without going through clap's
+    /// `finite_f32` parser at all -- see `args::finite_f32`.
+    #[tokio::test]
+    async fn resolve_f32_rejects_a_non_finite_direct_value() {
+        let backend = MockBackend::new(&[]);
+        let err = resolve_f32(&backend, &TagOrValue::Value(f32::NAN))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("finite"));
     }
 
     #[tokio::test]

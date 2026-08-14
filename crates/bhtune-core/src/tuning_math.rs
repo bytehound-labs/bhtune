@@ -17,18 +17,9 @@ use crate::{
     direction::ControllerDirection,
     loop_config::LoopConfig,
     pid_config::{DerivativeType, IntegralType, ProportionalType, TimeUnit},
+    range::PvRange,
     template::DcsTemplate,
 };
-
-/// PV scale range, read once before the test starts (`PvSH`/`PvSL` in the legacy app's
-/// `ReadInitialOPCvalues`) — distinct from the MV range used to clamp the relay amplitude
-/// ([`crate::mrft::InitialReadings`]): this is the PV's engineering-unit span, used only to
-/// express the oscillation amplitude as a percentage.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct PvRange {
-    pub high: f32,
-    pub low: f32,
-}
 
 /// Legacy-bug replication flags for this module, mirroring [`crate::mrft::MrftCompat`]'s
 /// pattern (see `core-bug-register`). Every field defaults to `false`: the fixed, correct

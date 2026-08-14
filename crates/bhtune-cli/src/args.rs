@@ -10,6 +10,50 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+/// `value_parser` for every `f32` CLI flag that can reach `bhtune-core` unvalidated. A
+/// backend tag read is checked for finiteness in `commands::tune::read_f32`, but a CLI flag
+/// value bypasses that check entirely (see `build_loop_tags`'s `TagOrValue::Value` path) --
+/// without this, `--relay-amp nan` or `--sim-gain inf` would flow straight into the tuning
+/// math. See AGENTS.md's "Live-plant safety hardening" section.
+fn finite_f32(s: &str) -> Result<f32, String> {
+    let value: f32 = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid number"))?;
+    if !value.is_finite() {
+        return Err(format!(
+            "'{s}' must be a finite number (not NaN or infinite)"
+        ));
+    }
+    Ok(value)
+}
+
+/// `value_parser` for a `u32` CLI flag where `0` parses fine but is nonsensical for the
+/// flag's unit. `--cycles-count 0` is the motivating case: it used to reach
+/// `bhtune-core::measure_oscillation`'s internal `assert!` and panic mid-run, after the loop
+/// had already been switched to manual and stroked.
+fn positive_u32(s: &str) -> Result<u32, String> {
+    let value: u32 = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid non-negative integer"))?;
+    if value == 0 {
+        return Err("must be at least 1".to_string());
+    }
+    Ok(value)
+}
+
+/// `value_parser` for a `u64` CLI flag where `0` parses fine but is nonsensical for the
+/// flag's unit -- `--poll-interval-ms 0` was previously silently clamped to `1` rather than
+/// rejected, and `--timeout-secs 0` "succeeded" by aborting the run almost instantly.
+fn positive_u64(s: &str) -> Result<u64, String> {
+    let value: u64 = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid non-negative integer"))?;
+    if value == 0 {
+        return Err("must be at least 1".to_string());
+    }
+    Ok(value)
+}
+
 /// The `bhtune` CLI: a scriptable, no-GUI way to run an MRFT tune and inspect its history.
 #[derive(Parser, Debug)]
 #[command(name = "bhtune", version, about = "Headless MRFT auto-tuner")]
@@ -200,7 +244,7 @@ pub struct TuneArgs {
     pub controller_type: ControllerTypeArg,
 
     /// Relay amplitude, as a percentage of the MV range.
-    #[arg(long)]
+    #[arg(long, value_parser = finite_f32)]
     pub relay_amp: f32,
 
     /// Relay cycles to skip before counting begins (default: looked up per `--process-type`).
@@ -209,7 +253,7 @@ pub struct TuneArgs {
 
     /// Relay cycles to count once the skip period ends (default: looked up per
     /// `--process-type`).
-    #[arg(long)]
+    #[arg(long, value_parser = positive_u32)]
     pub cycles_count: Option<u32>,
 
     /// Seconds a switch must persist before it's accepted (default: looked up per
@@ -237,47 +281,47 @@ pub struct TuneArgs {
     pub server: Option<String>,
 
     /// Simulator process gain (`--backend simulator` only).
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.0, value_parser = finite_f32)]
     pub sim_gain: f32,
     /// Simulator process time constant, in seconds (`--backend simulator` only).
-    #[arg(long, default_value_t = 2.0)]
+    #[arg(long, default_value_t = 2.0, value_parser = finite_f32)]
     pub sim_tau: f32,
     /// Simulator dead time, in seconds (`--backend simulator` only).
-    #[arg(long, default_value_t = 5.0)]
+    #[arg(long, default_value_t = 5.0, value_parser = finite_f32)]
     pub sim_dead_time: f32,
     /// Simulator measurement noise amplitude (`--backend simulator` only).
-    #[arg(long, default_value_t = 0.0)]
+    #[arg(long, default_value_t = 0.0, value_parser = finite_f32)]
     pub sim_noise: f32,
     /// Simulator RNG seed, for reproducible noise (`--backend simulator` only).
     #[arg(long, default_value_t = 0)]
     pub sim_seed: u64,
     /// Simulator initial PV (`--backend simulator` only).
-    #[arg(long, default_value_t = 50.0)]
+    #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
     pub sim_initial_pv: f32,
     /// Simulator initial MV (`--backend simulator` only).
-    #[arg(long, default_value_t = 50.0)]
+    #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
     pub sim_initial_mv: f32,
 
     /// Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle
     /// tag/value" button). Required (defaults to 100.0) for `--backend simulator`, which has
     /// no range tags at all.
-    #[arg(long)]
+    #[arg(long, value_parser = finite_f32)]
     pub pv_range_high: Option<f32>,
     /// Fixed PV range low, overriding a live tag read.
-    #[arg(long)]
+    #[arg(long, value_parser = finite_f32)]
     pub pv_range_low: Option<f32>,
     /// Fixed MV range high, overriding a live tag read.
-    #[arg(long)]
+    #[arg(long, value_parser = finite_f32)]
     pub mv_range_high: Option<f32>,
     /// Fixed MV range low, overriding a live tag read.
-    #[arg(long)]
+    #[arg(long, value_parser = finite_f32)]
     pub mv_range_low: Option<f32>,
     /// Fixed controller direction, overriding a live tag read.
     #[arg(long, value_enum)]
     pub direction: Option<DirectionArg>,
 
     /// How often to poll the backend, in milliseconds (legacy: the 800 ms WinForms timer).
-    #[arg(long, default_value_t = 800)]
+    #[arg(long, default_value_t = 800, value_parser = positive_u64)]
     pub poll_interval_ms: u64,
 
     /// Hard wall-clock cap on this run's total duration (including any `--mrft-delay`
@@ -287,7 +331,7 @@ pub struct TuneArgs {
     /// since an unattended run must never be able to perturb a live process indefinitely.
     /// Size this to comfortably exceed your slowest loop's expected test duration --
     /// temperature loops in particular can need much longer than the default.
-    #[arg(long, default_value_t = 3600)]
+    #[arg(long, default_value_t = 3600, value_parser = positive_u64)]
     pub timeout_secs: u64,
 
     /// A friendly name for this run, recorded as `loop_name` (default: the PV tag name).
@@ -326,38 +370,38 @@ pub struct SimulateArgs {
     #[arg(long, value_enum, default_value = "pi")]
     pub controller_type: ControllerTypeArg,
 
-    #[arg(long, default_value_t = 10.0)]
+    #[arg(long, default_value_t = 10.0, value_parser = finite_f32)]
     pub relay_amp: f32,
 
     #[arg(long)]
     pub cycles_skip: Option<u32>,
-    #[arg(long)]
+    #[arg(long, value_parser = positive_u32)]
     pub cycles_count: Option<u32>,
     #[arg(long)]
     pub noise_protection_secs: Option<u32>,
     #[arg(long, default_value_t = 0)]
     pub mrft_delay: u32,
 
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.0, value_parser = finite_f32)]
     pub sim_gain: f32,
-    #[arg(long, default_value_t = 2.0)]
+    #[arg(long, default_value_t = 2.0, value_parser = finite_f32)]
     pub sim_tau: f32,
-    #[arg(long, default_value_t = 5.0)]
+    #[arg(long, default_value_t = 5.0, value_parser = finite_f32)]
     pub sim_dead_time: f32,
-    #[arg(long, default_value_t = 0.0)]
+    #[arg(long, default_value_t = 0.0, value_parser = finite_f32)]
     pub sim_noise: f32,
     #[arg(long, default_value_t = 0)]
     pub sim_seed: u64,
-    #[arg(long, default_value_t = 50.0)]
+    #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
     pub sim_initial_pv: f32,
-    #[arg(long, default_value_t = 50.0)]
+    #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
     pub sim_initial_mv: f32,
 
-    #[arg(long, default_value_t = 800)]
+    #[arg(long, default_value_t = 800, value_parser = positive_u64)]
     pub poll_interval_ms: u64,
 
     /// See `TuneArgs::timeout_secs`.
-    #[arg(long, default_value_t = 3600)]
+    #[arg(long, default_value_t = 3600, value_parser = positive_u64)]
     pub timeout_secs: u64,
 
     #[arg(long)]

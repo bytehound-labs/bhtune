@@ -734,6 +734,45 @@ time; this section is updated as each lands, with a full pass once all are done:
   mode. A genuinely non-mutating rehearsal (validate tags/template/ranges/connectivity with
   no loop I/O at all) remains on the roadmap as a separate future command, not a flag on a
   live tune.
+- **No externally supplied number reaches the engine unvalidated** — done
+  (`bhtune-core::range`, `LoopConfig::validate`, `bhtune-cli::args` value parsers,
+  `commands::tune::validate_initial_state`). Previously `--cycles-count 0` reached
+  `tuning_math::measure_oscillation`'s internal `assert!` and panicked *after* the loop had
+  already been switched to manual and stroked through a full relay test, with no restore on
+  the panic path; ranges read from the backend or passed as flags were never checked for
+  finiteness or ordering, so a `NaN` parsed by `f32::from_str` (which silently accepts the
+  literal strings `"nan"`/`"inf"`) could flow into the tuning math and, ultimately, a PID
+  write. Closed in four layers:
+  - `bhtune_core::range` — new `PvRange`/`MvRange` validated newtypes, each with a
+    `::new(high, low) -> Result<Self, RangeError>` constructor. `PvRange` only requires the
+    bounds be distinct (it is used purely as a span magnitude); `MvRange` requires strict
+    `low < high`, since `mrft::clamp_relay_amplitude`'s boundary math assumes that
+    orientation. Both types keep their fields `pub` (unvalidated construction via a struct
+    literal is still possible in-crate) — validation is enforced only at the
+    untrusted-input boundary (`::new()`), not universally.
+  - `LoopConfig::validate()` — extended to reject `cycles_count < 1` and
+    `mrft_delay_secs > MRFT_DELAY_SECS_MAX` (3,600s, matching the default `--timeout-secs`),
+    alongside the existing relay-amplitude check.
+  - `bhtune-cli::args` — `finite_f32`/`positive_u32`/`positive_u64` clap `value_parser`
+    functions applied to every numeric flag on `TuneArgs`/`SimulateArgs` that reaches the
+    engine (relay amp, cycles count, the PV/MV range bounds, the simulator's process
+    parameters, poll interval, timeout). Rejects `NaN`/infinite/zero/negative input with a
+    clear message before any I/O. Deliberately *not* applied to `mrft_delay`, `cycles_skip`,
+    `noise_protection_secs`, or `sim_seed` — each is either bounded only at the model level
+    or has no invalid range at the CLI layer (`0` is a legitimate RNG seed).
+  - `commands::tune::validate_initial_state` — a new checkpoint between
+    `read_initial_values` and `transition_to_manual` (the single choke point before any
+    mutation of the live loop) that validates the resolved `InitialState` uniformly,
+    regardless of whether each value came from a CLI flag or a backend tag: constructs
+    `PvRange`/`MvRange` from the read ranges and confirms the initial MV falls inside the
+    validated MV range. `read_f32`/`resolve_f32` additionally reject non-finite parsed
+    values directly, closing the `"nan"`/`"inf"` string-parsing gap before a value is even
+    assembled into `InitialState`.
+
+  An `execute()`-level integration test proves the actual safety property end-to-end: a
+  backend reporting an inverted MV range (`low >= high`) causes `execute` to fail with no
+  entries at all in the backend's write log — i.e. `transition_to_manual` never runs, not
+  merely "the tuning math never runs".
 
 ## Logging (`cli-logging`)
 

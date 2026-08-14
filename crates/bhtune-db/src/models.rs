@@ -317,7 +317,7 @@ pub enum TuneOutcome {
 /// The initial-readings snapshot for a [`TuneRunRow`] — known only once the backend's initial
 /// read actually succeeds (`ReadInitialOPCvalues` in the legacy app); `None` for a run that
 /// failed before or during that step. Combines
-/// [`bhtune_core::mrft::InitialReadings`]/[`bhtune_core::tuning_math::PvRange`] with the
+/// [`bhtune_core::mrft::InitialReadings`]/[`bhtune_core::range::PvRange`] with the
 /// resolved [`ControllerDirection`] `core-tuning-math` needs alongside them, as one bespoke
 /// type, since gluing the two existing structs together with one extra field isn't any
 /// simpler than a purpose-built one here.

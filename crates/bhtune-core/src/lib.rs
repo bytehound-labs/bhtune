@@ -23,6 +23,7 @@ pub mod loop_config;
 pub mod mrft;
 pub mod pid_config;
 pub mod process_type;
+pub mod range;
 pub mod tags;
 pub mod template;
 pub mod tuning_math;
@@ -34,10 +35,10 @@ pub use loop_config::{LoopConfig, LoopConfigError};
 pub use mrft::{Action, InitialReadings, MrftCompat, MrftEngine, MrftState, Tick};
 pub use pid_config::{DerivativeType, IntegralType, ProportionalType, TimeUnit};
 pub use process_type::ProcessType;
+pub use range::{MvRange, PvRange, RangeError};
 pub use tags::{LoopTags, TagOrValue, derive_tag};
 pub use template::{DcsTemplate, built_in_templates};
 pub use tuning_math::{
-    OpcWriteValues, Oscillation, PidParameters, PvRange, TuningMathCompat, TuningResult,
-    calculate_all, calculate_pid_parameters, calculate_tuning_result, measure_oscillation,
-    opc_write_values,
+    OpcWriteValues, Oscillation, PidParameters, TuningMathCompat, TuningResult, calculate_all,
+    calculate_pid_parameters, calculate_tuning_result, measure_oscillation, opc_write_values,
 };

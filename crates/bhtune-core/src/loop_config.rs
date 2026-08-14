@@ -38,6 +38,12 @@ impl LoopConfig {
     /// debug shortcut reach a live control loop as a "relay amplitude".
     pub const RELAY_AMP_PERCENT_MAX: f32 = 50.0;
 
+    /// Maximum allowed `mrft_delay_secs`. Chosen to match the default `--timeout-secs` (one
+    /// hour): genuine pre/post-test recording padding is realistically a few minutes at
+    /// most, so anything larger is far more likely a units mistake (e.g. milliseconds typed
+    /// as seconds) than a deliberate choice.
+    pub const MRFT_DELAY_SECS_MAX: u32 = 3600;
+
     /// Applies `process_type`'s default skip/test/noise-protection values, keeping the
     /// existing `controller_type`, `relay_amp_percent`, and `mrft_delay_secs`. Downgrades
     /// `controller_type` from PID to PI if the new process type doesn't allow PID.
@@ -52,19 +58,29 @@ impl LoopConfig {
         self
     }
 
-    /// Validates fields whose legality can't be expressed in the type system alone.
-    /// Currently checks only `relay_amp_percent`, against
-    /// `[RELAY_AMP_PERCENT_MIN, RELAY_AMP_PERCENT_MAX]` -- see `docs/v1-checklist.md` §2.
-    /// This is real range validation at the model/construction level, not just a
-    /// client-side keystroke filter or a single "not blank" check, so it applies no matter
-    /// how the `LoopConfig` was built (CLI flags, an imported template, or a future web GUI
-    /// request).
+    /// Validates fields whose legality can't be expressed in the type system alone: relay
+    /// amplitude against `[RELAY_AMP_PERCENT_MIN, RELAY_AMP_PERCENT_MAX]`, `num_cycles_count`
+    /// must be at least 1 (zero previously reached `tuning_math::measure_oscillation`'s
+    /// internal `assert!` and panicked mid-run, after the loop had already been switched to
+    /// manual and stroked -- see `docs/v1-checklist.md` §2), and `mrft_delay_secs` against
+    /// `MRFT_DELAY_SECS_MAX`. This is real range validation at the model/construction level,
+    /// not just a client-side keystroke filter or a single "not blank" check, so it applies
+    /// no matter how the `LoopConfig` was built (CLI flags, an imported template, or a
+    /// future web GUI request).
     pub fn validate(&self) -> Result<(), LoopConfigError> {
         let amp = self.relay_amp_percent;
         if !amp.is_finite()
             || !(Self::RELAY_AMP_PERCENT_MIN..=Self::RELAY_AMP_PERCENT_MAX).contains(&amp)
         {
             return Err(LoopConfigError::RelayAmpOutOfRange { value: amp });
+        }
+        if self.num_cycles_count < 1 {
+            return Err(LoopConfigError::CyclesCountMustBeAtLeastOne);
+        }
+        if self.mrft_delay_secs > Self::MRFT_DELAY_SECS_MAX {
+            return Err(LoopConfigError::MrftDelayOutOfRange {
+                value: self.mrft_delay_secs,
+            });
         }
         Ok(())
     }
@@ -76,6 +92,11 @@ pub enum LoopConfigError {
     /// `relay_amp_percent` was non-finite (NaN/infinite) or outside
     /// `[LoopConfig::RELAY_AMP_PERCENT_MIN, LoopConfig::RELAY_AMP_PERCENT_MAX]`.
     RelayAmpOutOfRange { value: f32 },
+    /// `num_cycles_count` was `0` -- at least one full relay cycle is required to measure an
+    /// oscillation at all.
+    CyclesCountMustBeAtLeastOne,
+    /// `mrft_delay_secs` exceeded [`LoopConfig::MRFT_DELAY_SECS_MAX`].
+    MrftDelayOutOfRange { value: u32 },
 }
 
 impl fmt::Display for LoopConfigError {
@@ -87,6 +108,14 @@ impl fmt::Display for LoopConfigError {
                  {}% of the MV range",
                 LoopConfig::RELAY_AMP_PERCENT_MIN,
                 LoopConfig::RELAY_AMP_PERCENT_MAX,
+            ),
+            LoopConfigError::CyclesCountMustBeAtLeastOne => {
+                write!(f, "cycles count must be at least 1")
+            }
+            LoopConfigError::MrftDelayOutOfRange { value } => write!(
+                f,
+                "mrft delay {value}s is out of range: must be at most {}s",
+                LoopConfig::MRFT_DELAY_SECS_MAX,
             ),
         }
     }
@@ -241,6 +270,74 @@ mod tests {
         assert!(message.contains("2014"));
         assert!(message.contains(&LoopConfig::RELAY_AMP_PERCENT_MIN.to_string()));
         assert!(message.contains(&LoopConfig::RELAY_AMP_PERCENT_MAX.to_string()));
+    }
+
+    #[test]
+    fn validate_accepts_a_typical_cycles_count() {
+        let mut cfg = sample();
+        cfg.num_cycles_count = 3;
+        assert!(cfg.validate().is_ok());
+    }
+
+    /// The reproduced panic: `--cycles-count 0` used to reach
+    /// `tuning_math::measure_oscillation`'s internal `assert!` and panic mid-run, after the
+    /// loop had already been switched to manual and stroked. `validate` must reject it before
+    /// any of that happens.
+    #[test]
+    fn validate_rejects_zero_cycles_count() {
+        let mut cfg = sample();
+        cfg.num_cycles_count = 0;
+        assert_eq!(
+            cfg.validate(),
+            Err(LoopConfigError::CyclesCountMustBeAtLeastOne)
+        );
+    }
+
+    #[test]
+    fn validate_accepts_one_cycles_count() {
+        let mut cfg = sample();
+        cfg.num_cycles_count = 1;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_zero_mrft_delay() {
+        let mut cfg = sample();
+        cfg.mrft_delay_secs = 0;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_the_mrft_delay_maximum_boundary() {
+        let mut cfg = sample();
+        cfg.mrft_delay_secs = LoopConfig::MRFT_DELAY_SECS_MAX;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_just_above_the_mrft_delay_maximum() {
+        let mut cfg = sample();
+        cfg.mrft_delay_secs = LoopConfig::MRFT_DELAY_SECS_MAX + 1;
+        assert_eq!(
+            cfg.validate(),
+            Err(LoopConfigError::MrftDelayOutOfRange {
+                value: LoopConfig::MRFT_DELAY_SECS_MAX + 1
+            })
+        );
+    }
+
+    #[test]
+    fn cycles_count_error_display_names_the_requirement() {
+        let message = LoopConfigError::CyclesCountMustBeAtLeastOne.to_string();
+        assert!(message.contains("at least 1"));
+    }
+
+    #[test]
+    fn mrft_delay_out_of_range_display_names_the_value_and_the_bound() {
+        let err = LoopConfigError::MrftDelayOutOfRange { value: 9999 };
+        let message = err.to_string();
+        assert!(message.contains("9999"));
+        assert!(message.contains(&LoopConfig::MRFT_DELAY_SECS_MAX.to_string()));
     }
 
     /// `LoopConfigError` must be usable as a trait object / via `?` in a `Result<_,
