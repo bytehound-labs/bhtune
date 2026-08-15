@@ -15,6 +15,7 @@ use bhtune_core::DcsTemplate;
 use bhtune_db::models::{DcsTemplateRow, TemplateOrigin};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -25,7 +26,7 @@ use crate::state::AppState;
 /// comments), [`DcsTemplateRow`] itself deliberately does not derive `Serialize` -- every
 /// JSON-facing consumer builds its own projection rather than the DB row shape leaking
 /// straight onto the wire.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TemplateResponse {
     pub id: i64,
     pub origin: TemplateOrigin,
@@ -47,17 +48,41 @@ impl From<DcsTemplateRow> for TemplateResponse {
     }
 }
 
+/// List every stored template.
+///
 /// `GET /api/templates` -- every stored template (built-in, catalog, and user-created
 /// alike), ordered by name, for a template picker.
-async fn list_templates(
+#[utoipa::path(
+    get,
+    path = "/api/templates",
+    tag = "templates",
+    responses(
+        (status = 200, description = "Every stored template, ordered by name.", body = Vec<TemplateResponse>),
+    ),
+)]
+pub(crate) async fn list_templates(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<TemplateResponse>>, ApiError> {
     let rows = DcsTemplateRow::list(&state.pool).await?;
     Ok(Json(rows.into_iter().map(TemplateResponse::from).collect()))
 }
 
+/// Fetch one template by name.
+///
 /// `GET /api/templates/{name}` -- 404 if no template has that name.
-async fn get_template(
+#[utoipa::path(
+    get,
+    path = "/api/templates/{name}",
+    tag = "templates",
+    params(
+        ("name" = String, Path, description = "Template name"),
+    ),
+    responses(
+        (status = 200, body = TemplateResponse),
+        (status = 404, description = "No template with that name."),
+    ),
+)]
+pub(crate) async fn get_template(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<TemplateResponse>, ApiError> {
@@ -67,9 +92,22 @@ async fn get_template(
     Ok(Json(row.into()))
 }
 
-/// `POST /api/templates` -- create a new, user-owned template. 400 if [`DcsTemplate::validate`]
-/// rejects the body, 409 if a template with the same name already exists.
-async fn create_template(
+/// Create a new, user-owned template.
+///
+/// `POST /api/templates` -- 400 if [`DcsTemplate::validate`] rejects the body, 409 if a
+/// template with the same name already exists.
+#[utoipa::path(
+    post,
+    path = "/api/templates",
+    tag = "templates",
+    request_body = DcsTemplate,
+    responses(
+        (status = 201, description = "Template created.", body = TemplateResponse),
+        (status = 400, description = "The template failed validation."),
+        (status = 409, description = "A template with this name already exists."),
+    ),
+)]
+pub(crate) async fn create_template(
     State(state): State<AppState>,
     Json(template): Json<DcsTemplate>,
 ) -> Result<(StatusCode, Json<TemplateResponse>), ApiError> {
@@ -90,10 +128,25 @@ async fn create_template(
     Ok((StatusCode::CREATED, Json(row.into())))
 }
 
+/// Delete a template by name.
+///
 /// `DELETE /api/templates/{name}` -- 404 if no template has that name, 409 if it is still
 /// referenced by a saved loop (`bhtune_db::DbError::TemplateInUse`, mapped by
 /// `From<DbError> for ApiError`).
-async fn delete_template(
+#[utoipa::path(
+    delete,
+    path = "/api/templates/{name}",
+    tag = "templates",
+    params(
+        ("name" = String, Path, description = "Template name"),
+    ),
+    responses(
+        (status = 204, description = "Template deleted."),
+        (status = 404, description = "No template with that name."),
+        (status = 409, description = "The template is still referenced by one or more saved loops."),
+    ),
+)]
+pub(crate) async fn delete_template(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {

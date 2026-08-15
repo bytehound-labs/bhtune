@@ -1,0 +1,1146 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "BHTune API",
+    "description": "HTTP API for BHTune: DCS/PLC PID-loop templates, and the tune-run history recorded by the CLI and this server.",
+    "license": {
+      "name": "AGPL-3.0-or-later"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness probe.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "The process is up and answering HTTP.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "List tune runs, filtered and paginated.",
+        "description": "`GET /api/runs` -- newest-started-first, filtered by every present [`RunListQuery`] field,\none [`Pagination`] page at a time.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "loop_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "process_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ProcessType"
+            }
+          },
+          {
+            "name": "controller_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ControllerType"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TuneOutcome"
+            }
+          },
+          {
+            "name": "backend",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TuneBackend"
+            }
+          },
+          {
+            "name": "started_after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "started_before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "template_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "template_origin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TemplateOrigin"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of runs matching the filter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Fetch one run's full detail.",
+        "description": "`GET /api/runs/{id}` -- 404 if no run has that id.",
+        "operationId": "show_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The full recorded detail for one run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No run with that id."
+          }
+        }
+      }
+    },
+    "/api/templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "List every stored template.",
+        "description": "`GET /api/templates` -- every stored template (built-in, catalog, and user-created\nalike), ordered by name, for a template picker.",
+        "operationId": "list_templates",
+        "responses": {
+          "200": {
+            "description": "Every stored template, ordered by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateResponse"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Create a new, user-owned template.",
+        "description": "`POST /api/templates` -- 400 if [`DcsTemplate::validate`] rejects the body, 409 if a\ntemplate with the same name already exists.",
+        "operationId": "create_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DcsTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Template created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The template failed validation."
+          },
+          "409": {
+            "description": "A template with this name already exists."
+          }
+        }
+      }
+    },
+    "/api/templates/{name}": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Fetch one template by name.",
+        "description": "`GET /api/templates/{name}` -- 404 if no template has that name.",
+        "operationId": "get_template",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Template name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No template with that name."
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Delete a template by name.",
+        "description": "`DELETE /api/templates/{name}` -- 404 if no template has that name, 409 if it is still\nreferenced by a saved loop (`bhtune_db::DbError::TemplateInUse`, mapped by\n`From<DbError> for ApiError`).",
+        "operationId": "delete_template",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Template name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Template deleted."
+          },
+          "404": {
+            "description": "No template with that name."
+          },
+          "409": {
+            "description": "The template is still referenced by one or more saved loops."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ControllerDirection": {
+        "type": "string",
+        "description": "Direct-acting (increasing MV increases PV) or Reverse-acting (increasing MV decreases\nPV).",
+        "enum": [
+          "direct",
+          "reverse"
+        ]
+      },
+      "ControllerType": {
+        "type": "string",
+        "description": "A PID controller structure. Discriminants double as the column index into the\ntuning-constant matrices in [`crate::constants`].",
+        "enum": [
+          "p",
+          "pi",
+          "pid"
+        ]
+      },
+      "DcsTemplate": {
+        "type": "object",
+        "description": "One DCS/PLC vendor's conventions.",
+        "required": [
+          "name",
+          "revert_mode",
+          "proportional_type",
+          "integral_type",
+          "integral_unit",
+          "derivative_type",
+          "derivative_unit",
+          "process_variable_suffix",
+          "manipulated_variable_suffix",
+          "setpoint_variable_suffix",
+          "controller_direction_suffix",
+          "controller_mode_suffix",
+          "mode_attribute_suffix",
+          "upper_pv_range_suffix",
+          "lower_pv_range_suffix",
+          "upper_mv_range_suffix",
+          "lower_mv_range_suffix",
+          "proportional_constant_suffix",
+          "integral_constant_suffix",
+          "derivative_constant_suffix",
+          "mode_manual_value",
+          "mode_auto_value",
+          "controller_action_direct_value"
+        ],
+        "properties": {
+          "controller_action_direct_value": {
+            "type": "string",
+            "description": "The raw value a Controller Direction tag holds when the controller is Direct\nacting; see [`crate::direction::ControllerDirection::from_raw_tag_value`]."
+          },
+          "controller_direction_suffix": {
+            "type": "string"
+          },
+          "controller_mode_suffix": {
+            "type": "string"
+          },
+          "derivative_constant_suffix": {
+            "type": "string"
+          },
+          "derivative_type": {
+            "$ref": "#/components/schemas/DerivativeType"
+          },
+          "derivative_unit": {
+            "$ref": "#/components/schemas/TimeUnit"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Free-text description of the control system this template targets."
+          },
+          "integral_constant_suffix": {
+            "type": "string"
+          },
+          "integral_type": {
+            "$ref": "#/components/schemas/IntegralType"
+          },
+          "integral_unit": {
+            "$ref": "#/components/schemas/TimeUnit"
+          },
+          "lower_mv_range_suffix": {
+            "type": "string"
+          },
+          "lower_pv_range_suffix": {
+            "type": "string"
+          },
+          "manipulated_variable_suffix": {
+            "type": "string"
+          },
+          "mode_attribute_program_value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The raw value a Mode Attribute tag holds when in \"Program\" mode (permits external\nOPC writes). `None` when the DCS has no mode-attribute concept."
+          },
+          "mode_attribute_suffix": {
+            "type": "string"
+          },
+          "mode_auto_value": {
+            "type": "string"
+          },
+          "mode_manual_value": {
+            "type": "string",
+            "description": "The DCS-specific raw values a Mode tag holds for Manual/Auto."
+          },
+          "name": {
+            "type": "string"
+          },
+          "process_variable_suffix": {
+            "type": "string",
+            "description": "OPC item-name suffixes, combined with a PV tag's path prefix by\n[`crate::tags::derive_tag`] to fill in the rest of the tag set. An empty suffix\nmeans the corresponding tag is not applicable for this DCS (e.g. some DCS families\nhave no mode-attribute concept)."
+          },
+          "proportional_constant_suffix": {
+            "type": "string"
+          },
+          "proportional_type": {
+            "$ref": "#/components/schemas/ProportionalType"
+          },
+          "revert_mode": {
+            "type": "boolean",
+            "description": "If true, the controller mode is switched back to its original mode (e.g.\nAuto/Cascade) after a completed MRFT test. Has no effect if the loop was already in\nManual at test start."
+          },
+          "setpoint_variable_suffix": {
+            "type": "string"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Citation for where this mapping came from (a manual, a field deployment).\nProvenance, not a correctness guarantee -- there is deliberately no separate\n\"verified\" trust field; everything accepted into the catalog is treated as verified,\nand real mapping errors are fixed as bugs when they surface."
+          },
+          "upper_mv_range_suffix": {
+            "type": "string"
+          },
+          "upper_pv_range_suffix": {
+            "type": "string"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "DCS/PLC releases this mapping is known to apply to (e.g. `[\"R5\", \"R6\"]`), in each\nvendor's own version-naming convention rather than a normalized scheme. A newer\nrelease that changes tag conventions gets its *own* template entry with its own\n`name` and `versions` list -- never an edit to this one in place, since sites still\nrunning the older release depend on the existing mapping (see\n`docs/dcs-templates.md`). May be empty for a contribution whose version coverage\nisn't yet known; `name` is what makes a template unique, not `versions`."
+          }
+        }
+      },
+      "DerivativeType": {
+        "type": "string",
+        "description": "How a DCS expresses the derivative term.",
+        "enum": [
+          "derivative_time",
+          "derivative_gain"
+        ]
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "InitialReadingsResponse": {
+        "type": "object",
+        "description": "Local projection of [`bhtune_db::models::TuneRunInitialReadings`] -- see this module's\ndoc comment for why every JSON-facing type here is its own projection rather than a\n`Serialize` impl on the `bhtune-db` row type.",
+        "required": [
+          "pv_ini",
+          "mv_ini",
+          "mv_range_low",
+          "mv_range_high",
+          "pv_range_high",
+          "pv_range_low",
+          "controller_direction"
+        ],
+        "properties": {
+          "controller_direction": {
+            "$ref": "#/components/schemas/ControllerDirection"
+          },
+          "mode_attribute_raw": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode_raw": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mv_ini": {
+            "type": "number",
+            "format": "float"
+          },
+          "mv_range_high": {
+            "type": "number",
+            "format": "float"
+          },
+          "mv_range_low": {
+            "type": "number",
+            "format": "float"
+          },
+          "pv_ini": {
+            "type": "number",
+            "format": "float"
+          },
+          "pv_range_high": {
+            "type": "number",
+            "format": "float"
+          },
+          "pv_range_low": {
+            "type": "number",
+            "format": "float"
+          },
+          "setpoint_ini": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        }
+      },
+      "IntegralType": {
+        "type": "string",
+        "description": "How a DCS expresses the integral term.",
+        "enum": [
+          "reset_time",
+          "reset_rate",
+          "reset_gain"
+        ]
+      },
+      "LoopConfig": {
+        "type": "object",
+        "required": [
+          "process_type",
+          "controller_type",
+          "relay_amp_percent",
+          "num_cycles_skip",
+          "num_cycles_count",
+          "noise_protection_secs",
+          "mrft_delay_secs"
+        ],
+        "properties": {
+          "controller_type": {
+            "$ref": "#/components/schemas/ControllerType"
+          },
+          "mrft_delay_secs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Pre/post-test recording padding, in seconds. PV is still read and recorded during\nthis period; no switch evaluation happens.",
+            "minimum": 0
+          },
+          "noise_protection_secs": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "num_cycles_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "num_cycles_skip": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "process_type": {
+            "$ref": "#/components/schemas/ProcessType"
+          },
+          "relay_amp_percent": {
+            "type": "number",
+            "format": "float",
+            "description": "Relay amplitude as a percentage of the MV range. Not enforced by the type itself --\ncall [`LoopConfig::validate`] on a `LoopConfig` built from external input (CLI flags,\nan imported template) before using it, to catch an out-of-range value before it\nreaches a live loop."
+          }
+        }
+      },
+      "MrftState": {
+        "type": "object",
+        "description": "A snapshot of the engine's observable state after a `step()` call — the fields a\ngolden-master trace comparison checks against the legacy CSV log's per-tick columns\n(`Hysteresis`, `MvValueCurrent`, `MvSignNextStep`, `CounterAllSwitches`).",
+        "required": [
+          "hysteresis",
+          "mv_value_current",
+          "mv_sign_next_step",
+          "counter_all_switches",
+          "cycles_completed",
+          "cycles_remaining"
+        ],
+        "properties": {
+          "counter_all_switches": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "cycles_completed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Whole relay cycles completed so far. Mirrors `GetCyclesCompleted`."
+          },
+          "cycles_remaining": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Whole relay cycles remaining. Mirrors `GetCyclesRemaining`; reaches `0` on the tick of\nthe final switch, which is what triggers the snap-back to `mv_ini` instead of a full\nrelay step."
+          },
+          "hysteresis": {
+            "type": "number",
+            "format": "float"
+          },
+          "mv_sign_next_step": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "mv_value_current": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "ProcessType": {
+        "type": "string",
+        "description": "A process/loop category. Each has its own row in the tuning-constant matrices in\n[`crate::constants`] and its own default cycle/noise-protection settings.\n\nDiscriminants double as the row index into those matrices — see\n[`ProcessType::index`].",
+        "enum": [
+          "flow",
+          "pressure_line",
+          "pressure_vessel",
+          "level",
+          "temperature_mixing",
+          "temperature_heat_exchange"
+        ]
+      },
+      "ProportionalType": {
+        "type": "string",
+        "description": "How a DCS expresses the proportional term.",
+        "enum": [
+          "gain",
+          "band"
+        ]
+      },
+      "ResponseLevel": {
+        "type": "string",
+        "description": "How aggressively a tuning result should push the loop: a faster response trades off\nstability margin, a more sluggish response trades off speed.",
+        "enum": [
+          "aggressive",
+          "moderate",
+          "sluggish"
+        ]
+      },
+      "RestoreStatus": {
+        "type": "string",
+        "description": "The outcome of a best-effort loop-restore attempt made after a run ended --\n`safety-restore-guard` (finding 3 of the live-plant safety review). Recorded via\n[`TuneRunRow::record_restore_status`]; `NULL` in the database (mapped to `None` on\n[`TuneRunRow::restore_status`]) means no restore was ever attempted -- either the run\nnever mutated the loop at all, or it hasn't ended yet.",
+        "enum": [
+          "confirmed",
+          "incomplete"
+        ]
+      },
+      "ResultResponse": {
+        "type": "object",
+        "description": "Local projection of [`TuneResultRow`].",
+        "required": [
+          "response_level",
+          "kp",
+          "ti_minutes",
+          "td_minutes",
+          "proportional",
+          "integral",
+          "derivative"
+        ],
+        "properties": {
+          "derivative": {
+            "type": "number",
+            "format": "float"
+          },
+          "integral": {
+            "type": "number",
+            "format": "float"
+          },
+          "kp": {
+            "type": "number",
+            "format": "float"
+          },
+          "proportional": {
+            "type": "number",
+            "format": "float"
+          },
+          "response_level": {
+            "$ref": "#/components/schemas/ResponseLevel"
+          },
+          "td_minutes": {
+            "type": "number",
+            "format": "float"
+          },
+          "ti_minutes": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "RollbackState": {
+        "type": "string",
+        "description": "Whether a best-effort rollback of a partially-completed PID write was attempted and, if\nso, whether it succeeded. See [`TuneWriteRow::rollback_state`] for when this is `None`.",
+        "enum": [
+          "succeeded",
+          "failed"
+        ]
+      },
+      "RunDetailResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "loop_name",
+          "backend",
+          "outcome",
+          "started_at",
+          "template_name",
+          "template_origin",
+          "config",
+          "samples",
+          "results",
+          "writes"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/TuneBackend"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "config": {
+            "$ref": "#/components/schemas/LoopConfig"
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "initial_readings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InitialReadingsResponse"
+              }
+            ]
+          },
+          "loop_name": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TuneOutcome"
+          },
+          "restore_detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "restore_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RestoreStatus"
+              }
+            ]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResultResponse"
+            }
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SampleResponse"
+            }
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "template_name": {
+            "type": "string",
+            "description": "Name of the template snapshotted onto this run at start time -- not necessarily what\n`template_name` currently resolves to in the catalog (`safety-run-snapshot`)."
+          },
+          "template_origin": {
+            "$ref": "#/components/schemas/TemplateOrigin"
+          },
+          "writes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WriteResponse"
+            }
+          }
+        }
+      },
+      "RunListResponse": {
+        "type": "object",
+        "required": [
+          "runs",
+          "returned",
+          "total"
+        ],
+        "properties": {
+          "returned": {
+            "type": "integer",
+            "description": "How many rows are in `runs` (this page) -- distinct from `total`, the count of every\nrun matching the filter across all pages.",
+            "minimum": 0
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunSummaryResponse"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RunSummaryResponse": {
+        "type": "object",
+        "description": "One run in `GET /api/runs`'s `runs` array -- deliberately a subset matching the CLI's own\n`history list` table columns, not the full detail (that's [`RunDetailResponse`], for\n`GET /api/runs/{id}`).",
+        "required": [
+          "id",
+          "loop_name",
+          "backend",
+          "outcome",
+          "process_type",
+          "started_at"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/TuneBackend"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "loop_name": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TuneOutcome"
+          },
+          "process_type": {
+            "$ref": "#/components/schemas/ProcessType"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SampleQuality": {
+        "type": "string",
+        "description": "How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the\nmoment it was read (finding 5 of the live-plant safety review).\n\nA `bhtune-db`-local mirror of [`bhtune_backend::Quality`], not a reuse of it directly:\n`bhtune-db` deliberately doesn't depend on `bhtune-backend` (a leaf I/O-adapter crate with\na much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business\nin the persistence crate just to name one three-variant enum), so `bhtune-cli`, which\nalready depends on both, is the one place that converts between them. This mirrors\n[`TemplateOrigin`]'s own precedent: a small, persistence-local enum rather than a second\ndependency edge.",
+        "enum": [
+          "good",
+          "uncertain",
+          "bad"
+        ]
+      },
+      "SampleResponse": {
+        "type": "object",
+        "description": "One recorded tick: the [`Tick`] input and resulting engine state, plus the backend-\nreported PV quality at read time. `Tick`/`MrftState` already derive `Serialize` in\n`bhtune-core` (they round-trip through golden-trace fixtures too), so they're embedded\ndirectly rather than re-projected field-by-field like the other DTOs here.",
+        "required": [
+          "tick_index",
+          "sample",
+          "state",
+          "pv_quality"
+        ],
+        "properties": {
+          "pv_quality": {
+            "$ref": "#/components/schemas/SampleQuality"
+          },
+          "sample": {
+            "$ref": "#/components/schemas/Tick"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MrftState"
+          },
+          "tick_index": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TemplateOrigin": {
+        "type": "string",
+        "description": "Where a `dcs_templates` row came from, and -- since [`TuneRunRow`] snapshots a copy of one\nat [`TuneRunRow::start`] time -- where a run's snapshotted template came from too. Kept as\none definition reused by both tables (`dcs_templates.origin`, `tune_runs.template_origin`)\nrather than two, so they can never drift on what the possible origins even are, and so a\nrun's history never needs to look the original row back up to know its provenance --\nwhich matters precisely because that row might no longer exist, or might have been\nre-imported under a different origin since.\n\n`builtin` and `catalog` rows are re-upserted from their respective data files on every\nstartup ([`crate::seed::seed_templates`]); `user` rows (hand-imported via `bhtune template\nimport`, or created through a future GUI editor) are never auto-touched -- auto-reseeding\na hand-edited row would silently discard someone's own customization, while *not*\nreseeding a shipped preset would mean a suffix/unit fix in a later release never reaches\nexisting installs.",
+        "enum": [
+          "builtin",
+          "catalog",
+          "user"
+        ]
+      },
+      "TemplateResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DcsTemplate"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "origin",
+              "created_at",
+              "updated_at"
+            ],
+            "properties": {
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "origin": {
+                "$ref": "#/components/schemas/TemplateOrigin"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ],
+        "description": "The HTTP-facing shape of a stored template: the caller-supplied [`DcsTemplate`] fields\nflattened alongside the database-assigned `id`/`origin`/timestamps. Per this workspace's\nestablished DTO-decoupling convention (see `bhtune-cli`'s `commands::history` module doc\ncomments), [`DcsTemplateRow`] itself deliberately does not derive `Serialize` -- every\nJSON-facing consumer builds its own projection rather than the DB row shape leaking\nstraight onto the wire."
+      },
+      "Tick": {
+        "type": "object",
+        "description": "One PV sample fed into the engine. The engine has no clock of its own — every timestamp\nit ever reasons about arrives through a `Tick`.",
+        "required": [
+          "time",
+          "pv"
+        ],
+        "properties": {
+          "pv": {
+            "type": "number",
+            "format": "float"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TimeUnit": {
+        "type": "string",
+        "description": "The time unit a DCS expects for integral/derivative parameters.",
+        "enum": [
+          "seconds",
+          "minutes"
+        ]
+      },
+      "TuneBackend": {
+        "type": "string",
+        "description": "Which [`crate`]-agnostic I/O backend a run used. Lives in `bhtune-db` rather than\n`bhtune-core` because it's a persistence/orchestration concept (which adapter drove this\nrun), not a domain concept the pure MRFT engine itself needs to know about.",
+        "enum": [
+          "opcda",
+          "simulator",
+          "replay"
+        ]
+      },
+      "TuneOutcome": {
+        "type": "string",
+        "description": "A run's lifecycle state.",
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "aborted"
+        ]
+      },
+      "WriteKind": {
+        "type": "string",
+        "description": "Distinguishes a normal write-back from `bhtune history revert` undoing an earlier one.\nBoth share [`TuneWriteRow`]'s exact shape -- pre-read, write-and-verify each constant,\naudit the outcome -- so they live in the same table rather than a second near-duplicate\none; `kind` is the one column that tells them apart.",
+        "enum": [
+          "write",
+          "revert"
+        ]
+      },
+      "WriteResponse": {
+        "type": "object",
+        "description": "Local projection of [`TuneWriteRow`].",
+        "required": [
+          "kind",
+          "response_level",
+          "written_at",
+          "success"
+        ],
+        "properties": {
+          "derivative_previous": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "derivative_readback": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "derivative_written": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "integral_previous": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "integral_readback": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "integral_written": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WriteKind"
+          },
+          "proportional_previous": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "proportional_readback": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "proportional_written": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "response_level": {
+            "$ref": "#/components/schemas/ResponseLevel"
+          },
+          "rollback_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rollback_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RollbackState"
+              }
+            ]
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "written_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "Liveness probe"
+    },
+    {
+      "name": "templates",
+      "description": "DCS/PLC template catalog (built-in, community-catalog, and user-created)"
+    },
+    {
+      "name": "runs",
+      "description": "Read-only tune-run history"
+    }
+  ]
+}

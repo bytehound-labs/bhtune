@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Discriminants double as the row index into those matrices — see
 /// [`ProcessType::index`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessType {
     Flow = 0,

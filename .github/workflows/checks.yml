@@ -38,5 +38,10 @@ jobs:
       - name: Check for unused dependencies
         run: cargo machete
 
+      - name: Regenerate OpenAPI spec and check for drift
+        run: |
+          cargo run -p bhtune-server --example gen_openapi
+          git diff --exit-code openapi.json
+
       - name: Build workspace
         run: cargo build --workspace

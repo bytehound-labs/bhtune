@@ -34,3 +34,11 @@ thiserror = "2"
 # `bhtune.toml`/the user template catalog (`cli-config`/`template-user-catalog`) -- promoted
 # here once bhtune-core became a second consumer. Same major version `opcda-bridge` uses.
 toml = "1"
+# `bhtune-core` and `bhtune-db` derive `utoipa::ToSchema` behind an optional `utoipa`
+# feature each (see their `Cargo.toml` comments), and `bhtune-server` derives the rest plus
+# emits the OpenAPI document itself (`openapi-contract`) -- three consumers, pinned once so
+# they can never disagree on the schema-format version. `default-features = false` because
+# the only feature any of the three need is `macros` (the `ToSchema`/`IntoParams`/`OpenApi`/
+# `#[utoipa::path]` derives, already the crate default) plus `chrono` (for `DateTime<Utc>`
+# fields); `bhtune-server`'s own `Cargo.toml` adds `chrono` on top of this workspace entry.
+utoipa = { version = "5", default-features = false, features = ["macros"] }

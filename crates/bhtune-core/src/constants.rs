@@ -13,6 +13,7 @@ use crate::{controller_type::ControllerType, process_type::ProcessType};
 /// How aggressively a tuning result should push the loop: a faster response trades off
 /// stability margin, a more sluggish response trades off speed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseLevel {
     Aggressive = 0,

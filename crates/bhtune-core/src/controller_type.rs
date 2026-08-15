@@ -8,6 +8,7 @@ use crate::process_type::ProcessType;
 /// A PID controller structure. Discriminants double as the column index into the
 /// tuning-constant matrices in [`crate::constants`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ControllerType {
     P = 0,

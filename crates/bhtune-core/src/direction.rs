@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Direct-acting (increasing MV increases PV) or Reverse-acting (increasing MV decreases
 /// PV).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ControllerDirection {
     Direct,

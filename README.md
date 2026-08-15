@@ -92,9 +92,14 @@ cargo run --bin bhtune-server
 Binds `127.0.0.1:8787` by default (see the `bind` setting below) and exposes a JSON HTTP API —
 `GET /api/health`, `GET`/`POST /api/templates`, `GET`/`DELETE /api/templates/{name}`, and
 `GET /api/runs`/`GET /api/runs/{id}` for run history — using the same SQLite database and
-config precedence as the CLI. There is no web UI yet; that lands with `frontend-shell` and
-`server-embed-spa` (see [Roadmap](#roadmap)). The server shuts down gracefully on Ctrl+C (and
-on Unix, `SIGTERM`), draining in-flight requests rather than dropping connections.
+config precedence as the CLI. The full API contract is described by an OpenAPI 3.1 document,
+served as raw JSON at `GET /api/openapi.json` and as interactive documentation at `/api/docs`
+(a [Scalar](https://scalar.com/) UI — try it in a browser, or point any OpenAPI-aware tool at
+the JSON endpoint). The same document is checked in at [`openapi.json`](openapi.json) at the
+repo root for anyone who wants to read or diff it without running the server. There is no web
+UI yet; that lands with `frontend-shell` and `server-embed-spa` (see [Roadmap](#roadmap)). The
+server shuts down gracefully on Ctrl+C (and on Unix, `SIGTERM`), draining in-flight requests
+rather than dropping connections.
 
 ## Configuration
 

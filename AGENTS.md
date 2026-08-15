@@ -68,7 +68,18 @@ Phase 7's `server-http-api` is done: `bhtune-server` is a real Axum binary expos
 `/api/health`, `/api/templates` (list/get/create/delete), and `/api/runs` (filtered/paginated
 list, full run detail), sharing the CLI's config precedence, database bootstrap, and tracing
 setup, with graceful shutdown on Ctrl+C/`SIGTERM` — see "Key architectural decisions" above.
-`openapi-contract`, `server-embed-spa`, `frontend-shell`, `frontend-screens`,
+`openapi-contract` is also done: every route/DTO derives `utoipa::ToSchema`/`IntoParams`
+(behind an optional `utoipa` Cargo feature on `bhtune-core`/`bhtune-db`, so those two crates
+stay free of it unless a consumer asks — see "Key architectural decisions" below), aggregated
+by a single `ApiDoc` (`crates/bhtune-server/src/openapi.rs`) that serves the raw OpenAPI 3.1
+document at `GET /api/openapi.json` and an interactive Scalar UI at `/api/docs`. The document
+is also checked in at the repo root (`openapi.json`) and regenerated-and-diffed in CI
+(`cargo run -p bhtune-server --example gen_openapi` then `git diff --exit-code`), so it can
+never silently drift from the routes that actually produce it — the first use of this
+regenerate-and-diff pattern in the repo, and the template `docs-generated-cli` will reuse
+later for the CLI reference/man pages/completions. Generating a TypeScript client from this
+spec is deferred to `frontend-shell`, since no `frontend/` package exists yet for it to live
+in. `server-embed-spa`, `frontend-shell`, `frontend-screens`,
 `frontend-live-stream`, and `server-windows-service` (the rest of Phase 7), `backend-replay`,
 and the replay harness are not yet — the GUI plan reversed from a Tauri desktop app to a
 browser UI served by `bhtune-server` before any Tauri code was written (see "Key
@@ -211,14 +222,52 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   implemented, Cargo enhancement (upstream issue #16438); don't trust a search result that
   describes it as already shipped. Any future same-named, hyphenated `[[bin]]` in this
   workspace will hit the same thing.
-- **One API surface, described by OpenAPI, with no client-side transport abstraction.** Handlers/
-  DTOs are annotated with `utoipa` to emit an OpenAPI 3.1 spec; `openapi-typescript` generates the
-  TypeScript client consumed by the frontend, gated by a `git diff --exit-code` CI check so
-  spec/client drift is impossible (`openapi-contract`). There is exactly one transport — `fetch`
-  over HTTP — so no `ApiClient`-style interface with swappable backends is warranted; adding one
-  would be pure ceremony with a single implementation. The same OpenAPI spec renders interactive
-  docs (Scalar) at `/api/docs`, doubling as the reference for third-party scripting against the
-  HTTP API.
+- **One API surface, described by OpenAPI, with no client-side transport abstraction.**
+  `openapi-contract` is done on the Rust side: every DTO in `crates/bhtune-server/src/routes/
+  *.rs` derives `utoipa::ToSchema` (query structs derive `utoipa::IntoParams` instead), every
+  handler carries a `#[utoipa::path(...)]` annotation, and `crates/bhtune-server/src/
+  openapi.rs`'s `ApiDoc` (`#[derive(utoipa::OpenApi)]`) aggregates all of it into one OpenAPI
+  3.1 document — deliberately one explicit list of `paths(...)`/`components(schemas(...))`
+  rather than a macro that scans `routes/**` for annotations automatically, so a route added
+  without updating `ApiDoc` is a visible, reviewable omission rather than something that
+  silently works but never appears in the spec. The document is served two ways: the raw JSON
+  at `GET /api/openapi.json` (`axum::Json(ApiDoc::openapi())`, since `utoipa::openapi::OpenApi`
+  is plain `Serialize`) and an interactive Scalar UI at `/api/docs`
+  (`utoipa_scalar::Scalar::with_url` returns a state-generic `axum::Router<S>` with the UI
+  route already attached, so it merges straight into `build_router` with no handwritten
+  handler). It is also checked in at the repo root (`openapi.json`) and regenerated-and-diffed
+  in CI (`cargo run -p bhtune-server --example gen_openapi` then `git diff --exit-code
+  openapi.json`) — the first use of this pattern in the repo, and the template
+  `docs-generated-cli` will reuse later for the CLI reference/man pages/completions. There is
+  exactly one transport — `fetch` over HTTP — so no `ApiClient`-style interface with swappable
+  backends is warranted; adding one would be pure ceremony with a single implementation.
+  Generating the TypeScript client itself (`openapi-typescript`) is deferred to
+  `frontend-shell`, since no `frontend/` package/`pnpm-workspace.yaml` exists yet for the
+  generated client to live in or for a `git diff --exit-code` gate on it to check anything
+  against — `openapi-contract`'s scope in the end was the Rust-side contract (annotations,
+  aggregation, the two serving routes, the checked-in spec, the CI diff gate), not the
+  TypeScript generation step, which needs a frontend package to exist first.
+- **`utoipa` is an optional, feature-gated dependency on `bhtune-core`/`bhtune-db`, not a
+  hard one.** Neither crate can implement `utoipa::ToSchema` for the other's types from
+  `bhtune-server` directly (Rust's orphan rule: neither the trait nor the type would be local
+  to `bhtune-server`), so instead `bhtune-core`/`bhtune-db` each gained
+  `utoipa = { workspace = true, optional = true, ... }` plus `[features] utoipa =
+  ["dep:utoipa"]`, and derive `#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]`
+  directly on every type an HTTP-facing DTO embeds (enums like `ProcessType`/
+  `ControllerType`/`TemplateOrigin`, and structs like `LoopConfig`/`DcsTemplate`/`Tick`/
+  `MrftState`). `bhtune-server` enables the feature (`features = ["utoipa"]`) on both path
+  dependencies; `bhtune-cli` never requests it, so a `cargo build -p bhtune-cli` in isolation
+  never even fetches `utoipa` into its dependency graph — the derive costs nothing for a
+  consumer that doesn't ask for it, exactly the same shape this workspace already uses for
+  optional `serde`-adjacent derives elsewhere. (Cargo's feature unification means a
+  `cargo build --workspace` *does* compile `bhtune-core`/`bhtune-db` with the feature on
+  everywhere once anything in the graph requests it — normal, well-understood Cargo behavior
+  with no runtime effect, since the derive is compile-time-only and doesn't reopen
+  `core-mrft`'s "no clock reads" guarantee, which is enforced by chrono's `clock` feature
+  staying off workspace-wide, not by `utoipa` being absent.) `bhtune-core`'s existing crate-doc
+  purity rule ("no I/O, no async, no clock reads") already covered why `toml` doesn't violate
+  it; the same reasoning extends to `utoipa`, since deriving a schema at compile time is
+  neither I/O nor an async/clock operation.
 - **Live tick streaming uses Server-Sent Events, not WebSocket.** The flow is strictly
   server→client (engine state out, never commands in over the same channel), and SSE
   auto-reconnects natively, survives ordinary HTTP proxies, and is trivially inspectable with
@@ -1793,11 +1842,13 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state �
 - **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft; it does not bind anyone until the
   legal-entity question is resolved, the text has had a legal review, and a CLA-assistant check is
   added to the PR checks.
-- **No `frontend/` (pnpm workspace) yet.** Nothing consumes it until the `frontend-shell` phase.
-- **`bhtune-server` has no `utoipa` or `rust-embed` dependency yet** (`axum` landed with
-  `server-http-api`). Those two arrive with `openapi-contract` and `server-embed-spa`
-  respectively — adding them prematurely risks breaking `cargo build --workspace` before
-  either phase is ready to use them, for no benefit.
+- **No `frontend/` (pnpm workspace) yet.** Nothing consumes it until the `frontend-shell` phase
+  — this is also why `openapi-contract` generated the OpenAPI spec/Scalar docs but not yet a
+  TypeScript client from it; see "Key architectural decisions" above.
+- **`bhtune-server` has no `rust-embed` dependency yet** (`axum` landed with `server-http-api`;
+  `utoipa`/`utoipa-scalar` landed with `openapi-contract`). `rust-embed` arrives with
+  `server-embed-spa` — adding it prematurely risks breaking `cargo build --workspace` before
+  there's a built SPA for it to embed, for no benefit.
 - **A cross-project CI/CD audit against `opcda-bridge` hasn't happened yet.** See
   `cross-project-ci-audit` in "Phases and todos" — worth doing once both projects have settled a
   bit, not urgent.
@@ -1828,7 +1879,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above |
-| `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | `server-http-api` done — real Axum binary (health/templates/history routes, graceful shutdown, shares the CLI's config/db/logging bootstrap); OpenAPI spec, embedded SPA, and Windows service pending |
+| `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` done — real Axum binary (health/templates/history routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above); embedded SPA and Windows service pending |
 
 ## Phases and todos (roadmap order)
 
@@ -1885,18 +1936,23 @@ that binary does something real and gains its own targeted tests.
    contributions) are all done — see "Community DCS/PLC template catalog", "Auto-loading a
    user template catalog", and "Multi-template import, TOML export, and `template delete`"
    above.
-7. **Web GUI (`bhtune-server` + React SPA)** — `server-http-api` is done: `bhtune-server`
-   promoted from stub to a real Axum server exposing `/api/health`, `/api/templates`
-   (list/get/create/delete), and `/api/runs` (filtered/paginated list, full run detail) over
-   the tuning engine, sharing the CLI's config precedence and database bootstrap, with
-   graceful shutdown on Ctrl+C/`SIGTERM` — see "Key architectural decisions" above. Remaining:
-   describing that API with OpenAPI (`openapi-contract`), embedding the built SPA into the
+7. **Web GUI (`bhtune-server` + React SPA)** — `server-http-api` and `openapi-contract` are
+   done: `bhtune-server` promoted from stub to a real Axum server exposing `/api/health`,
+   `/api/templates` (list/get/create/delete), and `/api/runs` (filtered/paginated list, full
+   run detail) over the tuning engine, sharing the CLI's config precedence and database
+   bootstrap, with graceful shutdown on Ctrl+C/`SIGTERM`; every route/DTO is annotated with
+   `utoipa`, aggregated into one OpenAPI 3.1 document served at `/api/openapi.json` and as an
+   interactive Scalar UI at `/api/docs`, checked in at the repo root and drift-gated in CI —
+   see "Key architectural decisions" above. Remaining: embedding the built SPA into the
    binary (`server-embed-spa`); React + TS + Vite + Tailwind frontend using TanStack Query
-   against the generated client (`frontend-shell`); Connection/Tag-mapping/Test-parameters/
-   Results/History/Template-editor/Simulator screens plus a live PV/MV trend chart
-   (`frontend-screens`); live per-tick streaming to the UI over SSE (`frontend-live-stream`);
-   running as a proper platform service (`server-windows-service`). Replaces the earlier
-   Tauri desktop GUI phase — see "Key architectural decisions" above for the reversal.
+   against a TypeScript client generated from the now-existing OpenAPI spec (`frontend-shell`
+   — this is also where `openapi-typescript` generation actually happens, once a `frontend/`
+   package exists for the generated client to live in); Connection/Tag-mapping/
+   Test-parameters/Results/History/Template-editor/Simulator screens plus a live PV/MV trend
+   chart (`frontend-screens`); live per-tick streaming to the UI over SSE
+   (`frontend-live-stream`); running as a proper platform service
+   (`server-windows-service`). Replaces the earlier Tauri desktop GUI phase — see "Key
+   architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — fully automated E2E tune on Linux CI via CLI + simulator
    backend (no Windows, no external DCS dependency); Playwright E2E against the real web UI
    (`e2e-playwright`); golden replay suite in CI; release build matrix for Linux/macOS/Windows

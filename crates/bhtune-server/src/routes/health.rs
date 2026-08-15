@@ -7,15 +7,25 @@
 use axum::Json;
 use axum::routing::get;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
-#[derive(Serialize)]
-struct Health {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct Health {
     status: &'static str,
 }
 
-async fn health() -> Json<Health> {
+/// Liveness probe.
+#[utoipa::path(
+    get,
+    path = "/api/health",
+    tag = "health",
+    responses(
+        (status = 200, description = "The process is up and answering HTTP.", body = Health),
+    ),
+)]
+pub(crate) async fn health() -> Json<Health> {
     Json(Health { status: "ok" })
 }
 

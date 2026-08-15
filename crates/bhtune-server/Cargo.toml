@@ -12,8 +12,12 @@ name = "bhtune_server"
 path = "src/lib.rs"
 
 [dependencies]
-bhtune-core = { path = "../bhtune-core" }
-bhtune-db = { path = "../bhtune-db" }
+# `features = ["utoipa"]` derives `utoipa::ToSchema` on the types this crate's DTOs embed
+# directly (`ProcessType`, `ControllerType`, `ControllerDirection`, `ResponseLevel`,
+# `LoopConfig`, `DcsTemplate`, `Tick`, `MrftState`) -- see that crate's `Cargo.toml` comment
+# for why the dependency is optional there but always-on here.
+bhtune-core = { path = "../bhtune-core", features = ["utoipa"] }
+bhtune-db = { path = "../bhtune-db", features = ["utoipa"] }
 # Reuses the CLI's config precedence (`bhtune.toml`/env var/default resolution -- including
 # the `bind` address this crate alone consumes, see `crate::config::resolve_bind_addr`),
 # database open/migrate/seed bootstrap, and tracing setup verbatim, rather than duplicating
@@ -38,6 +42,17 @@ axum = "0.8"
 # Ctrl+C/SIGTERM, matching `bhtune-cli`'s own Ctrl+C handling story (see `cancel.rs`) rather
 # than leaving a request in flight when the process is asked to stop.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+# `openapi-contract`: derives the OpenAPI 3.1 document (`#[derive(utoipa::OpenApi)]`,
+# `#[derive(utoipa::ToSchema)]`/`IntoParams` on local DTOs, `#[utoipa::path]` on handlers)
+# from the same route/DTO code that serves the API, so the spec cannot silently drift from
+# the real routes -- see `crate::openapi`. `chrono` on top of the workspace entry's
+# `macros`-only default, for the same `DateTime<Utc>` reason `bhtune-core`'s identical
+# dependency needs it (see that crate's `Cargo.toml` comment).
+utoipa = { workspace = true, features = ["chrono"] }
+# Renders the always-current OpenAPI document as an interactive Scalar UI at `/api/docs` --
+# no separate static-file build step, no JS toolchain, and (unlike Swagger UI) no bundled
+# `swagger-ui-*.zip` binary blob to keep in sync with a released version.
+utoipa-scalar = { version = "0.3", features = ["axum"] }
 tracing = "0.1"
 
 [dev-dependencies]

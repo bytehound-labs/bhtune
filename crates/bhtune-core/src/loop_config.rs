@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{controller_type::ControllerType, process_type::ProcessType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct LoopConfig {
     pub process_type: ProcessType,
     pub controller_type: ControllerType,

@@ -9,28 +9,48 @@
 //! `bhtune-cli` already uses for the same reason.
 
 pub mod error;
+pub mod openapi;
 pub mod routes;
 pub mod state;
 
 #[cfg(test)]
 mod test_support;
 
+use utoipa::OpenApi as _;
+use utoipa_scalar::Servable as _;
+
 pub use state::AppState;
 
 /// Assembles every route module into one [`axum::Router`], ready to serve or to drive
 /// directly in a test via `tower::ServiceExt::oneshot`.
+///
+/// Alongside the JSON API routes, this mounts the OpenAPI contract itself two ways: the raw
+/// document at `GET /api/openapi.json` (for tooling -- CI's spec-diff gate, and eventually
+/// `frontend-shell`'s generated TS client) and an interactive Scalar UI at `/api/docs` (for a
+/// human exploring the API in a browser). [`utoipa_scalar::Scalar::with_url`] returns a
+/// state-generic `axum::Router<S>` with the UI's one route already attached, so it merges in
+/// directly rather than needing its own handler function.
 pub fn build_router(state: AppState) -> axum::Router {
     axum::Router::new()
         .merge(routes::health::router())
         .merge(routes::templates::router())
         .merge(routes::history::router())
+        .route("/api/openapi.json", axum::routing::get(openapi_json))
+        .merge(utoipa_scalar::Scalar::with_url(
+            "/api/docs",
+            openapi::ApiDoc::openapi(),
+        ))
         .with_state(state)
+}
+
+async fn openapi_json() -> axum::Json<utoipa::openapi::OpenApi> {
+    axum::Json(openapi::ApiDoc::openapi())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
@@ -53,9 +73,41 @@ mod tests {
         assert_eq!(templates.status(), StatusCode::OK);
 
         let runs = app
+            .clone()
             .oneshot(Request::get("/api/runs").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(runs.status(), StatusCode::OK);
+
+        let openapi_json = app
+            .clone()
+            .oneshot(
+                Request::get("/api/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(openapi_json.status(), StatusCode::OK);
+        let bytes = to_bytes(openapi_json.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let spec: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(spec["info"]["title"], "BHTune API");
+        assert_eq!(spec["paths"]["/api/health"]["get"]["tags"][0], "health");
+
+        let docs = app
+            .oneshot(Request::get("/api/docs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(docs.status(), StatusCode::OK);
+        let content_type = docs
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(content_type.starts_with("text/html"));
     }
 }

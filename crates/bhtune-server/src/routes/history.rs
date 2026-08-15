@@ -25,6 +25,7 @@ use bhtune_db::models::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -32,7 +33,8 @@ use crate::state::AppState;
 /// Query parameters for `GET /api/runs`, mirroring [`TuneRunFilter`]'s fields one-to-one
 /// plus [`Pagination`]. Every field is optional; an absent `limit`/`offset` falls back to
 /// [`Pagination::default`] (50 rows, offset 0), matching the CLI's own default page size.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct RunListQuery {
     pub loop_id: Option<i64>,
     pub process_type: Option<ProcessType>,
@@ -82,7 +84,7 @@ fn filter_from_query(query: &RunListQuery) -> TuneRunFilter {
 /// One run in `GET /api/runs`'s `runs` array -- deliberately a subset matching the CLI's own
 /// `history list` table columns, not the full detail (that's [`RunDetailResponse`], for
 /// `GET /api/runs/{id}`).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RunSummaryResponse {
     pub id: i64,
     pub loop_name: String,
@@ -105,7 +107,7 @@ impl From<&TuneRunRow> for RunSummaryResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RunListResponse {
     pub runs: Vec<RunSummaryResponse>,
     /// How many rows are in `runs` (this page) -- distinct from `total`, the count of every
@@ -114,9 +116,20 @@ pub struct RunListResponse {
     pub total: i64,
 }
 
+/// List tune runs, filtered and paginated.
+///
 /// `GET /api/runs` -- newest-started-first, filtered by every present [`RunListQuery`] field,
 /// one [`Pagination`] page at a time.
-async fn list_runs(
+#[utoipa::path(
+    get,
+    path = "/api/runs",
+    tag = "runs",
+    params(RunListQuery),
+    responses(
+        (status = 200, description = "A page of runs matching the filter.", body = RunListResponse),
+    ),
+)]
+pub(crate) async fn list_runs(
     State(state): State<AppState>,
     Query(query): Query<RunListQuery>,
 ) -> Result<Json<RunListResponse>, ApiError> {
@@ -137,7 +150,7 @@ async fn list_runs(
 /// Local projection of [`bhtune_db::models::TuneRunInitialReadings`] -- see this module's
 /// doc comment for why every JSON-facing type here is its own projection rather than a
 /// `Serialize` impl on the `bhtune-db` row type.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct InitialReadingsResponse {
     pub pv_ini: f32,
     pub mv_ini: f32,
@@ -172,7 +185,7 @@ impl From<bhtune_db::models::TuneRunInitialReadings> for InitialReadingsResponse
 /// reported PV quality at read time. `Tick`/`MrftState` already derive `Serialize` in
 /// `bhtune-core` (they round-trip through golden-trace fixtures too), so they're embedded
 /// directly rather than re-projected field-by-field like the other DTOs here.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SampleResponse {
     pub tick_index: i64,
     pub sample: Tick,
@@ -192,7 +205,7 @@ impl From<&TuneSampleRow> for SampleResponse {
 }
 
 /// Local projection of [`TuneResultRow`].
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ResultResponse {
     pub response_level: ResponseLevel,
     pub kp: f32,
@@ -218,7 +231,7 @@ impl From<&TuneResultRow> for ResultResponse {
 }
 
 /// Local projection of [`TuneWriteRow`].
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct WriteResponse {
     pub kind: WriteKind,
     pub response_level: ResponseLevel,
@@ -261,7 +274,7 @@ impl From<&TuneWriteRow> for WriteResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RunDetailResponse {
     pub id: i64,
     pub loop_name: String,
@@ -283,8 +296,22 @@ pub struct RunDetailResponse {
     pub restore_detail: Option<String>,
 }
 
+/// Fetch one run's full detail.
+///
 /// `GET /api/runs/{id}` -- 404 if no run has that id.
-async fn show_run(
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}",
+    tag = "runs",
+    params(
+        ("id" = i64, Path, description = "Run id"),
+    ),
+    responses(
+        (status = 200, description = "The full recorded detail for one run.", body = RunDetailResponse),
+        (status = 404, description = "No run with that id."),
+    ),
+)]
+pub(crate) async fn show_run(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {

@@ -54,6 +54,7 @@ use crate::{
 /// reseeding a shipped preset would mean a suffix/unit fix in a later release never reaches
 /// existing installs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TemplateOrigin {
     /// One of the templates `bhtune-core` ships embedded in its own binary (see
@@ -384,6 +385,7 @@ pub struct LoopRow {
 /// `bhtune-core` because it's a persistence/orchestration concept (which adapter drove this
 /// run), not a domain concept the pure MRFT engine itself needs to know about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TuneBackend {
     Opcda,
@@ -393,6 +395,7 @@ pub enum TuneBackend {
 
 /// A run's lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TuneOutcome {
     Running,
@@ -407,6 +410,7 @@ pub enum TuneOutcome {
 /// [`TuneRunRow::restore_status`]) means no restore was ever attempted -- either the run
 /// never mutated the loop at all, or it hasn't ended yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum RestoreStatus {
     /// `restore()` ran every applicable step to completion with no failures.
@@ -1022,6 +1026,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
 /// [`TemplateOrigin`]'s own precedent: a small, persistence-local enum rather than a second
 /// dependency edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SampleQuality {
     Good,
@@ -1292,6 +1297,7 @@ pub struct WriteReadback {
 /// Whether a best-effort rollback of a partially-completed PID write was attempted and, if
 /// so, whether it succeeded. See [`TuneWriteRow::rollback_state`] for when this is `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum RollbackState {
     /// Every constant that had been written was successfully written back to its `previous`
@@ -1308,6 +1314,7 @@ pub enum RollbackState {
 /// audit the outcome -- so they live in the same table rather than a second near-duplicate
 /// one; `kind` is the one column that tells them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum WriteKind {
     /// A write-back of freshly calculated PID parameters (`maybe_write_back`).

@@ -15,6 +15,7 @@ use crate::{direction::ControllerDirection, loop_config::LoopConfig};
 /// One PV sample fed into the engine. The engine has no clock of its own — every timestamp
 /// it ever reasons about arrives through a `Tick`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct Tick {
     pub time: DateTime<Utc>,
     pub pv: f32,
@@ -95,6 +96,7 @@ pub fn clamp_relay_amplitude(
 /// golden-master trace comparison checks against the legacy CSV log's per-tick columns
 /// (`Hysteresis`, `MvValueCurrent`, `MvSignNextStep`, `CounterAllSwitches`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct MrftState {
     pub hysteresis: f32,
     pub mv_value_current: f32,

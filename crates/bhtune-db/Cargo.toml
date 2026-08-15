@@ -39,6 +39,16 @@ sqlx = { version = "0.9", default-features = false, features = [
   "migrate",
   "macros",
 ] }
+# Optional, feature-gated: derives `utoipa::ToSchema` on this crate's plain lifecycle enums
+# (`TemplateOrigin`, `TuneBackend`, `TuneOutcome`, `RestoreStatus`, `SampleQuality`,
+# `RollbackState`, `WriteKind`) so `bhtune-server`'s OpenAPI spec (`openapi-contract`)
+# describes them from the real type. Same rationale as `bhtune-core`'s identical optional
+# dependency -- see that crate's `Cargo.toml` comment; off by default, so `bhtune-cli` (which
+# depends on this crate but never touches HTTP) never pulls `utoipa` in.
+utoipa = { workspace = true, optional = true }
+
+[features]
+utoipa = ["dep:utoipa"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }
