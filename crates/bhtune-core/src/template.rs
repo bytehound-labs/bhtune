@@ -175,8 +175,11 @@ impl From<toml::de::Error> for TemplateError {
     }
 }
 
-/// The embedded/user catalog's top-level shape: a TOML `[[template]]` array of tables.
-#[derive(Debug, Deserialize)]
+/// The embedded/user catalog's top-level shape: a TOML `[[template]]` array of tables. Also
+/// used in reverse by [`to_catalog_toml`] (bhtune-cli's `template export --format toml`), so
+/// export and import always agree on the exact same wire shape with no separate format to
+/// keep in sync by hand.
+#[derive(Debug, Serialize, Deserialize)]
 struct Catalog {
     #[serde(rename = "template")]
     templates: Vec<DcsTemplate>,
@@ -193,6 +196,15 @@ pub fn parse_catalog(input: &str) -> Result<Vec<DcsTemplate>, TemplateError> {
         template.validate()?;
     }
     Ok(catalog.templates)
+}
+
+/// Serializes `templates` as a TOML catalog in the exact `[[template]]` array-of-tables
+/// shape [`parse_catalog`] reads back -- the inverse operation. Used by bhtune-cli's
+/// `template export --format toml` (a single template exports as a one-entry catalog) so
+/// the contribution loop is export -> annotate -> PR with no hand-transcription step. Pure,
+/// like [`parse_catalog`]: writing the result to a file is the caller's job.
+pub fn to_catalog_toml(templates: Vec<DcsTemplate>) -> Result<String, toml::ser::Error> {
+    toml::to_string_pretty(&Catalog { templates })
 }
 
 /// The embedded catalog TOML, compiled into the binary so it can never go missing from a
@@ -459,6 +471,29 @@ controller_action_direct_value = "0"
             err,
             TemplateError::MissingModeAttributeProgramValue { .. }
         ));
+    }
+
+    #[test]
+    fn to_catalog_toml_round_trips_the_built_in_templates() {
+        let original = built_in_templates();
+        let toml = to_catalog_toml(original.clone()).unwrap();
+        let parsed = parse_catalog(&toml).unwrap();
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn to_catalog_toml_with_one_template_produces_a_single_template_block() {
+        let template = parse_catalog(minimal_valid_toml()).unwrap().remove(0);
+        let toml = to_catalog_toml(vec![template.clone()]).unwrap();
+        assert_eq!(toml.matches("[[template]]").count(), 1);
+        let parsed = parse_catalog(&toml).unwrap();
+        assert_eq!(parsed, vec![template]);
+    }
+
+    #[test]
+    fn to_catalog_toml_with_no_templates_produces_an_empty_catalog() {
+        let toml = to_catalog_toml(vec![]).unwrap();
+        assert_eq!(parse_catalog(&toml).unwrap(), Vec::new());
     }
 
     #[test]

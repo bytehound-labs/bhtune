@@ -23,7 +23,9 @@ FOPDT process simulator (`backend-simulator`, `SimulatorBackend`) is done, givin
 fully synthetic, wall-clock-free way to drive a real `MrftEngine` end to end. `bhtune-cli`'s
 core subcommand set (`cli-commands`) is done: `tune`/`simulate` (drive a real MRFT run against
 either `OpcDaBackend` or `SimulatorBackend`, persisting the full lifecycle through
-`bhtune-db`), `template` (`list`/`show`/`import`/`export`), `history` (`list`/`show`), `export`
+`bhtune-db`), `template` (`list`/`show`/`import`/`export`/`delete` — see `template-cli`
+below for the multi-template TOML catalog import and TOML export), `history` (`list`/
+`show`), `export`
 (CSV/JSON of one run's samples), and `opc` (low-level `read`/`write`/`browse` passthrough to
 the bridge, bypassing the tuning engine). `cli-config` is done: `CLI flag > env var > TOML
 config file > platform default` precedence for the database path, opcda-bridge gateway
@@ -53,8 +55,12 @@ three-way `origin` column (`builtin`/`catalog`/`user`, replacing a plain `is_bui
 boolean) plus `versions_json`/`description`/`source` columns to store them. `template-
 user-catalog` is also done: `bhtune-cli` auto-loads a user-supplied catalog file on every
 startup (`--templates`/`BHTUNE_TEMPLATES`/a `templates` config key, resolved through the
-same precedence chain as every other setting), seeding it with `TemplateOrigin::Catalog` —
-see "Community DCS/PLC template catalog" below; `template-cli`/`template-docs` remain.
+same precedence chain as every other setting), seeding it with `TemplateOrigin::Catalog`.
+`template-cli` is also done: `template import` auto-detects a single JSON template versus a
+multi-template TOML catalog, `template export --format toml` emits a PR-ready
+`[[template]]` block, and `template delete <name>` removes a template (with a friendly
+error if a saved loop still references it) — see "Community DCS/PLC template catalog"
+below; only `template-docs` remains in this phase.
 `backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan
 reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri
 code was written (see "Key architectural decisions"). See "Phases and todos" below for what's
@@ -514,8 +520,17 @@ discretization and its numerical cross-check against that reference.
   `SIMULATOR_MV_TAG`), for a demo/smoke-test run with no real DCS/PLC needed.
   `SimulateArgs::into_tune_args` converts to the same `TuneArgs` `tune` uses, so the two share
   every code path below template resolution.
-- **`bhtune template list|show|import|export`** — inspect and manage `dcs_templates` rows
-  (built-in and user-imported) as JSON, via `DcsTemplateRow`.
+- **`bhtune template list|show|import|export|delete`** — inspect and manage `dcs_templates`
+  rows (built-in, catalog, and user-imported) via `DcsTemplateRow`. `import` accepts either a
+  single JSON template or a multi-template TOML catalog (auto-detected by content, not file
+  extension) — a single-template import hard-fails on a name collision, while a catalog import
+  skips colliding names and reports a summary, since the expected workflow there is
+  re-importing an updated shared catalog. `export --format json|toml` (default `json`) emits
+  either one template as JSON or a PR-ready `[[template]]` TOML block. `delete <name>` removes
+  a template, with a friendly error if a saved loop still references it (`DbError::
+  TemplateInUse`) and a note that a `Builtin`/`Catalog`-origin template will simply reappear on
+  the next startup unless also removed from its source. See "Multi-template import, TOML
+  export, and `template delete`" below for the full design.
 - **`bhtune history list|show`** — list past runs (optional `--outcome` filter, `--limit`/
   `--offset` pagination) and show one run's full detail (config, initial readings, calculated
   results, write-back audit rows), via `history-query-api`'s `TuneRunRow`/`TuneResultRow`/
@@ -1349,8 +1364,8 @@ and get a Rust PR reviewed.
   put into Manual. `toml` was already a dependency (`bhtune-cli`'s single-template import/
   export); the mainstream YAML crates are unusable under this project's `cargo deny` gate
   (`serde_yaml` is deprecated/archived, its `serde_yml` fork carries RUSTSEC-2025-0068). JSON
-  import/export stays supported for interop; a `toml` export format is planned in
-  `template-cli` (still pending) so the contribution loop becomes export → annotate → PR.
+  import/export stays supported for interop; a `toml` export format is done (`template-cli`,
+  see below) so the contribution loop is export → annotate → PR.
 - **Embedded, not read from disk.** `crates/bhtune-core/templates/builtin.toml` is
   `include_str!`-compiled into the binary, so a shipped binary can never be broken by a
   missing or hand-edited data file, while contributors still edit a plain text file, not
@@ -1370,12 +1385,13 @@ and get a Rust PR reviewed.
   `cli-safety`: non-empty `name` (trimmed); non-empty `process_variable_suffix`; non-empty
   `manipulated_variable_suffix`; if `controller_mode_suffix` is set, both
   `mode_manual_value` and `mode_auto_value` must be non-empty; if `mode_attribute_suffix` is
-  set, `mode_attribute_program_value` must be `Some`. Runs on every catalog template today
-  (built-in, contributed, or user-catalog — `template-user-catalog`'s `load_user_templates`
-  reuses `parse_catalog` directly, so the same validation applies with no separate code
-  path); `template import`'s single-template path will gain it too once `template-cli`
-  lands — today, importing a garbage template via `template import` succeeds and only fails
-  much later, mid-tune.
+  set, `mode_attribute_program_value` must be `Some`. Runs on every catalog template (built-
+  in, contributed, or user-catalog — `template-user-catalog`'s `load_user_templates` reuses
+  `parse_catalog` directly, so the same validation applies with no separate code path) and,
+  since `template-cli`, on `template import`'s single-JSON-template path too (`import_one`
+  calls it explicitly, since that path parses with plain `serde_json::from_str` rather than
+  going through `parse_catalog`) — a garbage template can no longer be imported and only
+  fail much later, mid-tune.
 - **`TemplateError`** is a hand-rolled `Display`/`std::error::Error` enum (no `thiserror`,
   matching `bhtune-core`'s existing `RangeError`/`LoopConfigError` convention): `Toml(toml::
   de::Error)` (`source()` delegates to the wrapped error), `EmptyName`, `EmptyField { name,
@@ -1529,6 +1545,88 @@ one `lib.rs` integration test proving `run_with_cli` itself (not just the lower-
 `config::load_user_templates` unit) surfaces a broken `--templates` path as exit failure
 before ever calling `db::open`. `cargo llvm-cov` confirms 100% line coverage of every line
 this todo added or touched.
+
+### Multi-template import, TOML export, and `template delete` (`template-cli`)
+
+`template-catalog`/`template-provenance`/`template-user-catalog` (above) made TOML catalogs a
+real, auto-loaded data source, but `bhtune template import`/`export` still only understood a
+single JSON template, and there was no way at all to remove a template once imported or
+auto-seeded — a real dead end now that startup auto-loads a user catalog. This closes both
+gaps in `crates/bhtune-cli/src/commands/template.rs`.
+
+- **`template import` auto-detects JSON vs. TOML by sniffing content, not extension or a
+  try-then-fallback.** `looks_like_json_object` checks whether the file's content, ignoring
+  leading whitespace, starts with `{`; if so it's parsed as a single JSON template (the
+  existing `import_one`, unchanged hard-fail-on-name-collision behavior); otherwise it's
+  parsed as a TOML catalog via `bhtune_core::template::parse_catalog` (the new
+  `import_catalog`). Chosen over "try JSON, fall back to TOML on failure" specifically so a
+  malformed file of either format gets a format-specific, useful parse error rather than
+  always surfacing the TOML parser's complaint about content the user actually meant as
+  JSON — legitimate TOML catalog files can never start with a bare `{` at the document root
+  (not valid top-level TOML), so the heuristic never misclassifies real content of either
+  format.
+- **`import_catalog` is best-effort, deliberately unlike `import_one`.** A single-JSON-
+  template import still hard-fails on a name collision (unchanged — it's one deliberate
+  template, so a collision is a mistake to fix). A multi-template TOML catalog import
+  instead skips any colliding name and reports both what was imported and what was skipped,
+  because the expected workflow is re-importing an updated community catalog file that
+  overlaps with templates already present — the useful outcome is "add what's new," not
+  "fail because some of this was already here." An empty catalog (`template = []`) is its
+  own message, not an error.
+- **`template export --format <json|toml>`** (new `TemplateFileFormat` `ValueEnum` in
+  `args.rs`, default `json`, so the existing default behavior is unchanged for anyone not
+  passing the flag). The TOML path is `bhtune_core::template::to_catalog_toml(vec![row.
+  template])` — a single-template file is just a one-entry catalog, so it round-trips
+  through the exact same `parse_catalog` used everywhere else, and the output is a
+  `[[template]]` block ready to paste into a contribution PR (the export → annotate → PR
+  loop `template-catalog`'s design section had planned for since before this todo existed).
+- **`template delete <name>`** — there was previously no way to remove a template at all.
+  Looks the template up by name (the existing "no template named" error if missing), then
+  calls `bhtune_db::models::DcsTemplateRow::delete`: `Ok(true)` deletes and prints an
+  origin-specific note for `Builtin`/`Catalog` templates (both will silently reappear on the
+  next startup unless also removed from their source — the embedded catalog for `Builtin`,
+  which only a new release can change, or the user's `templates.toml` for `Catalog` — so the
+  CLI says so up front rather than letting a confused re-appearance be discovered later);
+  `Ok(false)` (a same-process TOCTOU race — something else deleted the row between the
+  lookup and the delete call) is reported as "already deleted" rather than treated as a bug;
+  `Err(DbError::TemplateInUse)` becomes a friendly "still referenced by one or more saved
+  loops" message instead of a raw SQL error, deleting nothing.
+- **`template list` gained a VERSIONS column** (between ORIGIN and PROPORTIONAL),
+  formatting `versions.join(", ")` or `"-"` for a template with none recorded.
+- **`import_one` (the single-JSON-template path) now calls `DcsTemplate::validate()`
+  itself**, before the name-collision check. It parses with plain `serde_json::from_str`
+  rather than going through `parse_catalog`, so — unlike `import_catalog`, which inherits
+  validation for free from `parse_catalog` — it never got the validation `template-catalog`
+  added to `DcsTemplate` in the first place; this closes that gap explicitly.
+- **`bhtune-cli` gained a `sqlx` dev-dependency** (not a production one — this crate's
+  non-test code still only ever talks to `bhtune-db`'s repository API) purely so the
+  `delete`-still-referenced test can insert a raw `loops` row via SQL, mirroring the exact
+  pattern `bhtune-db`'s own `tests/schema.rs` already uses for the identical FK check; there
+  is no `LoopRow::insert` yet (loop-saving is `cli-commands` scope, not this todo's).
+
+**Testing approach.** 22 tests in `commands/template.rs` (up from 10) cover: TOML single-
+template export round-tripping through import under a renamed identity; a multi-template
+TOML catalog import adding new entries while skipping ones that already exist by name (and
+the all-new/all-skipped edge cases separately); an empty-catalog import being a no-op;
+invalid-TOML-catalog import producing a TOML-specific error (proving the content-sniffing
+heuristic routes correctly, alongside the pre-existing invalid-JSON-import test); a JSON
+template that parses but fails `validate()` being rejected without ever reaching the
+database; `delete` succeeding for `User`/`Builtin`/`Catalog`-origin templates (each
+exercising its own note branch); `delete` failing cleanly on an unknown name and on a
+template still referenced by a
+loop (the latter inserting a real `loops` row, per the `sqlx` dev-dependency note above); and
+`list` formatting a template with no recorded `versions` as `"-"`. One further test added to
+`bhtune-db/tests/schema.rs` (`dcs_template_delete_reports_a_non_database_error_as_query_not_
+template_in_use`, using a closed pool to force a non-`Database` `sqlx::Error`) closes a
+coverage gap in `DcsTemplateRow::delete`'s own classification logic that predates this todo.
+Two branches remain deliberately untested and documented in place, consistent with this
+project's existing accepted-gap precedent (e.g. `safety-db-restore`'s exclusivity-check
+residual race): `delete`'s own same-process TOCTOU branch, and the CLI-level passthrough for
+a non-`TemplateInUse` `DbError` from `DcsTemplateRow::delete` — both require a database error
+to occur between two calls that share one connection pool with no `.await` yield point
+between them, which is not deterministically constructible without fault-injection seams
+this project has no other use for. `cargo llvm-cov` confirms these are the only three lines
+(across those two branches) left uncovered in the entire file.
 
 ## Validation strategy: golden-master replay
 
@@ -1684,7 +1782,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness` | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -1734,11 +1832,12 @@ that binary does something real and gains its own targeted tests.
    see "Live-plant safety hardening" above. Phase 6.6, turning the built-in DCS/PLC templates
    into a community-contributable catalog, is well underway: `template-catalog` (`bhtune-core`),
    `template-provenance` (`bhtune-db` schema: a real three-way `origin` column plus
-   `versions_json`/`description`/`source`), and `template-user-catalog` (`bhtune-cli` auto-loads
+   `versions_json`/`description`/`source`), `template-user-catalog` (`bhtune-cli` auto-loads
    a user-supplied catalog file on startup, resolved through the same config precedence chain as
-   every other setting) are all done — see "Community DCS/PLC template catalog" and
-   "Auto-loading a user template catalog" above; `template-cli` (multi-template import/export,
-   `template delete`) and `template-docs` remain.
+   every other setting), and `template-cli` (multi-template TOML import/export, `template
+   delete`, and validating a single-JSON-template import too) are all done — see "Community
+   DCS/PLC template catalog", "Auto-loading a user template catalog", and "Multi-template
+   import, TOML export, and `template delete`" above; only `template-docs` remains.
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS

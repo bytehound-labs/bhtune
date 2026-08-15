@@ -59,9 +59,10 @@ pub enum TemplateOrigin {
     /// One of the templates `bhtune-core` ships embedded in its own binary (see
     /// `template-catalog`).
     Builtin,
-    /// Loaded from a user-supplied catalog file. Not yet produced anywhere --
-    /// `template-user-catalog` (auto-loading `$XDG_CONFIG_HOME/bhtune/templates.toml` and
-    /// equivalents) is what will start seeding rows with this origin.
+    /// Loaded from a user-supplied catalog file (`$XDG_CONFIG_HOME/bhtune/templates.toml`
+    /// and platform equivalents, or an explicit `--templates`/`BHTUNE_TEMPLATES` override --
+    /// see `template-user-catalog`), auto-seeded on every startup the same way `Builtin`
+    /// rows are.
     Catalog,
     /// Hand-imported (`bhtune template import`) or otherwise created by whoever is running
     /// bhtune.
@@ -242,6 +243,42 @@ impl DcsTemplateRow {
         .map_err(DbError::Query)?;
 
         row_to_dcs_template(row)
+    }
+
+    /// Deletes the row at `id`. Returns `Ok(true)` if a row existed and was removed,
+    /// `Ok(false)` if no row with that id existed (not an error -- deciding whether "nothing
+    /// to delete" should itself be an error is the caller's call; `bhtune-cli`'s `template
+    /// delete` already resolves `id` from a name via [`Self::get_by_name`] and produces its
+    /// own "no template named" error before ever calling this).
+    ///
+    /// Fails with [`DbError::TemplateInUse`] if `loops.dcs_template_id`'s `ON DELETE
+    /// RESTRICT` foreign key rejects the delete because a saved loop still references this
+    /// template. Classified as "any database-level error on this specific statement",
+    /// rather than solely `sqlx`'s `DatabaseError::is_foreign_key_violation()` -- confirmed
+    /// empirically that SQLite's C implementation reports an *immediate* `RESTRICT`
+    /// violation like this one under the extended result code `SQLITE_CONSTRAINT_TRIGGER`
+    /// (its FK-action enforcement runs through the same internal machinery as a trigger
+    /// body), not `SQLITE_CONSTRAINT_FOREIGNKEY` -- the latter is what `sqlx-sqlite` maps to
+    /// `is_foreign_key_violation()`, and it's only what a *deferred* FK check reports at
+    /// commit time, which this crate never uses. This is safe to broaden to "any database
+    /// error" specifically because `dcs_templates` has exactly one foreign key pointing at
+    /// it (`loops.dcs_template_id`), no triggers exist anywhere in the schema, and a bare
+    /// `DELETE` can't violate this table's own `CHECK` constraints (they all apply to
+    /// column values, which a delete-by-id never touches) -- so a database-level failure of
+    /// this exact statement structurally has only one possible cause.
+    pub async fn delete(pool: &SqlitePool, id: i64) -> DbResult<bool> {
+        let result = sqlx::query("DELETE FROM dcs_templates WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                if e.as_database_error().is_some() {
+                    DbError::TemplateInUse { id }
+                } else {
+                    DbError::Query(e)
+                }
+            })?;
+        Ok(result.rows_affected() > 0)
     }
 }
 

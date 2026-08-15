@@ -525,10 +525,37 @@ pub enum TemplateCommand {
     List,
     /// Show one template's full detail as JSON.
     Show { name: String },
-    /// Import a template from a JSON file (see `template export`'s output shape).
+    /// Import a template from a file. Accepts either a single template as JSON (see
+    /// `template export`'s default output shape) or a multi-template TOML catalog (the same
+    /// `[[template]]` array-of-tables shape as the embedded/user catalog, see `template
+    /// export --format toml`) -- the format is auto-detected from the file's content, not
+    /// its extension. A JSON single-template import is rejected outright if a template with
+    /// that name already exists; a TOML catalog import instead skips (and reports) any
+    /// template whose name already exists, so re-importing an updated community catalog
+    /// only adds what's new.
     Import { path: PathBuf },
-    /// Export a template's JSON to a file, e.g. as a starting point for a site-specific copy.
-    Export { name: String, path: PathBuf },
+    /// Export a template to a file, e.g. as a starting point for a site-specific copy or a
+    /// community catalog contribution.
+    Export {
+        name: String,
+        path: PathBuf,
+        /// File format to write. `toml` emits a single-entry `[[template]]` catalog block,
+        /// ready to paste into a catalog file or open as a contribution pull request.
+        #[arg(long, value_enum, default_value = "json")]
+        format: TemplateFileFormat,
+    },
+    /// Delete a template. Refuses if any saved loop still references it. A `Builtin`- or
+    /// `Catalog`-origin template reappears automatically the next time bhtune starts unless
+    /// it's also removed from its source (bhtune-core's embedded catalog for `Builtin`,
+    /// which only a new bhtune release can change; the user catalog file for `Catalog`).
+    Delete { name: String },
+}
+
+/// File format for `template export`/auto-detected on `template import`.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateFileFormat {
+    Json,
+    Toml,
 }
 
 #[derive(Subcommand, Debug)]

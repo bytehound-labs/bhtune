@@ -149,13 +149,14 @@ Everything in this section is deferred past v1, not permanently out of scope.
 - [ ] REQUIRED — the template schema: revert-mode flag; proportional/integral/derivative
       type-and-unit settings (as proper enums, never magic display strings); manual/auto mode
       values; mode-attribute "Program" value; controller-action-direct value.
-- [ ] REQUIRED — add/delete custom templates.
-- [ ] REQUIRED — persist templates to SQLite as the source of truth, seeded from an embedded,
+- [x] REQUIRED — add/delete custom templates.
+- [x] REQUIRED — persist templates to SQLite as the source of truth, seeded from an embedded,
       community-contributable TOML catalog (`template-catalog`, done — see `AGENTS.md`'s
-      "Community DCS/PLC template catalog"); JSON import/export already exists, and
+      "Community DCS/PLC template catalog"); JSON import/export, TOML export
+      (`template export --format toml`), and `template delete` are all done (`template-cli` —
+      see AGENTS.md's "Multi-template import, TOML export, and `template delete`"), and
       auto-loading a user-supplied catalog file is done (`template-user-catalog` — see
-      AGENTS.md's "Auto-loading a user template catalog"); a TOML export format and
-      `template delete` are still planned (`template-cli`).
+      AGENTS.md's "Auto-loading a user template catalog").
 - [ ] REQUIRED — assigning the entire active template onto the tuning engine immediately before a
       test starts (§4).
 

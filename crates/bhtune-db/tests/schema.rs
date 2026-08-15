@@ -6,7 +6,7 @@
 
 use bhtune_core::{LoopTags, built_in_templates};
 use bhtune_db::{
-    connect_in_memory,
+    DbError, connect_in_memory,
     models::{DcsTemplateRow, TemplateOrigin},
 };
 use chrono::Utc;
@@ -263,6 +263,80 @@ async fn deleting_a_referenced_dcs_template_is_restricted() {
         delete.is_err(),
         "deleting a dcs_template referenced by a loop must be restricted"
     );
+}
+
+#[tokio::test]
+async fn dcs_template_delete_removes_an_unreferenced_template() {
+    let pool = connect_in_memory().await.unwrap();
+    let template_id = seed_template(&pool).await;
+
+    let deleted = DcsTemplateRow::delete(&pool, template_id).await.unwrap();
+    assert!(deleted, "delete of an existing, unreferenced row");
+    assert!(
+        DcsTemplateRow::get(&pool, template_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn dcs_template_delete_returns_false_for_a_nonexistent_id() {
+    let pool = connect_in_memory().await.unwrap();
+    let deleted = DcsTemplateRow::delete(&pool, 999).await.unwrap();
+    assert!(!deleted, "deleting a nonexistent id is not an error");
+}
+
+#[tokio::test]
+async fn dcs_template_delete_fails_with_template_in_use_when_referenced_by_a_loop() {
+    let pool = connect_in_memory().await.unwrap();
+    let template_id = seed_template(&pool).await;
+    let now = Utc::now();
+
+    sqlx::query(
+        r#"
+        INSERT INTO loops (
+            name, dcs_template_id, tags_json, process_type, controller_type,
+            relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
+            mrft_delay_secs, created_at, updated_at
+        ) VALUES ('LIC101', ?, '{}', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
+        "#,
+    )
+    .bind(template_id)
+    .bind(now)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let err = DcsTemplateRow::delete(&pool, template_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, DbError::TemplateInUse { id } if id == template_id));
+
+    // The row must still be there -- the rejected delete must not have partially applied.
+    assert!(
+        DcsTemplateRow::get(&pool, template_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn dcs_template_delete_reports_a_non_database_error_as_query_not_template_in_use() {
+    let pool = connect_in_memory().await.unwrap();
+    let template_id = seed_template(&pool).await;
+
+    // Closing the pool first forces `execute` to fail with `sqlx::Error::PoolClosed` --
+    // not a `Database` error -- proving `delete`'s classification correctly falls through
+    // to `DbError::Query` rather than misreporting every failure as `TemplateInUse`.
+    pool.close().await;
+
+    let err = DcsTemplateRow::delete(&pool, template_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, DbError::Query(_)));
 }
 
 /// Inserts a loop (and its owning template) and returns the loop's id.

@@ -35,6 +35,15 @@ pub enum DbError {
         source: serde_json::Error,
     },
 
+    /// [`crate::models::DcsTemplateRow::delete`] targeted a template that at least one
+    /// `loops` row still references. The schema's `ON DELETE RESTRICT` foreign key is what
+    /// actually enforces this; this variant exists so `bhtune-cli`'s `template delete` can
+    /// turn the resulting SQLite foreign-key-violation error into a message naming the
+    /// template rather than a raw SQL error, without needing its own `sqlx` dependency just
+    /// to inspect the error kind.
+    #[error("template {id} is still referenced by one or more saved loops and cannot be deleted")]
+    TemplateInUse { id: i64 },
+
     /// [`crate::backup::backup_to`]'s destination already exists. Refused rather than
     /// silently overwritten — clobbering a previous backup because of a reused filename
     /// would itself be a data-loss bug.

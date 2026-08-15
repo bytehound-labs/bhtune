@@ -55,6 +55,17 @@ tracing-appender = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# Test-only: `template.rs`'s "delete a template still referenced by a loop" test inserts a
+# raw `loops` row directly via SQL to trigger that FK restriction -- there is no
+# `LoopRow::insert` in `bhtune-db` yet (loop-saving lands with `cli-commands`), so this
+# mirrors the exact same raw-row pattern `bhtune-db`'s own `tests/schema.rs` already uses to
+# test the identical constraint. Not a production dependency: this crate's non-test code
+# never touches `sqlx` directly, going through `bhtune-db`'s repository API instead.
+sqlx = { version = "0.9", default-features = false, features = [
+  "sqlite",
+  "runtime-tokio",
+  "chrono",
+] }
 # Pinned to the same versions `opcda-bridge` (and `bhtune-backend`'s own tests) use, so the
 # `opc` subcommand's tests can stand up a mock `Bridge` gRPC service and get wire-compatible
 # generated types to test `OpcDaBackend`-backed commands end-to-end.
