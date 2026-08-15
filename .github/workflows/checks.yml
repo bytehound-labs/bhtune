@@ -45,3 +45,30 @@ jobs:
 
       - name: Build workspace
         run: cargo build --workspace
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Check npm dependency licenses
+        run: pnpm run check:licenses
+
+      - name: Regenerate OpenAPI TS types and check for drift
+        run: |
+          pnpm --filter bhtune-frontend run generate:api
+          git diff --exit-code -- frontend/src/api/schema.d.ts
+
+      - name: Check formatting
+        run: pnpm --filter bhtune-frontend run format:check
+
+      - name: Lint
+        run: pnpm --filter bhtune-frontend run lint
+
+      - name: Build (typecheck + bundle)
+        run: pnpm --filter bhtune-frontend run build

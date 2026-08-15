@@ -26,13 +26,10 @@ target
 lcov.info
 *.profraw
 
-# Node / pnpm (frontend/, once it exists — see AGENTS.md)
+# Node / pnpm (frontend/)
 node_modules/
 dist/
 .pnpm-store/
-
-# Tauri build output
-frontend/src-tauri/target/
 
 # SQLite databases used by local/manual testing (never commit real data)
 *.db

@@ -32,11 +32,23 @@ pre-commit:
       stage_fixed: true
 
     prettier-format:
-      glob: '**/*.{md,yaml,yml,json}'
+      glob: '**/*.{md,yaml,yml,json,ts,tsx,css}'
       run: |
         echo "Formatting files with prettier..."
         npx prettier --write {staged_files}
       stage_fixed: true
+
+    oxlint-frontend:
+      glob: 'frontend/src/**/*.{ts,tsx}'
+      run: |
+        echo "Linting frontend files with oxlint..."
+        pnpm --filter bhtune-frontend run lint
+
+    frontend-typecheck:
+      glob: 'frontend/**/*.{ts,tsx}'
+      run: |
+        echo "Type-checking and building the frontend..."
+        pnpm --filter bhtune-frontend run build
 
     shfmt-format:
       glob: '**/*.{sh,bash}'

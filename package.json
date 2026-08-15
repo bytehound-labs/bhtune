@@ -1,0 +1,12 @@
+{
+  "name": "bhtune",
+  "private": true,
+  "description": "BHTune workspace root — see frontend/ for the web GUI. Not published to npm.",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "check:licenses": "node scripts/check-frontend-licenses.mjs"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.6"
+  }
+}

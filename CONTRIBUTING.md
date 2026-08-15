@@ -34,15 +34,21 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 
 ## Code style
 
-- Format with `cargo fmt --all` (default rustfmt settings) before committing.
+- Format Rust with `cargo fmt --all` (default rustfmt settings) before committing.
 - Lint with `cargo clippy --workspace --all-targets --all-features -- -D warnings`; fix every
   warning or justify an explicit `#[allow(...)]` with a comment.
-- Both are enforced automatically by a [lefthook](https://github.com/evilmartians/lefthook)
-  `pre-commit` hook (`.lefthook.yml`), which also formats `Cargo.toml`/TOML with `taplo` and
-  Markdown/YAML/JSON with `prettier`. Run `lefthook install` once after cloning to enable it.
-- No proprietary or non-FOSS dependencies, ever. `cargo deny check` enforces this in CI against
-  the allow-list in `deny.toml`; if it fails on a new dependency, look for a FOSS alternative
-  rather than widening the allow-list.
+- Format frontend code (`frontend/`) with `pnpm --filter bhtune-frontend run format:check` /
+  `pnpm exec prettier --write .`, and lint it with `pnpm --filter bhtune-frontend run lint`
+  ([oxlint](https://oxc.rs/)).
+- All of the above are enforced automatically by a
+  [lefthook](https://github.com/evilmartians/lefthook) `pre-commit` hook (`.lefthook.yml`),
+  which also formats `Cargo.toml`/TOML with `taplo` and Markdown/YAML/JSON/TypeScript/CSS with
+  `prettier`. Run `lefthook install` once after cloning to enable it.
+- No proprietary or non-FOSS dependencies, ever, on either side of the stack. `cargo deny check`
+  enforces this in CI for Rust dependencies against the allow-list in `deny.toml`; `pnpm run
+  check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the equivalent allow-list for
+  npm dependencies. If either fails on a new dependency, look for a FOSS alternative rather than
+  widening the allow-list.
 
 ## Testing
 
@@ -56,8 +62,11 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 
 ## CI
 
-PRs must pass `cargo fmt --check --all`, `cargo clippy --workspace --all-targets --all-features
--- -D warnings`, `cargo test --workspace`, `cargo deny check`, and `cargo machete` before merge.
+Rust PRs must pass `cargo fmt --check --all`, `cargo clippy --workspace --all-targets
+--all-features -- -D warnings`, `cargo test --workspace`, `cargo deny check`, and
+`cargo machete` before merge. PRs touching `frontend/` must additionally pass `pnpm run
+check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
+is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`.
 
 ## Pull requests
 

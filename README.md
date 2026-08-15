@@ -51,8 +51,11 @@ A Cargo workspace of small, single-purpose crates:
 | `bhtune-cli`     | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                       |
 | `bhtune-server`  | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                            |
 
-The frontend (React + TypeScript + Vite, for `bhtune-server`) lives under `frontend/` once that
-phase begins; it does not exist yet in this early scaffold.
+The frontend (`bhtune-frontend`: React + TypeScript + Vite + Tailwind CSS, for `bhtune-server`)
+lives under `frontend/` — a pnpm workspace package, kept separate from the Cargo workspace. See
+[`frontend/README.md`](frontend/README.md) for how to run it during development. It isn't
+embedded into the `bhtune-server` binary yet (that lands with `server-embed-spa`), so building
+and running it is currently a separate step from `cargo build`.
 
 ### OPC DA bridge
 
@@ -96,8 +99,18 @@ config precedence as the CLI. The full API contract is described by an OpenAPI 3
 served as raw JSON at `GET /api/openapi.json` and as interactive documentation at `/api/docs`
 (a [Scalar](https://scalar.com/) UI — try it in a browser, or point any OpenAPI-aware tool at
 the JSON endpoint). The same document is checked in at [`openapi.json`](openapi.json) at the
-repo root for anyone who wants to read or diff it without running the server. There is no web
-UI yet; that lands with `frontend-shell` and `server-embed-spa` (see [Roadmap](#roadmap)). The
+repo root for anyone who wants to read or diff it without running the server. The server does
+not yet serve the web UI itself — that embedding lands with `server-embed-spa` (see
+[Roadmap](#roadmap)) — but the frontend exists and can be run alongside the server during
+development:
+
+```sh
+pnpm install        # from the repo root — this is a pnpm workspace
+cd frontend
+pnpm dev             # http://localhost:5173, proxies /api/* to the server above
+```
+
+See [`frontend/README.md`](frontend/README.md) for details. The
 server shuts down gracefully on Ctrl+C (and on Unix, `SIGTERM`), draining in-flight requests
 rather than dropping connections.
 
