@@ -37,13 +37,13 @@ can never merge.
 
 ## Routes
 
-| Path              | Screen                                                                    |
-| ----------------- | -------------------------------------------------------------------------- |
-| `/templates`      | Template list, with delete.                                                |
-| `/templates/new`  | Create a template (all `DcsTemplate` fields).                              |
-| `/templates/:name`| Read-only template detail.                                                 |
-| `/runs`           | Filterable, paginated tune-run history list.                                |
-| `/runs/:id`       | Run detail: configuration, initial readings, calculated results, and the write-back audit trail. |
+| Path               | Screen                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| `/templates`       | Template list, with delete.                                                                      |
+| `/templates/new`   | Create a template (all `DcsTemplate` fields).                                                    |
+| `/templates/:name` | Read-only template detail.                                                                       |
+| `/runs`            | Filterable, paginated tune-run history list.                                                     |
+| `/runs/:id`        | Run detail: configuration, initial readings, calculated results, and the write-back audit trail. |
 
 There is no template edit screen (no update endpoint yet) and no trend chart on the run
 detail screen yet (that's the `history-explorer-ui` phase). Connection, tag mapping, test
