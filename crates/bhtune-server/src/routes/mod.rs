@@ -3,4 +3,5 @@
 
 pub mod health;
 pub mod history;
+pub mod runs;
 pub mod templates;

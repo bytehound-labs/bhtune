@@ -39,7 +39,7 @@
 
 pub mod args;
 pub mod backend;
-mod cancel;
+pub mod cancel;
 pub mod commands;
 pub mod config;
 pub mod db;

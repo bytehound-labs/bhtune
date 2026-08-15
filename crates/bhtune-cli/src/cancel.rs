@@ -29,7 +29,14 @@ use tokio::sync::watch;
 /// is gone for the rest of that process, so if any unit test installed a real handler, a
 /// developer's own Ctrl+C meant to abort a hung `cargo test` run could silently disappear
 /// into an idle listener nothing is polling.
-pub(crate) struct CtrlC {
+///
+/// `pub` (rather than `pub(crate)`) so `bhtune-server` can name the type as it threads a
+/// [`CtrlC::manual`] handle through `commands::tune::drive` for an HTTP-triggered run -- see
+/// that constructor's doc comment. [`CtrlC::signalled`] itself deliberately stays
+/// `pub(crate)`: only code inside this crate (`execute`/`run_polling_loop`/`attempt_restore`)
+/// ever needs to *observe* a cancellation, an external caller only ever needs to *trigger*
+/// one, via a [`CtrlCHandle`].
+pub struct CtrlC {
     rx: watch::Receiver<u32>,
 }
 
@@ -98,6 +105,49 @@ impl CtrlC {
         let (tx, rx) = watch::channel(0u32);
         (CtrlC { rx }, tx)
     }
+
+    /// Returns a fresh `(CtrlC, CtrlCHandle)` pair for a caller with no real OS Ctrl+C
+    /// keypress to listen for at all -- `bhtune-server`'s background tune task, which needs
+    /// an HTTP request (`POST /api/runs/{id}/cancel`, or graceful shutdown) to be able to
+    /// trigger the exact same cancellation an interactive Ctrl+C would.
+    ///
+    /// Deliberately **not** `#[cfg(test)]`-gated, unlike [`CtrlC::never`]/[`CtrlC::test_pair`]
+    /// above: those exist purely so this crate's own unit tests can avoid installing a real
+    /// process-wide signal handler, but `manual()` never touches
+    /// `tokio::signal`/[`CtrlC::install`] at all, so calling it from production code any
+    /// number of times (once per in-flight run) carries none of that risk.
+    pub fn manual() -> (CtrlC, CtrlCHandle) {
+        let (tx, rx) = watch::channel(0u32);
+        (CtrlC { rx }, CtrlCHandle { tx })
+    }
+}
+
+/// A trigger for a [`CtrlC`] handle created via [`CtrlC::manual`] -- the HTTP-triggered
+/// equivalent of a real Ctrl+C keypress. Deliberately a thin wrapper around the same
+/// `watch::Sender<u32>` mechanism `#[cfg(test)]`'s `test_pair()` already uses internally,
+/// rather than a second, parallel cancellation mechanism: [`CtrlC::signalled`] can't tell the
+/// two apart, so `execute`/`run_polling_loop`/`attempt_restore` need no changes at all to
+/// support HTTP-triggered cancellation.
+///
+/// `Clone` so a caller can store one copy in a run registry (to answer a later
+/// `POST /api/runs/{id}/cancel`) while another copy is held by whatever's waiting to trigger
+/// it on graceful shutdown.
+#[derive(Clone)]
+pub struct CtrlCHandle {
+    tx: watch::Sender<u32>,
+}
+
+impl CtrlCHandle {
+    /// Requests cancellation, exactly as if Ctrl+C had been pressed. Safe to call more than
+    /// once -- a second call is exactly what lets a caller model a "second Ctrl+C" hard-exit
+    /// request arriving during an already-in-flight restore, matching `safety-cancellation`'s
+    /// interactive CLI behavior (see AGENTS.md) -- and safe to call after the paired
+    /// [`CtrlC`] has already been dropped (the run this handle was for has already ended):
+    /// [`watch::Sender::send_modify`] never fails, unlike `send`, so there is nothing to
+    /// propagate or ignore.
+    pub fn trigger(&self) {
+        self.tx.send_modify(|count| *count = count.wrapping_add(1));
+    }
 }
 
 #[cfg(test)]
@@ -153,4 +203,51 @@ mod tests {
     // there is no race-free way to know that registration has happened from outside the
     // task. `tests/ctrlc_abort.rs` already proves `install()` against a real `SIGINT` safely,
     // by sending it to a dedicated child *process* rather than this shared test binary.
+
+    #[tokio::test]
+    async fn manual_resolves_signalled_after_a_trigger() {
+        let (mut ctrl_c, handle) = CtrlC::manual();
+        handle.trigger();
+        tokio::time::timeout(Duration::from_millis(200), ctrl_c.signalled())
+            .await
+            .expect("signalled() should resolve promptly after trigger()");
+    }
+
+    #[tokio::test]
+    async fn manual_does_not_resolve_signalled_before_any_trigger() {
+        let (mut ctrl_c, _handle) = CtrlC::manual();
+        tokio::select! {
+            () = ctrl_c.signalled() => panic!("signalled() must not resolve before trigger()"),
+            () = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_handle_clone_triggers_the_same_ctrl_c() {
+        let (mut ctrl_c, handle) = CtrlC::manual();
+        let cloned = handle.clone();
+        cloned.trigger();
+        tokio::time::timeout(Duration::from_millis(200), ctrl_c.signalled())
+            .await
+            .expect("a clone's trigger() should resolve the original CtrlC's signalled()");
+    }
+
+    #[tokio::test]
+    async fn manual_handle_trigger_is_safe_to_call_after_ctrl_c_is_dropped() {
+        let (ctrl_c, handle) = CtrlC::manual();
+        drop(ctrl_c);
+        // Must not panic even though every receiver is gone.
+        handle.trigger();
+    }
+
+    #[tokio::test]
+    async fn manual_handle_second_trigger_resolves_signalled_again() {
+        let (mut ctrl_c, handle) = CtrlC::manual();
+        handle.trigger();
+        ctrl_c.signalled().await;
+        handle.trigger();
+        tokio::time::timeout(Duration::from_millis(200), ctrl_c.signalled())
+            .await
+            .expect("a second trigger() should resolve signalled() again");
+    }
 }

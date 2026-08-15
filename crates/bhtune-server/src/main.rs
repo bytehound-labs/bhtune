@@ -11,9 +11,17 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bhtune_cli::{config, db, logging};
+use bhtune_server::active_run::ActiveRun;
 use bhtune_server::{AppState, build_router};
+
+/// How long graceful shutdown waits for an in-flight tune run to actually finish cancelling
+/// (its restore attempt included) after `axum::serve` itself has finished draining
+/// in-flight HTTP connections, before giving up and exiting anyway -- see
+/// [`ActiveRun::cancel_and_wait`]'s own doc comment for what "giving up" logs.
+const SHUTDOWN_RUN_CANCEL_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -65,7 +73,15 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid bind address '{bind_addr}': {e}"))?;
 
-    let app = build_router(AppState { pool });
+    // Kept as a separate binding (not just read back out of `AppState` after `axum::serve`
+    // returns) so the graceful-shutdown call below reads clearly as "the same registry the
+    // whole app shared" rather than looking like it's reaching back into a consumed value.
+    let active_run = ActiveRun::default();
+    let app = build_router(AppState {
+        pool,
+        active_run: active_run.clone(),
+        app_config: config,
+    });
     let listener = tokio::net::TcpListener::bind(addr).await?;
     // Logs the OS-assigned address, not the requested `addr` -- identical for every real
     // deployment (a concrete port is always configured), but the two differ whenever the
@@ -78,6 +94,14 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    // Runs *after* axum has finished draining in-flight HTTP connections, not folded into
+    // `shutdown_signal` itself -- so a client mid-`GET /api/runs/:id` during shutdown still
+    // gets its response before this starts cancelling the run it might have been asking
+    // about.
+    active_run
+        .cancel_and_wait(SHUTDOWN_RUN_CANCEL_TIMEOUT)
+        .await;
 
     Ok(())
 }

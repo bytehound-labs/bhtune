@@ -6,6 +6,7 @@
 
 use chrono::Utc;
 
+use crate::active_run::ActiveRun;
 use crate::state::AppState;
 
 /// An in-memory SQLite pool, migrated and seeded with the four built-in DCS/PLC templates
@@ -20,5 +21,9 @@ pub(crate) async fn in_memory_state() -> AppState {
     bhtune_db::seed_builtin_templates(&pool, Utc::now())
         .await
         .expect("seeding the built-in templates into a fresh in-memory db should never fail");
-    AppState { pool }
+    AppState {
+        pool,
+        active_run: ActiveRun::default(),
+        app_config: bhtune_cli::config::BhtuneConfig::default(),
+    }
 }

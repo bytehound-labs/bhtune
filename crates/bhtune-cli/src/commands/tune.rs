@@ -115,10 +115,107 @@ pub async fn run(
 /// in AGENTS.md.
 pub(crate) async fn run_with_ctrl_c(
     pool: &SqlitePool,
-    mut args: TuneArgs,
+    args: TuneArgs,
     app_config: &crate::config::BhtuneConfig,
     ctrl_c: &mut CtrlC,
 ) -> anyhow::Result<TuneOutcome> {
+    let prepared = prepare(pool, args, app_config).await?;
+    let PreparedTune {
+        run_id,
+        args,
+        template,
+        tags,
+        backend,
+        config,
+        started_at,
+        write_pid,
+    } = prepared;
+
+    let outcome = execute(
+        pool,
+        run_id,
+        &args,
+        &template,
+        &tags,
+        backend.as_ref(),
+        config,
+        started_at,
+        write_pid,
+        ctrl_c,
+        &mut std::io::stdin().lock(),
+    )
+    .await;
+
+    match outcome {
+        Ok(run_outcome) => {
+            let tune_outcome = print_summary(run_id, &run_outcome, args.output);
+            let outcome_label = tune_outcome.label();
+            tracing::info!(run_id, outcome = outcome_label, "tune run finished");
+            Ok(tune_outcome)
+        }
+        Err(e) => {
+            tracing::error!(run_id, error = %e, "tune run failed");
+            TuneRunRow::fail(pool, run_id, Utc::now(), &e.to_string())
+                .await
+                .ok();
+            Err(e)
+        }
+    }
+}
+
+/// Everything [`prepare`] resolves before a tune's long-running polling phase can start:
+/// the already-validated/defaulted [`TuneArgs`], the resolved template and derived tags, a
+/// connected backend, the built [`LoopConfig`], the run's start time, and the response level
+/// (if any) to write back at the end -- plus the `tune_runs` row's assigned id.
+///
+/// Exists to split [`run_with_ctrl_c`]'s single monolithic body into a fast, synchronous-ish
+/// setup phase (this struct's construction: template lookup, tag derivation, backend
+/// connect, and the `tune_runs` insert that assigns [`PreparedTune::run_id`]) and a
+/// long-running phase ([`drive`]/[`execute`]'s actual polling loop, potentially minutes
+/// long) -- so an HTTP caller (`bhtune-server`'s `POST /api/runs`) can run the first phase
+/// inline in its request handler (fast enough to await directly, and any failure here -- bad
+/// template name, unreachable backend -- is exactly the kind of problem an HTTP client
+/// expects a synchronous error response for) and `tokio::spawn` the second, returning the
+/// assigned `run_id` immediately rather than blocking the HTTP response for the whole test.
+///
+/// Every field but `run_id` is private: a caller that isn't this module has no legitimate
+/// reason to inspect a template/tags/backend/config mid-flight, only to hand the whole
+/// prepared bundle to [`drive`] (or, internally, [`run_with_ctrl_c`]) unchanged.
+pub struct PreparedTune {
+    run_id: i64,
+    args: TuneArgs,
+    template: DcsTemplate,
+    tags: LoopTags,
+    backend: Box<dyn Backend>,
+    config: LoopConfig,
+    started_at: DateTime<Utc>,
+    write_pid: Option<ResponseLevel>,
+}
+
+impl PreparedTune {
+    /// The `tune_runs` row id assigned to this run -- returned to an HTTP caller immediately
+    /// (before the run has necessarily finished, or even started polling) so it can be used
+    /// to poll `GET /api/runs/{id}` or issue `POST /api/runs/{id}/cancel`.
+    pub fn run_id(&self) -> i64 {
+        self.run_id
+    }
+}
+
+/// The fast setup phase shared by [`run_with_ctrl_c`] (the CLI's entry point) and [`drive`]
+/// (the entry point for a caller -- `bhtune-server` -- that needs to start a run and return
+/// control to its own caller before the run finishes). See [`PreparedTune`]'s doc comment
+/// for why this split exists.
+///
+/// Identical in behavior to what `run_with_ctrl_c` did inline before this split: the
+/// `--write-pid`-without-`--yes` guard, `bridge_host`/`server` resolution, template lookup,
+/// `LoopConfig`/`LoopTags` construction, backend connection, and the `tune_runs` insert all
+/// run in exactly the same order against exactly the same inputs. Extracting this into its
+/// own function changes nothing about what runs or when -- only who else can call it.
+pub async fn prepare(
+    pool: &SqlitePool,
+    mut args: TuneArgs,
+    app_config: &crate::config::BhtuneConfig,
+) -> anyhow::Result<PreparedTune> {
     // Fails before any backend/database I/O at all: an unattended write-back must be an
     // explicit, deliberate choice, not something a stray `--write-pid` without `--yes` can
     // trigger by accident.
@@ -181,9 +278,65 @@ pub(crate) async fn run_with_ctrl_c(
 
     let write_pid: Option<ResponseLevel> = args.write_pid.map(Into::into);
 
+    Ok(PreparedTune {
+        run_id: run.id,
+        args,
+        template,
+        tags,
+        backend,
+        config,
+        started_at,
+        write_pid,
+    })
+}
+
+/// Runs an already-[`prepare`]d tune to completion -- the print-free counterpart to
+/// [`run_with_ctrl_c`], for a caller with no terminal to print a summary to and no stdin to
+/// prompt on (`bhtune-server`'s background tune task, `tokio::spawn`ed after its
+/// `POST /api/runs` handler has already returned `prepared.run_id()` to the HTTP client).
+///
+/// Calls the exact same [`execute`] this module's CLI path calls, with the exact same
+/// arguments, so the actual tuning behavior -- quality checks, restore-on-abort, write-back
+/// rollback, all of it -- is identical between the CLI and an HTTP-started run; only the
+/// reporting differs. On success, returns the same coarse [`TuneOutcome`]
+/// `run_with_ctrl_c`'s printed summary would have shown, computed via the same
+/// `tune_outcome_for_run` mapping, and logs it exactly as `run_with_ctrl_c` does. On
+/// failure, records the same `tune_runs.fail` row `run_with_ctrl_c` would have.
+///
+/// A caller that wants the same rich per-response-level detail `print_summary` shows on the
+/// CLI should instead read the run back from the database once this resolves (over HTTP,
+/// `GET /api/runs/{id}`) -- `execute`'s own DB writes (`tune_results`/`tune_writes`) are the
+/// authoritative record of everything `print_summary` would have printed, so there is
+/// nothing this function needs to hand back beyond the coarse outcome.
+///
+/// `prepared.args.output` should be [`OutputFormat::Json`] for every caller of this
+/// function, even though nothing here actually prints: [`maybe_write_back`] (called from
+/// inside [`execute`]) skips its interactive stdin prompt only when `output ==
+/// OutputFormat::Json` (see that function's doc comment) -- a caller with no stdin to read
+/// from at all must never risk hitting that prompt. Accordingly, this function passes
+/// [`execute`] a [`std::io::empty()`] reader rather than real stdin -- besides there being
+/// no human to prompt, `std::io::Empty` is `Send` (unlike a real [`std::io::StdinLock`]),
+/// which is what allows the future returned by a call to this function to be
+/// `tokio::spawn`ed at all (see `execute`'s own doc comment).
+pub async fn drive(
+    pool: &SqlitePool,
+    prepared: PreparedTune,
+    ctrl_c: &mut CtrlC,
+) -> anyhow::Result<TuneOutcome> {
+    let PreparedTune {
+        run_id,
+        args,
+        template,
+        tags,
+        backend,
+        config,
+        started_at,
+        write_pid,
+    } = prepared;
+
     let outcome = execute(
         pool,
-        run.id,
+        run_id,
         &args,
         &template,
         &tags,
@@ -192,23 +345,19 @@ pub(crate) async fn run_with_ctrl_c(
         started_at,
         write_pid,
         ctrl_c,
+        &mut std::io::empty(),
     )
     .await;
 
     match outcome {
         Ok(run_outcome) => {
-            let tune_outcome = print_summary(run.id, &run_outcome, args.output);
-            let outcome_label = tune_outcome.label();
-            tracing::info!(
-                run_id = run.id,
-                outcome = outcome_label,
-                "tune run finished"
-            );
+            let tune_outcome = tune_outcome_for_run(&run_outcome);
+            tracing::info!(run_id, outcome = tune_outcome.label(), "tune run finished");
             Ok(tune_outcome)
         }
         Err(e) => {
-            tracing::error!(run_id = run.id, error = %e, "tune run failed");
-            TuneRunRow::fail(pool, run.id, Utc::now(), &e.to_string())
+            tracing::error!(run_id, error = %e, "tune run failed");
+            TuneRunRow::fail(pool, run_id, Utc::now(), &e.to_string())
                 .await
                 .ok();
             Err(e)
@@ -610,8 +759,18 @@ async fn finish_completed_run(
     Ok(())
 }
 
+/// Generic over `reader` (rather than hardcoding `std::io::stdin().lock()` internally) so
+/// this function's generated future is monomorphized separately per call site: [`run_with_ctrl_c`]
+/// (the CLI path) instantiates it with the real, process-wide [`std::io::StdinLock`], which
+/// is `!Send` -- fine there, since that future is only ever `.await`ed directly, never
+/// `tokio::spawn`ed. [`drive`] (the HTTP path) instantiates it with [`std::io::Empty`]
+/// (`std::io::empty()`), which *is* `Send`, so `bhtune-server` can spawn the resulting
+/// future onto its background tune task. Passing a live `StdinLock` through as a plain
+/// parameter of a single non-generic `execute` would force both instantiations to share one
+/// concrete (and therefore `!Send`) future type, which is exactly the compile error this
+/// split avoids -- see `ActiveRun::start`'s `Send` bound in `bhtune-server`.
 #[allow(clippy::too_many_arguments)]
-async fn execute(
+async fn execute<R: std::io::BufRead>(
     pool: &SqlitePool,
     run_id: i64,
     args: &TuneArgs,
@@ -622,6 +781,7 @@ async fn execute(
     started_at: DateTime<Utc>,
     write_pid: Option<ResponseLevel>,
     ctrl_c: &mut CtrlC,
+    reader: &mut R,
 ) -> anyhow::Result<RunOutcome> {
     let allow_uncertain = args.allow_uncertain_quality;
     let initial = read_initial_values(backend, tags, template, allow_uncertain).await?;
@@ -755,7 +915,7 @@ async fn execute(
                         write_pid,
                         args.output,
                         allow_uncertain,
-                        &mut std::io::stdin().lock(),
+                        reader,
                     )
                     .await?;
                     Ok(RunOutcome::Completed {
@@ -3288,6 +3448,7 @@ mod tests {
             Utc::now(),
             None,
             &mut CtrlC::never(),
+            &mut std::io::empty(),
         )
         .await
         .unwrap_err();
@@ -3332,6 +3493,7 @@ mod tests {
             Utc::now(),
             None,
             &mut CtrlC::never(),
+            &mut std::io::empty(),
         )
         .await
         .unwrap_err();
@@ -3424,6 +3586,7 @@ mod tests {
             Utc::now(),
             None,
             &mut CtrlC::never(),
+            &mut std::io::empty(),
         )
         .await
         .unwrap_err();
@@ -3472,6 +3635,7 @@ mod tests {
             Utc::now(),
             None,
             &mut CtrlC::never(),
+            &mut std::io::empty(),
         )
         .await
         .unwrap_err();
@@ -3580,6 +3744,7 @@ mod tests {
             Utc::now(),
             None,
             &mut CtrlC::never(),
+            &mut std::io::empty(),
         )
         .await;
 
@@ -3645,6 +3810,7 @@ mod tests {
             Utc::now(),
             None,
             &mut CtrlC::never(),
+            &mut std::io::empty(),
         )
         .await
         .unwrap();

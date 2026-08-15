@@ -21,7 +21,7 @@ pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 /// bhtune's configuration, loaded from an optional TOML file. Every field is optional; a
 /// value missing from the file (or the file itself missing) falls back to the env var / CLI
 /// flag / built-in default resolution in the `resolve_*` functions below.
-#[derive(Debug, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct BhtuneConfig {
     /// Overrides the default SQLite database path (see [`default_db_path_from`]).
     pub db: Option<PathBuf>,

@@ -8,6 +8,7 @@
 //! [`build_router`]'s output, with no bound TCP socket needed -- the same lib/bin split
 //! `bhtune-cli` already uses for the same reason.
 
+pub mod active_run;
 pub mod error;
 pub mod openapi;
 pub mod routes;
@@ -35,6 +36,7 @@ pub fn build_router(state: AppState) -> axum::Router {
         .merge(routes::health::router())
         .merge(routes::templates::router())
         .merge(routes::history::router())
+        .merge(routes::runs::router())
         .route("/api/openapi.json", axum::routing::get(openapi_json))
         .merge(utoipa_scalar::Scalar::with_url(
             "/api/docs",
@@ -78,6 +80,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(runs.status(), StatusCode::OK);
+
+        // `history::router()` registers `GET /api/runs` and `runs::router()` registers
+        // `POST /api/runs` at that same path string -- proving axum actually merges the two
+        // method routers onto one path (rather than the second `.merge()` silently
+        // dropping/overwriting the first) is exactly the design question this route was
+        // built to resolve. A malformed body still reaches the handler and fails with `400`
+        // (validation), not `404`/`405` (routing) -- routing succeeding is all this
+        // assertion cares about.
+        let post_runs = app
+            .clone()
+            .oneshot(
+                Request::post("/api/runs")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(post_runs.status(), StatusCode::NOT_FOUND);
+        assert_ne!(post_runs.status(), StatusCode::METHOD_NOT_ALLOWED);
 
         let openapi_json = app
             .clone()

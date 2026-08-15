@@ -97,11 +97,16 @@ tables, deliberately no trend chart yet — that's `history-explorer-ui`). Still
 Connection, Tag mapping, Test parameters, the live PV/MV trend chart, Results with
 Write-PID, and Simulator screens all need a way to actually start a tune over HTTP, which
 doesn't exist yet (`bhtune-server`'s API is read-only plus template CRUD-minus-update) —
-tracked as the new `server-start-tune-api` todo. `server-embed-spa`,
-`frontend-live-stream`, and `server-windows-service` (the rest of Phase 7), `backend-replay`,
-and the replay harness are not yet — the GUI plan reversed from a Tauri desktop app to a
-browser UI served by `bhtune-server` before any Tauri code was written (see "Key
-architectural decisions"). See "Phases and todos" below for what's next.
+tracked as the new `server-start-tune-api` todo. `server-start-tune-api` is now done:
+`POST /api/runs` and `POST /api/runs/{id}/cancel` let a tune be started and cancelled over
+HTTP, reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration under the hood rather
+than duplicating it — see "`server-start-tune-api`: starting and cancelling a tune over
+HTTP" below for the full design, including the `Send`-trait fix this required in
+`bhtune-cli` itself before a tune could be spawned as a background task at all.
+`server-embed-spa`, `frontend-live-stream`, and `server-windows-service` (the rest of
+Phase 7), `backend-replay`, and the replay harness are not yet — the GUI plan reversed
+from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri code
+was written (see "Key architectural decisions"). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -1833,6 +1838,100 @@ between them, which is not deterministically constructible without fault-injecti
 this project has no other use for. `cargo llvm-cov` confirms these are the only three lines
 (across those two branches) left uncovered in the entire file.
 
+## `server-start-tune-api`: starting and cancelling a tune over HTTP
+
+`crates/bhtune-server/src/routes/runs.rs` adds `POST /api/runs` (start) and
+`POST /api/runs/{id}/cancel` (cancel), closing the gap `frontend-screens` surfaced: every
+remaining GUI screen needs a way to actually start a tune, and until now `bhtune-server`'s API
+was read-only plus template CRUD-minus-update.
+
+**Reuses `bhtune-cli`'s orchestration; does not reimplement it.** `start_run` calls
+`bhtune_cli::commands::tune::prepare()` inline (template lookup, tag derivation, a real
+backend connect attempt, the `tune_runs` insert) and, once that succeeds, `tokio::spawn`s
+`bhtune_cli::commands::tune::drive()` (the polling/tuning phase itself) as a background task
+tracked by a new `crate::active_run::ActiveRun` (an `Arc<Mutex<Option<ActiveRunEntry>>>`
+shared via `AppState`). `POST /api/runs` returns `201 Created` with the same
+`RunDetailResponse` shape `GET /api/runs/{id}` would show for this run at this instant
+(almost always still `outcome: "running"`) as soon as `prepare()` succeeds — it does not wait
+for the tune to finish. `POST /api/runs/{id}/cancel` signals the background task's `CtrlC`
+handle and awaits it reaching a terminal outcome, then returns `204 No Content`; cancelling
+an already-finished or unknown run is not an error (`204`/`404` respectively, matching the
+CLI's own idempotent-cancel precedent). v1 allows only one active run at a time, enforced by
+`ActiveRun` itself, not by any per-loop locking.
+
+**`StartRunRequest` mirrors `TuneArgs` field-for-field**, with `#[serde(default = "...")]`
+helpers reproducing the CLI's own clap defaults exactly (`sim_gain`/`sim_tau`/
+`sim_dead_time`/`poll_interval_ms`/etc.), so a client that only cares about a few fields gets
+the same behavior `bhtune tune`'s bare flags would. `into_tune_args()` is where a real,
+previously-invisible gap gets closed: every value clap's `value_parser`s would normally
+validate (finite floats, positive integers) arrives here with **no** such validation, because
+constructing a `TuneArgs` directly in Rust code bypasses clap entirely. `require_finite`/
+`require_finite_if_some`/`require_positive` close that gap explicitly, each producing a `400`
+naming the offending field. Fields already covered by `LoopConfig::validate()` inside
+`prepare()` itself (`relay_amp`, `cycles_count` after defaulting, `mrft_delay`) are
+deliberately *not* re-checked here, to avoid two divergent copies of the same rule.
+
+**Two-tier conflict detection, and why both tiers are real.** `start_run` first does an
+optimistic pre-check (`state.active_run.active_run_id().await`) purely to avoid a wasted
+`prepare()` call (a real backend connection attempt, a DB insert) in the common case where a
+run is obviously already active. This is *not* authoritative: `prepare()` awaits real
+database I/O, which is exactly the kind of gap that lets two near-simultaneous
+`POST /api/runs` requests both pass the pre-check before either reaches the actual
+`state.active_run.start(...)` call — the real, authoritative check. Losing that second,
+deeper race is handled distinctly from losing the shallow one: since `prepare()` already
+succeeded (a `tune_runs` row exists, but no backend I/O beyond the connect attempt has
+happened), the just-inserted row is explicitly marked `failed` via `TuneRunRow::fail(...)`
+rather than left forever showing `outcome: "running"` for a run that will never actually
+progress. The two rejection messages are worded differently on purpose (the shallow one says
+"cancel it first via ..."; the deep one says "no backend I/O was performed") so a caller —
+and this phase's own tests — can tell which check actually fired.
+
+**The `Send` fix in `bhtune-cli` this required.** Spawning `drive()` as a `tokio::spawn`
+background task requires its future to be `Send + 'static`. The first compile attempt failed:
+`drive()` calls `execute()`, which constructed `std::io::stdin().lock()` (a `StdinLock`,
+`!Send` because it wraps a `std::sync::MutexGuard`) inline as an argument to an internal
+`.await`ed call inside the `RestoreAttempt::Confirmed` write-back branch. Because
+`async fn` desugars to one monolithic generated future type per function, *any* `!Send` local
+live across *any* `.await` point — even in a branch never taken at runtime — makes the whole
+generated future `!Send`, and `execute()` was a single non-generic function, so its one
+compiled future type was permanently unsendable regardless of which runtime branch actually
+touched the reader. This was harmless for the CLI's own use (`run_with_ctrl_c`'s future is
+only ever `.await`ed directly inside `#[tokio::main]`, never spawned) but fatal for
+`bhtune-server`. The fix: made `execute()` **generic over the reader type**
+(`async fn execute<R: std::io::BufRead>(..., reader: &mut R)`), with **no explicit `Send`
+bound on `R`** — Rust's monomorphization then produces a *separate* concrete future type per
+instantiation, each independently checked. `run_with_ctrl_c()` instantiates it with
+`&mut std::io::stdin().lock()` (`!Send`, fine — never spawned); `drive()` instantiates it with
+`&mut std::io::empty()` (`std::io::Empty` is `Send + Sync + Clone + Copy` and behaves as
+immediate EOF, exactly the right semantic for "no human present to answer an interactive
+write-back prompt" — `maybe_write_back`'s existing EOF/blank-input-skips-write-back logic
+already handles it gracefully). A `spawn_local`/`LocalSet` architecture change was considered
+and rejected as disproportionate — it would force the entire axum server onto a
+single-threaded runtime flavor to accommodate one `!Send` value in one rarely-hit branch.
+**This is a reusable pattern, not a one-off:** any future function that is sometimes spawned
+and sometimes not, and that holds a genuinely-optional `!Send` resource only on one branch,
+should reach for "make the resource type generic" before reaching for `spawn_local`.
+
+**Test coverage, including a genuinely reliable concurrency test.**
+`cargo llvm-cov -p bhtune-server` reports 99.35%→99.59% line coverage on `routes/runs.rs`
+(97.77% region, 100% function) after 14 tests (up from the initial 10), with only two lines
+left uncovered — both defensive `panic!` message-format arguments on assertions that never
+fail in a passing suite (`wait_for_outcome`'s 10-second-timeout guard, and the race test's own
+`else` branch), matching this project's existing accepted-gap precedent
+(`core-tuning-math`/`backend-simulator`'s "passing-assert's message-format argument"). Of the
+four new tests, the most interesting is
+`a_genuine_race_between_two_starts_marks_the_losing_row_failed`: it calls the `start_run`
+handler function *directly* (bypassing the router/tower/hyper stack entirely — `State(state)`
+and `Json(request)` are plain public tuple-struct constructors, not just `FromRequest`
+extractors) and races two invocations with `tokio::join!`. This reliably lands in the deep
+"authoritative race lost" branch — verified empirically across 45+ repeated runs with zero
+failures — because `#[tokio::test]` defaults to a single-threaded runtime, where
+`tokio::join!` polls both futures on the same task and genuinely interleaves at each
+`prepare()` `.await` point (real, if in-memory, SQLite I/O), giving both requests a fair
+chance to pass the optimistic pre-check before either reaches the authoritative check. This
+is a deterministic, non-flaky test, not the "accept the gap" fallback that was the working
+assumption before it was attempted.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -1998,8 +2097,8 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above |
-| `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` done — real Axum binary (health/templates/history routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above); embedded SPA and Windows service pending |
-| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream` | `frontend-shell` done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above; `frontend-screens` in progress — routing shell, Templates (List/Detail/Create), and History (List/Detail) done; Connection/Tag-mapping/Test-parameters/Results/Simulator screens and the live trend chart blocked on `server-start-tune-api`; live SSE streaming pending |
+| `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` + `server-start-tune-api` done — real Axum binary (health/templates/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), and `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below; embedded SPA and Windows service pending |
+| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream` | `frontend-shell` done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above; `frontend-screens` in progress — routing shell, Templates (List/Detail/Create), and History (List/Detail) done; Connection/Tag-mapping/Test-parameters/Results/Simulator screens and the live trend chart now unblocked by `server-start-tune-api`, not yet built; live SSE streaming pending |
 
 ## Phases and todos (roadmap order)
 
@@ -2075,12 +2174,16 @@ that binary does something real and gains its own targeted tests.
    against a real running server; Connection, Tag mapping, Test parameters, the live PV/MV
    trend chart, Results with Write-PID, and Simulator screens are blocked on a real gap
    discovered while building this slice — there is no way to start a tune over HTTP yet,
-   tracked as the new `server-start-tune-api` todo. Remaining: `server-start-tune-api` itself;
-   embedding the built SPA into the `bhtune-server` binary (`server-embed-spa`); the rest of
-   `frontend-screens`; live per-tick streaming to the UI over SSE (`frontend-live-stream`,
-   also blocked on `server-start-tune-api`); running as a proper platform service
-   (`server-windows-service`). Replaces the earlier Tauri desktop GUI phase — see "Key
-   architectural decisions" above for the reversal.
+   tracked as the new `server-start-tune-api` todo. `server-start-tune-api` is now done:
+   `POST /api/runs`/`POST /api/runs/{id}/cancel` start and cancel a real tune over HTTP,
+   reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration rather than duplicating it —
+   see "`server-start-tune-api`: starting and cancelling a tune over HTTP" above, including
+   the `Send`-trait fix this required in `bhtune-cli` before a tune could be spawned as a
+   background task at all. Remaining: embedding the built SPA into the `bhtune-server` binary
+   (`server-embed-spa`); the rest of `frontend-screens` (now unblocked); live per-tick
+   streaming to the UI over SSE (`frontend-live-stream`, also now unblocked); running as a
+   proper platform service (`server-windows-service`). Replaces the earlier Tauri desktop GUI
+   phase — see "Key architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — fully automated E2E tune on Linux CI via CLI + simulator
    backend (no Windows, no external DCS dependency); Playwright E2E against the real web UI
    (`e2e-playwright`); golden replay suite in CI; release build matrix for Linux/macOS/Windows

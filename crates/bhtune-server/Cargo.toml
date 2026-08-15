@@ -40,8 +40,10 @@ serde_json = "1"
 axum = "0.8"
 # `rt-multi-thread`/`macros` to run as an async binary; `signal` for graceful shutdown on
 # Ctrl+C/SIGTERM, matching `bhtune-cli`'s own Ctrl+C handling story (see `cancel.rs`) rather
-# than leaving a request in flight when the process is asked to stop.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+# than leaving a request in flight when the process is asked to stop. `sync` for
+# `tokio::sync::Mutex` in `active_run.rs`, guarding the single-in-flight-run registry across
+# the `.await` points `POST /api/runs`'s handler needs while it holds the lock.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync"] }
 # `openapi-contract`: derives the OpenAPI 3.1 document (`#[derive(utoipa::OpenApi)]`,
 # `#[derive(utoipa::ToSchema)]`/`IntoParams` on local DTOs, `#[utoipa::path]` on handlers)
 # from the same route/DTO code that serves the API, so the spec cannot silently drift from

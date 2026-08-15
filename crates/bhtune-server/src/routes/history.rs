@@ -296,6 +296,42 @@ pub struct RunDetailResponse {
     pub restore_detail: Option<String>,
 }
 
+/// Builds the full `RunDetailResponse` for one run, or `Ok(None)` if no run has that id --
+/// shared by `show_run` (`GET /api/runs/{id}`, which maps `None` to a 404) and
+/// `routes::runs::start_run` (`POST /api/runs`'s `201` body is the very same detail view of
+/// the run it just created, so both routes describe a run identically rather than the HTTP
+/// API growing two different shapes for "what a run looks like").
+pub(crate) async fn build_run_detail(
+    pool: &bhtune_db::SqlitePool,
+    run_id: i64,
+) -> Result<Option<RunDetailResponse>, ApiError> {
+    let Some(run) = TuneRunRow::get(pool, run_id).await? else {
+        return Ok(None);
+    };
+    let samples = TuneSampleRow::list_for_run(pool, run_id).await?;
+    let results = TuneResultRow::list_for_run(pool, run_id).await?;
+    let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
+
+    Ok(Some(RunDetailResponse {
+        id: run.id,
+        loop_name: run.loop_name,
+        backend: run.backend,
+        outcome: run.outcome,
+        failure_reason: run.failure_reason,
+        started_at: run.started_at,
+        completed_at: run.completed_at,
+        template_name: run.template.name,
+        template_origin: run.template_origin,
+        config: run.config,
+        initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
+        samples: samples.iter().map(SampleResponse::from).collect(),
+        results: results.iter().map(ResultResponse::from).collect(),
+        writes: writes.iter().map(WriteResponse::from).collect(),
+        restore_status: run.restore_status,
+        restore_detail: run.restore_detail,
+    }))
+}
+
 /// Fetch one run's full detail.
 ///
 /// `GET /api/runs/{id}` -- 404 if no run has that id.
@@ -315,31 +351,10 @@ pub(crate) async fn show_run(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {
-    let run = TuneRunRow::get(&state.pool, run_id)
+    build_run_detail(&state.pool, run_id)
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
-    let samples = TuneSampleRow::list_for_run(&state.pool, run_id).await?;
-    let results = TuneResultRow::list_for_run(&state.pool, run_id).await?;
-    let writes = TuneWriteRow::list_for_run(&state.pool, run_id).await?;
-
-    Ok(Json(RunDetailResponse {
-        id: run.id,
-        loop_name: run.loop_name,
-        backend: run.backend,
-        outcome: run.outcome,
-        failure_reason: run.failure_reason,
-        started_at: run.started_at,
-        completed_at: run.completed_at,
-        template_name: run.template.name,
-        template_origin: run.template_origin,
-        config: run.config,
-        initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
-        samples: samples.iter().map(SampleResponse::from).collect(),
-        results: results.iter().map(ResultResponse::from).collect(),
-        writes: writes.iter().map(WriteResponse::from).collect(),
-        restore_status: run.restore_status,
-        restore_detail: run.restore_detail,
-    }))
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))
 }
 
 pub fn router() -> Router<AppState> {

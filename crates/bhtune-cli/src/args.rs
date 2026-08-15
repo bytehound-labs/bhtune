@@ -171,6 +171,26 @@ impl From<ProcessTypeArg> for bhtune_core::ProcessType {
     }
 }
 
+/// The reverse of the `impl From<ProcessTypeArg>` above -- needed by `bhtune-server`'s
+/// `POST /api/runs`, whose request body deserializes straight into `bhtune-core`'s domain
+/// enums (already `Deserialize`/`ToSchema` via existing feature-gating, and meaningful
+/// outside a CLI context) rather than these CLI-only `clap::ValueEnum` wrappers, then
+/// converts into a [`TuneArgs`] to reuse this crate's tune orchestration unchanged.
+impl From<bhtune_core::ProcessType> for ProcessTypeArg {
+    fn from(value: bhtune_core::ProcessType) -> Self {
+        match value {
+            bhtune_core::ProcessType::Flow => ProcessTypeArg::Flow,
+            bhtune_core::ProcessType::PressureLine => ProcessTypeArg::PressureLine,
+            bhtune_core::ProcessType::PressureVessel => ProcessTypeArg::PressureVessel,
+            bhtune_core::ProcessType::Level => ProcessTypeArg::Level,
+            bhtune_core::ProcessType::TemperatureMixing => ProcessTypeArg::TemperatureMixing,
+            bhtune_core::ProcessType::TemperatureHeatExchange => {
+                ProcessTypeArg::TemperatureHeatExchange
+            }
+        }
+    }
+}
+
 /// A [`bhtune_core::ControllerType`] value, as a CLI flag.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControllerTypeArg {
@@ -185,6 +205,18 @@ impl From<ControllerTypeArg> for bhtune_core::ControllerType {
             ControllerTypeArg::P => bhtune_core::ControllerType::P,
             ControllerTypeArg::Pi => bhtune_core::ControllerType::Pi,
             ControllerTypeArg::Pid => bhtune_core::ControllerType::Pid,
+        }
+    }
+}
+
+/// The reverse of the `impl From<ControllerTypeArg>` above -- see
+/// `impl From<bhtune_core::ProcessType> for ProcessTypeArg`'s doc comment for why.
+impl From<bhtune_core::ControllerType> for ControllerTypeArg {
+    fn from(value: bhtune_core::ControllerType) -> Self {
+        match value {
+            bhtune_core::ControllerType::P => ControllerTypeArg::P,
+            bhtune_core::ControllerType::Pi => ControllerTypeArg::Pi,
+            bhtune_core::ControllerType::Pid => ControllerTypeArg::Pid,
         }
     }
 }
@@ -205,6 +237,17 @@ impl From<DirectionArg> for bhtune_core::ControllerDirection {
     }
 }
 
+/// The reverse of the `impl From<DirectionArg>` above -- see
+/// `impl From<bhtune_core::ProcessType> for ProcessTypeArg`'s doc comment for why.
+impl From<bhtune_core::ControllerDirection> for DirectionArg {
+    fn from(value: bhtune_core::ControllerDirection) -> Self {
+        match value {
+            bhtune_core::ControllerDirection::Direct => DirectionArg::Direct,
+            bhtune_core::ControllerDirection::Reverse => DirectionArg::Reverse,
+        }
+    }
+}
+
 /// Which [`bhtune_backend::Backend`] implementation a `tune` run should use.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendKindArg {
@@ -213,6 +256,45 @@ pub enum BackendKindArg {
     /// The in-process FOPDT simulator — no external dependency at all.
     Simulator,
 }
+
+/// The reverse of `BackendKindArg -> TuneBackend` conversions elsewhere in this crate, for
+/// `bhtune-server`'s `POST /api/runs`, whose request body accepts
+/// [`bhtune_db::models::TuneBackend`] directly (already `Deserialize`/`ToSchema`, and the one
+/// enum every other run-history route already uses on the wire -- see `routes/history.rs` in
+/// `bhtune-server`) rather than this CLI-only wrapper.
+///
+/// `TryFrom`, not `From`: [`bhtune_db::models::TuneBackend::Replay`] has no [`BackendKindArg`]
+/// counterpart at all yet (`backend-replay` in AGENTS.md is still unimplemented, so there is
+/// no `crate::backend::build` case that could ever construct one), so a request naming it
+/// must be rejected explicitly rather than silently mapped to something else.
+impl TryFrom<bhtune_db::models::TuneBackend> for BackendKindArg {
+    type Error = ReplayBackendUnsupported;
+
+    fn try_from(value: bhtune_db::models::TuneBackend) -> Result<Self, Self::Error> {
+        match value {
+            bhtune_db::models::TuneBackend::Opcda => Ok(BackendKindArg::Opcda),
+            bhtune_db::models::TuneBackend::Simulator => Ok(BackendKindArg::Simulator),
+            bhtune_db::models::TuneBackend::Replay => Err(ReplayBackendUnsupported),
+        }
+    }
+}
+
+/// The error [`BackendKindArg::try_from`] returns for
+/// [`bhtune_db::models::TuneBackend::Replay`] -- see that impl's doc comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayBackendUnsupported;
+
+impl std::fmt::Display for ReplayBackendUnsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the replay backend cannot be used to start a new tune run (it exists only for \
+             offline golden-trace validation, not live/simulated tuning)"
+        )
+    }
+}
+
+impl std::error::Error for ReplayBackendUnsupported {}
 
 /// A [`bhtune_core::ResponseLevel`] value, as a CLI flag (`--write-pid
 /// <aggressive|moderate|sluggish>`).
@@ -229,6 +311,18 @@ impl From<ResponseLevelArg> for bhtune_core::ResponseLevel {
             ResponseLevelArg::Aggressive => bhtune_core::ResponseLevel::Aggressive,
             ResponseLevelArg::Moderate => bhtune_core::ResponseLevel::Moderate,
             ResponseLevelArg::Sluggish => bhtune_core::ResponseLevel::Sluggish,
+        }
+    }
+}
+
+/// The reverse of the `impl From<ResponseLevelArg>` above -- see
+/// `impl From<bhtune_core::ProcessType> for ProcessTypeArg`'s doc comment for why.
+impl From<bhtune_core::ResponseLevel> for ResponseLevelArg {
+    fn from(value: bhtune_core::ResponseLevel) -> Self {
+        match value {
+            bhtune_core::ResponseLevel::Aggressive => ResponseLevelArg::Aggressive,
+            bhtune_core::ResponseLevel::Moderate => ResponseLevelArg::Moderate,
+            bhtune_core::ResponseLevel::Sluggish => ResponseLevelArg::Sluggish,
         }
     }
 }
@@ -770,6 +864,81 @@ mod tests {
     }
 
     #[test]
+    fn process_type_converts_back_to_every_arg_variant() {
+        assert_eq!(
+            ProcessTypeArg::from(bhtune_core::ProcessType::Flow),
+            ProcessTypeArg::Flow
+        );
+        assert_eq!(
+            ProcessTypeArg::from(bhtune_core::ProcessType::PressureLine),
+            ProcessTypeArg::PressureLine
+        );
+        assert_eq!(
+            ProcessTypeArg::from(bhtune_core::ProcessType::PressureVessel),
+            ProcessTypeArg::PressureVessel
+        );
+        assert_eq!(
+            ProcessTypeArg::from(bhtune_core::ProcessType::Level),
+            ProcessTypeArg::Level
+        );
+        assert_eq!(
+            ProcessTypeArg::from(bhtune_core::ProcessType::TemperatureMixing),
+            ProcessTypeArg::TemperatureMixing
+        );
+        assert_eq!(
+            ProcessTypeArg::from(bhtune_core::ProcessType::TemperatureHeatExchange),
+            ProcessTypeArg::TemperatureHeatExchange
+        );
+    }
+
+    #[test]
+    fn controller_type_converts_back_to_every_arg_variant() {
+        assert_eq!(
+            ControllerTypeArg::from(bhtune_core::ControllerType::P),
+            ControllerTypeArg::P
+        );
+        assert_eq!(
+            ControllerTypeArg::from(bhtune_core::ControllerType::Pi),
+            ControllerTypeArg::Pi
+        );
+        assert_eq!(
+            ControllerTypeArg::from(bhtune_core::ControllerType::Pid),
+            ControllerTypeArg::Pid
+        );
+    }
+
+    #[test]
+    fn direction_converts_back_to_every_arg_variant() {
+        assert_eq!(
+            DirectionArg::from(bhtune_core::ControllerDirection::Direct),
+            DirectionArg::Direct
+        );
+        assert_eq!(
+            DirectionArg::from(bhtune_core::ControllerDirection::Reverse),
+            DirectionArg::Reverse
+        );
+    }
+
+    #[test]
+    fn backend_kind_arg_try_from_tune_backend_covers_the_implemented_backends() {
+        assert_eq!(
+            BackendKindArg::try_from(bhtune_db::models::TuneBackend::Opcda).unwrap(),
+            BackendKindArg::Opcda
+        );
+        assert_eq!(
+            BackendKindArg::try_from(bhtune_db::models::TuneBackend::Simulator).unwrap(),
+            BackendKindArg::Simulator
+        );
+    }
+
+    #[test]
+    fn backend_kind_arg_try_from_tune_backend_rejects_replay() {
+        let err = BackendKindArg::try_from(bhtune_db::models::TuneBackend::Replay).unwrap_err();
+        assert_eq!(err, ReplayBackendUnsupported);
+        assert!(err.to_string().contains("replay"));
+    }
+
+    #[test]
     fn outcome_arg_converts_to_every_db_variant() {
         assert_eq!(
             bhtune_db::models::TuneOutcome::from(OutcomeArg::Running),
@@ -839,6 +1008,22 @@ mod tests {
         assert_eq!(
             bhtune_core::ResponseLevel::from(ResponseLevelArg::Sluggish),
             bhtune_core::ResponseLevel::Sluggish
+        );
+    }
+
+    #[test]
+    fn response_level_converts_back_to_every_arg_variant() {
+        assert_eq!(
+            ResponseLevelArg::from(bhtune_core::ResponseLevel::Aggressive),
+            ResponseLevelArg::Aggressive
+        );
+        assert_eq!(
+            ResponseLevelArg::from(bhtune_core::ResponseLevel::Moderate),
+            ResponseLevelArg::Moderate
+        );
+        assert_eq!(
+            ResponseLevelArg::from(bhtune_core::ResponseLevel::Sluggish),
+            ResponseLevelArg::Sluggish
         );
     }
 

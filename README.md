@@ -93,8 +93,9 @@ cargo run --bin bhtune-server
 ```
 
 Binds `127.0.0.1:8787` by default (see the `bind` setting below) and exposes a JSON HTTP API —
-`GET /api/health`, `GET`/`POST /api/templates`, `GET`/`DELETE /api/templates/{name}`, and
-`GET /api/runs`/`GET /api/runs/{id}` for run history — using the same SQLite database and
+`GET /api/health`, `GET`/`POST /api/templates`, `GET`/`DELETE /api/templates/{name}`,
+`GET /api/runs`/`GET /api/runs/{id}` for run history, and `POST /api/runs`/
+`POST /api/runs/{id}/cancel` to start and cancel a tune — using the same SQLite database and
 config precedence as the CLI. The full API contract is described by an OpenAPI 3.1 document,
 served as raw JSON at `GET /api/openapi.json` and as interactive documentation at `/api/docs`
 (a [Scalar](https://scalar.com/) UI — try it in a browser, or point any OpenAPI-aware tool at

@@ -12,7 +12,7 @@
 use utoipa::OpenApi;
 
 use crate::error::ErrorBody;
-use crate::routes::{health, history, templates};
+use crate::routes::{health, history, runs, templates};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -29,6 +29,8 @@ use crate::routes::{health, history, templates};
         templates::delete_template,
         history::list_runs,
         history::show_run,
+        runs::start_run,
+        runs::cancel_run,
     ),
     components(schemas(
         health::Health,
@@ -40,12 +42,13 @@ use crate::routes::{health, history, templates};
         history::ResultResponse,
         history::WriteResponse,
         history::RunDetailResponse,
+        runs::StartRunRequest,
         ErrorBody,
     )),
     tags(
         (name = "health", description = "Liveness probe"),
         (name = "templates", description = "DCS/PLC template catalog (built-in, community-catalog, and user-created)"),
-        (name = "runs", description = "Read-only tune-run history"),
+        (name = "runs", description = "Start, cancel, and browse the history of tune runs"),
     ),
 )]
 pub struct ApiDoc;
