@@ -102,7 +102,18 @@ tracked as the new `server-start-tune-api` todo. `server-start-tune-api` is now 
 HTTP, reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration under the hood rather
 than duplicating it — see "`server-start-tune-api`: starting and cancelling a tune over
 HTTP" below for the full design, including the `Send`-trait fix this required in
-`bhtune-cli` itself before a tune could be spawned as a background task at all.
+`bhtune-cli` itself before a tune could be spawned as a background task at all. That
+unblocked `frontend-screens`'s second slice, also now done: a combined New Run screen
+(Connection, Tag mapping, Test parameters, Simulator parameters, and Write-back-on-
+completion in one form, since it all feeds one `POST /api/runs` body), run cancellation,
+and a polling-based live-progress banner on the run detail screen (the deliberate interim
+substitute for the not-yet-built SSE stream) — manually verified against a real running
+server, which caught and fixed two real bugs (a `NumberField` `step`/`min` misalignment,
+and the simulator backend actually requiring five fields instead of the one originally
+assumed) that typechecking alone would have missed. Still blocked: a Template edit screen,
+which needs a template-update HTTP endpoint that doesn't exist yet — tracked as the new
+`server-template-update-api` todo, mirroring how `server-start-tune-api` was itself spun
+out earlier in this same phase.
 `server-embed-spa`, `frontend-live-stream`, and `server-windows-service` (the rest of
 Phase 7), `backend-replay`, and the replay harness are not yet — the GUI plan reversed
 from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri code
@@ -168,7 +179,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   interprets directly), so parsing is the caller's job, not this trait's. `TagWrite` is
   `Float(f32) | Raw(String)` — bhtune only ever writes numeric process values or a raw mode
   code (reverting Auto/Manual after a test). `write` returns `Ok(WriteOutcome { success,
-  error_message })` even when the backend *rejects* the write (read-only tag, out of range) —
+error_message })` even when the backend _rejects_ the write (read-only tag, out of range) —
   that's a normal outcome of the call reaching the backend, not a `BackendError`; the shape
   matches `bhtune_db::models::TuneWriteRow`'s columns exactly so a caller can copy it straight
   into an audit row with no translation. `BackendError` splits `Connect` (nothing was
@@ -182,7 +193,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   `OpcDaBackend` (via `opcda-bridge`) is the primary/only driver for v1, now implemented (see
   `backend-opcda` below). `OpcUaBackend` and `ModbusBackend` are roadmap items that must slot in
   without touching `bhtune-core`. Connecting/constructing a specific backend is deliberately
-  *not* part of the trait — each implementation's own inherent constructor takes whatever it
+  _not_ part of the trait — each implementation's own inherent constructor takes whatever it
   individually needs (gateway host/port + OPC DA server name, a trace file path, simulator
   parameters), since one uniform `connect()` signature across such different backends would
   leak one implementation's parameters into the trait every other implementation would have to
@@ -231,7 +242,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   startup log/print line reports `TcpListener::local_addr()` (the OS-assigned address), not
   the originally-requested bind string — identical for every real deployment (a concrete port
   is always configured) but the only way a test can bind an ephemeral port (`BHTUNE_BIND=
-  127.0.0.1:0`) and still discover which port the OS actually chose from stdout, without
+127.0.0.1:0`) and still discover which port the OS actually chose from stdout, without
   hardcoding a port that might collide with something else already listening.
 - **Cargo preserves hyphens literally in `CARGO_BIN_EXE_<name>` when a `[[bin]]` name equals
   the package name and contains a hyphen.** For `bhtune-server` (package name and `[[bin]]`
@@ -241,15 +252,15 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   compile time") even in a clean build. This is easy to get wrong by analogy with
   `bhtune-cli`'s own tests, which use `CARGO_BIN_EXE_bhtune` without incident only because its
   `[[bin]]` is named `bhtune` (no hyphen) while the package is `bhtune-cli` — a different name,
-  so there's nothing to substitute. The underscored form only exists as a *proposed*, not yet
+  so there's nothing to substitute. The underscored form only exists as a _proposed_, not yet
   implemented, Cargo enhancement (upstream issue #16438); don't trust a search result that
   describes it as already shipped. Any future same-named, hyphenated `[[bin]]` in this
   workspace will hit the same thing.
 - **One API surface, described by OpenAPI, with no client-side transport abstraction.**
   `openapi-contract` is done on the Rust side: every DTO in `crates/bhtune-server/src/routes/
-  *.rs` derives `utoipa::ToSchema` (query structs derive `utoipa::IntoParams` instead), every
+*.rs` derives `utoipa::ToSchema` (query structs derive `utoipa::IntoParams` instead), every
   handler carries a `#[utoipa::path(...)]` annotation, and `crates/bhtune-server/src/
-  openapi.rs`'s `ApiDoc` (`#[derive(utoipa::OpenApi)]`) aggregates all of it into one OpenAPI
+openapi.rs`'s `ApiDoc` (`#[derive(utoipa::OpenApi)]`) aggregates all of it into one OpenAPI
   3.1 document — deliberately one explicit list of `paths(...)`/`components(schemas(...))`
   rather than a macro that scans `routes/**` for annotations automatically, so a route added
   without updating `ApiDoc` is a visible, reviewable omission rather than something that
@@ -260,7 +271,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   route already attached, so it merges straight into `build_router` with no handwritten
   handler). It is also checked in at the repo root (`openapi.json`) and regenerated-and-diffed
   in CI (`cargo run -p bhtune-server --example gen_openapi` then `git diff --exit-code
-  openapi.json`) — the first use of this pattern in the repo, and the template
+openapi.json`) — the first use of this pattern in the repo, and the template
   `docs-generated-cli` will reuse later for the CLI reference/man pages/completions. There is
   exactly one transport — `fetch` over HTTP — so no `ApiClient`-style interface with swappable
   backends is warranted; adding one would be pure ceremony with a single implementation.
@@ -275,12 +286,12 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   far. `frontend/src/api/client.ts` is the one and only HTTP transport for the whole UI: an
   `openapi-fetch` client (`createClient<paths>({ baseUrl: '' })` — empty, not `/api`, because
   the generated `paths` keys already include the `/api` prefix) typed against `frontend/src/
-  api/schema.d.ts`, generated by `openapi-typescript` from the repo-root `openapi.json` via
+api/schema.d.ts`, generated by `openapi-typescript` from the repo-root `openapi.json` via
   `pnpm run generate:api`. That script's own `prettier --write` step is load-bearing, not
   cosmetic: without it, `openapi-typescript`'s raw output wouldn't match what `prettier
-  --check` (and a human) expect of a committed file, so CI's regenerate-and-diff gate
+--check` (and a human) expect of a committed file, so CI's regenerate-and-diff gate
   (`pnpm --filter bhtune-frontend run generate:api` then `git diff --exit-code -- frontend/
-  src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would show
+src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would show
   permanent, spurious drift. TanStack Query (`@tanstack/react-query` + the Devtools) is the
   only data-fetching/caching layer in use; the original health-check-badge placeholder in
   `frontend/src/App.tsx` proved the whole pipeline works end-to-end against a real running
@@ -324,6 +335,60 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   chart, Results with Write-PID, and Simulator — all need a way to start a tune over HTTP,
   which does not exist yet; tracked as the new `server-start-tune-api` todo rather than
   guessed at here.
+- **`frontend-screens`'s second slice — the New Run screen, run cancellation, and live
+  progress polling — is done, as one combined form rather than five separate screens.**
+  `routes/runs/NewRunPage.tsx` covers Connection, Tag mapping, Test parameters, Simulator
+  parameters, and Write-back-on-completion in a single page, since all of it feeds one
+  `POST /api/runs` body anyway; the plan's own stated principle for this phase is
+  "equivalent capability plus real validation", not matching the legacy widget-for-widget
+  layout. Every default (`sim_gain`, `poll_interval_ms`, `timeout_secs`, etc.) matches
+  `StartRunRequest`'s server-side `#[serde(default = ...)]` values or `bhtune-cli`'s clap
+  defaults exactly, and `buildRequest()` mirrors the server's own `into_tune_args()`
+  pre-flight checks client-side for fast feedback (the server still re-validates
+  everything regardless). `frontend/src/api/runs.ts` gained `useStartRun`/`useCancelRun`
+  mutations; `useRun` gained `refetchInterval: 1000ms while outcome === "running"` as the
+  deliberate interim substitute for the not-yet-built SSE stream
+  (`frontend-live-stream`) — `RunDetailPage` now shows a live-progress banner (latest
+  tick/PV/MV/cycles) and a "Cancel run" button while a run is active, both explicitly
+  labeled in the UI as polling, not push, so nobody mistakes it for the eventual real-time
+  chart. `components/ui.tsx` gained a `NumberField` (mirrors `TextField` but
+  `type="number"`, `value`/`onChange` typed `number | ""` for "left blank") and extended
+  `SelectField` with `required`/`hint` props matching `TextField`'s existing pattern, so an
+  enum field can show the same red-asterisk-plus-explanation treatment a numeric field
+  already could.
+
+  **Manually verified against a real running server, not just typechecked** — the same
+  standard the first `frontend-screens` slice was held to. A scratch `bhtune-server` +
+  Vite dev server were driven through a real browser (chrome-devtools automation): filled
+  and submitted the New Run form with fast-converging simulator parameters, watched a run
+  complete with control-theory-consistent PID results across all three response levels,
+  started a second run and clicked "Cancel run" mid-flight (confirmed `outcome` flips to
+  `aborted` with `restore_status: confirmed`), and confirmed the History list reflects
+  both runs correctly — zero browser console errors, every network request 2xx.
+
+  This caught two real bugs no amount of typechecking would have, both fixed before
+  landing:
+  1. **`step`/`min` misalignment on two `NumberField`s.** `pollIntervalMs` used
+     `min={1} step={50}` and `timeoutSecs` used `min={1} step={60}`; HTML5's step
+     validation anchors at `min`, so the only valid values are `1, 51, 101, ...` and
+     `1, 61, 121, ...` respectively — silently excluding the exact defaults being
+     displayed (`800`, `3600`), which browsers flag as invalid (`:invalid`,
+     `validationMessage` non-empty) even though the values are perfectly correct. Fixed
+     by using `step={1}` for both; a numeric field's default should never itself be
+     off-step.
+  2. **The simulator backend actually requires five fields, not one.**
+     `bhtune-cli`'s `build_loop_tags` (`commands/tune.rs`) hard-requires
+     `pv_range_high`, `pv_range_low`, `mv_range_high`, `mv_range_low`, **and**
+     `direction` whenever `backend: "simulator"` — the frontend had only validated and
+     defaulted `pv_range_high`, so a first-time visitor's default simulator run 400'd
+     immediately on submit (only caught by actually clicking "Start tune" in a browser,
+     not by reading the DTO's field list). Fixed by defaulting all five to exactly
+     `bhtune simulate`'s own CLI-convenience values (`100`/`0`/`100`/`0`/`"reverse"`,
+     read from `SimulateArgs::into_tune_args` in `bhtune-cli/src/args.rs`), extending
+     `buildRequest()`'s validation to cover all five with the server's exact wording, and
+     adding a `setBackend` handler that back-fills these onto switching to the simulator
+     backend without ever overwriting a value the user already set.
+
 - **Every fallible route response is now typed with a real error schema, not
   `content?: never`.** `utoipa::path`'s `responses(...)` entries for 4xx statuses previously
   gave only a `description`, so `openapi-typescript` generated `content?: never` for them —
@@ -336,7 +401,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   convention for schemas that only ever appear nested inside another struct), and adding
   `body = ErrorBody` to every error-status entry across `routes/templates.rs` and
   `routes/history.rs`. `frontend/src/api/errors.ts`'s `apiErrorMessage(error: unknown):
-  string` is the one shared helper every hook (`templates.ts`, `runs.ts`) uses to narrow an
+string` is the one shared helper every hook (`templates.ts`, `runs.ts`) uses to narrow an
   `openapi-fetch` error down to a displayable string now that the shape is real, replacing an
   earlier ad hoc `typeof error === "string"` check.
 - **The repo root pins an explicit `.prettierrc.json`, matching Prettier's own defaults
@@ -356,7 +421,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   `gen_openapi` example with its own `git diff --exit-code` gate; utoipa's JSON serializer has
   different, equally-valid formatting conventions that Prettier would otherwise fight).
 - **`scripts/check-frontend-licenses.mjs` is the npm-side counterpart to `cargo deny
-  check`.** A dependency-free Node script that parses `pnpm licenses list --json`'s output
+check`.** A dependency-free Node script that parses `pnpm licenses list --json`'s output
   against an allow-list mirroring `deny.toml`'s Rust license allow-list (plus `Python-2.0`, a
   legitimate transitive dependency's OSI-approved PSF license), including SPDX `OR` compound
   expressions (satisfied if any single arm is on the allow-list, matching `cargo-deny`'s own
@@ -369,7 +434,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   `bhtune-server` directly (Rust's orphan rule: neither the trait nor the type would be local
   to `bhtune-server`), so instead `bhtune-core`/`bhtune-db` each gained
   `utoipa = { workspace = true, optional = true, ... }` plus `[features] utoipa =
-  ["dep:utoipa"]`, and derive `#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]`
+["dep:utoipa"]`, and derive `#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]`
   directly on every type an HTTP-facing DTO embeds (enums like `ProcessType`/
   `ControllerType`/`TemplateOrigin`, and structs like `LoopConfig`/`DcsTemplate`/`Tick`/
   `MrftState`). `bhtune-server` enables the feature (`features = ["utoipa"]`) on both path
@@ -377,7 +442,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   never even fetches `utoipa` into its dependency graph — the derive costs nothing for a
   consumer that doesn't ask for it, exactly the same shape this workspace already uses for
   optional `serde`-adjacent derives elsewhere. (Cargo's feature unification means a
-  `cargo build --workspace` *does* compile `bhtune-core`/`bhtune-db` with the feature on
+  `cargo build --workspace` _does_ compile `bhtune-core`/`bhtune-db` with the feature on
   everywhere once anything in the graph requests it — normal, well-understood Cargo behavior
   with no runtime effect, since the derive is compile-time-only and doesn't reopen
   `core-mrft`'s "no clock reads" guarantee, which is enforced by chrono's `clock` feature
@@ -400,12 +465,12 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   (not paywalled) deferred to post-v1 remote-access work (`server-remote-auth`, `server-tls`,
   `server-audit-log`, `server-oidc`) rather than blocking v1. This is a judgement call worth
   re-examining before that host is ever reachable off a trusted OT network: the precedent that
-  makes it defensible in the meantime is that `opcda-bridge-gateway` is *already* an
+  makes it defensible in the meantime is that `opcda-bridge-gateway` is _already_ an
   unauthenticated network service in this exact topology, and it is strictly more dangerous than
   an unauthenticated bhtune (it can read/write any tag, whereas bhtune only ever writes the PID
   constants of one user-selected loop).
 - **Nothing is paywalled, now or on the current roadmap.** The CLA exists solely to keep
-  relicensing *possible* in the future without taking anything from AGPL users today — it is not
+  relicensing _possible_ in the future without taking anything from AGPL users today — it is not
   evidence of a planned paid tier, and no roadmap item (including the post-v1 remote-access work
   above) is scoped as enterprise-only.
 - **Step Test is deferred**, not part of v1 (MRFT only). Step Test is an alternative, simpler
@@ -424,9 +489,9 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   rule blocks implementing the foreign `sqlx::Type` trait for a foreign enum type from
   `bhtune-db` either. `bhtune_db::convert::{enum_to_text, text_to_enum}` solves this generically,
   by round-tripping through each enum's existing, already-tested `#[serde(rename_all =
-  "snake_case")]` implementation (`serde_json::Value::String`) instead of a second, hand-written,
+"snake_case")]` implementation (`serde_json::Value::String`) instead of a second, hand-written,
   drift-prone string-mapping table per enum. Every enum-shaped column has a matching `CHECK (...
-  IN (...))` constraint using the exact same literals, so an invalid value can never be written
+IN (...))` constraint using the exact same literals, so an invalid value can never be written
   even by something other than this crate.
 - **Schema rule of thumb: flatten stable/filterable data into columns, keep nested/evolving data
   as validated JSON.** `bhtune_core::loop_config::LoopConfig` (flat, stable, and something
@@ -476,13 +541,13 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   documented as "the literal values to write" — a calculated, intended value, and it already
   supplies `TuneWriteRow`'s `response_level`. What a backend reads back is a different kind
   of fact (a raw, unlabelled observation, not a calculation) with no natural home in
-  `bhtune-core`, so both the *pre-write* readback (`TuneWriteRow.previous`) and the
-  *post-write* confirmation readbacks reuse `WriteReadback { proportional, integral,
-  derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
+  `bhtune-core`, so both the _pre-write_ readback (`TuneWriteRow.previous`) and the
+  _post-write_ confirmation readbacks reuse `WriteReadback { proportional, integral,
+derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
   independently nullable fields) because `safety-writeback-rollback`'s pre-read step is a
   hard stop — either all three pre-reads succeed before anything is written, or nothing is
   written and there is no partial "previous" to record. The three `*_written`/`*_readback`
-  columns, by contrast, *are* independently nullable, since the write-and-verify loop is
+  columns, by contrast, _are_ independently nullable, since the write-and-verify loop is
   sequential and stops at the first failure (P can succeed while I fails and D is never
   attempted). A single `NewTuneWrite` struct (all fields `pub`, built incrementally via
   `NewTuneWrite::new(response_level, written_at)` and one `TuneWriteRow::insert`) replaced an
@@ -504,7 +569,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
 - **The FOPDT process model uses an exact closed-form discretization, not a ported ODE solver.**
   For the first-order lag `tau*dy/dt = -(y-y0) + Kp*(u-u0)` driven by a zero-order-hold input over
   one tick, the update `pv_new = pv*decay + (1-decay)*(bias + gain*mv_effective)` (`decay =
-  exp(-dt/tau)`) is the exact analytical solution, not an approximation — verified by comparing
+exp(-dt/tau)`) is the exact analytical solution, not an approximation — verified by comparing
   it against the legacy Python reference's own `scipy.integrate.odeint` integration across 5
   varied gain/tau/dt combinations (agreement to ~1e-5, `odeint`'s own tolerance). This avoids
   taking on a numerical-ODE-solver dependency for a model simple enough to solve in closed form.
@@ -532,7 +597,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   equality/inequality, so a future `rand` upgrade changing `StdRng`'s internals can't break them.
 - **`OpcDaBackend` always reports `TagValue::timestamp` as `None`, never a guessed value.**
   `opc-da-client`'s documented contract (the Windows-only library the gateway wraps) reports
-  each tag's last-change time as a *local*, offset-less `"YYYY-MM-DD HH:MM:SS"` string (or
+  each tag's last-change time as a _local_, offset-less `"YYYY-MM-DD HH:MM:SS"` string (or
   `"N/A"`/`"Invalid"` for tags with none) — there is no reliable way to convert that into a
   trustworthy `DateTime<Utc>` without knowing the gateway host's timezone, which isn't part of
   the bridge protocol and can't safely be assumed to match wherever `bhtune` runs. Guessing
@@ -569,7 +634,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   schema) maps to the same `DbError::InvalidBackup`, so callers don't need to distinguish causes
   to handle "this isn't a valid backup" correctly. Per this project's own "export before
   destructive DB operations" rule, `restore_from` copies any existing live file to a
-  timestamped `<file>.pre-restore-<UTC timestamp>.bak` sibling *before* overwriting it, and
+  timestamped `<file>.pre-restore-<UTC timestamp>.bak` sibling _before_ overwriting it, and
   reports that path back via `RestoreOutcome::pre_restore_backup` (`None` only when there was no
   live file to protect, i.e. a fresh install) — via `VACUUM INTO`, not a raw `fs::copy`, and
   gated by an exclusive-access check that refuses to proceed while another connection still
@@ -579,7 +644,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   leave `db_path` half-overwritten (rename onto an existing path is atomic on the same
   filesystem). Stale `-wal`/`-shm` sidecars at the old live path are then explicitly removed —
   proven necessary by testing that a graceful `Pool::close()` on a database's last connection
-  already deletes sidecars *it* created, so the removal loop only matters for genuinely orphaned
+  already deletes sidecars _it_ created, so the removal loop only matters for genuinely orphaned
   ones with no backing connection (crash leftovers, or files copied in from elsewhere); the test
   covering this simulates exactly that case rather than the (already self-cleaning) graceful
   case. Finally, `db_path` is reopened via the ordinary `connect()`, so any migrations the
@@ -697,7 +762,7 @@ clock, which is what makes it usable for fast CI E2E runs.
   tick); reading the MV tag returns `mv()` without advancing. Writing the MV tag accepts either a
   `TagWrite::Float` or a `TagWrite::Raw` that parses as `f32`; a non-numeric raw write is a
   rejected `WriteOutcome`, not a `BackendError`. Any other tag name is `BackendError::
-  InvalidTagValue` on both read and write. `browse` is always `BackendError::Unsupported` — a
+InvalidTagValue` on both read and write. `browse` is always `BackendError::Unsupported` — a
   synthetic two-tag process has no real tag tree to browse.
 
 The FOPDT physics were ported from the legacy `Model` repo's `ProcessModelOPC.py` (the script the
@@ -738,7 +803,7 @@ discretization and its numerical cross-check against that reference.
   re-importing an updated shared catalog. `export --format json|toml` (default `json`) emits
   either one template as JSON or a PR-ready `[[template]]` TOML block. `delete <name>` removes
   a template, with a friendly error if a saved loop still references it (`DbError::
-  TemplateInUse`) and a note that a `Builtin`/`Catalog`-origin template will simply reappear on
+TemplateInUse`) and a note that a `Builtin`/`Catalog`-origin template will simply reappear on
   the next startup unless also removed from its source. See "Multi-template import, TOML
   export, and `template delete`" below for the full design.
 - **`bhtune history list|show`** — list past runs (optional `--outcome` filter, `--limit`/
@@ -788,7 +853,7 @@ downstream of it in `run`/`execute`) is covered by `tests/ctrlc_abort.rs`, a bla
 integration test that spawns the real compiled `bhtune` binary as a child OS process (via
 `Command::new(env!("CARGO_BIN_EXE_bhtune"))`, only available to `tests/*.rs` integration
 targets, not `#[cfg(test)]` unit tests) and sends it a genuine `SIGINT` mid-poll — sidestepping
-the risk of raising a real process signal *inside* `cargo test`'s own shared, multi-threaded
+the risk of raising a real process signal _inside_ `cargo test`'s own shared, multi-threaded
 test binary (where a race between signal delivery and tokio's handler registration could
 terminate the entire test process, not just one test). `cargo-llvm-cov` merges the spawned
 child's coverage data automatically (its `%p`-templated `LLVM_PROFILE_FILE` is inherited and
@@ -830,12 +895,12 @@ Auto-discovered config file location (first one found wins):
   `$HOME/.config/bhtune/bhtune.toml`.
 - Windows: `%APPDATA%\bhtune\bhtune.toml`.
 
-| Setting               | CLI flag        | Env var             | Config key    | Default                                                                                                                                    |
-| --------------------- | --------------- | -------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Database path         | `--db`          | `BHTUNE_DB`          | `db`           | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (falls back to `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db` |
-| opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host`  | `localhost:7600`                                                                                                                            |
-| Default OPC DA server | `--server`      | —                    | `server`       | none — must be set one way or another for `tune --backend opcda` and the `opc` subcommands                                                 |
-| User template catalog | `--templates`   | `BHTUNE_TEMPLATES`   | `templates`    | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (falls back to `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error at this tier only |
+| Setting               | CLI flag        | Env var              | Config key    | Default                                                                                                                                                                                             |
+| --------------------- | --------------- | -------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database path         | `--db`          | `BHTUNE_DB`          | `db`          | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (falls back to `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db`                                                         |
+| opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host` | `localhost:7600`                                                                                                                                                                                    |
+| Default OPC DA server | `--server`      | —                    | `server`      | none — must be set one way or another for `tune --backend opcda` and the `opc` subcommands                                                                                                          |
+| User template catalog | `--templates`   | `BHTUNE_TEMPLATES`   | `templates`   | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (falls back to `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error at this tier only |
 
 `resolve_db_path`/`resolve_bridge_host` fold the env var into the CLI value already (via
 clap's `env` attribute on `Cli::db`/`TuneArgs::bridge_host`/`OpcCommand`'s per-variant
@@ -896,7 +961,7 @@ machine-readable output for the same callers:
   `run()` returns as `Err`), `EXIT_ABORTED = 2` (Ctrl+C), `EXIT_WRITE_BACK_FAILED = 3`
   (the test itself completed, but the requested PID write-back failed — rejected write,
   failed confirmation readback, or the defensive missing-result case above), `EXIT_TIMED_OUT
-  = 4` (`--timeout-secs` elapsed before the test finished), `EXIT_POOR_QUALITY = 5` (a
+= 4` (`--timeout-secs` elapsed before the test finished), `EXIT_POOR_QUALITY = 5` (a
   non-`Good` OPC sample aborted the run — see the OPC-quality bullet under "Live-plant safety
   hardening" above), and `EXIT_RESTORE_INCOMPLETE = 6` (the post-run restore could not be
   confirmed within `--restore-timeout-secs`, or was cut short by a second Ctrl+C — see
@@ -908,7 +973,7 @@ machine-readable output for the same callers:
   `ExitCode`; `fail()` handles the `Err` path and always prints the error in the format
   `--output` requested before returning `EXIT_FAILURE`. **The database's own
   `tune_runs.outcome` column only ever records `Completed`/`Aborted`/`Failed`** —
-  `TuneRunRow::complete` runs *before* the optional write-back attempt, so a write-back
+  `TuneRunRow::complete` runs _before_ the optional write-back attempt, so a write-back
   failure changes the process's exit code and the printed summary but never retroactively
   rewrites an already-`Completed` run's DB outcome to look like the whole test failed.
 - **`--write-pid`/`--yes` on `bhtune simulate`** are accepted (for a uniform flag surface with
@@ -953,8 +1018,8 @@ removes that supervision while still stroking a live valve, so these are not opt
   instant timeout, preserving genuine "mandatory" semantics. Implemented in
   `run_polling_loop` as a `tokio::time::sleep` created once before the loop and raced via a
   `tokio::select!` arm alongside `interval.tick()` and a single process-wide `CtrlC` handle
-  (see `safety-cancellation` below) — but that outer race only covers the *idle* wait between
-  ticks. The timeout (and Ctrl+C) also stay effective *during* a tick — including a stalled
+  (see `safety-cancellation` below) — but that outer race only covers the _idle_ wait between
+  ticks. The timeout (and Ctrl+C) also stay effective _during_ a tick — including a stalled
   backend read or write, e.g. a wedged DCOM call or a black-holed network — because every
   backend call inside the tick body is separately raced against the same `CtrlC` handle and a
   `--op-timeout-secs` cap via `bounded_backend_call` (see `safety-cancellation` for why this
@@ -1011,7 +1076,7 @@ rationale for code that still exists (not a changelog of the review itself):
 - **No externally supplied number reaches the engine unvalidated** — done
   (`bhtune-core::range`, `LoopConfig::validate`, `bhtune-cli::args` value parsers,
   `commands::tune::validate_initial_state`). Previously `--cycles-count 0` reached
-  `tuning_math::measure_oscillation`'s internal `assert!` and panicked *after* the loop had
+  `tuning_math::measure_oscillation`'s internal `assert!` and panicked _after_ the loop had
   already been switched to manual and stroked through a full relay test, with no restore on
   the panic path; ranges read from the backend or passed as flags were never checked for
   finiteness or ordering, so a `NaN` parsed by `f32::from_str` (which silently accepts the
@@ -1031,7 +1096,7 @@ rationale for code that still exists (not a changelog of the review itself):
     functions applied to every numeric flag on `TuneArgs`/`SimulateArgs` that reaches the
     engine (relay amp, cycles count, the PV/MV range bounds, the simulator's process
     parameters, poll interval, timeout). Rejects `NaN`/infinite/zero/negative input with a
-    clear message before any I/O. Deliberately *not* applied to `mrft_delay`, `cycles_skip`,
+    clear message before any I/O. Deliberately _not_ applied to `mrft_delay`, `cycles_skip`,
     `noise_protection_secs`, or `sim_seed` — each is either bounded only at the model level
     or has no invalid range at the CLI layer (`0` is a legitimate RNG seed).
   - `commands::tune::validate_initial_state` — a new checkpoint between
@@ -1047,6 +1112,7 @@ rationale for code that still exists (not a changelog of the review itself):
   backend reporting an inverted MV range (`low >= high`) causes `execute` to fail with no
   entries at all in the backend's write log — i.e. `transition_to_manual` never runs, not
   merely "the tuning math never runs".
+
 - **Every run now snapshots the template it was configured against, not just its name** —
   done. `tune_runs` recorded no template or tag information at all, so a historical run
   could not be reinterpreted once the template catalog underneath it changed — a real
@@ -1063,7 +1129,7 @@ rationale for code that still exists (not a changelog of the review itself):
   every `f32` is finite" basis as `enum_to_text`. A new `DbError::InvalidJsonShape` variant
   covers the case where a stored blob is syntactically valid JSON (guaranteed by the schema)
   but no longer deserializes into the current `DcsTemplate`/`LoopTags` shape. `bhtune history
-  show` (not `list`, to keep the list view narrow) prints the snapshotted template name and
+show` (not `list`, to keep the list view narrow) prints the snapshotted template name and
   origin alongside the run's other identity fields, from `RunDetailJson`/the plain-text
   table.
 - **OPC quality now enforced on every tuning-critical read** — done
@@ -1079,10 +1145,10 @@ rationale for code that still exists (not a changelog of the review itself):
   - `read_initial_values`/`transition_to_manual`'s setpoint read — a poor-quality reading
     before any mutation of the loop is a hard failure (a plain `anyhow::Error`), since
     nothing has been mutated yet and there is no loop state to restore.
-  - The in-flight MRFT poll loop (`run_polling_loop`) — a poor-quality PV sample here *does*
+  - The in-flight MRFT poll loop (`run_polling_loop`) — a poor-quality PV sample here _does_
     abort the run (a new `AbortReason::PoorQuality { tag, quality }`, restored and recorded
     exactly like a Ctrl+C/timeout abort), but the triggering sample is still recorded to
-    `tune_samples` (with its real, poor quality) *before* the abort, via a new
+    `tune_samples` (with its real, poor quality) _before_ the abort, via a new
     `read_pv_sample` helper that returns quality without hard-failing on it, so the future
     history explorer can show exactly what was seen when the run gave up.
   - The PID write-back confirmation readback (`maybe_write_back`) — a poor-quality readback
@@ -1097,13 +1163,14 @@ rationale for code that still exists (not a changelog of the review itself):
   `bhtune tune --allow-uncertain-quality` is the CLI flag; a poor-quality abort exits with
   `EXIT_POOR_QUALITY` (5), distinct from a Ctrl+C/timeout abort, and `--output json` carries
   nullable `poor_quality_tag`/`poor_quality` fields alongside the existing `timeout_secs`.
+
 - **Ctrl+C and `--timeout-secs` now reach an in-flight backend call, and the restore itself
   is bounded** — done (`bhtune-cli::cancel`, `commands::tune::{bounded_backend_call,
-  attempt_restore}`). Previously the signal listener and the timeout sleep were both
+attempt_restore}`). Previously the signal listener and the timeout sleep were both
   reconstructed fresh on every polling-loop iteration, inline in a `tokio::select!` — so for
   the entire duration of a tick's body (the PV read, the relay MV write, the sample insert)
   neither existed, and a Ctrl+C delivered in that window was silently lost (tokio coalesces
-  signal delivery per kind, and a `Signal` future created *after* delivery never observes
+  signal delivery per kind, and a `Signal` future created _after_ delivery never observes
   it), with no fallback to the OS's default terminate-on-SIGINT behavior either (tokio
   replaces it process-wide the first time `ctrl_c()` is ever polled, and never reverts it). A
   hung backend read made the loop uninterruptible outright — exactly the scenario
@@ -1117,7 +1184,7 @@ rationale for code that still exists (not a changelog of the review itself):
     would add a dependency) specifically for its per-clone "have I observed this value yet"
     semantics: `CtrlC::signalled()` resolves immediately for a signal that arrived at any
     point before that call — including before the handle's first call at all — and a
-    *second* signal is a second, distinguishable resolution on the same handle, which is
+    _second_ signal is a second, distinguishable resolution on the same handle, which is
     exactly the "first Ctrl+C aborts, second forces a hard stop" distinction below needs.
     `CtrlC::never()`/`CtrlC::test_pair()` back the test-only `run`/direct-call entry points,
     so the many unit tests never install a real process-wide signal handler (which would
@@ -1128,15 +1195,15 @@ rationale for code that still exists (not a changelog of the review itself):
     `Completed(T)`/`Cancelled`/`TimedOut`; a genuine `Err` from the call itself still
     propagates via `?` rather than being folded into this enum, since a rejected write or a
     transport error is a real failure, not "gave up waiting". `run_polling_loop`'s outer
-    `tokio::select!` (covering the *idle* wait between ticks) reuses the exact same `&mut
-    CtrlC` handle passed down into the tick body's `bounded_backend_call`s, which is safe
+    `tokio::select!` (covering the _idle_ wait between ticks) reuses the exact same `&mut
+CtrlC` handle passed down into the tick body's `bounded_backend_call`s, which is safe
     specifically because a tokio `watch::Receiver`'s "seen this value" state advances the
     moment either `select!` observes it — there is no way for the outer and an inner
     `select!` to each separately consume the same signal.
   - `attempt_restore`/`RestoreAttempt` — wraps `restore()` in the same race, against a new
     `--restore-timeout-secs` (default 30s, independent of `--op-timeout-secs`/
-    `--timeout-secs`, since a restore triggered *by* a timeout would otherwise inherit an
-    already-expired budget) and `ctrl_c.signalled()` again — a *second* Ctrl+C during the
+    `--timeout-secs`, since a restore triggered _by_ a timeout would otherwise inherit an
+    already-expired budget) and `ctrl_c.signalled()` again — a _second_ Ctrl+C during the
     restore is what "forces a hard stop" means in practice, since the restore is the one
     thing that keeps running after the first signal aborts polling.
     `RestoreAttempt::Incomplete { reason }` (timeout or second-Ctrl+C, distinguished only by
@@ -1160,20 +1227,21 @@ rationale for code that still exists (not a changelog of the review itself):
   and one `run_with_ctrl_c` test exercises the real (non-test-only) entry point end-to-end
   with a simulated signal, rather than only through the `CtrlC::never()`-backed `run` every
   other test in the module uses.
+
 - **Every exit path now funnels through one best-effort, all-steps-attempted restore** — done
   (`commands::tune::{MutationGuard, RestoreReport, RestoreStepOutcome, restore, execute}`,
   `bhtune_db::models::{RestoreStatus, TuneRunRow::record_restore_status}`). Previously
   `execute()` could transition a loop to manual and then return without ever calling
   `restore()` at all — any `?` between the transition and the polling loop (the
   `record_initial_readings` DB write, engine construction), or a `persist_results`/`complete`
-  failure *after* a genuinely completed test — and `restore()` itself returned on its first
-  failure, so a single rejected MV write pre-empted even *attempting* to put the mode back.
+  failure _after_ a genuinely completed test — and `restore()` itself returned on its first
+  failure, so a single rejected MV write pre-empted even _attempting_ to put the mode back.
   Closed in three parts, matching the design's "A + C + D" decision:
   - **`MutationGuard`** (Option A) — a plain struct of four booleans
     (`mode_attribute_written`/`mode_written`/`mv_written`/tracks whether a setpoint was
     captured), armed the instant each corresponding write actually succeeds, never
     optimistically before. `execute()`'s mutating body was split into an inner function
-    returning `Result<_, (anyhow::Error, MutationGuard)>` — the guard travels *with* the
+    returning `Result<_, (anyhow::Error, MutationGuard)>` — the guard travels _with_ the
     error on every failure path — so the outer function can unconditionally consume
     whatever guard state exists (fully armed, partially armed, or the zero value from a
     failure before any write) and call `restore()` accordingly on every single exit, with no
@@ -1185,7 +1253,7 @@ rationale for code that still exists (not a changelog of the review itself):
     (`NotNeeded`/`Succeeded`/`Failed(String)`). The MV step is never gated by the guard (a
     relay-stroked MV always gets written back, since nothing else in the guard implies it
     wasn't touched); the mode/setpoint/mode-attribute steps are each gated by their own
-    guard flag *and* a value-based precondition (e.g. the mode-attribute step only fires if
+    guard flag _and_ a value-based precondition (e.g. the mode-attribute step only fires if
     the read-back program value actually differs from what's already there), so a step whose
     guard flag was never armed correctly reports `NotNeeded`, distinct from an armed-but-
     failed `Failed`. `RestoreReport::failure_summary()` names every failed step by label
@@ -1195,7 +1263,7 @@ rationale for code that still exists (not a changelog of the review itself):
   - **Durable restore intent** (Option D, partially done) — `TuneRunRow::record_initial_readings`
     now persists `mode_raw`/`mode_attribute_raw`/`setpoint_ini` (the loop's pre-mutation
     mode/mode-attribute/setpoint, mirroring the existing `pv_ini`/`mv_ini`/range columns)
-    *before* `transition_to_manual`'s first write, not after — so a process that dies
+    _before_ `transition_to_manual`'s first write, not after — so a process that dies
     outright (SIGKILL, power loss, a second Ctrl+C during an already-incomplete restore) still
     leaves a durable, reconstructable record of what needs to be put back, not just an
     in-memory `MutationGuard` that dies with the process. New `restore_status`
@@ -1222,10 +1290,11 @@ rationale for code that still exists (not a changelog of the review itself):
   `MockBackend::degrade_quality_after` test-harness extension, returning a tag's quality as
   `Good` for the first N reads and a chosen `Quality` after) still runs the restore end to
   end and records `Incomplete`.
+
 - **PID write-back now pre-reads, verifies against tolerance, and rolls back a partial
   write** — done, core rewrite (`commands::tune::{read_previous_pid_values,
-  pid_value_within_tolerance, write_and_verify_pid_value, rollback_pid_writes,
-  maybe_write_back}`, `bhtune_db::models::{NewTuneWrite, RollbackState}`). Previously the
+pid_value_within_tolerance, write_and_verify_pid_value, rollback_pid_writes,
+maybe_write_back}`, `bhtune_db::models::{NewTuneWrite, RollbackState}`). Previously the
   three constants were written in sequence with no pre-read at all: if P succeeded and I was
   rejected, the loop was left with a mismatched, half-updated set and no way to know what P
   used to be. A transport error during the confirmation readback propagated via `?` and
@@ -1247,7 +1316,7 @@ rationale for code that still exists (not a changelog of the review itself):
     down for a requested value at or near zero (e.g. `D = 0` on a PI controller).
     `maybe_write_back` calls this once per constant, in P/I/D order, stopping at the first
     failure — implemented as a loop over a fixed 3-element array of `(label, tag, requested,
-    previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the written/readback
+previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the written/readback
     values, rather than string-matching on `label`, then unpacked into `NewTuneWrite`'s named
     fields once the loop ends.
   - **Roll back only what was actually confirmed.** A constant is only added to
@@ -1260,7 +1329,7 @@ rationale for code that still exists (not a changelog of the review itself):
   - **Four distinguishable outcomes**, not just success/failure: wrote nothing (pre-read
     failed, `previous = None`, `rollback_state = None`); wrote and confirmed everything
     (`success = true`); wrote some, failed, rolled back successfully
-    (`rollback_state = Succeeded`); and wrote some, failed, and the rollback *itself* failed
+    (`rollback_state = Succeeded`); and wrote some, failed, and the rollback _itself_ failed
     (`rollback_state = Failed`, `rollback_error` set) — printing a message pointing the
     operator at `bhtune history revert <run-id>` for the last case, since the loop may now
     hold a mismatched set of constants with no automated way left to fix it.
@@ -1276,8 +1345,8 @@ rationale for code that still exists (not a changelog of the review itself):
   **Testing approach.** `MockBackend` gained three more builders alongside the existing
   `degrade_quality_after`: `erroring_read_after`/`rejecting_write_after` (a tag's first N
   reads/writes succeed normally, then every one after that fails — letting a test put a
-  tag's *pre-read* in good standing while still forcing its *post-write* readback or a later
-  *rollback* write to fail deterministically) and `distorting_write` (silently perturbs a
+  tag's _pre-read_ in good standing while still forcing its _post-write_ readback or a later
+  _rollback_ write to fail deterministically) and `distorting_write` (silently perturbs a
   written float by a fixed offset before storing it, so a readback that parses fine and
   reports `Good` quality can still be exercised as an out-of-tolerance rejection — a failure
   mode distinct from an erroring or poor-quality readback that no prior mock capability could
@@ -1324,7 +1393,7 @@ rationale for code that still exists (not a changelog of the review itself):
     `pub(crate)` for this purpose) rather than re-implementing them, so a revert's pre-read,
     tolerance check, and per-constant failure semantics are identical to the original
     write-back's by construction, not by parallel maintenance. Like the original write-back,
-    a revert pre-reads the loop's *current* live values first and records them as its own
+    a revert pre-reads the loop's _current_ live values first and records them as its own
     `previous` — so a revert that turns out to be wrong can itself be undone by reverting
     again — then writes and verifies Proportional, Integral, and Derivative in order,
     stopping at the first failure. A revert never chains a nested rollback of itself
@@ -1352,6 +1421,7 @@ rationale for code that still exists (not a changelog of the review itself):
   final test exercises the `--output json` success path directly (`bhtune-cli`'s own
   subprocess-level "stdout is exactly one JSON object" contract remains
   `safety-json-contract`'s responsibility, not re-proven per command here).
+
 - **`bhtune-db`'s `restore_from` is now safe under an active WAL and requires exclusive
   access before restoring** — done (`bhtune_db::backup::exclusive_pre_restore_snapshot`,
   `EXCLUSIVITY_PROBE_TIMEOUT`, `DbError::DatabaseInUse`). This finding predates any CLI
@@ -1360,13 +1430,13 @@ rationale for code that still exists (not a changelog of the review itself):
   path, but sequenced here rather than deferred since Phase 6.6's template catalog work
   edits the same pre-release migration findings 6 and 9 already touch. Previously the
   pre-restore safety copy used a raw `std::fs::copy`, and SQLite only auto-checkpoints a
-  WAL when the *actual last connection to the file across the whole system* closes — not
+  WAL when the _actual last connection to the file across the whole system_ closes — not
   merely the last connection in the caller's own pool — so a copy taken while a second
   process (`bhtune-server` running alongside the CLI, the exact topology this project's own
   architecture anticipates) still held the database open could silently miss committed data
   sitting only in the WAL. Separately investigated and found to be a non-issue:
   `restore_from`'s existing copy-to-temp-then-`rename` file replacement was already correct
-  on Windows — `std::fs::rename` overwriting an existing destination *file* (as opposed to a
+  on Windows — `std::fs::rename` overwriting an existing destination _file_ (as opposed to a
   directory) has always worked there via `MOVEFILE_REPLACE_EXISTING`, so no
   Windows-specific fallback was needed for that part of the original finding. Closed as the
   design's "A + C":
@@ -1403,20 +1473,21 @@ rationale for code that still exists (not a changelog of the review itself):
   blocking connection is dropped and closed. A third test targets the one line the new
   exclusivity step's own side effect made harder to reach: because
   `exclusive_pre_restore_snapshot`'s own open-checkpoint-close sequence against an
-  *existing* `db_path` already tidies up any stale `-wal`/`-shm` sidecars itself, the
+  _existing_ `db_path` already tidies up any stale `-wal`/`-shm` sidecars itself, the
   pre-existing orphaned-sidecar test no longer exercises the later post-rename cleanup
   loop's own `remove_file` call (caught by `cargo llvm-cov`'s line-level report, not by a
   failing test — its own assertions, checking only final restored data, still passed). The
-  new test constructs the one scenario that *can* only be cleaned up by that loop: `db_path`
+  new test constructs the one scenario that _can_ only be cleaned up by that loop: `db_path`
   itself never existing (so the exclusivity/snapshot step is skipped entirely, per its own
   existence gate) while stale sidecar files exist anyway at the paths it would use.
+
 - **`--output json` now emits exactly one parseable JSON value on stdout on every `tune`
   path** — done (`commands::tune::maybe_write_back`, `RunOutcome::Completed`'s new
   `write_back_detail` field). Previously `maybe_write_back` `println!`ed its interactive
   listing/prompt and every status/result line unconditionally, regardless of `--output` —
   confirmed by hand: a completed simulator run (which never has PID constant tags
   configured, see `build_tags`'s `BackendKindArg::Simulator` arm) printed "No PID constant
-  tags configured for this run's backend/template; skipping write-back." on stdout *before*
+  tags configured for this run's backend/template; skipping write-back." on stdout _before_
   the run's final JSON object, so `serde_json::from_str`/`json.loads` on stdout failed for
   every scripted/scheduled caller using `--output json` — the exact audience that flag
   exists to serve. Closed as the design's Option B ("format-aware reporting"), chosen over
@@ -1428,7 +1499,7 @@ rationale for code that still exists (not a changelog of the review itself):
   reading stdin regardless.
   - **`maybe_write_back` gained an `output: OutputFormat` parameter and now returns
     `(WriteBackOutcome, Option<String>)`** instead of bare `WriteBackOutcome` — the second
-    element is a human-readable detail string explaining *why* the outcome is what it is,
+    element is a human-readable detail string explaining _why_ the outcome is what it is,
     populated on every `Skipped`/`Failed` return path (no PID constant tags configured; no
     calculated results recorded; the named `--write-pid` response level has no result;
     pre-read failure; a rejected write, with or without a successful/failed rollback) and
@@ -1439,16 +1510,16 @@ rationale for code that still exists (not a changelog of the review itself):
     trailing `..` to accommodate the new field without caring about its value), since the
     equivalent information is already in the `println!`ed prose there.
   - **Every remaining `println!` in `maybe_write_back` is now gated on `output ==
-    OutputFormat::Table`**, so `Json` mode prints nothing at all from this function — the
+OutputFormat::Table`**, so `Json` mode prints nothing at all from this function — the
     caller's single final JSON object is the only thing that reaches stdout.
   - **The interactive listing/menu/prompt moved to `eprintln!` unconditionally**, in both
-    output formats. A prompt has no business on stdout in *any* format: a caller piping
+    output formats. A prompt has no business on stdout in _any_ format: a caller piping
     stdout elsewhere (exactly the scripted use `--output json` exists for, but just as true
     of `--output table | tee run.log`) should never see "Write which response level..."
     interleaved with the actual result.
   - **`--output json` without `--write-pid` now skips the interactive prompt outright**
     rather than attempting to read a response level from stdin — added as a new early-return
-    arm (`None if output == OutputFormat::Json`) checked *before* `reader` is touched at all,
+    arm (`None if output == OutputFormat::Json`) checked _before_ `reader` is touched at all,
     returning `WriteBackOutcome::Skipped` with a detail string naming the reason. There is no
     human present to answer an interactive prompt in a scripted/scheduled JSON run, and the
     prior behavior (read a line from real `stdin`, block indefinitely if none arrives) is
@@ -1465,29 +1536,29 @@ rationale for code that still exists (not a changelog of the review itself):
   **Testing approach.** Six of the thirteen existing `maybe_write_back` unit tests were
   extended (rather than duplicated) with an assertion on the returned detail string, proving
   the plumbing end-to-end for each distinct skip/failure shape: no PID constant tags
-  configured, no results recorded, the pre-read-failure case (asserts the detail *starts
-  with* `"pre-read failed:"`, since the underlying transport error's own message is
-  interpolated), a rolled-back failure (asserts the detail *ends with* `"(rolled back)"`), a
+  configured, no results recorded, the pre-read-failure case (asserts the detail _starts
+  with_ `"pre-read failed:"`, since the underlying transport error's own message is
+  interpolated), a rolled-back failure (asserts the detail _ends with_ `"(rolled back)"`), a
   failed rollback (asserts it mentions both `"rollback also failed"` and `"history
-  revert"`), and a named `--write-pid` level with no recorded result. One new unit test
+revert"`), and a named `--write-pid` level with no recorded result. One new unit test
   (`maybe_write_back_skips_the_interactive_prompt_without_touching_stdin_when_json_output_is_set_without_write_pid`)
   uses a named `Cursor` (rather than an inline temporary) specifically so `reader.position()`
-  can be asserted as `0` *after* the call — direct proof that the JSON-mode early-exit never
+  can be asserted as `0` _after_ the call — direct proof that the JSON-mode early-exit never
   reads a single byte from stdin, not just that it returns the right value. None of this,
-  however, can prove the actual stdout *contract* — `print_summary` calls `println!` directly
+  however, can prove the actual stdout _contract_ — `print_summary` calls `println!` directly
   and returns only a label enum, so a unit test has no way to observe the rendered JSON
   string. That gap is closed by a new subprocess-level integration test,
   `crates/bhtune-cli/tests/json_output_contract.rs`, modeled on `ctrlc_abort.rs`'s pattern of
   spawning the real compiled `bhtune` binary (`env!("CARGO_BIN_EXE_bhtune")`) rather than
   calling anything in-process: `tune_output_json_emits_exactly_one_parseable_json_value_on_stdout`
   runs a fast-completing simulator tune with `--output json`, asserts a clean exit code, and
-  — the load-bearing assertion — runs `serde_json::from_str` on the *entire, trimmed* stdout
+  — the load-bearing assertion — runs `serde_json::from_str` on the _entire, trimmed_ stdout
   and asserts it succeeds, catching both "prose printed before the object" (this finding's
   original bug) and "prose printed after it"; it further asserts `write_back_detail` is a
   string containing "no PID constant tags configured" and that the old suppressed prose
   string never appears anywhere in stdout. A second test,
   `tune_output_table_is_plain_text_not_json`, is a sanity check that the default `Table`
-  format for the identical run is *not* parseable as JSON, proving the format flag actually
+  format for the identical run is _not_ parseable as JSON, proving the format flag actually
   branches rather than the two tests coincidentally passing the same way.
 
 ## Logging (`cli-logging`)
@@ -1511,7 +1582,7 @@ corrupt `--output json`'s single-object stdout contract (see "Automation" above)
   precedence, mirrored 1:1 with the flags above via `LogConfig` in `config.rs`.
 
 **Deliberately never writes to stdout — the single load-bearing design decision.** Log lines
-always go to the rotating file (`tracing_appender::rolling`, non-blocking); they *also*
+always go to the rotating file (`tracing_appender::rolling`, non-blocking); they _also_
 mirror to **stderr**, and only when a console is actually attached (`std::io::stderr().
 is_terminal()` — false for a `cron`/Task-Scheduler invocation), never to stdout.
 `opcda-bridge-gateway`'s equivalent mirrors to stdout safely, because it owns stdout outright;
@@ -1565,11 +1636,11 @@ DCS/PLC systems, which doesn't scale if every contributor has to learn the works
 and get a Rust PR reviewed.
 
 - **Format: TOML, not JSON or YAML.** The legacy app's `SettingsTemplates.json` had the right
-  *content* but the wrong *shape* for a community catalog. JSON has no comments, and a shared
+  _content_ but the wrong _shape_ for a community catalog. JSON has no comments, and a shared
   catalog needs inline provenance (which manual a suffix came from, why a field is blank) —
   that alone rules it out as an authoring format. YAML's implicit typing is an active footgun
   here: `mode_manual_value`/`mode_auto_value`/`controller_action_direct_value` are, for some
-  templates, literally the *strings* `"true"`/`"false"`/`"0"` — YAML would silently coerce
+  templates, literally the _strings_ `"true"`/`"false"`/`"0"` — YAML would silently coerce
   unquoted forms of these to bool/int on exactly the fields that decide whether a loop gets
   put into Manual. `toml` was already a dependency (`bhtune-cli`'s single-template import/
   export); the mainstream YAML crates are unusable under this project's `cargo deny` gate
@@ -1584,12 +1655,12 @@ and get a Rust PR reviewed.
   than shipping.
 - **`parse_catalog(&str) -> Result<Vec<DcsTemplate>, TemplateError>`** is the pure parsing
   entry point — deserializes a private `Catalog { #[serde(rename = "template")] templates:
-  Vec<DcsTemplate> }` wrapper (TOML's array-of-tables idiom, one `[[template]]` block per
+Vec<DcsTemplate> }` wrapper (TOML's array-of-tables idiom, one `[[template]]` block per
   entry) and then calls `.validate()` on every template, so a syntactically valid but
   semantically incomplete contribution (e.g. a mode suffix with no manual/auto value) is
   rejected at parse time, not mid-tune. Parsing a `&'static str` embedded at compile time is
   not I/O, so `bhtune-core`'s "no I/O, no clock, no async" purity rule is preserved — all
-  *file* reading stays in `bhtune-cli`, which reuses this exact function to load a user
+  _file_ reading stays in `bhtune-cli`, which reuses this exact function to load a user
   catalog from disk (`template-user-catalog`, done — see below).
 - **`DcsTemplate::validate()`** mirrors the `LoopConfig::validate` precedent from
   `cli-safety`: non-empty `name` (trimmed); non-empty `process_variable_suffix`; non-empty
@@ -1604,8 +1675,8 @@ and get a Rust PR reviewed.
   fail much later, mid-tune.
 - **`TemplateError`** is a hand-rolled `Display`/`std::error::Error` enum (no `thiserror`,
   matching `bhtune-core`'s existing `RangeError`/`LoopConfigError` convention): `Toml(toml::
-  de::Error)` (`source()` delegates to the wrapped error), `EmptyName`, `EmptyField { name,
-  field }`, `MissingModeValue { name, field }`, `MissingModeAttributeProgramValue { name }`.
+de::Error)` (`source()` delegates to the wrapped error), `EmptyName`, `EmptyField { name,
+field }`, `MissingModeValue { name, field }`, `MissingModeAttributeProgramValue { name }`.
   `toml::de::Error` (the resolved `toml 1.1.4+spec-1.1.0`) already derives `Clone`/`PartialEq`
   and implements `Display`/`Error`, so it's stored directly rather than flattened into a
   `String` — no information is lost converting a parse error into this crate's own error type.
@@ -1628,9 +1699,9 @@ and get a Rust PR reviewed.
   `versions` reflect when each mapping was actually authored (~2015–2016), not an exhaustive
   tested matrix — recorded with a "current as of authoring" comment in `builtin.toml` so a
   later reader doesn't over-read the list as a coverage guarantee: Yokogawa CentumVP `["R5",
-  "R6"]` (field-confirmed), Honeywell Experion `["R400", "R410", "R430"]`, Schneider Modicon
+"R6"]` (field-confirmed), Honeywell Experion `["R400", "R410", "R430"]`, Schneider Modicon
   `["Unity Pro V8.0", "Unity Pro V8.1", "Unity Pro V11.0"]`, Allen-Bradley PlantPAx `["3.0",
-  "3.5", "4.0"]`.
+"3.5", "4.0"]`.
 - **`toml` promoted to `[workspace.dependencies]`** now that both `bhtune-cli` (single-
   template JSON/TOML import/export) and `bhtune-core` (the embedded catalog) consume it, per
   the root `Cargo.toml`'s own documented convention of promoting on a second consumer.
@@ -1663,7 +1734,7 @@ Done now, pre-release, specifically to avoid a later `ALTER TABLE` migration onc
 installs exist.
 
 - **`origin TEXT CHECK (origin IN ('builtin', 'catalog', 'user'))`** replaces `is_builtin
-  INTEGER`. `bhtune_db::models::TemplateOrigin` (`Builtin`/`Catalog`/`User`) — previously
+INTEGER`. `bhtune_db::models::TemplateOrigin` (`Builtin`/`Catalog`/`User`) — previously
   defined only for `tune_runs.template_origin` (`safety-run-snapshot`, with a temporary
   `from_is_builtin` bridge method) — moved to be `dcs_templates`' own type, since that's now
   its primary use; `tune_runs.template_origin` reuses the same enum for its run-start
@@ -1678,7 +1749,7 @@ installs exist.
   was broadened to mention it).
 - **`seed_builtin_templates` generalized into `seed_templates(pool, templates, origin, now)`**,
   with `seed_builtin_templates` kept as a thin wrapper (`seed_templates(pool,
-  built_in_templates(), TemplateOrigin::Builtin, now)`) rather than renamed, since `bhtune-cli`
+built_in_templates(), TemplateOrigin::Builtin, now)`) rather than renamed, since `bhtune-cli`
   already has established callers of the original name. `template-user-catalog` (see below)
   is the first real caller of `seed_templates` directly, with `TemplateOrigin::Catalog`. The
   `SkippedUserOwned` outcome generalizes the same way the boolean did: a row exists but its
@@ -1692,7 +1763,7 @@ installs exist.
   through `DcsTemplateRow::get`, and that `row_to_dcs_template`'s `versions_json` decode-error
   path actually fires for JSON that is syntactically valid (satisfying the `CHECK`) but the
   wrong shape (`"123"`, a bare JSON number, isn't a `Vec<String>`) — the `CHECK` constraint
-  alone only proves bad *syntax* is rejected at the SQL layer, not that the Rust-level shape
+  alone only proves bad _syntax_ is rejected at the SQL layer, not that the Rust-level shape
   mismatch is handled once past it.
 
 ### Auto-loading a user template catalog (`template-user-catalog`)
@@ -1705,22 +1776,22 @@ than inventing a new pattern.
 
 - **Resolution order: `--templates` > `BHTUNE_TEMPLATES` > `templates` config key > platform
   default.** `config::load_user_templates(cli_templates, config, xdg_config_home, home,
-  appdata, is_windows)` in `crates/bhtune-cli/src/config.rs` mirrors `load_config`'s own
-  split between an *explicit* path (CLI flag, already folded in by clap's `env =
-  "BHTUNE_TEMPLATES"`, or the config-file key) and the *auto-discovered default* path — but
+appdata, is_windows)` in `crates/bhtune-cli/src/config.rs` mirrors `load_config`'s own
+  split between an _explicit_ path (CLI flag, already folded in by clap's `env =
+"BHTUNE_TEMPLATES"`, or the config-file key) and the _auto-discovered default_ path — but
   it is a 4-tier chain, one tier deeper than `load_config`'s own 2-tier bootstrapping case,
   because `bhtune.toml`'s own path obviously can't be configured from inside itself, whereas
-  the templates path *can* have a config-file-key tier since `bhtune.toml` is already loaded
+  the templates path _can_ have a config-file-key tier since `bhtune.toml` is already loaded
   by the time templates are resolved.
 - **`templates_path_from(...)` mirrors `config_path_from` (the config directory), not
   `default_db_path_from`/`default_log_dir_from` (the data directory).** `templates.toml`
   lives in the same directory as `bhtune.toml` — `$XDG_CONFIG_HOME/bhtune/templates.toml` on
   Linux/macOS (falling back to `$HOME/.config/bhtune/` if unset), `%APPDATA%\bhtune\
-  templates.toml` on Windows — since both are per-user hand-edited settings files, not
+templates.toml` on Windows — since both are per-user hand-edited settings files, not
   persistent application data.
 - **Missing-file semantics depend on how the path was resolved, matching `bhtune.toml`'s own
   rule.** An auto-discovered default path that doesn't exist is `Ok(None)` — not an error, and
-  the common case, since most installs never create `templates.toml` at all. An *explicit*
+  the common case, since most installs never create `templates.toml` at all. An _explicit_
   path — from `--templates`/`BHTUNE_TEMPLATES` or the config file's `templates` key — that
   doesn't exist is a hard error naming the path, exactly like an explicit `--config` path that
   doesn't exist. A file that exists but fails to parse (malformed TOML) or fails
@@ -1728,7 +1799,7 @@ than inventing a new pattern.
   error regardless of how the path was resolved, naming the file and the problem.
 - **Reuses `bhtune_core::template::parse_catalog` directly** — the same function
   `template-catalog` built for the embedded built-in catalog already parses the `[[template]]`
-  TOML shape *and* calls `.validate()` on every template, so a single call handles both
+  TOML shape _and_ calls `.validate()` on every template, so a single call handles both
   "shape" and "content" validation with no new parsing code in `bhtune-cli` at all.
 - **`db::open`'s signature grew a `user_templates: Option<Vec<DcsTemplate>>` parameter.** It
   seeds the built-ins first (as before), then — only if `Some` — seeds the user catalog via
@@ -1786,7 +1857,7 @@ gaps in `crates/bhtune-cli/src/commands/template.rs`.
 - **`template export --format <json|toml>`** (new `TemplateFileFormat` `ValueEnum` in
   `args.rs`, default `json`, so the existing default behavior is unchanged for anyone not
   passing the flag). The TOML path is `bhtune_core::template::to_catalog_toml(vec![row.
-  template])` — a single-template file is just a one-entry catalog, so it round-trips
+template])` — a single-template file is just a one-entry catalog, so it round-trips
   through the exact same `parse_catalog` used everywhere else, and the output is a
   `[[template]]` block ready to paste into a contribution PR (the export → annotate → PR
   loop `template-catalog`'s design section had planned for since before this todo existed).
@@ -1869,12 +1940,12 @@ constructing a `TuneArgs` directly in Rust code bypasses clap entirely. `require
 `require_finite_if_some`/`require_positive` close that gap explicitly, each producing a `400`
 naming the offending field. Fields already covered by `LoopConfig::validate()` inside
 `prepare()` itself (`relay_amp`, `cycles_count` after defaulting, `mrft_delay`) are
-deliberately *not* re-checked here, to avoid two divergent copies of the same rule.
+deliberately _not_ re-checked here, to avoid two divergent copies of the same rule.
 
 **Two-tier conflict detection, and why both tiers are real.** `start_run` first does an
 optimistic pre-check (`state.active_run.active_run_id().await`) purely to avoid a wasted
 `prepare()` call (a real backend connection attempt, a DB insert) in the common case where a
-run is obviously already active. This is *not* authoritative: `prepare()` awaits real
+run is obviously already active. This is _not_ authoritative: `prepare()` awaits real
 database I/O, which is exactly the kind of gap that lets two near-simultaneous
 `POST /api/runs` requests both pass the pre-check before either reaches the actual
 `state.active_run.start(...)` call — the real, authoritative check. Losing that second,
@@ -1891,15 +1962,15 @@ background task requires its future to be `Send + 'static`. The first compile at
 `drive()` calls `execute()`, which constructed `std::io::stdin().lock()` (a `StdinLock`,
 `!Send` because it wraps a `std::sync::MutexGuard`) inline as an argument to an internal
 `.await`ed call inside the `RestoreAttempt::Confirmed` write-back branch. Because
-`async fn` desugars to one monolithic generated future type per function, *any* `!Send` local
-live across *any* `.await` point — even in a branch never taken at runtime — makes the whole
+`async fn` desugars to one monolithic generated future type per function, _any_ `!Send` local
+live across _any_ `.await` point — even in a branch never taken at runtime — makes the whole
 generated future `!Send`, and `execute()` was a single non-generic function, so its one
 compiled future type was permanently unsendable regardless of which runtime branch actually
 touched the reader. This was harmless for the CLI's own use (`run_with_ctrl_c`'s future is
 only ever `.await`ed directly inside `#[tokio::main]`, never spawned) but fatal for
 `bhtune-server`. The fix: made `execute()` **generic over the reader type**
 (`async fn execute<R: std::io::BufRead>(..., reader: &mut R)`), with **no explicit `Send`
-bound on `R`** — Rust's monomorphization then produces a *separate* concrete future type per
+bound on `R`** — Rust's monomorphization then produces a _separate_ concrete future type per
 instantiation, each independently checked. `run_with_ctrl_c()` instantiates it with
 `&mut std::io::stdin().lock()` (`!Send`, fine — never spawned); `drive()` instantiates it with
 `&mut std::io::empty()` (`std::io::Empty` is `Send + Sync + Clone + Copy` and behaves as
@@ -1921,7 +1992,7 @@ fail in a passing suite (`wait_for_outcome`'s 10-second-timeout guard, and the r
 (`core-tuning-math`/`backend-simulator`'s "passing-assert's message-format argument"). Of the
 four new tests, the most interesting is
 `a_genuine_race_between_two_starts_marks_the_losing_row_failed`: it calls the `start_run`
-handler function *directly* (bypassing the router/tower/hyper stack entirely — `State(state)`
+handler function _directly_ (bypassing the router/tower/hyper stack entirely — `State(state)`
 and `Json(request)` are plain public tuple-struct constructors, not just `FromRequest`
 extractors) and races two invocations with `tokio::join!`. This reliably lands in the deep
 "authoritative race lost" branch — verified empirically across 45+ repeated runs with zero
@@ -2091,14 +2162,14 @@ that binary does something real and gains its own targeted tests.
 
 ## Crate map and phase status
 
-| Crate            | Phase                                                                   | Status                                                                       |
-| ---------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness` | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending |
-| `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
-| `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above |
-| `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` + `server-start-tune-api` done — real Axum binary (health/templates/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), and `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below; embedded SPA and Windows service pending |
-| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream` | `frontend-shell` done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above; `frontend-screens` in progress — routing shell, Templates (List/Detail/Create), and History (List/Detail) done; Connection/Tag-mapping/Test-parameters/Results/Simulator screens and the live trend chart now unblocked by `server-start-tune-api`, not yet built; live SSE streaming pending |
+| Crate              | Phase                                                                                                          | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`      | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness`                           | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `bhtune-backend`   | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`                                           | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `bhtune-db`        | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance`                  | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above |
+| `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-embed-spa`/`server-windows-service`       | `server-http-api` + `openapi-contract` + `server-start-tune-api` done — real Axum binary (health/templates/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), and `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below; embedded SPA and Windows service pending                                                                                                                                                                                                                              |
+| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`                                                     | `frontend-shell` done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above; `frontend-screens` in progress — routing shell, Templates (List/Detail/Create), History (List/Detail), and a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation and a polling-based live-progress banner) all done and manually verified against a real running server; remaining: the live PV/MV trend chart (blocked on `frontend-live-stream`/SSE) and a Template edit screen (blocked on `server-template-update-api`, a template-update HTTP endpoint that doesn't exist yet)                                                                       |
 
 ## Phases and todos (roadmap order)
 
@@ -2115,7 +2186,7 @@ that binary does something real and gains its own targeted tests.
    unit-tested directly.
 4. **Backends** — the `Backend` trait (`backend-trait`, done: `read`/`write`/`browse` plus
    `TagId`/`TagValue`/`TagWrite`/`WriteOutcome`/`TagNode`/`BackendError` in `crates/
-   bhtune-backend`), its OPC DA implementation (`backend-opcda`, done: `OpcDaBackend` in
+bhtune-backend`), its OPC DA implementation (`backend-opcda`, done: `OpcDaBackend` in
    `crates/bhtune-backend/src/opcda.rs`, see "OPC DA integration reference" above), and its
    in-Rust FOPDT simulator (`backend-simulator`, done: `SimulatorBackend`/`FopdtProcess`/
    `VirtualPid` in `crates/bhtune-backend/src/simulator.rs`, see "Simulator backend reference"
@@ -2150,7 +2221,7 @@ that binary does something real and gains its own targeted tests.
    `versions_json`/`description`/`source`), `template-user-catalog` (`bhtune-cli` auto-loads
    a user-supplied catalog file on startup, resolved through the same config precedence chain as
    every other setting), `template-cli` (multi-template TOML import/export, `template
-   delete`, and validating a single-JSON-template import too), and `template-docs` (README/
+delete`, and validating a single-JSON-template import too), and `template-docs` (README/
    `CONTRIBUTING.md`/`docs/dcs-templates.md` documenting the catalog and inviting
    contributions) are all done — see "Community DCS/PLC template catalog", "Auto-loading a
    user template catalog", and "Multi-template import, TOML export, and `template delete`"
@@ -2167,21 +2238,27 @@ that binary does something real and gains its own targeted tests.
    pnpm-workspace React + TS + Vite + Tailwind CSS v4 SPA using TanStack Query against a typed
    `openapi-fetch` client generated from that same spec, with its own CI-enforced
    regenerate-and-diff gate and a new npm license-allowlist gate mirroring `cargo-deny` — see
-   "Key architectural decisions" above for all of this. `frontend-screens` is under way: a
-   `react-router` routing shell (`AppLayout` nav + health badge), the Templates screens
-   (List/Detail/Create — no edit, no update endpoint yet), and the History screens
+   "Key architectural decisions" above for all of this. `frontend-screens` is well under
+   way: a `react-router` routing shell (`AppLayout` nav + health badge), the Templates
+   screens (List/Detail/Create — no edit, no update endpoint yet), and the History screens
    (List/Detail — no trend chart yet, that's `history-explorer-ui`) are done and verified
-   against a real running server; Connection, Tag mapping, Test parameters, the live PV/MV
-   trend chart, Results with Write-PID, and Simulator screens are blocked on a real gap
-   discovered while building this slice — there is no way to start a tune over HTTP yet,
-   tracked as the new `server-start-tune-api` todo. `server-start-tune-api` is now done:
+   against a real running server. `server-start-tune-api` is now done:
    `POST /api/runs`/`POST /api/runs/{id}/cancel` start and cancel a real tune over HTTP,
    reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration rather than duplicating it —
    see "`server-start-tune-api`: starting and cancelling a tune over HTTP" above, including
    the `Send`-trait fix this required in `bhtune-cli` before a tune could be spawned as a
-   background task at all. Remaining: embedding the built SPA into the `bhtune-server` binary
-   (`server-embed-spa`); the rest of `frontend-screens` (now unblocked); live per-tick
-   streaming to the UI over SSE (`frontend-live-stream`, also now unblocked); running as a
+   background task at all. That unblocked `frontend-screens`'s second slice, also now done
+   and manually verified against a real running server: a combined New Run screen
+   (Connection, Tag mapping, Test parameters, Simulator parameters, and Write-back-on-
+   completion in one form), run cancellation, and a polling-based live-progress banner on
+   the run detail screen (the deliberate interim substitute for the not-yet-built SSE
+   stream) — see the dedicated bullet above for the two real bugs this manual verification
+   caught and fixed. Remaining: embedding the built SPA into the `bhtune-server` binary
+   (`server-embed-spa`); the live PV/MV trend chart, blocked on live per-tick streaming to
+   the UI over SSE (`frontend-live-stream`); a Template edit screen, blocked on a
+   template-update HTTP endpoint that doesn't exist yet — tracked as the new
+   `server-template-update-api` todo, mirroring how `server-start-tune-api` was itself
+   spun out earlier in this same phase; running as a
    proper platform service (`server-windows-service`). Replaces the earlier Tauri desktop GUI
    phase — see "Key architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — fully automated E2E tune on Linux CI via CLI + simulator
@@ -2197,7 +2274,7 @@ that binary does something real and gains its own targeted tests.
 10. **History explorer** (low priority, post-v1) — a filterable/sortable run list and PV/MV
     trend view over already-recorded history (`history-explorer-ui`), age-based retention
     disabled by default (`history-retention`), and headless parity via `bhtune history
-    list`/`show`/`prune` (`history-cli`). A reader of data earlier phases already write, so
+list`/`show`/`prune` (`history-cli`). A reader of data earlier phases already write, so
     deliberately scheduled after v1.
 11. **Remote and multi-user access** (post-v1, free like everything else) — local accounts with
     session cookies and revocable API tokens (`server-remote-auth`), TLS (`server-tls`), an

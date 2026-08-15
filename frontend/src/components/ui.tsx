@@ -198,36 +198,105 @@ export function TextField({
   );
 }
 
-/** A labeled `<select>` for a fixed set of enum options. */
-export function SelectField<T extends string>({
+/**
+ * A labeled numeric `<input>`, mirroring `<TextField>` but using `type="number"` so the
+ * browser offers native validation/steppers and `e.target.valueAsNumber` avoids re-parsing
+ * strings. `value`/`onChange` use `""` (not `undefined`) for "left blank", since an
+ * uncontrolled-vs-controlled `<input>` switch on `undefined` triggers a React warning.
+ */
+export function NumberField({
   label,
   value,
   onChange,
-  options,
+  required = false,
+  placeholder,
+  hint,
+  step,
+  min,
+  max,
   full = false,
 }: {
   label: string;
-  value: T;
-  onChange: (value: T) => void;
-  options: readonly T[];
+  value: number | "";
+  onChange: (value: number | "") => void;
+  required?: boolean;
+  placeholder?: string;
+  hint?: string;
+  step?: number | string;
+  min?: number;
+  max?: number;
   full?: boolean;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
       <span className="text-xs uppercase tracking-wide text-slate-500">
         {label}
+        {required && <span className="ml-1 text-red-400">*</span>}
+      </span>
+      <input
+        type="number"
+        value={value}
+        placeholder={placeholder}
+        step={step}
+        min={min}
+        max={max}
+        onChange={(e) =>
+          onChange(e.target.value === "" ? "" : e.target.valueAsNumber)
+        }
+        className={fieldControlClass}
+      />
+      {hint && (
+        <span className="mt-1 block text-xs text-slate-500">{hint}</span>
+      )}
+    </label>
+  );
+}
+
+/**
+ * A labeled `<select>` for a fixed set of enum options. `placeholder`, when given, renders a
+ * leading `value=""` option with human-readable text (e.g. "Auto-detect") — for an optional
+ * enum field where `T` includes `""` for "unset".
+ */
+export function SelectField<T extends string>({
+  label,
+  value,
+  onChange,
+  options,
+  full = false,
+  placeholder,
+  required = false,
+  hint,
+}: {
+  label: string;
+  value: T;
+  onChange: (value: T) => void;
+  options: readonly T[];
+  full?: boolean;
+  placeholder?: string;
+  required?: boolean;
+  hint?: string;
+}) {
+  return (
+    <label className={`block ${full ? "sm:col-span-2" : ""}`}>
+      <span className="text-xs uppercase tracking-wide text-slate-500">
+        {label}
+        {required && <span className="ml-1 text-red-400">*</span>}
       </span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
         className={fieldControlClass}
       >
+        {placeholder !== undefined && <option value="">{placeholder}</option>}
         {options.map((option) => (
           <option key={option} value={option}>
             {option}
           </option>
         ))}
       </select>
+      {hint && (
+        <span className="mt-1 block text-xs text-slate-500">{hint}</span>
+      )}
     </label>
   );
 }

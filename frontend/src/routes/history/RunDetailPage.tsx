@@ -1,5 +1,5 @@
 import { Link, useParams } from "react-router";
-import { useRun } from "../../api/runs";
+import { useCancelRun, useRun } from "../../api/runs";
 import {
   Badge,
   Button,
@@ -42,15 +42,28 @@ export function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
   const runId = Number(id);
   const run = useRun(runId);
+  const cancelRun = useCancelRun();
+  const isRunning = run.data?.outcome === "running";
 
   return (
     <div>
       <PageHeading
         title={`Run #${id ?? ""}`}
         actions={
-          <Link to="/runs">
-            <Button>Back to history</Button>
-          </Link>
+          <>
+            {isRunning && (
+              <Button
+                variant="danger"
+                disabled={cancelRun.isPending}
+                onClick={() => cancelRun.mutate(runId)}
+              >
+                {cancelRun.isPending ? "Cancelling…" : "Cancel run"}
+              </Button>
+            )}
+            <Link to="/runs">
+              <Button>Back to history</Button>
+            </Link>
+          </>
         }
       />
 
@@ -61,9 +74,36 @@ export function RunDetailPage() {
         <LoadingState message="Loading run…" />
       )}
       {run.isError && <ErrorBanner message={run.error.message} />}
+      {cancelRun.isError && <ErrorBanner message={cancelRun.error.message} />}
 
       {run.isSuccess && (
         <>
+          {isRunning && (
+            <div className="mb-6 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
+              <p className="text-slate-300">
+                Run in progress — this page refreshes automatically every
+                second. There is no live push channel yet
+                (frontend-live-stream), so a chart can't stream in real time,
+                but the latest recorded sample is shown below.
+              </p>
+              {run.data.samples.length > 0 ? (
+                (() => {
+                  const latest = run.data.samples[run.data.samples.length - 1];
+                  return (
+                    <p className="mt-2 font-mono text-slate-400">
+                      Tick {latest.tick_index}: PV {num(latest.sample.pv)}, MV{" "}
+                      {num(latest.state.mv_value_current)}, cycles{" "}
+                      {latest.state.cycles_completed} completed /{" "}
+                      {latest.state.cycles_remaining} remaining
+                    </p>
+                  );
+                })()
+              ) : (
+                <p className="mt-2 text-slate-500">No samples recorded yet.</p>
+              )}
+            </div>
+          )}
+
           <Section title="Summary">
             <Field label="Loop" value={run.data.loop_name} />
             <Field
@@ -322,8 +362,9 @@ export function RunDetailPage() {
           </section>
 
           <p className="text-sm text-slate-500">
-            {run.data.samples.length} per-tick samples were recorded for this
-            run. A trend chart is planned for the history explorer
+            {run.data.samples.length} per-tick samples{" "}
+            {isRunning ? "recorded so far" : "were recorded"} for this run. A
+            trend chart is planned for the history explorer
             (history-explorer-ui), not yet built.
           </p>
         </>

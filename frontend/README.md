@@ -37,18 +37,19 @@ can never merge.
 
 ## Routes
 
-| Path               | Screen                                                                                           |
-| ------------------ | ------------------------------------------------------------------------------------------------ |
-| `/templates`       | Template list, with delete.                                                                      |
-| `/templates/new`   | Create a template (all `DcsTemplate` fields).                                                    |
-| `/templates/:name` | Read-only template detail.                                                                       |
-| `/runs`            | Filterable, paginated tune-run history list.                                                     |
-| `/runs/:id`        | Run detail: configuration, initial readings, calculated results, and the write-back audit trail. |
+| Path               | Screen                                                                                                                                                                  |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/templates`       | Template list, with delete.                                                                                                                                             |
+| `/templates/new`   | Create a template (all `DcsTemplate` fields).                                                                                                                           |
+| `/templates/:name` | Read-only template detail.                                                                                                                                              |
+| `/runs`            | Filterable, paginated tune-run history list.                                                                                                                            |
+| `/runs/new`        | Start a tune: connection, tag mapping, test parameters, simulator parameters, and write-back, all in one form.                                                          |
+| `/runs/:id`        | Run detail: configuration, initial readings, calculated results, write-back audit trail, and (while running) a polling-based live-progress banner with a cancel button. |
 
-There is no template edit screen (no update endpoint yet) and no trend chart on the run
-detail screen yet (that's the `history-explorer-ui` phase). Connection, tag mapping, test
-parameters, results with write-PID, and the simulator screen are not built yet — they need a
-way to start a tune over HTTP, which doesn't exist yet either; see `AGENTS.md`'s roadmap.
+There is no template edit screen (no update endpoint yet), and no live-updating trend chart
+on the run detail screen (that's the `history-explorer-ui` phase, blocked on the SSE stream
+`frontend-live-stream` adds); the run detail screen instead polls once per second while a run
+is active.
 
 ## Scripts
 
