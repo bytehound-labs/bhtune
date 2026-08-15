@@ -1,15 +1,77 @@
 [package]
 name = "bhtune-server"
-description = "Axum HTTP/REST adapter for BHTune (roadmap stub — not part of the v1 scope, see AGENTS.md)."
+description = "Axum HTTP/REST adapter for BHTune: the primary v1 GUI backend, serving the tuning engine and the (future) React SPA from one binary."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
 
-# bhtune-core will be added here once this roadmap stub is actually
-# implemented (see AGENTS.md) — cargo-machete flags unused path deps.
+[lib]
+name = "bhtune_server"
+path = "src/lib.rs"
+
 [dependencies]
+bhtune-core = { path = "../bhtune-core" }
+bhtune-db = { path = "../bhtune-db" }
+# Reuses the CLI's config precedence (`bhtune.toml`/env var/default resolution -- including
+# the `bind` address this crate alone consumes, see `crate::config::resolve_bind_addr`),
+# database open/migrate/seed bootstrap, and tracing setup verbatim, rather than duplicating
+# or re-deriving any of it. This is a deliberate, and deliberately named, temporary coupling
+# -- see "Key architectural decisions" in AGENTS.md: `bhtune-cli` and `bhtune-server` are
+# meant to be peer adapters over `bhtune-core`/`bhtune-db`/`bhtune-backend`, not one
+# depending on the other, but extracting the shared pieces (`config.rs`/`db.rs`/`logging.rs`,
+# none of which touch `clap`) into their own crate is a refactor with no payoff until a
+# second reason to do it shows up. Revisit if this coupling ever becomes awkward (e.g. the
+# two crates' config needs diverge, or `bhtune-cli`'s `clap`/`csv` dependencies become a real
+# concern in this binary's footprint).
+bhtune-cli = { path = "../bhtune-cli" }
+anyhow = "1"
+chrono.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Same major version already in the workspace's dependency graph via `bhtune-backend`'s
+# `tonic`/`tower` stack (see `cargo deny check`'s duplicate-version lints), so this doesn't
+# add a second `axum` build to the tree.
+axum = "0.8"
+# `rt-multi-thread`/`macros` to run as an async binary; `signal` for graceful shutdown on
+# Ctrl+C/SIGTERM, matching `bhtune-cli`'s own Ctrl+C handling story (see `cancel.rs`) rather
+# than leaving a request in flight when the process is asked to stop.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+# Test-only: `routes/history.rs`'s fuller fixture inserts a raw `loops` row directly via SQL
+# so a seeded run can carry a real `loop_id` for the `GET /api/runs?loop_id=` filter test --
+# there is no `LoopRow::insert` in `bhtune-db` yet (loop-saving lands with `cli-commands`), so
+# this mirrors the exact same raw-row pattern `bhtune-db`'s own `tests/schema.rs` and
+# `bhtune-cli`'s `template.rs` tests already use for the identical need. Not a production
+# dependency: this crate's non-test code never touches `sqlx` directly, going through
+# `bhtune-db`'s repository API instead.
+sqlx = { version = "0.9", default-features = false, features = [
+  "sqlite",
+  "runtime-tokio",
+  "chrono",
+] }
+# `tower::ServiceExt::oneshot` drives the router directly against an in-memory request/
+# response pair, so route tests never need a real bound TCP socket.
+tower = { version = "0.5", features = ["util"] }
+# Reads a response's body bytes out in tests (`axum::body::Body` implements `http_body::Body`
+# but has no built-in "collect to bytes" convenience of its own).
+http-body-util = "0.1"
+# `tests/graceful_shutdown.rs` only: bounds how long it waits for the spawned subprocess to
+# print its "listening" line and to exit after being signalled (on top of the regular
+# dependency's `net`/`signal`/`macros`/`rt-multi-thread` features, unified by Cargo for test
+# builds only).
+tokio = { version = "1", features = ["time"] }
+# `tests/graceful_shutdown.rs` only: sends a real SIGTERM/SIGINT to a spawned `bhtune-server`
+# subprocess, mirroring `bhtune-cli`'s own `tests/ctrlc_abort.rs` rationale -- a real OS
+# signal can't be delivered to one `#[test]` inside a shared multi-threaded `cargo test`
+# binary without also hitting every other concurrently running test. Unix-only, matching the
+# test's own `#[cfg(unix)]` gate; already present transitively (tokio/mio), so this just names
+# the version directly rather than introducing a new dependency to the build graph.
+libc = "0.2"
 
 [[bin]]
 name = "bhtune-server"

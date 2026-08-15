@@ -1,0 +1,141 @@
+//! [`ApiError`]: the one error type every route handler returns, and its mapping onto an HTTP
+//! status code plus a JSON `{"error": "..."}` body.
+
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::Serialize;
+
+/// Every way a request can fail, already carrying the HTTP status it maps to -- handlers
+/// return `Result<_, ApiError>` and let `?` do the conversion (see the `From` impls below),
+/// the same "one error enum, converted at the boundary" shape `bhtune-cli`'s commands use
+/// with `anyhow::Result`.
+#[derive(Debug)]
+pub enum ApiError {
+    /// The requested resource doesn't exist (a template name, a run id). 404.
+    NotFound(String),
+    /// The request conflicts with existing state (a name collision on create, a delete
+    /// blocked by a foreign-key reference). 409.
+    Conflict(String),
+    /// The request body/query itself is malformed or fails domain validation
+    /// (`DcsTemplate::validate`, an unparseable filter value axum's extractors didn't already
+    /// reject). 400.
+    BadRequest(String),
+    /// Anything else: a database connection/query failure, or any other unexpected error.
+    /// Deliberately doesn't echo the underlying error's `Display` text into the response body
+    /// (logged via `tracing::error!` instead) -- an internal error's detail is for the
+    /// server's own logs, not a client that can't act on it. 500.
+    Internal(anyhow::Error),
+}
+
+#[derive(Serialize)]
+struct ErrorBody {
+    error: String,
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
+            ApiError::Conflict(message) => (StatusCode::CONFLICT, message),
+            ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
+            ApiError::Internal(err) => {
+                tracing::error!(error = %err, "internal error handling request");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
+            }
+        };
+        (status, Json(ErrorBody { error: message })).into_response()
+    }
+}
+
+impl From<bhtune_db::DbError> for ApiError {
+    /// [`bhtune_db::DbError::TemplateInUse`] is the one variant a client can actually act on
+    /// (stop trying to delete a template still referenced by a saved loop) -- everything else
+    /// is an infrastructure-level failure the client can't distinguish or fix, so it collapses
+    /// to [`ApiError::Internal`].
+    fn from(err: bhtune_db::DbError) -> Self {
+        match err {
+            bhtune_db::DbError::TemplateInUse { id } => ApiError::Conflict(format!(
+                "template {id} is still referenced by one or more saved loops and cannot be deleted"
+            )),
+            other => ApiError::Internal(other.into()),
+        }
+    }
+}
+
+impl From<anyhow::Error> for ApiError {
+    fn from(err: anyhow::Error) -> Self {
+        ApiError::Internal(err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    async fn body_json(response: Response) -> serde_json::Value {
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn not_found_maps_to_404_with_the_message() {
+        let response = ApiError::NotFound("no template named 'X'".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({"error": "no template named 'X'"})
+        );
+    }
+
+    #[tokio::test]
+    async fn conflict_maps_to_409_with_the_message() {
+        let response = ApiError::Conflict("already exists".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({"error": "already exists"})
+        );
+    }
+
+    #[tokio::test]
+    async fn bad_request_maps_to_400_with_the_message() {
+        let response = ApiError::BadRequest("invalid".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({"error": "invalid"})
+        );
+    }
+
+    #[tokio::test]
+    async fn internal_maps_to_500_and_never_leaks_the_underlying_message() {
+        let response =
+            ApiError::Internal(anyhow::anyhow!("secret db path leaked here")).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({"error": "internal server error"})
+        );
+    }
+
+    #[tokio::test]
+    async fn template_in_use_db_error_maps_to_409() {
+        let api_err: ApiError = bhtune_db::DbError::TemplateInUse { id: 7 }.into();
+        assert!(matches!(api_err, ApiError::Conflict(_)));
+        let response = api_err.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn other_db_errors_map_to_internal() {
+        let api_err: ApiError = bhtune_db::DbError::InvalidBackup("bad file".to_string()).into();
+        assert!(matches!(api_err, ApiError::Internal(_)));
+        let response = api_err.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}

@@ -83,6 +83,19 @@ cd bhtune
 cargo build --workspace
 ```
 
+### Running the server
+
+```sh
+cargo run --bin bhtune-server
+```
+
+Binds `127.0.0.1:8787` by default (see the `bind` setting below) and exposes a JSON HTTP API —
+`GET /api/health`, `GET`/`POST /api/templates`, `GET`/`DELETE /api/templates/{name}`, and
+`GET /api/runs`/`GET /api/runs/{id}` for run history — using the same SQLite database and
+config precedence as the CLI. There is no web UI yet; that lands with `frontend-shell` and
+`server-embed-spa` (see [Roadmap](#roadmap)). The server shuts down gracefully on Ctrl+C (and
+on Unix, `SIGTERM`), draining in-flight requests rather than dropping connections.
+
 ## Configuration
 
 Every setting resolves with the same precedence, highest first:
@@ -113,6 +126,7 @@ available key.
 | Log directory         | `--log-dir`     | —                     | `log.dir`     | Linux/macOS: `$XDG_DATA_HOME/bhtune/logs` (or `$HOME/.local/share/bhtune/logs`); Windows: `%APPDATA%\bhtune\logs` |
 | Log format            | `--log-format`  | —                     | `log.format`  | `pretty`                                                                                    |
 | Log rotation          | `--log-rotation`| —                     | `log.rotation`| `daily`                                                                                     |
+| HTTP bind address (`bhtune-server` only) | — | `BHTUNE_BIND` | `bind` | `127.0.0.1:8787`                                                       |
 
 ## DCS/PLC templates
 

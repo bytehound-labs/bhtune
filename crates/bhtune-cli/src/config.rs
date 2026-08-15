@@ -9,6 +9,15 @@ use std::path::{Path, PathBuf};
 /// Default opcda-bridge gateway address bhtune connects to when nothing else specifies one.
 pub const DEFAULT_BRIDGE_HOST: &str = "localhost:7600";
 
+/// Default address `bhtune-server` binds to when nothing else specifies one -- loopback
+/// only, matching the "v1 binds to `127.0.0.1` by default" decision in AGENTS.md. Lives
+/// alongside [`DEFAULT_BRIDGE_HOST`] in this shared config module (rather than in
+/// `bhtune-server` itself) even though only the server binary ever calls
+/// [`resolve_bind_addr`], the same way `templates`/`log` below are settings only some
+/// commands consume -- one `bhtune.toml` file and one precedence chain for every bhtune
+/// setting, CLI or server.
+pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
+
 /// bhtune's configuration, loaded from an optional TOML file. Every field is optional; a
 /// value missing from the file (or the file itself missing) falls back to the env var / CLI
 /// flag / built-in default resolution in the `resolve_*` functions below.
@@ -28,6 +37,9 @@ pub struct BhtuneConfig {
     /// embedded built-in catalog (see `crate::db::open` and [`load_user_templates`]),
     /// attributed `TemplateOrigin::Catalog`.
     pub templates: Option<PathBuf>,
+    /// Overrides [`DEFAULT_BIND_ADDR`] -- the `host:port` `bhtune-server` listens on. Only
+    /// meaningful to the server binary; see [`resolve_bind_addr`].
+    pub bind: Option<String>,
     /// `[log]` sub-table: level/directory/format/rotation for `crate::logging`'s tracing
     /// setup, mirroring `opcda-bridge-gateway`'s own `log.*` config conventions.
     #[serde(default)]
@@ -304,6 +316,18 @@ pub fn resolve_bridge_host(cli_host: Option<String>, config: &BhtuneConfig) -> S
     cli_host
         .or_else(|| config.bridge_host.clone())
         .unwrap_or_else(|| DEFAULT_BRIDGE_HOST.to_string())
+}
+
+/// Resolve `bhtune-server`'s bind address with `CLI flag > env var > config file > default`
+/// precedence, matching [`resolve_bridge_host`]'s shape exactly. `bhtune-server` has no
+/// `clap` dependency (see AGENTS.md's "Deferred setup"), so unlike `resolve_bridge_host` the
+/// env var isn't folded in by a derive attribute upstream -- callers pass
+/// `std::env::var("BHTUNE_BIND").ok()` (or a real CLI flag, if one is ever added) directly as
+/// `cli_bind`.
+pub fn resolve_bind_addr(cli_bind: Option<String>, config: &BhtuneConfig) -> String {
+    cli_bind
+        .or_else(|| config.bind.clone())
+        .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string())
 }
 
 /// Resolve the OPC DA server ProgID with `CLI flag > config file` precedence, erroring if
@@ -857,6 +881,35 @@ controller_action_direct_value = "0"
         assert_eq!(
             resolve_bridge_host(None, &BhtuneConfig::default()),
             DEFAULT_BRIDGE_HOST.to_string()
+        );
+    }
+
+    #[test]
+    fn resolve_bind_addr_cli_wins() {
+        let config = BhtuneConfig {
+            bind: Some("0.0.0.0:9999".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_bind_addr(Some("127.0.0.1:1234".to_string()), &config),
+            "127.0.0.1:1234".to_string()
+        );
+    }
+
+    #[test]
+    fn resolve_bind_addr_config_wins_over_default() {
+        let config = BhtuneConfig {
+            bind: Some("0.0.0.0:9999".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_bind_addr(None, &config), "0.0.0.0:9999".to_string());
+    }
+
+    #[test]
+    fn resolve_bind_addr_default() {
+        assert_eq!(
+            resolve_bind_addr(None, &BhtuneConfig::default()),
+            DEFAULT_BIND_ADDR.to_string()
         );
     }
 

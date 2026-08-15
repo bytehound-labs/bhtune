@@ -64,10 +64,15 @@ below. `template-docs` is also done: the README documents the `template` subcomm
 invites template contributions, `CONTRIBUTING.md` has a "Contributing a DCS/PLC template"
 section, and `docs/dcs-templates.md` documents every field with a worked example — this
 closes out Phase 6.6.
-`backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan
-reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri
-code was written (see "Key architectural decisions"). See "Phases and todos" below for what's
-next.
+Phase 7's `server-http-api` is done: `bhtune-server` is a real Axum binary exposing
+`/api/health`, `/api/templates` (list/get/create/delete), and `/api/runs` (filtered/paginated
+list, full run detail), sharing the CLI's config precedence, database bootstrap, and tracing
+setup, with graceful shutdown on Ctrl+C/`SIGTERM` — see "Key architectural decisions" above.
+`openapi-contract`, `server-embed-spa`, `frontend-shell`, `frontend-screens`,
+`frontend-live-stream`, and `server-windows-service` (the rest of Phase 7), `backend-replay`,
+and the replay harness are not yet — the GUI plan reversed from a Tauri desktop app to a
+browser UI served by `bhtune-server` before any Tauri code was written (see "Key
+architectural decisions"). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -170,6 +175,42 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   because Docker is frequently banned or unavailable on OT networks; the Docker image
   (`pkg-docker`) is a secondary channel for IT-managed Linux hosts, not the deployment path this
   decision was optimized for.
+- **`server-http-api` is done: `bhtune-server` is a real Axum binary, not a placeholder.**
+  `bhtune_server::build_router` merges `GET /api/health`, `GET`/`POST /api/templates`,
+  `GET`/`DELETE /api/templates/{name}`, and `GET /api/runs` (filtered, paginated list)/
+  `GET /api/runs/{id}` (full run detail: config, initial readings, samples, results, writes)
+  into one `axum::Router<AppState>`, directly testable via `tower::ServiceExt::oneshot` with
+  no bound socket. `main.rs` is a thin bootstrap shell calling straight into
+  `bhtune_cli::{config, db, logging}` — the exact same config-precedence, database-open/
+  migrate/seed, and tracing setup the CLI uses, so the two adapters can never silently
+  disagree about where the database lives or how logging is configured (see the
+  `bhtune-server` → `bhtune-cli` dependency note above `[dependencies]` in
+  `crates/bhtune-server/Cargo.toml` for why this is a deliberate, named, temporary coupling
+  rather than the intended peer relationship). Every JSON-facing DTO in `routes/*.rs` is its
+  own hand-written projection of the corresponding `bhtune-db` row type (never a `Serialize`
+  impl on the row type itself), mirroring `bhtune-cli`'s own `--output json` shapes
+  field-for-field so the CLI and the HTTP API describe the same run the same way. Shuts down
+  gracefully on Ctrl+C and, on Unix, `SIGTERM` (`axum::serve(...).with_graceful_shutdown(...)`),
+  draining in-flight requests rather than dropping connections — proven by real subprocess
+  integration tests (`tests/graceful_shutdown.rs`) that spawn the compiled binary, do a real
+  HTTP request over a raw `TcpStream`, send a real OS signal, and assert a clean exit. The
+  startup log/print line reports `TcpListener::local_addr()` (the OS-assigned address), not
+  the originally-requested bind string — identical for every real deployment (a concrete port
+  is always configured) but the only way a test can bind an ephemeral port (`BHTUNE_BIND=
+  127.0.0.1:0`) and still discover which port the OS actually chose from stdout, without
+  hardcoding a port that might collide with something else already listening.
+- **Cargo preserves hyphens literally in `CARGO_BIN_EXE_<name>` when a `[[bin]]` name equals
+  the package name and contains a hyphen.** For `bhtune-server` (package name and `[[bin]]`
+  name both `"bhtune-server"`), the correct lookup in a test is
+  `env!("CARGO_BIN_EXE_bhtune-server")` — **not** the underscored
+  `CARGO_BIN_EXE_bhtune_server`, which fails to compile ("environment variable not defined at
+  compile time") even in a clean build. This is easy to get wrong by analogy with
+  `bhtune-cli`'s own tests, which use `CARGO_BIN_EXE_bhtune` without incident only because its
+  `[[bin]]` is named `bhtune` (no hyphen) while the package is `bhtune-cli` — a different name,
+  so there's nothing to substitute. The underscored form only exists as a *proposed*, not yet
+  implemented, Cargo enhancement (upstream issue #16438); don't trust a search result that
+  describes it as already shipped. Any future same-named, hyphenated `[[bin]]` in this
+  workspace will hit the same thing.
 - **One API surface, described by OpenAPI, with no client-side transport abstraction.** Handlers/
   DTOs are annotated with `utoipa` to emit an OpenAPI 3.1 spec; `openapi-typescript` generates the
   TypeScript client consumed by the frontend, gated by a `git diff --exit-code` CI check so
@@ -1723,11 +1764,11 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state �
 - **Commits**: [Conventional Commits](https://www.conventionalcommits.org/).
 - **Formatting/linting**: `cargo fmt --check --all` and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
-- **No unused dependencies**: `cargo machete` runs in CI. Placeholder crates
-  (`bhtune-server` and any stub not yet consuming a path dependency)
-  deliberately carry **no** dependency on other workspace crates until they actually use one —
-  don't add `bhtune-core` etc. back as a path dependency just to "wire up the graph"; add it when
-  real code needs it.
+- **No unused dependencies**: `cargo machete` runs in CI. Placeholder crates (any stub not yet
+  consuming a path dependency) deliberately carry **no** dependency on other workspace crates
+  until they actually use one — don't add `bhtune-core` etc. back as a path dependency just to
+  "wire up the graph"; add it when real code needs it. `bhtune-server` graduated out of this
+  category with `server-http-api` (it now depends on `bhtune-core`/`bhtune-db`/`bhtune-cli`).
 - **`[workspace.package]` inheritance**: version/edition/license/repository are set once in the
   root `Cargo.toml` and inherited (`version.workspace = true` etc.) by every crate, rather than
   repeated per-crate.
@@ -1753,9 +1794,10 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state �
   legal-entity question is resolved, the text has had a legal review, and a CLA-assistant check is
   added to the PR checks.
 - **No `frontend/` (pnpm workspace) yet.** Nothing consumes it until the `frontend-shell` phase.
-- **`bhtune-server` has no `axum`, `utoipa`, or `rust-embed` dependency yet.** It remains a
-  placeholder binary until `server-http-api` starts. Adding real deps prematurely risks breaking
-  `cargo build --workspace` before that phase is ready to use them, for no benefit.
+- **`bhtune-server` has no `utoipa` or `rust-embed` dependency yet** (`axum` landed with
+  `server-http-api`). Those two arrive with `openapi-contract` and `server-embed-spa`
+  respectively — adding them prematurely risks breaking `cargo build --workspace` before
+  either phase is ready to use them, for no benefit.
 - **A cross-project CI/CD audit against `opcda-bridge` hasn't happened yet.** See
   `cross-project-ci-audit` in "Phases and todos" — worth doing once both projects have settled a
   bit, not urgent.
@@ -1786,7 +1828,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below) |
 | `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above |
-| `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
+| `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | `server-http-api` done — real Axum binary (health/templates/history routes, graceful shutdown, shares the CLI's config/db/logging bootstrap); OpenAPI spec, embedded SPA, and Windows service pending |
 
 ## Phases and todos (roadmap order)
 
@@ -1843,15 +1885,18 @@ that binary does something real and gains its own targeted tests.
    contributions) are all done — see "Community DCS/PLC template catalog", "Auto-loading a
    user template catalog", and "Multi-template import, TOML export, and `template delete`"
    above.
-7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
-   server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
-   `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS
-   + Vite + Tailwind frontend using TanStack Query against the generated client
-   (`frontend-shell`); Connection/Tag-mapping/Test-parameters/Results/History/Template-editor/
-   Simulator screens plus a live PV/MV trend chart (`frontend-screens`); live per-tick streaming
-   to the UI over SSE (`frontend-live-stream`); running as a proper platform service
-   (`server-windows-service`). Replaces the earlier Tauri desktop GUI phase — see "Key
-   architectural decisions" above for the reversal.
+7. **Web GUI (`bhtune-server` + React SPA)** — `server-http-api` is done: `bhtune-server`
+   promoted from stub to a real Axum server exposing `/api/health`, `/api/templates`
+   (list/get/create/delete), and `/api/runs` (filtered/paginated list, full run detail) over
+   the tuning engine, sharing the CLI's config precedence and database bootstrap, with
+   graceful shutdown on Ctrl+C/`SIGTERM` — see "Key architectural decisions" above. Remaining:
+   describing that API with OpenAPI (`openapi-contract`), embedding the built SPA into the
+   binary (`server-embed-spa`); React + TS + Vite + Tailwind frontend using TanStack Query
+   against the generated client (`frontend-shell`); Connection/Tag-mapping/Test-parameters/
+   Results/History/Template-editor/Simulator screens plus a live PV/MV trend chart
+   (`frontend-screens`); live per-tick streaming to the UI over SSE (`frontend-live-stream`);
+   running as a proper platform service (`server-windows-service`). Replaces the earlier
+   Tauri desktop GUI phase — see "Key architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — fully automated E2E tune on Linux CI via CLI + simulator
    backend (no Windows, no external DCS dependency); Playwright E2E against the real web UI
    (`e2e-playwright`); golden replay suite in CI; release build matrix for Linux/macOS/Windows
