@@ -35,6 +35,21 @@ This regenerates `src/api/schema.d.ts` from `../openapi.json` and reformats it. 
 it too and fails the build on drift, so a stale, hand-edited, or forgotten-to-regenerate schema
 can never merge.
 
+## Routes
+
+| Path              | Screen                                                                    |
+| ----------------- | -------------------------------------------------------------------------- |
+| `/templates`      | Template list, with delete.                                                |
+| `/templates/new`  | Create a template (all `DcsTemplate` fields).                              |
+| `/templates/:name`| Read-only template detail.                                                 |
+| `/runs`           | Filterable, paginated tune-run history list.                                |
+| `/runs/:id`       | Run detail: configuration, initial readings, calculated results, and the write-back audit trail. |
+
+There is no template edit screen (no update endpoint yet) and no trend chart on the run
+detail screen yet (that's the `history-explorer-ui` phase). Connection, tag mapping, test
+parameters, results with write-PID, and the simulator screen are not built yet — they need a
+way to start a tune over HTTP, which doesn't exist yet either; see `AGENTS.md`'s roadmap.
+
 ## Scripts
 
 | Command                 | Purpose                                                                 |

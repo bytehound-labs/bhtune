@@ -1,45 +1,26 @@
-import { useQuery } from "@tanstack/react-query";
-import { apiClient } from "./api/client";
+import { Navigate, Route, Routes } from "react-router";
+import { AppLayout } from "./layout/AppLayout";
+import { TemplateListPage } from "./routes/templates/TemplateListPage";
+import { TemplateDetailPage } from "./routes/templates/TemplateDetailPage";
+import { TemplateCreatePage } from "./routes/templates/TemplateCreatePage";
+import { RunListPage } from "./routes/history/RunListPage";
+import { RunDetailPage } from "./routes/history/RunDetailPage";
 
-// This is the frontend shell: a minimal placeholder that proves the whole
-// pipeline (Vite dev proxy / embedded-SPA production build → React →
-// TanStack Query → the openapi-fetch client generated from openapi.json →
-// bhtune-server's real HTTP API) works end to end. The real screens
-// (Connection, Tag mapping, Test parameters, Results, History, Template
-// editor, Simulator) land in the `frontend-screens` phase.
+// Route table for the web GUI (`frontend-screens`). Declarative-mode react-router: no
+// loaders, since TanStack Query (wired up in `frontend-shell`) is this project's sole
+// data-fetching/caching layer and a second, competing data mechanism would be redundant.
 function App() {
-  const health = useQuery({
-    queryKey: ["health"],
-    queryFn: async () => {
-      const { data, error } = await apiClient.GET("/api/health");
-      if (error) throw error;
-      return data;
-    },
-    refetchInterval: 5000,
-  });
-
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950 p-8 text-slate-100">
-      <h1 className="text-3xl font-semibold tracking-tight">BHTune</h1>
-      <p className="text-slate-400">
-        FOSS PID auto-tuner — web GUI shell (frontend-shell phase).
-      </p>
-      <div
-        className={`rounded-md border px-4 py-2 font-mono text-sm ${
-          health.isPending
-            ? "border-slate-700 bg-slate-900 text-slate-400"
-            : health.isError
-              ? "border-red-800 bg-red-950 text-red-300"
-              : "border-emerald-800 bg-emerald-950 text-emerald-300"
-        }`}
-      >
-        {health.isPending
-          ? "Checking server…"
-          : health.isError
-            ? `Server unreachable: ${String(health.error)}`
-            : `Server status: ${health.data?.status ?? "unknown"}`}
-      </div>
-    </div>
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route index element={<Navigate to="/templates" replace />} />
+        <Route path="templates" element={<TemplateListPage />} />
+        <Route path="templates/new" element={<TemplateCreatePage />} />
+        <Route path="templates/:name" element={<TemplateDetailPage />} />
+        <Route path="runs" element={<RunListPage />} />
+        <Route path="runs/:id" element={<RunDetailPage />} />
+      </Route>
+    </Routes>
   );
 }
 

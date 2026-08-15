@@ -179,7 +179,14 @@
             }
           },
           "404": {
-            "description": "No run with that id."
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -237,10 +244,24 @@
             }
           },
           "400": {
-            "description": "The template failed validation."
+            "description": "The template failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "409": {
-            "description": "A template with this name already exists."
+            "description": "A template with this name already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -276,7 +297,14 @@
             }
           },
           "404": {
-            "description": "No template with that name."
+            "description": "No template with that name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       },
@@ -303,10 +331,24 @@
             "description": "Template deleted."
           },
           "404": {
-            "description": "No template with that name."
+            "description": "No template with that name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "409": {
-            "description": "The template is still referenced by one or more saved loops."
+            "description": "The template is still referenced by one or more saved loops.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -470,6 +512,18 @@
           "derivative_time",
           "derivative_gain"
         ]
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "The JSON body of every non-2xx response: `{\"error\": \"<message>\"}`. `pub`/`ToSchema` so\nevery fallible `#[utoipa::path]` response can reference it (`body = ErrorBody`) and the\ngenerated OpenAPI spec -- and therefore the generated frontend TS client -- accurately\ntypes error bodies instead of `content?: never`.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
       },
       "Health": {
         "type": "object",

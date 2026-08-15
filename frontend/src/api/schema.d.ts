@@ -201,6 +201,15 @@ export interface components {
      * @enum {string}
      */
     DerivativeType: "derivative_time" | "derivative_gain";
+    /**
+     * @description The JSON body of every non-2xx response: `{"error": "<message>"}`. `pub`/`ToSchema` so
+     *     every fallible `#[utoipa::path]` response can reference it (`body = ErrorBody`) and the
+     *     generated OpenAPI spec -- and therefore the generated frontend TS client -- accurately
+     *     types error bodies instead of `content?: never`.
+     */
+    ErrorBody: {
+      error: string;
+    };
     Health: {
       status: string;
     };
@@ -605,7 +614,9 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
       };
     };
   };
@@ -656,14 +667,18 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
       };
       /** @description A template with this name already exists. */
       409: {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
       };
     };
   };
@@ -692,7 +707,9 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
       };
     };
   };
@@ -720,14 +737,18 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
       };
       /** @description The template is still referenced by one or more saved loops. */
       409: {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
       };
     };
   };

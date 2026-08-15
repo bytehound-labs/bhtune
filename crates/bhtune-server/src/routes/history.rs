@@ -27,7 +27,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::state::AppState;
 
 /// Query parameters for `GET /api/runs`, mirroring [`TuneRunFilter`]'s fields one-to-one
@@ -308,7 +308,7 @@ pub struct RunDetailResponse {
     ),
     responses(
         (status = 200, description = "The full recorded detail for one run.", body = RunDetailResponse),
-        (status = 404, description = "No run with that id."),
+        (status = 404, description = "No run with that id.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn show_run(

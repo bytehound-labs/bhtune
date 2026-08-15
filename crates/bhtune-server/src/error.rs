@@ -5,6 +5,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use utoipa::ToSchema;
 
 /// Every way a request can fail, already carrying the HTTP status it maps to -- handlers
 /// return `Result<_, ApiError>` and let `?` do the conversion (see the `From` impls below),
@@ -28,9 +29,13 @@ pub enum ApiError {
     Internal(anyhow::Error),
 }
 
-#[derive(Serialize)]
-struct ErrorBody {
-    error: String,
+/// The JSON body of every non-2xx response: `{"error": "<message>"}`. `pub`/`ToSchema` so
+/// every fallible `#[utoipa::path]` response can reference it (`body = ErrorBody`) and the
+/// generated OpenAPI spec -- and therefore the generated frontend TS client -- accurately
+/// types error bodies instead of `content?: never`.
+#[derive(Serialize, ToSchema)]
+pub struct ErrorBody {
+    pub error: String,
 }
 
 impl IntoResponse for ApiError {

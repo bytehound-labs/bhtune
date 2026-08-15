@@ -11,6 +11,7 @@
 
 use utoipa::OpenApi;
 
+use crate::error::ErrorBody;
 use crate::routes::{health, history, templates};
 
 #[derive(OpenApi)]
@@ -39,6 +40,7 @@ use crate::routes::{health, history, templates};
         history::ResultResponse,
         history::WriteResponse,
         history::RunDetailResponse,
+        ErrorBody,
     )),
     tags(
         (name = "health", description = "Liveness probe"),

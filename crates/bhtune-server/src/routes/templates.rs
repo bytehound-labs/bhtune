@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::state::AppState;
 
 /// The HTTP-facing shape of a stored template: the caller-supplied [`DcsTemplate`] fields
@@ -79,7 +79,7 @@ pub(crate) async fn list_templates(
     ),
     responses(
         (status = 200, body = TemplateResponse),
-        (status = 404, description = "No template with that name."),
+        (status = 404, description = "No template with that name.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn get_template(
@@ -103,8 +103,8 @@ pub(crate) async fn get_template(
     request_body = DcsTemplate,
     responses(
         (status = 201, description = "Template created.", body = TemplateResponse),
-        (status = 400, description = "The template failed validation."),
-        (status = 409, description = "A template with this name already exists."),
+        (status = 400, description = "The template failed validation.", body = ErrorBody),
+        (status = 409, description = "A template with this name already exists.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn create_template(
@@ -142,8 +142,8 @@ pub(crate) async fn create_template(
     ),
     responses(
         (status = 204, description = "Template deleted."),
-        (status = 404, description = "No template with that name."),
-        (status = 409, description = "The template is still referenced by one or more saved loops."),
+        (status = 404, description = "No template with that name.", body = ErrorBody),
+        (status = 409, description = "The template is still referenced by one or more saved loops.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn delete_template(
