@@ -4,7 +4,7 @@
  */
 
 export interface paths {
-  '/api/health': {
+  "/api/health": {
     parameters: {
       query?: never;
       header?: never;
@@ -12,7 +12,7 @@ export interface paths {
       cookie?: never;
     };
     /** Liveness probe. */
-    get: operations['health'];
+    get: operations["health"];
     put?: never;
     post?: never;
     delete?: never;
@@ -21,7 +21,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  '/api/runs': {
+  "/api/runs": {
     parameters: {
       query?: never;
       header?: never;
@@ -33,7 +33,7 @@ export interface paths {
      * @description `GET /api/runs` -- newest-started-first, filtered by every present [`RunListQuery`] field,
      *     one [`Pagination`] page at a time.
      */
-    get: operations['list_runs'];
+    get: operations["list_runs"];
     put?: never;
     post?: never;
     delete?: never;
@@ -42,7 +42,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  '/api/runs/{id}': {
+  "/api/runs/{id}": {
     parameters: {
       query?: never;
       header?: never;
@@ -53,7 +53,7 @@ export interface paths {
      * Fetch one run's full detail.
      * @description `GET /api/runs/{id}` -- 404 if no run has that id.
      */
-    get: operations['show_run'];
+    get: operations["show_run"];
     put?: never;
     post?: never;
     delete?: never;
@@ -62,7 +62,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  '/api/templates': {
+  "/api/templates": {
     parameters: {
       query?: never;
       header?: never;
@@ -74,21 +74,21 @@ export interface paths {
      * @description `GET /api/templates` -- every stored template (built-in, catalog, and user-created
      *     alike), ordered by name, for a template picker.
      */
-    get: operations['list_templates'];
+    get: operations["list_templates"];
     put?: never;
     /**
      * Create a new, user-owned template.
      * @description `POST /api/templates` -- 400 if [`DcsTemplate::validate`] rejects the body, 409 if a
      *     template with the same name already exists.
      */
-    post: operations['create_template'];
+    post: operations["create_template"];
     delete?: never;
     options?: never;
     head?: never;
     patch?: never;
     trace?: never;
   };
-  '/api/templates/{name}': {
+  "/api/templates/{name}": {
     parameters: {
       query?: never;
       header?: never;
@@ -99,7 +99,7 @@ export interface paths {
      * Fetch one template by name.
      * @description `GET /api/templates/{name}` -- 404 if no template has that name.
      */
-    get: operations['get_template'];
+    get: operations["get_template"];
     put?: never;
     post?: never;
     /**
@@ -108,7 +108,7 @@ export interface paths {
      *     referenced by a saved loop (`bhtune_db::DbError::TemplateInUse`, mapped by
      *     `From<DbError> for ApiError`).
      */
-    delete: operations['delete_template'];
+    delete: operations["delete_template"];
     options?: never;
     head?: never;
     patch?: never;
@@ -123,13 +123,13 @@ export interface components {
      *     PV).
      * @enum {string}
      */
-    ControllerDirection: 'direct' | 'reverse';
+    ControllerDirection: "direct" | "reverse";
     /**
      * @description A PID controller structure. Discriminants double as the column index into the
      *     tuning-constant matrices in [`crate::constants`].
      * @enum {string}
      */
-    ControllerType: 'p' | 'pi' | 'pid';
+    ControllerType: "p" | "pi" | "pid";
     /** @description One DCS/PLC vendor's conventions. */
     DcsTemplate: {
       /**
@@ -140,13 +140,13 @@ export interface components {
       controller_direction_suffix: string;
       controller_mode_suffix: string;
       derivative_constant_suffix: string;
-      derivative_type: components['schemas']['DerivativeType'];
-      derivative_unit: components['schemas']['TimeUnit'];
+      derivative_type: components["schemas"]["DerivativeType"];
+      derivative_unit: components["schemas"]["TimeUnit"];
       /** @description Free-text description of the control system this template targets. */
       description?: string | null;
       integral_constant_suffix: string;
-      integral_type: components['schemas']['IntegralType'];
-      integral_unit: components['schemas']['TimeUnit'];
+      integral_type: components["schemas"]["IntegralType"];
+      integral_unit: components["schemas"]["TimeUnit"];
       lower_mv_range_suffix: string;
       lower_pv_range_suffix: string;
       manipulated_variable_suffix: string;
@@ -168,7 +168,7 @@ export interface components {
        */
       process_variable_suffix: string;
       proportional_constant_suffix: string;
-      proportional_type: components['schemas']['ProportionalType'];
+      proportional_type: components["schemas"]["ProportionalType"];
       /**
        * @description If true, the controller mode is switched back to its original mode (e.g.
        *     Auto/Cascade) after a completed MRFT test. Has no effect if the loop was already in
@@ -200,7 +200,7 @@ export interface components {
      * @description How a DCS expresses the derivative term.
      * @enum {string}
      */
-    DerivativeType: 'derivative_time' | 'derivative_gain';
+    DerivativeType: "derivative_time" | "derivative_gain";
     Health: {
       status: string;
     };
@@ -210,7 +210,7 @@ export interface components {
      *     `Serialize` impl on the `bhtune-db` row type.
      */
     InitialReadingsResponse: {
-      controller_direction: components['schemas']['ControllerDirection'];
+      controller_direction: components["schemas"]["ControllerDirection"];
       mode_attribute_raw?: string | null;
       mode_raw?: string | null;
       /** Format: float */
@@ -232,9 +232,9 @@ export interface components {
      * @description How a DCS expresses the integral term.
      * @enum {string}
      */
-    IntegralType: 'reset_time' | 'reset_rate' | 'reset_gain';
+    IntegralType: "reset_time" | "reset_rate" | "reset_gain";
     LoopConfig: {
-      controller_type: components['schemas']['ControllerType'];
+      controller_type: components["schemas"]["ControllerType"];
       /**
        * Format: int32
        * @description Pre/post-test recording padding, in seconds. PV is still read and recorded during
@@ -247,7 +247,7 @@ export interface components {
       num_cycles_count: number;
       /** Format: int32 */
       num_cycles_skip: number;
-      process_type: components['schemas']['ProcessType'];
+      process_type: components["schemas"]["ProcessType"];
       /**
        * Format: float
        * @description Relay amplitude as a percentage of the MV range. Not enforced by the type itself --
@@ -293,23 +293,23 @@ export interface components {
      * @enum {string}
      */
     ProcessType:
-      | 'flow'
-      | 'pressure_line'
-      | 'pressure_vessel'
-      | 'level'
-      | 'temperature_mixing'
-      | 'temperature_heat_exchange';
+      | "flow"
+      | "pressure_line"
+      | "pressure_vessel"
+      | "level"
+      | "temperature_mixing"
+      | "temperature_heat_exchange";
     /**
      * @description How a DCS expresses the proportional term.
      * @enum {string}
      */
-    ProportionalType: 'gain' | 'band';
+    ProportionalType: "gain" | "band";
     /**
      * @description How aggressively a tuning result should push the loop: a faster response trades off
      *     stability margin, a more sluggish response trades off speed.
      * @enum {string}
      */
-    ResponseLevel: 'aggressive' | 'moderate' | 'sluggish';
+    ResponseLevel: "aggressive" | "moderate" | "sluggish";
     /**
      * @description The outcome of a best-effort loop-restore attempt made after a run ended --
      *     `safety-restore-guard` (finding 3 of the live-plant safety review). Recorded via
@@ -318,7 +318,7 @@ export interface components {
      *     never mutated the loop at all, or it hasn't ended yet.
      * @enum {string}
      */
-    RestoreStatus: 'confirmed' | 'incomplete';
+    RestoreStatus: "confirmed" | "incomplete";
     /** @description Local projection of [`TuneResultRow`]. */
     ResultResponse: {
       /** Format: float */
@@ -329,7 +329,7 @@ export interface components {
       kp: number;
       /** Format: float */
       proportional: number;
-      response_level: components['schemas']['ResponseLevel'];
+      response_level: components["schemas"]["ResponseLevel"];
       /** Format: float */
       td_minutes: number;
       /** Format: float */
@@ -340,23 +340,23 @@ export interface components {
      *     so, whether it succeeded. See [`TuneWriteRow::rollback_state`] for when this is `None`.
      * @enum {string}
      */
-    RollbackState: 'succeeded' | 'failed';
+    RollbackState: "succeeded" | "failed";
     RunDetailResponse: {
-      backend: components['schemas']['TuneBackend'];
+      backend: components["schemas"]["TuneBackend"];
       /** Format: date-time */
       completed_at?: string | null;
-      config: components['schemas']['LoopConfig'];
+      config: components["schemas"]["LoopConfig"];
       failure_reason?: string | null;
       /** Format: int64 */
       id: number;
       initial_readings?:
-        null | components['schemas']['InitialReadingsResponse'];
+        null | components["schemas"]["InitialReadingsResponse"];
       loop_name: string;
-      outcome: components['schemas']['TuneOutcome'];
+      outcome: components["schemas"]["TuneOutcome"];
       restore_detail?: string | null;
-      restore_status?: null | components['schemas']['RestoreStatus'];
-      results: components['schemas']['ResultResponse'][];
-      samples: components['schemas']['SampleResponse'][];
+      restore_status?: null | components["schemas"]["RestoreStatus"];
+      results: components["schemas"]["ResultResponse"][];
+      samples: components["schemas"]["SampleResponse"][];
       /** Format: date-time */
       started_at: string;
       /**
@@ -364,8 +364,8 @@ export interface components {
        *     `template_name` currently resolves to in the catalog (`safety-run-snapshot`).
        */
       template_name: string;
-      template_origin: components['schemas']['TemplateOrigin'];
-      writes: components['schemas']['WriteResponse'][];
+      template_origin: components["schemas"]["TemplateOrigin"];
+      writes: components["schemas"]["WriteResponse"][];
     };
     RunListResponse: {
       /**
@@ -373,7 +373,7 @@ export interface components {
        *     run matching the filter across all pages.
        */
       returned: number;
-      runs: components['schemas']['RunSummaryResponse'][];
+      runs: components["schemas"]["RunSummaryResponse"][];
       /** Format: int64 */
       total: number;
     };
@@ -383,12 +383,12 @@ export interface components {
      *     `GET /api/runs/{id}`).
      */
     RunSummaryResponse: {
-      backend: components['schemas']['TuneBackend'];
+      backend: components["schemas"]["TuneBackend"];
       /** Format: int64 */
       id: number;
       loop_name: string;
-      outcome: components['schemas']['TuneOutcome'];
-      process_type: components['schemas']['ProcessType'];
+      outcome: components["schemas"]["TuneOutcome"];
+      process_type: components["schemas"]["ProcessType"];
       /** Format: date-time */
       started_at: string;
     };
@@ -405,7 +405,7 @@ export interface components {
      *     dependency edge.
      * @enum {string}
      */
-    SampleQuality: 'good' | 'uncertain' | 'bad';
+    SampleQuality: "good" | "uncertain" | "bad";
     /**
      * @description One recorded tick: the [`Tick`] input and resulting engine state, plus the backend-
      *     reported PV quality at read time. `Tick`/`MrftState` already derive `Serialize` in
@@ -413,9 +413,9 @@ export interface components {
      *     directly rather than re-projected field-by-field like the other DTOs here.
      */
     SampleResponse: {
-      pv_quality: components['schemas']['SampleQuality'];
-      sample: components['schemas']['Tick'];
-      state: components['schemas']['MrftState'];
+      pv_quality: components["schemas"]["SampleQuality"];
+      sample: components["schemas"]["Tick"];
+      state: components["schemas"]["MrftState"];
       /** Format: int64 */
       tick_index: number;
     };
@@ -436,7 +436,7 @@ export interface components {
      *     existing installs.
      * @enum {string}
      */
-    TemplateOrigin: 'builtin' | 'catalog' | 'user';
+    TemplateOrigin: "builtin" | "catalog" | "user";
     /**
      * @description The HTTP-facing shape of a stored template: the caller-supplied [`DcsTemplate`] fields
      *     flattened alongside the database-assigned `id`/`origin`/timestamps. Per this workspace's
@@ -445,12 +445,12 @@ export interface components {
      *     JSON-facing consumer builds its own projection rather than the DB row shape leaking
      *     straight onto the wire.
      */
-    TemplateResponse: components['schemas']['DcsTemplate'] & {
+    TemplateResponse: components["schemas"]["DcsTemplate"] & {
       /** Format: date-time */
       created_at: string;
       /** Format: int64 */
       id: number;
-      origin: components['schemas']['TemplateOrigin'];
+      origin: components["schemas"]["TemplateOrigin"];
       /** Format: date-time */
       updated_at: string;
     };
@@ -468,19 +468,19 @@ export interface components {
      * @description The time unit a DCS expects for integral/derivative parameters.
      * @enum {string}
      */
-    TimeUnit: 'seconds' | 'minutes';
+    TimeUnit: "seconds" | "minutes";
     /**
      * @description Which [`crate`]-agnostic I/O backend a run used. Lives in `bhtune-db` rather than
      *     `bhtune-core` because it's a persistence/orchestration concept (which adapter drove this
      *     run), not a domain concept the pure MRFT engine itself needs to know about.
      * @enum {string}
      */
-    TuneBackend: 'opcda' | 'simulator' | 'replay';
+    TuneBackend: "opcda" | "simulator" | "replay";
     /**
      * @description A run's lifecycle state.
      * @enum {string}
      */
-    TuneOutcome: 'running' | 'completed' | 'failed' | 'aborted';
+    TuneOutcome: "running" | "completed" | "failed" | "aborted";
     /**
      * @description Distinguishes a normal write-back from `bhtune history revert` undoing an earlier one.
      *     Both share [`TuneWriteRow`]'s exact shape -- pre-read, write-and-verify each constant,
@@ -488,7 +488,7 @@ export interface components {
      *     one; `kind` is the one column that tells them apart.
      * @enum {string}
      */
-    WriteKind: 'write' | 'revert';
+    WriteKind: "write" | "revert";
     /** @description Local projection of [`TuneWriteRow`]. */
     WriteResponse: {
       /** Format: float */
@@ -504,16 +504,16 @@ export interface components {
       integral_readback?: number | null;
       /** Format: float */
       integral_written?: number | null;
-      kind: components['schemas']['WriteKind'];
+      kind: components["schemas"]["WriteKind"];
       /** Format: float */
       proportional_previous?: number | null;
       /** Format: float */
       proportional_readback?: number | null;
       /** Format: float */
       proportional_written?: number | null;
-      response_level: components['schemas']['ResponseLevel'];
+      response_level: components["schemas"]["ResponseLevel"];
       rollback_error?: string | null;
-      rollback_state?: null | components['schemas']['RollbackState'];
+      rollback_state?: null | components["schemas"]["RollbackState"];
       success: boolean;
       /** Format: date-time */
       written_at: string;
@@ -542,7 +542,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['Health'];
+          "application/json": components["schemas"]["Health"];
         };
       };
     };
@@ -551,14 +551,14 @@ export interface operations {
     parameters: {
       query?: {
         loop_id?: number;
-        process_type?: components['schemas']['ProcessType'];
-        controller_type?: components['schemas']['ControllerType'];
-        outcome?: components['schemas']['TuneOutcome'];
-        backend?: components['schemas']['TuneBackend'];
+        process_type?: components["schemas"]["ProcessType"];
+        controller_type?: components["schemas"]["ControllerType"];
+        outcome?: components["schemas"]["TuneOutcome"];
+        backend?: components["schemas"]["TuneBackend"];
         started_after?: string;
         started_before?: string;
         template_name?: string;
-        template_origin?: components['schemas']['TemplateOrigin'];
+        template_origin?: components["schemas"]["TemplateOrigin"];
         limit?: number;
         offset?: number;
       };
@@ -574,7 +574,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['RunListResponse'];
+          "application/json": components["schemas"]["RunListResponse"];
         };
       };
     };
@@ -597,7 +597,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['RunDetailResponse'];
+          "application/json": components["schemas"]["RunDetailResponse"];
         };
       };
       /** @description No run with that id. */
@@ -624,7 +624,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['TemplateResponse'][];
+          "application/json": components["schemas"]["TemplateResponse"][];
         };
       };
     };
@@ -638,7 +638,7 @@ export interface operations {
     };
     requestBody: {
       content: {
-        'application/json': components['schemas']['DcsTemplate'];
+        "application/json": components["schemas"]["DcsTemplate"];
       };
     };
     responses: {
@@ -648,7 +648,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['TemplateResponse'];
+          "application/json": components["schemas"]["TemplateResponse"];
         };
       };
       /** @description The template failed validation. */
@@ -684,7 +684,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['TemplateResponse'];
+          "application/json": components["schemas"]["TemplateResponse"];
         };
       };
       /** @description No template with that name. */

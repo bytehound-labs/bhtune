@@ -46,7 +46,7 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   `prettier`. Run `lefthook install` once after cloning to enable it.
 - No proprietary or non-FOSS dependencies, ever, on either side of the stack. `cargo deny check`
   enforces this in CI for Rust dependencies against the allow-list in `deny.toml`; `pnpm run
-  check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the equivalent allow-list for
+check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the equivalent allow-list for
   npm dependencies. If either fails on a new dependency, look for a FOSS alternative rather than
   widening the allow-list.
 

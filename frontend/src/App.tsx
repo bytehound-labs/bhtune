@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { apiClient } from './api/client';
+import { useQuery } from "@tanstack/react-query";
+import { apiClient } from "./api/client";
 
 // This is the frontend shell: a minimal placeholder that proves the whole
 // pipeline (Vite dev proxy / embedded-SPA production build → React →
@@ -9,9 +9,9 @@ import { apiClient } from './api/client';
 // editor, Simulator) land in the `frontend-screens` phase.
 function App() {
   const health = useQuery({
-    queryKey: ['health'],
+    queryKey: ["health"],
     queryFn: async () => {
-      const { data, error } = await apiClient.GET('/api/health');
+      const { data, error } = await apiClient.GET("/api/health");
       if (error) throw error;
       return data;
     },
@@ -27,17 +27,17 @@ function App() {
       <div
         className={`rounded-md border px-4 py-2 font-mono text-sm ${
           health.isPending
-            ? 'border-slate-700 bg-slate-900 text-slate-400'
+            ? "border-slate-700 bg-slate-900 text-slate-400"
             : health.isError
-              ? 'border-red-800 bg-red-950 text-red-300'
-              : 'border-emerald-800 bg-emerald-950 text-emerald-300'
+              ? "border-red-800 bg-red-950 text-red-300"
+              : "border-emerald-800 bg-emerald-950 text-emerald-300"
         }`}
       >
         {health.isPending
-          ? 'Checking server…'
+          ? "Checking server…"
           : health.isError
             ? `Server unreachable: ${String(health.error)}`
-            : `Server status: ${health.data?.status ?? 'unknown'}`}
+            : `Server status: ${health.data?.status ?? "unknown"}`}
       </div>
     </div>
   );
