@@ -68,6 +68,15 @@ pub struct Cli {
     #[arg(long, global = true, env = "BHTUNE_DB", value_name = "PATH")]
     pub db: Option<PathBuf>,
 
+    /// Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in
+    /// addition to the built-in templates (default: platform-specific, next to the config
+    /// file -- see `crate::config::templates_path_from`). A missing file at the default
+    /// location is fine; a file that fails to parse or validate is a hard error. CLI >
+    /// `BHTUNE_TEMPLATES` env var > `templates` in the config file > platform default --
+    /// see `crate::config::load_user_templates`.
+    #[arg(long, global = true, env = "BHTUNE_TEMPLATES", value_name = "PATH")]
+    pub templates: Option<PathBuf>,
+
     /// Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default:
     /// info). Diagnostic detail only -- never printed to stdout, so it can never interleave
     /// with `--output json`'s single-object contract; see `crate::logging`.
@@ -1010,24 +1019,31 @@ mod tests {
     }
 
     #[test]
-    fn cli_db_and_config_default_to_none() {
+    fn cli_db_config_and_templates_default_to_none() {
         let cli = Cli::parse_from(["bhtune", "simulate"]);
         assert_eq!(cli.db, None);
         assert_eq!(cli.config, None);
+        assert_eq!(cli.templates, None);
     }
 
     #[test]
-    fn cli_parses_explicit_db_and_config_flags() {
+    fn cli_parses_explicit_db_config_and_templates_flags() {
         let cli = Cli::parse_from([
             "bhtune",
             "--db",
             "/data/bhtune.db",
             "--config",
             "/etc/bhtune.toml",
+            "--templates",
+            "/etc/bhtune/templates.toml",
             "simulate",
         ]);
         assert_eq!(cli.db, Some(PathBuf::from("/data/bhtune.db")));
         assert_eq!(cli.config, Some(PathBuf::from("/etc/bhtune.toml")));
+        assert_eq!(
+            cli.templates,
+            Some(PathBuf::from("/etc/bhtune/templates.toml"))
+        );
     }
 
     #[test]

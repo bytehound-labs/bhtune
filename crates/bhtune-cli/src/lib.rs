@@ -7,8 +7,10 @@
 //! - [`args`] — the `clap` derive `Cli`/`Command` definitions and the wrapper enums adapting
 //!   `bhtune-core`'s domain enums to `clap::ValueEnum` (required by Rust's orphan rule).
 //! - [`config`] — `CLI > env > TOML config file > platform default` precedence for the
-//!   database path, opcda-bridge gateway address, and default OPC server.
-//! - [`db`] — opens the database and seeds built-in templates on every startup.
+//!   database path, opcda-bridge gateway address, default OPC server, and the user-supplied
+//!   template catalog path (`template-user-catalog`).
+//! - [`db`] — opens the database and seeds the built-in and (if configured) user-catalog
+//!   DCS/PLC templates on every startup.
 //! - [`backend`] — constructs the selected `Backend` implementation.
 //! - [`commands`] — one module per subcommand family: `tune`/`simulate`, `template`,
 //!   `history`, `export`, `opc`.
@@ -184,8 +186,19 @@ async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCod
         std::env::var("APPDATA").ok().as_deref(),
         cfg!(target_os = "windows"),
     );
+    let user_templates = match config::load_user_templates(
+        cli.templates,
+        &config,
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        std::env::var("APPDATA").ok().as_deref(),
+        cfg!(target_os = "windows"),
+    ) {
+        Ok(templates) => templates,
+        Err(e) => return fail(&e, output_format),
+    };
 
-    match db::open(&db_path).await {
+    match db::open(&db_path, user_templates).await {
         Err(e) => fail(&e, output_format),
         Ok(pool) => {
             let result: anyhow::Result<ExitCode> = match cli.command {
@@ -259,6 +272,7 @@ mod tests {
         let cli = Cli {
             db: Some(PathBuf::from("/nonexistent-dir/bhtune.db")),
             config: None,
+            templates: None,
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -278,6 +292,28 @@ mod tests {
         let cli = Cli {
             db: None,
             config: Some(PathBuf::from("/nonexistent/bhtune.toml")),
+            templates: None,
+            log_level: None,
+            log_dir: None,
+            log_format: None,
+            log_rotation: None,
+            command: Command::Template {
+                command: crate::args::TemplateCommand::List,
+            },
+        };
+        assert_eq!(run_with_cli(cli).await, ExitCode::FAILURE);
+    }
+
+    #[tokio::test]
+    async fn run_with_cli_templates_load_failure_is_exit_failure() {
+        // An explicit `--templates` path that doesn't exist is a hard error (unlike
+        // auto-discovery, which is not an error) -- confirms `run_with_cli` surfaces
+        // `config::load_user_templates`'s error before ever calling `db::open`.
+        let (_dir, db) = temp_db_path();
+        let cli = Cli {
+            db: Some(db),
+            config: None,
+            templates: Some(PathBuf::from("/nonexistent/templates.toml")),
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -295,6 +331,7 @@ mod tests {
         let cli = Cli {
             db: Some(db),
             config: None,
+            templates: None,
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -312,6 +349,7 @@ mod tests {
         let cli = Cli {
             db: Some(db),
             config: None,
+            templates: None,
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -438,6 +476,7 @@ mod tests {
             run_with_cli(Cli {
                 db: Some(db.clone()),
                 config: None,
+                templates: None,
                 log_level: None,
                 log_dir: None,
                 log_format: None,
@@ -465,6 +504,7 @@ mod tests {
             run_with_cli(Cli {
                 db: Some(db.clone()),
                 config: None,
+                templates: None,
                 log_level: None,
                 log_dir: None,
                 log_format: None,
@@ -484,6 +524,7 @@ mod tests {
             run_with_cli(Cli {
                 db: Some(db.clone()),
                 config: None,
+                templates: None,
                 log_level: None,
                 log_dir: None,
                 log_format: None,
@@ -505,6 +546,7 @@ mod tests {
             run_with_cli(Cli {
                 db: Some(db),
                 config: None,
+                templates: None,
                 log_level: None,
                 log_dir: None,
                 log_format: None,
@@ -532,6 +574,7 @@ mod tests {
         let cli = Cli {
             db: None,
             config: Some(config_file.path().to_path_buf()),
+            templates: None,
             log_level: None,
             log_dir: None,
             log_format: None,

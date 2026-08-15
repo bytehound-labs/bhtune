@@ -50,9 +50,12 @@ built-in DCS templates moved from hardcoded Rust constructors to an embedded, co
 TOML catalog (`crates/bhtune-core/templates/builtin.toml`) with a `DcsTemplate::validate()`
 and new `versions`/`description`/`source` fields, and `dcs_templates` gained a real
 three-way `origin` column (`builtin`/`catalog`/`user`, replacing a plain `is_builtin`
-boolean) plus `versions_json`/`description`/`source` columns to store them — see "Community
-DCS/PLC template catalog" below; `template-user-catalog`/`template-cli`/`template-docs`
-remain. `backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan
+boolean) plus `versions_json`/`description`/`source` columns to store them. `template-
+user-catalog` is also done: `bhtune-cli` auto-loads a user-supplied catalog file on every
+startup (`--templates`/`BHTUNE_TEMPLATES`/a `templates` config key, resolved through the
+same precedence chain as every other setting), seeding it with `TemplateOrigin::Catalog` —
+see "Community DCS/PLC template catalog" below; `template-cli`/`template-docs` remain.
+`backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan
 reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri
 code was written (see "Key architectural decisions"). See "Phases and todos" below for what's
 next.
@@ -607,6 +610,7 @@ Auto-discovered config file location (first one found wins):
 | Database path         | `--db`          | `BHTUNE_DB`          | `db`           | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (falls back to `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db` |
 | opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host`  | `localhost:7600`                                                                                                                            |
 | Default OPC DA server | `--server`      | —                    | `server`       | none — must be set one way or another for `tune --backend opcda` and the `opc` subcommands                                                 |
+| User template catalog | `--templates`   | `BHTUNE_TEMPLATES`   | `templates`    | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (falls back to `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error at this tier only |
 
 `resolve_db_path`/`resolve_bridge_host` fold the env var into the CLI value already (via
 clap's `env` attribute on `Cli::db`/`TuneArgs::bridge_host`/`OpcCommand`'s per-variant
@@ -1360,16 +1364,18 @@ and get a Rust PR reviewed.
   semantically incomplete contribution (e.g. a mode suffix with no manual/auto value) is
   rejected at parse time, not mid-tune. Parsing a `&'static str` embedded at compile time is
   not I/O, so `bhtune-core`'s "no I/O, no clock, no async" purity rule is preserved — all
-  *file* reading stays in `bhtune-cli` (loading a user catalog from disk is
-  `template-user-catalog`, still pending).
+  *file* reading stays in `bhtune-cli`, which reuses this exact function to load a user
+  catalog from disk (`template-user-catalog`, done — see below).
 - **`DcsTemplate::validate()`** mirrors the `LoopConfig::validate` precedent from
   `cli-safety`: non-empty `name` (trimmed); non-empty `process_variable_suffix`; non-empty
   `manipulated_variable_suffix`; if `controller_mode_suffix` is set, both
   `mode_manual_value` and `mode_auto_value` must be non-empty; if `mode_attribute_suffix` is
   set, `mode_attribute_program_value` must be `Some`. Runs on every catalog template today
-  (built-in or, eventually, contributed); it will also run on user-imported/user-catalog
-  templates once `template-cli`/`template-user-catalog` land — today, importing a garbage
-  template via `template import` succeeds and only fails much later, mid-tune.
+  (built-in, contributed, or user-catalog — `template-user-catalog`'s `load_user_templates`
+  reuses `parse_catalog` directly, so the same validation applies with no separate code
+  path); `template import`'s single-template path will gain it too once `template-cli`
+  lands — today, importing a garbage template via `template import` succeeds and only fails
+  much later, mid-tune.
 - **`TemplateError`** is a hand-rolled `Display`/`std::error::Error` enum (no `thiserror`,
   matching `bhtune-core`'s existing `RangeError`/`LoopConfigError` convention): `Toml(toml::
   de::Error)` (`source()` delegates to the wrapped error), `EmptyName`, `EmptyField { name,
@@ -1424,10 +1430,11 @@ happens to construct. `cargo llvm-cov` confirms 100% line coverage of the new co
 
 `template-catalog` (above) taught `DcsTemplate` that a template can come from more than one
 place, but `dcs_templates` itself still only had a two-state `is_builtin BOOLEAN` — no room
-for a third state, which `template-user-catalog` (still pending) needs: a row seeded from a
-site's own `templates.toml` is neither a shipped built-in nor a hand-imported user template,
-and treating it as either would break one of the two. Done now, pre-release, specifically to
-avoid a later `ALTER TABLE` migration once real installs exist.
+for a third state, which `template-user-catalog` (see "Auto-loading a user template catalog"
+below) needs: a row seeded from a site's own `templates.toml` is neither a shipped built-in
+nor a hand-imported user template, and treating it as either would break one of the two.
+Done now, pre-release, specifically to avoid a later `ALTER TABLE` migration once real
+installs exist.
 
 - **`origin TEXT CHECK (origin IN ('builtin', 'catalog', 'user'))`** replaces `is_builtin
   INTEGER`. `bhtune_db::models::TemplateOrigin` (`Builtin`/`Catalog`/`User`) — previously
@@ -1446,8 +1453,8 @@ avoid a later `ALTER TABLE` migration once real installs exist.
 - **`seed_builtin_templates` generalized into `seed_templates(pool, templates, origin, now)`**,
   with `seed_builtin_templates` kept as a thin wrapper (`seed_templates(pool,
   built_in_templates(), TemplateOrigin::Builtin, now)`) rather than renamed, since `bhtune-cli`
-  already has established callers of the original name. `template-user-catalog` will be the
-  first real caller of `seed_templates` directly, with `TemplateOrigin::Catalog`. The
+  already has established callers of the original name. `template-user-catalog` (see below)
+  is the first real caller of `seed_templates` directly, with `TemplateOrigin::Catalog`. The
   `SkippedUserOwned` outcome generalizes the same way the boolean did: a row exists but its
   `origin` differs from the one being seeded, so it belongs to a different catalog/seed pass
   and is left untouched.
@@ -1461,6 +1468,67 @@ avoid a later `ALTER TABLE` migration once real installs exist.
   wrong shape (`"123"`, a bare JSON number, isn't a `Vec<String>`) — the `CHECK` constraint
   alone only proves bad *syntax* is rejected at the SQL layer, not that the Rust-level shape
   mismatch is handled once past it.
+
+### Auto-loading a user template catalog (`template-user-catalog`)
+
+`template-catalog`/`template-provenance` (above) made the catalog format and the database's
+three-way `origin` real, but nothing yet populated `TemplateOrigin::Catalog` with real data —
+a site's own `templates.toml` was still not read by anything. `bhtune-cli` now auto-loads one
+on every startup, mirroring `bhtune.toml`'s own `cli-config` precedence chain exactly rather
+than inventing a new pattern.
+
+- **Resolution order: `--templates` > `BHTUNE_TEMPLATES` > `templates` config key > platform
+  default.** `config::load_user_templates(cli_templates, config, xdg_config_home, home,
+  appdata, is_windows)` in `crates/bhtune-cli/src/config.rs` mirrors `load_config`'s own
+  split between an *explicit* path (CLI flag, already folded in by clap's `env =
+  "BHTUNE_TEMPLATES"`, or the config-file key) and the *auto-discovered default* path — but
+  it is a 4-tier chain, one tier deeper than `load_config`'s own 2-tier bootstrapping case,
+  because `bhtune.toml`'s own path obviously can't be configured from inside itself, whereas
+  the templates path *can* have a config-file-key tier since `bhtune.toml` is already loaded
+  by the time templates are resolved.
+- **`templates_path_from(...)` mirrors `config_path_from` (the config directory), not
+  `default_db_path_from`/`default_log_dir_from` (the data directory).** `templates.toml`
+  lives in the same directory as `bhtune.toml` — `$XDG_CONFIG_HOME/bhtune/templates.toml` on
+  Linux/macOS (falling back to `$HOME/.config/bhtune/` if unset), `%APPDATA%\bhtune\
+  templates.toml` on Windows — since both are per-user hand-edited settings files, not
+  persistent application data.
+- **Missing-file semantics depend on how the path was resolved, matching `bhtune.toml`'s own
+  rule.** An auto-discovered default path that doesn't exist is `Ok(None)` — not an error, and
+  the common case, since most installs never create `templates.toml` at all. An *explicit*
+  path — from `--templates`/`BHTUNE_TEMPLATES` or the config file's `templates` key — that
+  doesn't exist is a hard error naming the path, exactly like an explicit `--config` path that
+  doesn't exist. A file that exists but fails to parse (malformed TOML) or fails
+  `DcsTemplate::validate()` (e.g. a mode suffix with no manual/auto value) is always a hard
+  error regardless of how the path was resolved, naming the file and the problem.
+- **Reuses `bhtune_core::template::parse_catalog` directly** — the same function
+  `template-catalog` built for the embedded built-in catalog already parses the `[[template]]`
+  TOML shape *and* calls `.validate()` on every template, so a single call handles both
+  "shape" and "content" validation with no new parsing code in `bhtune-cli` at all.
+- **`db::open`'s signature grew a `user_templates: Option<Vec<DcsTemplate>>` parameter.** It
+  seeds the built-ins first (as before), then — only if `Some` — seeds the user catalog via
+  `bhtune_db::seed_templates(&pool, templates, TemplateOrigin::Catalog, now)`, the first real
+  production caller of the `Catalog` origin (previously exercised only by one round-trip
+  test in `template-provenance`). `lib.rs`'s `run_with_cli_and_ctrl_c` calls
+  `config::load_user_templates(...)` right after resolving the database path and before
+  `db::open`, propagating a load/parse/validation failure through the same `fail()` exit path
+  every other startup error uses.
+- **`--templates <PATH>` global CLI flag**, placed alongside `--db`/`--config` in `args.rs`,
+  with `env = "BHTUNE_TEMPLATES"` matching the other global flags' `BHTUNE_*` convention.
+
+**Testing approach.** 2 new tests in `db.rs` (seeding a user catalog tags rows with
+`TemplateOrigin::Catalog`; reseeding the same catalog is idempotent), 2 extended tests in
+`args.rs` (the new flag/env var/default), and 16 new tests in `config.rs`: 5 for
+`templates_path_from` (Windows with/without `%APPDATA%`, Unix via `$XDG_CONFIG_HOME`, Unix
+via `$HOME` fallback, Unix with neither set) and 11 for `load_user_templates` (nothing
+resolves → `None`; an auto-discovered path that's missing → `Ok(None)`, not an error; an
+explicit CLI-flag path that's missing → error; an explicit config-key path that's missing →
+error; a valid file parses; malformed TOML → error; a template failing `validate()` → error;
+the generic-I/O-error branch, e.g. reading a directory as if it were a file → error; the CLI
+flag winning over the config key; the config key being used when there's no CLI flag). Plus
+one `lib.rs` integration test proving `run_with_cli` itself (not just the lower-level
+`config::load_user_templates` unit) surfaces a broken `--templates` path as exit failure
+before ever calling `db::open`. `cargo llvm-cov` confirms 100% line coverage of every line
+this todo added or touched.
 
 ## Validation strategy: golden-master replay
 
@@ -1616,7 +1684,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-core`    | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness` | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending |
 | `bhtune-backend` | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`    | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending |
 | `bhtune-db`      | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance` | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below) |
-| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below |
+| `bhtune-cli`     | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog` | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above |
 | `bhtune-server`  | `server-http-api`/`openapi-contract`/`server-embed-spa`/`server-windows-service` | Placeholder binary; primary v1 GUI adapter, no `axum` dependency yet         |
 
 ## Phases and todos (roadmap order)
@@ -1664,11 +1732,13 @@ that binary does something real and gains its own targeted tests.
    sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
    own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done —
    see "Live-plant safety hardening" above. Phase 6.6, turning the built-in DCS/PLC templates
-   into a community-contributable catalog, has started: `template-catalog` (`bhtune-core`) and
+   into a community-contributable catalog, is well underway: `template-catalog` (`bhtune-core`),
    `template-provenance` (`bhtune-db` schema: a real three-way `origin` column plus
-   `versions_json`/`description`/`source`) are done — see "Community DCS/PLC template catalog"
-   above; `template-user-catalog` (auto-loading a user catalog file), `template-cli`
-   (multi-template import/export, `template delete`), and `template-docs` remain.
+   `versions_json`/`description`/`source`), and `template-user-catalog` (`bhtune-cli` auto-loads
+   a user-supplied catalog file on startup, resolved through the same config precedence chain as
+   every other setting) are all done — see "Community DCS/PLC template catalog" and
+   "Auto-loading a user template catalog" above; `template-cli` (multi-template import/export,
+   `template delete`) and `template-docs` remain.
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS

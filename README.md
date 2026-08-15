@@ -107,6 +107,7 @@ available key.
 | Database path         | `--db`          | `BHTUNE_DB`          | `db`          | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (or `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db` |
 | opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host` | `localhost:7600`                                                                            |
 | Default OPC DA server | `--server`      | —                    | `server`      | none — must be set one way or another                                                      |
+| User template catalog | `--templates`   | `BHTUNE_TEMPLATES`   | `templates`   | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (or `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error here |
 | Log level             | `--log-level`   | `RUST_LOG`           | `log.level`   | `info`                                                                                      |
 | Log directory         | `--log-dir`     | —                     | `log.dir`     | Linux/macOS: `$XDG_DATA_HOME/bhtune/logs` (or `$HOME/.local/share/bhtune/logs`); Windows: `%APPDATA%\bhtune\logs` |
 | Log format            | `--log-format`  | —                     | `log.format`  | `pretty`                                                                                    |
