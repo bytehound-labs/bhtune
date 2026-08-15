@@ -145,6 +145,56 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Start a new tune run.",
+        "description": "`POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, backend connect,\nand the `tune_runs` insert) inline and returns as soon as that succeeds, having already\n`tokio::spawn`ed the actual polling/tuning phase in the background. `201 Created` carries\nthe same [`RunDetailResponse`] `GET /api/runs/{id}` would show for this run at this\ninstant (almost certainly still `outcome: \"running\"`) -- poll that endpoint, or use\n`POST /api/runs/{id}/cancel`, to follow the run to completion.\n\n`409 Conflict` if another run is already active: v1 allows only one at a time (see\n`crate::active_run`).",
+        "operationId": "start_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The run was started; detail reflects its state right now.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable backend).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another tune run is already active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/runs/{id}": {
@@ -177,6 +227,43 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Request cancellation of a run, exactly as if Ctrl+C had been pressed against an\nequivalent CLI-driven run.",
+        "description": "`POST /api/runs/{id}/cancel` -- `404` if no run has that id; otherwise always `204`,\nwhether or not the run was actually active at the moment this was called (a run that\nalready finished simply has nothing left to cancel). Cancellation is asynchronous: the\nrun's background task still has to observe it, stop polling, and run its restore --\n`GET /api/runs/{id}` shows the eventual outcome.",
+        "operationId": "cancel_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cancellation requested (or the run was already inactive)."
           },
           "404": {
             "description": "No run with that id.",
@@ -975,6 +1062,219 @@
           }
         }
       },
+      "StartRunRequest": {
+        "type": "object",
+        "description": "The body of `POST /api/runs` -- full field parity with [`TuneArgs`], since starting a run\nover HTTP must be able to express everything `bhtune tune` can. Every field that has a\nCLI default (`--sim-gain`, `--poll-interval-ms`, etc.) repeats that exact default here via\n`#[serde(default = \"...\")]`, so an HTTP caller that omits a field gets identical behavior\nto a CLI invocation that omits the matching flag. `Option<T>` fields need no\n`#[serde(default)]` of their own -- serde already treats a missing key as `None` for an\n`Option` field.",
+        "required": [
+          "tagname",
+          "template",
+          "process_type",
+          "controller_type",
+          "relay_amp",
+          "backend"
+        ],
+        "properties": {
+          "allow_uncertain_quality": {
+            "type": "boolean",
+            "description": "Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. See\n[`TuneArgs::allow_uncertain_quality`]."
+          },
+          "backend": {
+            "$ref": "#/components/schemas/TuneBackend",
+            "description": "Which backend drives this tune. `\"replay\"` is rejected -- that backend exists only\nfor offline golden-trace validation, not for starting a live/simulated run."
+          },
+          "bridge_host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "opcda-bridge gateway address. Only meaningful with `backend: \"opcda\"` (default:\nresolved the same way the CLI resolves `--bridge-host`, via this process's own\nconfig/env)."
+          },
+          "controller_type": {
+            "$ref": "#/components/schemas/ControllerType"
+          },
+          "cycles_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Relay cycles to count once the skip period ends (default: looked up per\n`process_type`).",
+            "minimum": 0
+          },
+          "cycles_skip": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Relay cycles to skip before counting begins (default: looked up per `process_type`).",
+            "minimum": 0
+          },
+          "direction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ControllerDirection",
+                "description": "Fixed controller direction, overriding a live tag read."
+              }
+            ]
+          },
+          "mrft_delay": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Pre/post-test recording padding, in seconds.",
+            "minimum": 0
+          },
+          "mv_range_high": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Fixed MV range high, overriding a live tag read."
+          },
+          "mv_range_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Fixed MV range low, overriding a live tag read."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A friendly name for this run, recorded as `loop_name` (default: the PV tag name)."
+          },
+          "noise_protection_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Seconds a switch must persist before it's accepted (default: looked up per\n`process_type`).",
+            "minimum": 0
+          },
+          "op_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cap on any single backend read/write during the run, in seconds.",
+            "minimum": 0
+          },
+          "poll_interval_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How often to poll the backend, in milliseconds.",
+            "minimum": 0
+          },
+          "process_type": {
+            "$ref": "#/components/schemas/ProcessType"
+          },
+          "pv_range_high": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Fixed PV range high, overriding a live tag read. Required for `backend: \"simulator\"`,\nwhich has no range tags at all."
+          },
+          "pv_range_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Fixed PV range low, overriding a live tag read."
+          },
+          "relay_amp": {
+            "type": "number",
+            "format": "float",
+            "description": "Relay amplitude, as a percentage of the MV range."
+          },
+          "restore_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cap on restoring the loop to its pre-test state after the run ends, in seconds.",
+            "minimum": 0
+          },
+          "server": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "OPC DA server ProgID. Required with `backend: \"opcda\"`."
+          },
+          "sim_dead_time": {
+            "type": "number",
+            "format": "float",
+            "description": "Simulator dead time, in seconds (`backend: \"simulator\"` only)."
+          },
+          "sim_gain": {
+            "type": "number",
+            "format": "float",
+            "description": "Simulator process gain (`backend: \"simulator\"` only)."
+          },
+          "sim_initial_mv": {
+            "type": "number",
+            "format": "float",
+            "description": "Simulator initial MV (`backend: \"simulator\"` only)."
+          },
+          "sim_initial_pv": {
+            "type": "number",
+            "format": "float",
+            "description": "Simulator initial PV (`backend: \"simulator\"` only)."
+          },
+          "sim_noise": {
+            "type": "number",
+            "format": "float",
+            "description": "Simulator measurement noise amplitude (`backend: \"simulator\"` only)."
+          },
+          "sim_seed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Simulator RNG seed, for reproducible noise (`backend: \"simulator\"` only).",
+            "minimum": 0
+          },
+          "sim_tau": {
+            "type": "number",
+            "format": "float",
+            "description": "Simulator process time constant, in seconds (`backend: \"simulator\"` only)."
+          },
+          "tagname": {
+            "type": "string",
+            "description": "PV tag prefix; ignored for `backend: \"simulator\"`. See [`TuneArgs::tagname`]."
+          },
+          "template": {
+            "type": "string",
+            "description": "DCS/PLC template name (see `GET /api/templates`)."
+          },
+          "timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Hard wall-clock cap on this run's total duration, in seconds. See\n[`TuneArgs::timeout_secs`] -- always enforced, exactly as for a CLI-driven run.",
+            "minimum": 0
+          },
+          "write_pid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseLevel",
+                "description": "Non-interactively write this response level's calculated PID parameters back to the\nDCS. Requires `yes: true`."
+              }
+            ]
+          },
+          "yes": {
+            "type": "boolean",
+            "description": "Confirm an unattended PID write-back. Required alongside `write_pid` -- the request\nis rejected otherwise, identically to `--write-pid` without `--yes` on the CLI."
+          }
+        }
+      },
       "TemplateOrigin": {
         "type": "string",
         "description": "Where a `dcs_templates` row came from, and -- since [`TuneRunRow`] snapshots a copy of one\nat [`TuneRunRow::start`] time -- where a run's snapshotted template came from too. Kept as\none definition reused by both tables (`dcs_templates.origin`, `tune_runs.template_origin`)\nrather than two, so they can never drift on what the possible origins even are, and so a\nrun's history never needs to look the original row back up to know its provenance --\nwhich matters precisely because that row might no longer exist, or might have been\nre-imported under a different origin since.\n\n`builtin` and `catalog` rows are re-upserted from their respective data files on every\nstartup ([`crate::seed::seed_templates`]); `user` rows (hand-imported via `bhtune template\nimport`, or created through a future GUI editor) are never auto-touched -- auto-reseeding\na hand-edited row would silently discard someone's own customization, while *not*\nreseeding a shipped preset would mean a suffix/unit fix in a later release never reaches\nexisting installs.",
@@ -1194,7 +1494,7 @@
     },
     {
       "name": "runs",
-      "description": "Read-only tune-run history"
+      "description": "Start, cancel, and browse the history of tune runs"
     }
   ]
 }

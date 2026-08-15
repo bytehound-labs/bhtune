@@ -35,7 +35,19 @@ export interface paths {
      */
     get: operations["list_runs"];
     put?: never;
-    post?: never;
+    /**
+     * Start a new tune run.
+     * @description `POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, backend connect,
+     *     and the `tune_runs` insert) inline and returns as soon as that succeeds, having already
+     *     `tokio::spawn`ed the actual polling/tuning phase in the background. `201 Created` carries
+     *     the same [`RunDetailResponse`] `GET /api/runs/{id}` would show for this run at this
+     *     instant (almost certainly still `outcome: "running"`) -- poll that endpoint, or use
+     *     `POST /api/runs/{id}/cancel`, to follow the run to completion.
+     *
+     *     `409 Conflict` if another run is already active: v1 allows only one at a time (see
+     *     `crate::active_run`).
+     */
+    post: operations["start_run"];
     delete?: never;
     options?: never;
     head?: never;
@@ -56,6 +68,31 @@ export interface paths {
     get: operations["show_run"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/runs/{id}/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Request cancellation of a run, exactly as if Ctrl+C had been pressed against an
+     *     equivalent CLI-driven run.
+     * @description `POST /api/runs/{id}/cancel` -- `404` if no run has that id; otherwise always `204`,
+     *     whether or not the run was actually active at the moment this was called (a run that
+     *     already finished simply has nothing left to cancel). Cancellation is asynchronous: the
+     *     run's background task still has to observe it, stop polling, and run its restore --
+     *     `GET /api/runs/{id}` shows the eventual outcome.
+     */
+    post: operations["cancel_run"];
     delete?: never;
     options?: never;
     head?: never;
@@ -429,6 +466,154 @@ export interface components {
       tick_index: number;
     };
     /**
+     * @description The body of `POST /api/runs` -- full field parity with [`TuneArgs`], since starting a run
+     *     over HTTP must be able to express everything `bhtune tune` can. Every field that has a
+     *     CLI default (`--sim-gain`, `--poll-interval-ms`, etc.) repeats that exact default here via
+     *     `#[serde(default = "...")]`, so an HTTP caller that omits a field gets identical behavior
+     *     to a CLI invocation that omits the matching flag. `Option<T>` fields need no
+     *     `#[serde(default)]` of their own -- serde already treats a missing key as `None` for an
+     *     `Option` field.
+     */
+    StartRunRequest: {
+      /**
+       * @description Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. See
+       *     [`TuneArgs::allow_uncertain_quality`].
+       */
+      allow_uncertain_quality?: boolean;
+      /**
+       * @description Which backend drives this tune. `"replay"` is rejected -- that backend exists only
+       *     for offline golden-trace validation, not for starting a live/simulated run.
+       */
+      backend: components["schemas"]["TuneBackend"];
+      /**
+       * @description opcda-bridge gateway address. Only meaningful with `backend: "opcda"` (default:
+       *     resolved the same way the CLI resolves `--bridge-host`, via this process's own
+       *     config/env).
+       */
+      bridge_host?: string | null;
+      controller_type: components["schemas"]["ControllerType"];
+      /**
+       * Format: int32
+       * @description Relay cycles to count once the skip period ends (default: looked up per
+       *     `process_type`).
+       */
+      cycles_count?: number | null;
+      /**
+       * Format: int32
+       * @description Relay cycles to skip before counting begins (default: looked up per `process_type`).
+       */
+      cycles_skip?: number | null;
+      direction?: null | components["schemas"]["ControllerDirection"];
+      /**
+       * Format: int32
+       * @description Pre/post-test recording padding, in seconds.
+       */
+      mrft_delay?: number;
+      /**
+       * Format: float
+       * @description Fixed MV range high, overriding a live tag read.
+       */
+      mv_range_high?: number | null;
+      /**
+       * Format: float
+       * @description Fixed MV range low, overriding a live tag read.
+       */
+      mv_range_low?: number | null;
+      /** @description A friendly name for this run, recorded as `loop_name` (default: the PV tag name). */
+      name?: string | null;
+      /**
+       * Format: int32
+       * @description Seconds a switch must persist before it's accepted (default: looked up per
+       *     `process_type`).
+       */
+      noise_protection_secs?: number | null;
+      /**
+       * Format: int64
+       * @description Cap on any single backend read/write during the run, in seconds.
+       */
+      op_timeout_secs?: number;
+      /**
+       * Format: int64
+       * @description How often to poll the backend, in milliseconds.
+       */
+      poll_interval_ms?: number;
+      process_type: components["schemas"]["ProcessType"];
+      /**
+       * Format: float
+       * @description Fixed PV range high, overriding a live tag read. Required for `backend: "simulator"`,
+       *     which has no range tags at all.
+       */
+      pv_range_high?: number | null;
+      /**
+       * Format: float
+       * @description Fixed PV range low, overriding a live tag read.
+       */
+      pv_range_low?: number | null;
+      /**
+       * Format: float
+       * @description Relay amplitude, as a percentage of the MV range.
+       */
+      relay_amp: number;
+      /**
+       * Format: int64
+       * @description Cap on restoring the loop to its pre-test state after the run ends, in seconds.
+       */
+      restore_timeout_secs?: number;
+      /** @description OPC DA server ProgID. Required with `backend: "opcda"`. */
+      server?: string | null;
+      /**
+       * Format: float
+       * @description Simulator dead time, in seconds (`backend: "simulator"` only).
+       */
+      sim_dead_time?: number;
+      /**
+       * Format: float
+       * @description Simulator process gain (`backend: "simulator"` only).
+       */
+      sim_gain?: number;
+      /**
+       * Format: float
+       * @description Simulator initial MV (`backend: "simulator"` only).
+       */
+      sim_initial_mv?: number;
+      /**
+       * Format: float
+       * @description Simulator initial PV (`backend: "simulator"` only).
+       */
+      sim_initial_pv?: number;
+      /**
+       * Format: float
+       * @description Simulator measurement noise amplitude (`backend: "simulator"` only).
+       */
+      sim_noise?: number;
+      /**
+       * Format: int64
+       * @description Simulator RNG seed, for reproducible noise (`backend: "simulator"` only).
+       */
+      sim_seed?: number;
+      /**
+       * Format: float
+       * @description Simulator process time constant, in seconds (`backend: "simulator"` only).
+       */
+      sim_tau?: number;
+      /** @description PV tag prefix; ignored for `backend: "simulator"`. See [`TuneArgs::tagname`]. */
+      tagname: string;
+      /** @description DCS/PLC template name (see `GET /api/templates`). */
+      template: string;
+      /**
+       * Format: int64
+       * @description Hard wall-clock cap on this run's total duration, in seconds. See
+       *     [`TuneArgs::timeout_secs`] -- always enforced, exactly as for a CLI-driven run.
+       */
+      timeout_secs?: number;
+      write_pid?: null | components["schemas"]["ResponseLevel"];
+      /**
+       * @description Confirm an unattended PID write-back. Required alongside `write_pid` -- the request
+       *     is rejected otherwise, identically to `--write-pid` without `--yes` on the CLI.
+       */
+      yes?: boolean;
+    };
+    /**
      * @description Where a `dcs_templates` row came from, and -- since [`TuneRunRow`] snapshots a copy of one
      *     at [`TuneRunRow::start`] time -- where a run's snapshotted template came from too. Kept as
      *     one definition reused by both tables (`dcs_templates.origin`, `tune_runs.template_origin`)
@@ -588,6 +773,48 @@ export interface operations {
       };
     };
   };
+  start_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["StartRunRequest"];
+      };
+    };
+    responses: {
+      /** @description The run was started; detail reflects its state right now. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunDetailResponse"];
+        };
+      };
+      /** @description The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable backend). */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Another tune run is already active. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   show_run: {
     parameters: {
       query?: never;
@@ -608,6 +835,36 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["RunDetailResponse"];
         };
+      };
+      /** @description No run with that id. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  cancel_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Run id */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Cancellation requested (or the run was already inactive). */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description No run with that id. */
       404: {
