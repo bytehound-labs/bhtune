@@ -13,7 +13,8 @@ A free, open-source PID loop auto-tuner for industrial control systems (DCS/PLC)
 BHTune runs a Modified Relay Feedback Test (MRFT) against a live PID control loop, then
 calculates and — with explicit confirmation — writes back tuned PID constants. It targets
 Yokogawa CentumVP, Honeywell Experion, Schneider Modicon, and Allen-Bradley PlantPAx control
-systems out of the box, with more addable via templates.
+systems out of the box, with more addable via [templates](#dcsplc-templates) — contributions
+welcome.
 
 BHTune is designed around a few core principles:
 
@@ -112,6 +113,30 @@ available key.
 | Log directory         | `--log-dir`     | —                     | `log.dir`     | Linux/macOS: `$XDG_DATA_HOME/bhtune/logs` (or `$HOME/.local/share/bhtune/logs`); Windows: `%APPDATA%\bhtune\logs` |
 | Log format            | `--log-format`  | —                     | `log.format`  | `pretty`                                                                                    |
 | Log rotation          | `--log-rotation`| —                     | `log.rotation`| `daily`                                                                                     |
+
+## DCS/PLC templates
+
+A template maps one DCS/PLC vendor's PID conventions — tag suffixes, units, and raw mode
+values — onto BHTune's tuning engine. Four ship built in (Yokogawa CentumVP, Honeywell
+Experion, Schneider Modicon, Allen-Bradley PlantPAx), and more are added as a plain TOML
+data file change, not a Rust change:
+
+```sh
+bhtune template list                                              # built-in, catalog, and user templates
+bhtune template show "Yokogawa CentumVP"                          # full field detail as JSON
+bhtune template export "Yokogawa CentumVP" out.toml --format toml # a PR-ready [[template]] block
+bhtune template import ./site-catalog.toml                        # a single template or a multi-template catalog
+bhtune template delete "My Custom Template"
+```
+
+You can also auto-load your own catalog file on every startup (see `templates`/
+`--templates`/`BHTUNE_TEMPLATES` in the Configuration table above) — handy for sharing
+site-specific templates across installations without contributing them upstream.
+
+**Contributions of new templates are very welcome.** The goal is a full,
+community-maintained library eventually covering as many control systems as possible. See
+[`docs/dcs-templates.md`](docs/dcs-templates.md) for the complete field reference and a
+worked example, and [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to submit one.
 
 ## Automation
 

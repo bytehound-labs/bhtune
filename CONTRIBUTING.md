@@ -65,6 +65,28 @@ PRs must pass `cargo fmt --check --all`, `cargo clippy --workspace --all-targets
 - Describe what changed and why; link an issue if one exists.
 - Squash-merge once CI is green and the CLA check passes.
 
+## Contributing a DCS/PLC template
+
+Adding support for a control system BHTune doesn't already know about is a data file
+change, not a Rust change — no code, no rebuild logic, just a `[[template]]` block in
+[`crates/bhtune-core/templates/builtin.toml`](crates/bhtune-core/templates/builtin.toml).
+This is one of the easiest ways to contribute, and it's one we'd especially like to see:
+the goal is a community-maintained library covering as many DCS/PLC systems as possible.
+
+See [`docs/dcs-templates.md`](docs/dcs-templates.md) for the full field-by-field reference
+and a worked example. In short:
+
+- Copy the closest existing `[[template]]` block as a starting point, or generate one from
+  a template you've already built with `bhtune template export <name> out.toml --format toml`.
+- Fill in every tag suffix, the raw mode values, and a `versions` list naming the
+  release(s) you're targeting, in that vendor's own version-naming convention.
+- If a newer release of a vendor you've already contributed changes its tag conventions,
+  add a **new** `[[template]]` entry with its own `name` — never edit an existing entry's
+  suffixes in place, since sites on the older release still depend on the mapping as
+  written.
+- A unit test parses and validates the entire embedded catalog on every CI run, so a
+  malformed or incomplete contribution fails the build rather than merging silently broken.
+
 ## Releases
 
 SemVer tags cut directly from `main`. No release branches. release-plz tracks per-crate versions

@@ -60,7 +60,10 @@ same precedence chain as every other setting), seeding it with `TemplateOrigin::
 multi-template TOML catalog, `template export --format toml` emits a PR-ready
 `[[template]]` block, and `template delete <name>` removes a template (with a friendly
 error if a saved loop still references it) — see "Community DCS/PLC template catalog"
-below; only `template-docs` remains in this phase.
+below. `template-docs` is also done: the README documents the `template` subcommand and
+invites template contributions, `CONTRIBUTING.md` has a "Contributing a DCS/PLC template"
+section, and `docs/dcs-templates.md` documents every field with a worked example — this
+closes out Phase 6.6.
 `backend-replay`, the replay harness, and the web GUI are not yet — the GUI plan
 reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri
 code was written (see "Key architectural decisions"). See "Phases and todos" below for what's
@@ -1830,14 +1833,16 @@ that binary does something real and gains its own targeted tests.
    sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
    own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done —
    see "Live-plant safety hardening" above. Phase 6.6, turning the built-in DCS/PLC templates
-   into a community-contributable catalog, is well underway: `template-catalog` (`bhtune-core`),
+   into a community-contributable catalog, is done: `template-catalog` (`bhtune-core`),
    `template-provenance` (`bhtune-db` schema: a real three-way `origin` column plus
    `versions_json`/`description`/`source`), `template-user-catalog` (`bhtune-cli` auto-loads
    a user-supplied catalog file on startup, resolved through the same config precedence chain as
-   every other setting), and `template-cli` (multi-template TOML import/export, `template
-   delete`, and validating a single-JSON-template import too) are all done — see "Community
-   DCS/PLC template catalog", "Auto-loading a user template catalog", and "Multi-template
-   import, TOML export, and `template delete`" above; only `template-docs` remains.
+   every other setting), `template-cli` (multi-template TOML import/export, `template
+   delete`, and validating a single-JSON-template import too), and `template-docs` (README/
+   `CONTRIBUTING.md`/`docs/dcs-templates.md` documenting the catalog and inviting
+   contributions) are all done — see "Community DCS/PLC template catalog", "Auto-loading a
+   user template catalog", and "Multi-template import, TOML export, and `template delete`"
+   above.
 7. **Web GUI (`bhtune-server` + React SPA)** — `bhtune-server` promoted from stub to an Axum
    server exposing the tuning engine over an OpenAPI-described HTTP API (`server-http-api`,
    `openapi-contract`), embedding the built SPA into the binary (`server-embed-spa`); React + TS

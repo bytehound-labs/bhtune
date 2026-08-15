@@ -5,8 +5,7 @@
 # depends on this file being present on disk -- only *contributing* a new template requires
 # editing it.
 #
-# Contribution rules (see docs/dcs-templates.md for the full worked-example writeup once it
-# exists):
+# Contribution rules (see docs/dcs-templates.md for the full worked-example writeup):
 #   - `name` is the unique key. Adding a template never removes or edits an existing
 #     `[[template]]` block's suffix mapping in place.
 #   - `versions` records the DCS/PLC releases this mapping is known to apply to, in that
