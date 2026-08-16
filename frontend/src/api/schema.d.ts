@@ -70,9 +70,19 @@ export interface paths {
     post?: never;
     /**
      * Delete one run and its recorded samples/results/write-back audit rows.
-     * @description `DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run is currently active
-     *     (still executing in a background task -- deleting the row out from under it would corrupt
-     *     whatever it tries to write next; cancel it first).
+     * @description `DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run's own recorded
+     *     `outcome` is still [`TuneOutcome::Running`] (deleting the row out from under an in-flight
+     *     task would corrupt whatever it tries to write next; cancel it first). Deliberately checks
+     *     the run row's own `outcome` rather than [`crate::active_run::ActiveRun`]'s in-memory
+     *     active-run slot: `drive()` persists every terminal outcome (`persist_results` then
+     *     `TuneRunRow::complete`/`fail`/`abort`) *before* returning, and `ActiveRun::release` only
+     *     runs strictly after `drive()` returns (see `routes::runs::start_run`'s spawned task), so
+     *     there is a real -- if brief -- window where a run's outcome is already durably
+     *     `completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the slot is free yet.
+     *     Checking the DB's own authoritative, durable state instead of the best-effort in-memory
+     *     tracker closes that race outright, rather than requiring the caller to retry (as
+     *     `frontend/e2e/tune.spec.ts`'s `startTune()` already has to for the equivalent gap on the
+     *     *start* side).
      */
     delete: operations["delete_run"];
     options?: never;
@@ -962,7 +972,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description The run is still active. */
+      /** @description The run has not finished yet. */
       409: {
         headers: {
           [name: string]: unknown;

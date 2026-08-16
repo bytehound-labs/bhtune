@@ -245,7 +245,7 @@
           "runs"
         ],
         "summary": "Delete one run and its recorded samples/results/write-back audit rows.",
-        "description": "`DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run is currently active\n(still executing in a background task -- deleting the row out from under it would corrupt\nwhatever it tries to write next; cancel it first).",
+        "description": "`DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run's own recorded\n`outcome` is still [`TuneOutcome::Running`] (deleting the row out from under an in-flight\ntask would corrupt whatever it tries to write next; cancel it first). Deliberately checks\nthe run row's own `outcome` rather than [`crate::active_run::ActiveRun`]'s in-memory\nactive-run slot: `drive()` persists every terminal outcome (`persist_results` then\n`TuneRunRow::complete`/`fail`/`abort`) *before* returning, and `ActiveRun::release` only\nruns strictly after `drive()` returns (see `routes::runs::start_run`'s spawned task), so\nthere is a real -- if brief -- window where a run's outcome is already durably\n`completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the slot is free yet.\nChecking the DB's own authoritative, durable state instead of the best-effort in-memory\ntracker closes that race outright, rather than requiring the caller to retry (as\n`frontend/e2e/tune.spec.ts`'s `startTune()` already has to for the equivalent gap on the\n*start* side).",
         "operationId": "delete_run",
         "parameters": [
           {
@@ -274,7 +274,7 @@
             }
           },
           "409": {
-            "description": "The run is still active.",
+            "description": "The run has not finished yet.",
             "content": {
               "application/json": {
                 "schema": {
