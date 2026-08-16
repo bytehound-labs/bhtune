@@ -268,9 +268,24 @@ mod tests {
 
     #[tokio::test]
     async fn run_with_cli_config_load_failure_is_exit_failure() {
-        // An unwritable directory as the DB path is a hard error opening the database.
+        // An existing *file* occupying where a parent directory needs to go is a hard,
+        // portable error: `db::ensure_parent_dir`'s `create_dir_all` auto-creates a merely
+        // *missing* directory tree (deliberate first-run UX, see that function's doc
+        // comment) on every platform, so a bare nonexistent path is not reliably a failure
+        // trigger at all -- confirmed by hand, it does not fail on Linux either. What
+        // `create_dir_all` can never do on any OS is turn an existing regular file into a
+        // directory, so nesting the DB path under a plain file forces a portable, guaranteed
+        // failure. (An earlier version of this test used a hardcoded Unix-style absolute
+        // path like `/nonexistent-dir/bhtune.db`, relying on root-owned `/` rejecting
+        // directory creation for an unprivileged user -- that's a Linux permissions quirk,
+        // not a portable one: a leading `/`/`\` with no drive letter resolves relative to
+        // the current drive on Windows, and the `windows` CI job caught it landing somewhere
+        // writable there instead of failing.)
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
         let cli = Cli {
-            db: Some(PathBuf::from("/nonexistent-dir/bhtune.db")),
+            db: Some(blocker.join("bhtune.db")),
             config: None,
             templates: None,
             log_level: None,
