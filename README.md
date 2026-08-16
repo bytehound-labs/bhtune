@@ -102,9 +102,14 @@ scaffolding workspace intentionally does not declare unused dependencies.
 
 ## Installation
 
-Not yet released. Once tagged, prebuilt binaries will be attached to the
-[Releases](https://github.com/bytehound-labs/bhtune/releases) page, and `bhtune-cli` will be
-published to [crates.io](https://crates.io) for `cargo install bhtune-cli`.
+Not yet released — no `v0.1.0` tag has been cut. Release tooling is in place
+(`.github/workflows/release.yml`, `taiki-e/upload-rust-binary-action`): once a version tag is
+pushed, prebuilt Linux/macOS/Windows archives (each bundling both `bhtune` and
+`bhtune-server`) attach automatically to the [Releases](https://github.com/bytehound-labs/bhtune/releases)
+page. A Windows installer, a Docker image, and an AUR package are committed follow-on
+distribution channels, not yet built. Publishing to [crates.io](https://crates.io), Homebrew,
+and a few other channels is still an open evaluation, not a commitment — see the
+[roadmap](docs/roadmap.md).
 
 To build from source (requires a Rust toolchain supporting the 2024 edition — Rust 1.94 or
 newer, BHTune's declared MSRV, verified in CI):

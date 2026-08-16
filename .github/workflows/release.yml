@@ -1,0 +1,118 @@
+name: Release
+
+# Tag push (`v0.1.0`, `v0.1.0-rc.1`, ...) builds the release binary matrix and uploads real
+# assets to the GitHub Release for that tag. `workflow_dispatch` runs the exact same matrix
+# in dry-run mode (build + package + checksum, no upload, no release required to exist) --
+# a safe way to smoke-test this workflow, or a dependency bump's effect on it, without
+# cutting a real release. See AGENTS.md's "Windows installer"/"Packaging and distribution"
+# sections for how these archives feed `pkg-windows-installer`/`pkg-aur`/`pkg-docker`.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v[0-9]+.*"
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Only for a real tag push -- a `workflow_dispatch` dry run has no release to create and
+  # needs none, since `build`'s upload step below is itself skipped (dry-run) in that case.
+  #
+  # NOTE for `release-v1`: once `RELEASE_PLZ_TOKEN` is provisioned and release-plz's own
+  # workflow lands, confirm release-plz isn't *also* creating the GitHub Release for the
+  # same tag (it can either just tag, or tag-and-release depending on config) -- creating it
+  # twice would fail this job. If release-plz ends up owning release creation, delete this
+  # job and drop `needs: create-release` from `build` below; `build` already tolerates that
+  # rename via `if: ${{ !cancelled() }}`.
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # for taiki-e/create-gh-release-action
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          # No `changelog:` yet -- release-plz (`release-v1`) is what will eventually
+          # produce a CHANGELOG.md to point this at. Until then every release's notes are
+          # just GitHub's auto-generated "what's changed" list.
+          allow-missing-changelog: true
+
+  build:
+    needs: create-release
+    # Runs even when `create-release` was skipped (a `workflow_dispatch` dry run) --
+    # `needs:` on a *skipped* job otherwise skips this one too by default.
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          # Explicit even though macos-latest has defaulted to arm64 since macOS 14 --
+          # taiki-e/upload-rust-binary-action's own docs recommend always pinning this once
+          # macOS is in the matrix, since that default has changed before. Matches
+          # opcda-bridge's own macOS-arm64-only release matrix (no Intel Mac archive).
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write # for taiki-e/upload-rust-binary-action
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      # bhtune-backend depends on opcda-bridge, whose opcda-bridge-proto crate compiles
+      # bridge.proto via tonic-prost-build at build time -- protoc is a real, non-dev build
+      # requirement here, not just a test-only one. Matches checks.yml's `check`/`windows`/
+      # `package`/`msrv` jobs, which install it for the same reason.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: protoc
+
+      # `pnpm/setup@v2` runs `pnpm install` itself (default `install: true`), so no separate
+      # install step is needed here -- matches checks.yml's `frontend`/`website` jobs.
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@lts
+          cache: true
+
+      # Must run *before* the binary build below: bhtune-server's `--release` build embeds
+      # whatever is on disk at `frontend/dist/` into the binary at compile time via
+      # rust-embed (see crates/bhtune-server/build.rs and src/spa.rs) -- there is no
+      # after-the-fact embed step. A debug build (e.g. e2e.yml's) reads the directory live
+      # instead, which is why only *this* workflow needs this step ahead of the Rust build.
+      - name: Build frontend
+        run: pnpm --filter bhtune-frontend run build
+
+      # Bundles both v1 adapter binaries (the headless CLI and the primary GUI/HTTP server)
+      # into one per-platform archive -- matching the "one package, not two" decision in
+      # AGENTS.md's "Packaging and distribution" section, since there is no GUI-toolkit
+      # dependency to split them apart for anymore now that the UI is browser-served.
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: bhtune,bhtune-server
+          target: ${{ matrix.target }}
+          # Required once `bin` names more than one binary -- the default `$bin-$target`
+          # archive name isn't defined for that case.
+          archive: bhtune-$tag-$target
+          include: LICENSE,README.md
+          checksum: sha256
+          locked: true
+          # Build and package on every trigger (proves the matrix/frontend-embed/protoc
+          # setup all still work), but only actually upload on a real tag push -- a
+          # `workflow_dispatch` dry run has no release to upload into.
+          dry-run: ${{ github.event_name != 'push' }}

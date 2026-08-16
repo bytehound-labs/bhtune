@@ -201,7 +201,15 @@ bug on its very first execution — `bhtune-server`'s new `build.rs` now fixes a
 compile-time build-order trap where compiling the crate before `frontend/dist/` exists
 permanently breaks asset serving for that build, regardless of build order afterward; see
 "`server-embed-spa`: embedding the built SPA into the binary" below for the full mechanism
-and fix. `backend-replay` and the golden-trace replay harness are not yet — the GUI plan
+and fix. `build-matrix` (the last item in Phase 8) is now done too:
+`.github/workflows/release.yml` builds and packages the `bhtune`+`bhtune-server` binaries
+for Linux/macOS/Windows, building the frontend first so the release build's `rust-embed`
+step captures real SPA assets, via `taiki-e/create-gh-release-action` +
+`taiki-e/upload-rust-binary-action` — opcda-bridge's own already-proven tooling, adopted
+in place of the originally-planned `cargo-dist` once that sibling project's simpler setup
+was reviewed — see "`build-matrix`: the release binary matrix" below for the full design,
+including why this does not by itself mean `release-v1` should happen yet.
+`backend-replay` and the golden-trace replay harness are not yet — the GUI plan
 reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any
 Tauri code was written (see "Key architectural decisions"). Phase 9's two front-loaded,
 run-now items are also done: `docs-contract` (see
@@ -2531,6 +2539,78 @@ no config changes were needed to go live. Remaining in this area: `docs-api-rust
 `release-v1` actually cuts a version — a version dropdown with a single entry is pure
 overhead).
 
+## `build-matrix`: the release binary matrix
+
+`.github/workflows/release.yml` builds and packages the `bhtune` (CLI) and `bhtune-server`
+(GUI/HTTP) binaries for Linux (`x86_64-unknown-linux-gnu`), macOS
+(`aarch64-apple-darwin`), and Windows (`x86_64-pc-windows-msvc`) — the same three-platform
+shape opcda-bridge already ships.
+
+**`taiki-e/create-gh-release-action` + `taiki-e/upload-rust-binary-action`, not
+`cargo-dist`.** The plan originally called for `cargo-dist`, but reviewing opcda-bridge's
+own already-working `release.yml` (part of `cross-project-ci-audit`) turned up a simpler,
+already-proven alternative doing exactly what this project needs, with far less machinery:
+one action builds the binaries, packages a platform-appropriate archive (`.tar.gz` on
+Unix, `.zip` on Windows), computes checksums, and uploads to the tag's GitHub Release.
+`cargo-dist` additionally generates shell/PowerShell/npm installer scripts and an
+updater — none of which bhtune needs, since the Windows MSI (`pkg-windows-installer`) and
+the AUR package (`pkg-aur`) are the actual installer stories, not a `curl | sh` script.
+Adopting the sibling project's simpler, working tool beats introducing a second,
+heavier one for the same job — directly the kind of cross-project consistency
+`cross-project-ci-audit` recommended pursuing.
+
+**One archive per platform, bundling both binaries.** `bin: bhtune,bhtune-server` in a
+single `upload-rust-binary-action` step packages both into one
+`bhtune-$tag-$target.(tar.gz|zip)` archive (plus `LICENSE`/`README.md` via `include:`) —
+matching the "one package, not two" packaging decision below: now that the GUI is
+browser-served rather than a Tauri app, there is no GUI-toolkit dependency that would need
+keeping off a headless server build, so there is no reason to ship the CLI and the server
+as separate packages either.
+
+**The frontend must build before the Rust build, every time, in this specific
+workflow.** `bhtune-server`'s `--release` profile embeds `frontend/dist/` into the binary
+at compile time via `rust-embed` (see `server-embed-spa`); a debug build (as `e2e.yml`
+uses) reads the directory live off disk instead and doesn't need this ordering. This is
+the one workflow in the repo that produces `--release` binaries meant to run standalone
+without the source tree alongside them, so it's the one place a missing/stale
+`frontend/dist/` would silently ship a binary with no UI (or an old one) baked in. The
+step order is: `pnpm/setup@v2` (which runs `pnpm install` itself) → `pnpm --filter
+bhtune-frontend run build` → the Rust binary build/package step.
+
+**`protoc` is a real build requirement here, not just a test-only one.** Unlike a pure
+Rust dependency, `bhtune-backend`'s (non-dev) `opcda-bridge` dependency pulls in
+`opcda-bridge-proto`, whose `build.rs` calls `tonic_prost_build::compile_protos` at
+compile time — so every platform in the matrix installs `protoc` via
+`taiki-e/install-action`, matching `checks.yml`'s `check`/`windows`/`package`/`msrv` jobs.
+SQLite itself needs no such step: `bhtune-db`'s `sqlx` dependency uses the bundled
+(vendored, statically-linked) SQLite feature, not `sqlite-unbundled`, so the produced
+binaries have no external SQLite runtime dependency to document or install separately —
+confirmed by running a real `--release` build locally and serving a request from it
+directly.
+
+**Two trigger modes, doing genuinely different things, not just a toggle.** A `v[0-9]+.*`
+tag push runs the real thing: create the GitHub Release for that tag (unless
+`release-plz` — not yet wired up, see `release-v1` — ends up owning that step instead, in
+which case the `create-release` job should be deleted rather than fighting over who
+creates it), then build, package, and upload real assets into it. A manual
+`workflow_dispatch` runs the identical matrix in `dry-run: true` mode — builds and
+packages everything, proving the frontend build, `protoc` install, and packaging all still
+work on every platform — but uploads nothing and requires no release to already exist,
+making it safe to run at any time (e.g. after a dependency bump) without cutting a real
+release. Verified directly: a manual dispatch run built and packaged all three platforms
+successfully with the dry-run banner in each job's log confirming no upload was attempted.
+
+**This does not, by itself, ship v0.1.0.** `build-matrix` makes cutting a real release
+_possible_ — a maintainer can push a `v0.1.0` tag today and get a real GitHub Release with
+three working platform archives attached, with no dependency on `release-plz` or its
+still-unprovisioned `RELEASE_PLZ_TOKEN` secret. Whether to actually do that now is a
+deliberate call left to the project owner, not an automatic next step this todo unblocks
+by completing: the golden-master replay validation gate (`core-replay-harness`) that
+proves the Rust engine reproduces the legacy app's tuning behavior exactly is not yet
+built, and shipping a first public release before that gate is green would let users run
+an unverified reimplementation of code that writes PID constants to live plant equipment.
+See `release-v1` in "Phases and todos" below.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -2935,10 +3015,14 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    `bhtune-server` and the frontend, installs Chromium, and runs the suite in CI, uploading
    the HTML report on failure. A direct dividend of dropping Tauri: `tauri-driver`/WebDriver would
    have been markedly more fragile in CI than plain Playwright against a real browser.
-   Remaining: golden replay suite in CI (`e2e-golden-ci`, blocked on `trace-fixtures`/
-   `capture-traces`); release build matrix for Linux/macOS/
-   Windows (`build-matrix`, via `cargo-dist`, embedding the built SPA — no Tauri bundler or
-   WebView runtime to manage).
+   `build-matrix` is also done: `.github/workflows/release.yml` builds and packages the
+   `bhtune`+`bhtune-server` binaries for Linux/macOS/Windows via
+   `taiki-e/create-gh-release-action` + `taiki-e/upload-rust-binary-action` (opcda-bridge's
+   own tooling, in place of the originally-planned `cargo-dist`), building the frontend
+   first so the release build's `rust-embed` step captures real SPA assets — no Tauri
+   bundler or WebView runtime to manage. See "`build-matrix`: the release binary matrix"
+   above for the full design. Remaining: golden replay suite in CI (`e2e-golden-ci`,
+   blocked on `trace-fixtures`/`capture-traces`).
 9. **Documentation and release** — two prerequisites are already done, front-loaded ahead of
    the rest of this phase since they're cheap and are what actually prevents drift: a
    documentation contract in this file (`docs-contract`, see "Documentation contract" above)
@@ -2961,10 +3045,14 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    deliberately _not_ planned — continuous historization and, for now, cross-run comparison) —
    linked from the README's existing compact roadmap section rather than duplicating it.
    Remaining: `cargo doc` published alongside the site (`docs-api-rustdoc`), release-time
-   version snapshots (`docs-versioning`), v0.1.0 with per-platform binaries, a Windows MSI
-   installer (`pkg-windows-installer`, the primary distribution artifact, now unblocked for AUR
-   too since `pkg-aur` needs the man pages/completions `docs-generated-cli` just produced), and a
-   secondary Docker image (`pkg-docker`).
+   version snapshots (`docs-versioning`, deferred until `release-v1`), and packaging:
+   `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
+   `release.yml`, but cutting the actual first tag is a deliberate call left to the project
+   owner, not automatic — see "`build-matrix`: the release binary matrix" above), a
+   Windows MSI installer (`pkg-windows-installer`, the primary distribution artifact), and
+   `pkg-aur` (already unblocked — it needs the man pages/completions `docs-generated-cli`
+   produces plus `build-matrix`'s Linux archive, both done), and a secondary Docker image
+   (`pkg-docker`).
 10. **History explorer** (low priority, post-v1) — a filterable/sortable run list and PV/MV
     trend view over already-recorded history (`history-explorer-ui`), age-based retention
     disabled by default (`history-retention`), and headless parity via `bhtune history
