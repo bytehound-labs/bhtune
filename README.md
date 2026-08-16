@@ -353,7 +353,10 @@ way.
 
 BHTune's tuning engine is validated by golden-master replay: recorded input/output traces are
 replayed through the engine and the results are asserted to match exactly, so future changes can
-never silently alter tuning behavior. The full v1 feature checklist — what's required, what's
+never silently alter tuning behavior. The first real trace, captured from the legacy application
+against a simulated process, replays tick-for-tick and result-for-result through the Rust engine
+(`crates/bhtune-core/tests/golden_replay.rs`) — proving the port behaviorally matches the
+original, not just arguing that it should. The full v1 feature checklist — what's required, what's
 deferred, and what's deliberately not planned — lives at
 [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md).
 

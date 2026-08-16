@@ -300,7 +300,15 @@ broken Dockerfile fails the PR that broke it rather than surfacing at release ti
 system dependencies the Rust builder stage needs beyond `protoc` (`build-essential`, for
 `bhtune-db`'s bundled-SQLite `cc` compile step — easy to miss since the plain, non-`slim`
 `rust` image includes it by default and only `slim` doesn't) and the container-specific
-`BHTUNE_BIND=0.0.0.0:8787` default's rationale. See "Phases and todos" below for what's next.
+`BHTUNE_BIND=0.0.0.0:8787` default's rationale.
+`trace-fixtures`/`core-replay-harness` (Phase 0/3) are now also done: `flow_pi_direct` (the
+first real trace captured on the `hp` Windows host) is normalized by
+`scripts/convert_golden_trace.py` and replayed tick-by-tick through a real `MrftEngine` plus
+`calculate_all` in `crates/bhtune-core/tests/golden_replay.rs` — the Rust port is now proven,
+not just argued, to reproduce the legacy C# app's tuning behavior exactly. See "Validation
+strategy: golden-master replay" below for the two genuine legacy-CSV-logger precision limits
+this surfaced (both independently confirmed against the real C# source, not worked around by
+loosening tolerances blindly). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -2891,15 +2899,53 @@ into a stable, versioned format under `tests/golden/`; `core-replay-harness` fee
 the engine and asserts per-tick and final-result equality. This is the gate for confidence that a
 change didn't silently alter tuning behavior.
 
+Both are now done. `scripts/convert_golden_trace.py` normalizes a captured `--log --decryptedLog`
+CSV pair into `tests/golden/fixtures/<name>.json` (parameterized by process/controller type,
+direction, and template — see its module docstring for the full contribution workflow, including
+how to independently derive `direction` and the peaks/troughs array lengths rather than guessing
+them). `crates/bhtune-core/tests/golden_replay.rs` is the harness itself: it deserializes a
+fixture, drives a real `MrftEngine::step` once per tick asserting `state()` against every tick's
+recorded fields, captures the `Action::Complete` payload, and asserts it plus `calculate_all`'s
+three response-level results against the fixture's `expected_final`. The first fixture
+(`flow_pi_direct`, Flow/PI/Reverse, from the first real hp-VM capture) passes in full — the Rust
+port reproduces the legacy app's tuning behavior tick-for-tick and result-for-result.
+
+Getting there surfaced two genuine data-precision limits of the legacy CSV logger itself (not
+engine defects — confirmed in both cases by reading the actual C# source, not by loosening
+tolerances to make a test pass):
+
+- **The raw CSV logs `TimeCurrent`/`MvSwitchTimesList_N` at whole-second precision only**, despite
+  the true ~800 ms polling cadence. This creates an exact tie at any threshold comparison whose
+  true sub-second offset happens to straddle it — confirmed once, at a noise-protection-boundary
+  tick, and resolved with a single, evidence-based timestamp nudge (documented inline in the
+  fixture's `description` and in `scripts/convert_golden_trace.py`'s `--nudge-tick` flag), not by
+  changing the engine, since the engine's own `<=` comparison was verified byte-for-byte identical
+  to `OPCClass.cs`'s.
+- **`CalculatedMRFTperiodMinutes` (`OPCClass.cs`, ~line 743) computes elapsed time via
+  `TimeSpan.Seconds` — an integer, truncating — rather than total elapsed seconds**: exactly the
+  bug `TuningMathCompat::replicate_period_truncation_bug` already exists to optionally reproduce
+  (see "Correctness-critical design details" below, item 2). Combined with the whole-second
+  logging ceiling above, the fixture's reconstructed elapsed time between the first and last
+  recorded switch can differ from the legacy app's own truncated-integer computation by up to one
+  second — fully and numerically explaining the one place the replay harness needs a dedicated,
+  narrow tolerance (`ti_minutes`/`integral`, ~0.003 minutes observed against a documented ~0.0028
+  theoretical bound for this trace's cycle count) rather than the general tolerance used
+  everywhere else. This is a property of this one whole-second-logged trace, not the engine: the
+  harness deliberately drives `calculate_all` with the _default_ (bug-fixed) `TuningMathCompat`,
+  since that is the behavior bhtune ships.
+
 Reference traces are captured two ways, neither of which requires Windows:
 
 1. **Synthetic runs against the in-Rust FOPDT simulator** (`backend-simulator`, done — see
    "Simulator backend reference" above) across a coverage matrix of process types, controller
    types, action directions, and edge cases (non-zero MV range floor, varied skip/count cycles).
    `bhtune-backend`'s own test suite already includes one such run (a full `MrftEngine` driven
-   through `SimulatorBackend` to completion); `core-replay-harness` will need more, spanning the
-   full matrix, once it's built.
-2. **Real traces recorded from field use**, once the CLI/GUI exist.
+   through `SimulatorBackend` to completion).
+2. **Real traces recorded from field use** (`capture-traces`) — one is captured and replayed so
+   far (`flow_pi_direct`); the other 5 process types, PID/temperature controllers, reverse action,
+   cascade (non-zero MV range floor), and varied skip/count remain to be captured on the `hp`
+   Windows host and run through `scripts/convert_golden_trace.py` + a new `golden_replay.rs` test
+   function each.
 
 Snapshot a run as a fixture only after manually verifying the engine's output is
 control-theoretically correct for that scenario — the fixture then guards against future
@@ -3174,7 +3220,7 @@ that binary does something real and gains its own targeted tests.
 
 | Crate              | Phase                                                                                                                                                                           | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bhtune-core`      | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness`                                                                                            | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `bhtune-core`      | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness`                                                                                            | All done. `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); `core-replay-harness` (`crates/bhtune-core/tests/golden_replay.rs`) replays the first real captured trace (`tests/golden/fixtures/flow_pi_direct.json`) tick-by-tick through a real `MrftEngine` plus `calculate_all`, and asserts exact behavioral parity with the legacy C# app — see "Validation strategy: golden-master replay" below for the fixture-reconstruction subtleties this surfaced (a whole-second timestamp precision ceiling in the legacy CSV logger, and the already-known period-truncation bug independently corroborating the fixture's own recorded values)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `bhtune-backend`   | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`                                                                                                            | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `bhtune-db`        | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance`/`history-retention`                                                               | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination, now also `TuneRunRow::delete_matching` for age-based retention sweeps; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`/`docs-generated-cli`/`history-retention`/`history-cli`           | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above. `docs-generated-cli` (Phase 9) is also done: `examples/gen_docs.rs` regenerates the CLI reference, man pages, shell completions, and the `bhtune.toml`/template-catalog JSON Schema from the same `clap`/`serde` definitions, drift-gated in CI — see "`docs-generated-cli`: generating the CLI reference, man pages, completions, and config schema" above. `history-retention` (Phase 10) is also done: a new `retention` module (`cutoff_for`/`sweep_retention`) shared by the startup sweep, `bhtune-server`'s periodic ticker, and `history-cli`'s `prune` below, resolved through `resolve_retention_days`'s usual config precedence. `history-cli` is also done: `bhtune history prune` (`--older-than-days`/`--dry-run`/`--output json`) completes the `history` subcommand surface alongside the already-shipped `list`/`show`/`revert` |
@@ -3185,16 +3231,21 @@ that binary does something real and gains its own targeted tests.
 ## Phases and todos (roadmap order)
 
 0. **Behavior specification and reference traces** — the v1 feature/acceptance checklist at
-   [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md) (done); capture golden-master reference traces
-   from the simulator and, later, real field use; build the trace fixture normalizer.
+   [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md) (done); the trace fixture
+   normalizer (`scripts/convert_golden_trace.py`) and the first real captured-and-normalized
+   trace (`flow_pi_direct`) are done — see "Validation strategy: golden-master replay" above.
+   Capturing the remaining 5 process types, PID/temperature, reverse action, cascade, and varied
+   skip/count on the `hp` Windows host (`capture-traces`) is ongoing; `cleanup-golden-traces`
+   (deleting the raw CSV captures once parity is thoroughly proven) stays deliberately last.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
    `cargo-deny` open-source dependency gate.
 2. **`opcda-bridge` reusable client library** (published upstream) — consumed as a plain
    crates.io dependency (`opcda-bridge = "0.2"`), local to `bhtune-backend`'s own `Cargo.toml`
    (see "Key architectural decisions" for why it stays out of `[workspace.dependencies]`).
-3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, and tuning math are
-   done; the replay harness remains, with the correctness-critical details above baked in and
-   unit-tested directly.
+3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, tuning math, and the
+   golden-master replay harness are all done, with the correctness-critical details above baked
+   in and unit-tested directly, plus one real captured trace now proving exact behavioral parity
+   with the legacy C# app (see "Validation strategy: golden-master replay" above).
 4. **Backends** — the `Backend` trait (`backend-trait`, done: `read`/`write`/`browse` plus
    `TagId`/`TagValue`/`TagWrite`/`WriteOutcome`/`TagNode`/`BackendError` in `crates/
 bhtune-backend`), its OPC DA implementation (`backend-opcda`, done: `OpcDaBackend` in

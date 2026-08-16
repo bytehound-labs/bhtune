@@ -1,0 +1,415 @@
+{
+  "name": "flow_pi_direct",
+  "description": "Real MRFT capture from legacy FalconTune.exe against the Python FOPDT simulator on the hp Windows VM (see capture-traces). Flow process, PI controller, no MV range floor (uncascaded). NOTE: direction is \"reverse\" here, confirmed against the recorded per-tick MvSignNextStep values -- the \"direct\" in this trace filename does not refer to bhtune ControllerDirection. NOTE: tick index 3 timestamp is nudged 500ms earlier than the CSV whole-second-rounded value to break a noise-protection-boundary tie the source log precision could not represent -- see scripts/convert_golden_trace.py.",
+  "source": {
+    "static_log": "flow_pi_direct_20260812_142707_1d.csv",
+    "dynamic_log": "flow_pi_direct_20260812_142707_2d.csv",
+    "captured": "2026-08-12"
+  },
+  "config": {
+    "process_type": "flow",
+    "controller_type": "pi",
+    "relay_amp_percent": 2.0,
+    "num_cycles_skip": 1,
+    "num_cycles_count": 2,
+    "noise_protection_secs": 3,
+    "mrft_delay_secs": 0
+  },
+  "direction": "reverse",
+  "initial": {
+    "pv_ini": 40.00012,
+    "mv_ini": 40.0,
+    "mv_range_low": 0.0,
+    "mv_range_high": 100.0
+  },
+  "pv_range": {
+    "high": 100.0,
+    "low": 0.0
+  },
+  "template_name": "Yokogawa CentumVP",
+  "ticks": [
+    {
+      "time": "2026-08-12T14:27:08Z",
+      "pv": 40.00042,
+      "expected": {
+        "hysteresis": 0.0001288376,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 1,
+        "cycles_completed": 0,
+        "cycles_remaining": 3
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:09Z",
+      "pv": 40.00042,
+      "expected": {
+        "hysteresis": 0.0001288376,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 1,
+        "cycles_completed": 0,
+        "cycles_remaining": 3
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:10Z",
+      "pv": 40.00005,
+      "expected": {
+        "hysteresis": 0.0001288376,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 1,
+        "cycles_completed": 0,
+        "cycles_remaining": 3
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:10.500Z",
+      "pv": 38.73603,
+      "expected": {
+        "hysteresis": 0.5473516,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 1,
+        "cycles_completed": 0,
+        "cycles_remaining": 3
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:12Z",
+      "pv": 38.73603,
+      "expected": {
+        "hysteresis": 0.5473516,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 2,
+        "cycles_completed": 0,
+        "cycles_remaining": 3
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:12Z",
+      "pv": 38.27108,
+      "expected": {
+        "hysteresis": 0.7486736,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 2,
+        "cycles_completed": 0,
+        "cycles_remaining": 3
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:13Z",
+      "pv": 40.62828,
+      "expected": {
+        "hysteresis": 0.7486736,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 2,
+        "cycles_completed": 0,
+        "cycles_remaining": 3
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:14Z",
+      "pv": 41.49495,
+      "expected": {
+        "hysteresis": 0.7486736,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 2,
+        "cycles_completed": 0,
+        "cycles_remaining": 3
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:15Z",
+      "pv": 41.49495,
+      "expected": {
+        "hysteresis": 0.7486736,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 3,
+        "cycles_completed": 1,
+        "cycles_remaining": 2
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:16Z",
+      "pv": 41.81427,
+      "expected": {
+        "hysteresis": 0.7855277,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 3,
+        "cycles_completed": 1,
+        "cycles_remaining": 2
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:16Z",
+      "pv": 39.40324,
+      "expected": {
+        "hysteresis": 0.7855277,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 3,
+        "cycles_completed": 1,
+        "cycles_remaining": 2
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:17Z",
+      "pv": 39.40324,
+      "expected": {
+        "hysteresis": 0.7855277,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 3,
+        "cycles_completed": 1,
+        "cycles_remaining": 2
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:18Z",
+      "pv": 38.51624,
+      "expected": {
+        "hysteresis": 0.7855277,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 4,
+        "cycles_completed": 1,
+        "cycles_remaining": 2
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:19Z",
+      "pv": 38.18959,
+      "expected": {
+        "hysteresis": 0.7839618,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 4,
+        "cycles_completed": 1,
+        "cycles_remaining": 2
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:20Z",
+      "pv": 40.59851,
+      "expected": {
+        "hysteresis": 0.7839618,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 4,
+        "cycles_completed": 1,
+        "cycles_remaining": 2
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:20Z",
+      "pv": 40.59851,
+      "expected": {
+        "hysteresis": 0.7839618,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 4,
+        "cycles_completed": 1,
+        "cycles_remaining": 2
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:21Z",
+      "pv": 41.48464,
+      "expected": {
+        "hysteresis": 0.7839618,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 5,
+        "cycles_completed": 2,
+        "cycles_remaining": 1
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:22Z",
+      "pv": 41.81032,
+      "expected": {
+        "hysteresis": 0.7838148,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 5,
+        "cycles_completed": 2,
+        "cycles_remaining": 1
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:23Z",
+      "pv": 41.81032,
+      "expected": {
+        "hysteresis": 0.7838148,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 5,
+        "cycles_completed": 2,
+        "cycles_remaining": 1
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:24Z",
+      "pv": 39.40216,
+      "expected": {
+        "hysteresis": 0.7838148,
+        "mv_value_current": 38.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 5,
+        "cycles_completed": 2,
+        "cycles_remaining": 1
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:25Z",
+      "pv": 38.51552,
+      "expected": {
+        "hysteresis": 0.7838148,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 6,
+        "cycles_completed": 2,
+        "cycles_remaining": 1
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:25Z",
+      "pv": 38.1901,
+      "expected": {
+        "hysteresis": 0.7837405,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 6,
+        "cycles_completed": 2,
+        "cycles_remaining": 1
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:26Z",
+      "pv": 38.1901,
+      "expected": {
+        "hysteresis": 0.7837405,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 6,
+        "cycles_completed": 2,
+        "cycles_remaining": 1
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:27Z",
+      "pv": 40.59889,
+      "expected": {
+        "hysteresis": 0.7837405,
+        "mv_value_current": 42.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 6,
+        "cycles_completed": 2,
+        "cycles_remaining": 1
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:28Z",
+      "pv": 41.4845,
+      "expected": {
+        "hysteresis": 0.7837405,
+        "mv_value_current": 40.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 7,
+        "cycles_completed": 3,
+        "cycles_remaining": 0
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:29Z",
+      "pv": 41.4845,
+      "expected": {
+        "hysteresis": 0.6427377,
+        "mv_value_current": 40.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 7,
+        "cycles_completed": 3,
+        "cycles_remaining": 0
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:29Z",
+      "pv": 41.81014,
+      "expected": {
+        "hysteresis": 0.7837389,
+        "mv_value_current": 40.0,
+        "mv_sign_next_step": -1,
+        "counter_all_switches": 7,
+        "cycles_completed": 3,
+        "cycles_remaining": 0
+      }
+    },
+    {
+      "time": "2026-08-12T14:27:30Z",
+      "pv": 40.66624,
+      "expected": {
+        "hysteresis": 0.7837389,
+        "mv_value_current": 40.0,
+        "mv_sign_next_step": 1,
+        "counter_all_switches": 7,
+        "cycles_completed": 3,
+        "cycles_remaining": 0
+      }
+    }
+  ],
+  "expected_final": {
+    "mv_sign_init": -1,
+    "switch_times": [
+      "2026-08-12T14:27:15Z",
+      "2026-08-12T14:27:18Z",
+      "2026-08-12T14:27:21Z",
+      "2026-08-12T14:27:25Z",
+      "2026-08-12T14:27:28Z"
+    ],
+    "peaks": [41.81427, 41.81032],
+    "troughs": [38.27108, 38.18959, 38.1901],
+    "oscillation": {
+      "period_minutes": 0.1,
+      "frequency": 62.83186,
+      "pv_amp_raw": 1.811226,
+      "pv_amp_percent": 1.811226
+    },
+    "results": [
+      {
+        "response_level": "aggressive",
+        "kp": 0.63408,
+        "ti_minutes": 0.0331,
+        "td_minutes": 0.0,
+        "proportional": 157.7088,
+        "integral": 1.986,
+        "derivative": 0.0
+      },
+      {
+        "response_level": "moderate",
+        "kp": 0.4245946,
+        "ti_minutes": 0.0331,
+        "td_minutes": 0.0,
+        "proportional": 235.5188,
+        "integral": 1.986,
+        "derivative": 0.0
+      },
+      {
+        "response_level": "sluggish",
+        "kp": 0.3177429,
+        "ti_minutes": 0.0331,
+        "td_minutes": 0.0,
+        "proportional": 314.7198,
+        "integral": 1.986,
+        "derivative": 0.0
+      }
+    ]
+  }
+}

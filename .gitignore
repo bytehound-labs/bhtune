@@ -40,3 +40,7 @@ frontend/blob-report/
 *.db
 *.db-shm
 *.db-wal
+
+# Python (scripts/convert_golden_trace.py)
+__pycache__/
+*.pyc
