@@ -86,6 +86,13 @@ jobs:
             type=edge,branch=main
             type=sha,prefix=sha-
 
+      # `provenance`/`sbom` default to on as of `build-push-action` v4+, attaching a
+      # build-provenance (and SBOM) attestation as an extra manifest in the pushed image
+      # index. That manifest has no real OS/arch, so GHCR's package UI renders it as a
+      # bogus `unknown/unknown` platform entry alongside the real `linux/amd64` image --
+      # cosmetic only (`docker pull`/`run` always resolve the correct platform and ignore
+      # it), a known GHCR UI quirk (github/community discussion #45969), not a broken
+      # build. Disabled here purely to keep the package page's platform list clean.
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
@@ -95,3 +102,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
