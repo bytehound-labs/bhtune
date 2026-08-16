@@ -1,6 +1,6 @@
 [package]
 name = "bhtune-server"
-description = "Axum HTTP/REST adapter for BHTune: the primary v1 GUI backend, serving the tuning engine and the (future) React SPA from one binary."
+description = "Axum HTTP/REST adapter for BHTune: the primary v1 GUI backend, serving the tuning engine and the embedded React SPA from one binary."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

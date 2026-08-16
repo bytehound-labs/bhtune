@@ -234,7 +234,10 @@ publishing that same `docs/` folder as a browsable, searchable site, with its ow
 [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/) — see
 "`docs-site-scaffold`: the Docusaurus documentation site" below. `docs-roadmap` is also done:
 [`docs/roadmap.md`](docs/roadmap.md) covers the fuller reasoning behind each item in the
-README's roadmap section.
+README's roadmap section. `docs-api-rustdoc` is also done: `cargo doc` output for all six
+crate/binary targets is published under `/api/` on that same site, indexed from a
+hand-written `docs/reference/api.md` — see "`docs-api-rustdoc`: publishing the Rust API
+reference" below.
 Phase 10's `history-retention` is now done: age-based deletion of `tune_runs` (and their
 cascaded samples/results/write-back audit rows) older than a configurable number of days,
 off by default (retain forever). `resolve_retention_days` (`bhtune-cli`'s `config.rs`)
@@ -2506,7 +2509,7 @@ format hook's glob — `man/*.1`, `completions/_bhtune` (no extension), and
 that publishes `docs/` as a browsable, searchable site, live at
 [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/) — see the
 `website/` row in "Crate map and phase status" above for what's done versus still pending
-(`docs-api-rustdoc`, `docs-versioning`).
+(`docs-versioning`).
 
 **The content root is the real `docs/`, not a copy.** `docusaurus.config.ts`'s `docs` preset
 sets `path: '../docs'`, so the docs plugin reads Markdown directly from the repo-root folder
@@ -2589,10 +2592,62 @@ cancel-in-progress: false }` serializes deployments rather than cancelling one m
 so a fast-following push can never leave the live site on a half-published build. No custom
 domain; `url`/`baseUrl`/`organizationName`/`projectName` in `docusaurus.config.ts` were
 already set correctly for the `<org>.github.io/<repo>` path during `docs-site-scaffold`, so
-no config changes were needed to go live. Remaining in this area: `docs-api-rustdoc`
-(publish `cargo doc` output alongside the site) and `docs-versioning` (deferred until
-`release-v1` actually cuts a version — a version dropdown with a single entry is pure
-overhead).
+no config changes were needed to go live. Remaining in this area: `docs-versioning`
+(deferred until `release-v1` actually cuts a version — a version dropdown with a single
+entry is pure overhead).
+
+## `docs-api-rustdoc`: publishing the Rust API reference
+
+`cargo doc --workspace --no-deps --all-features` output is published under `/api/` on the
+docs site, alongside a hand-written index page at `docs/reference/api.md` (linked from the
+site navigation/footer and from `docs/reference/_category_.json`'s sidebar). Together these
+give contributors a real, browsable rustdoc reference for all six crate/binary targets
+(`bhtune`, `bhtune_backend`, `bhtune_cli`, `bhtune_core`, `bhtune_db`, `bhtune_server`)
+without hand-authoring any of the content itself.
+
+**Rustdoc output has no root `index.html` for a multi-crate workspace**, and produces five
+fixed infrastructure directories alongside the real per-crate ones: `search.index`, `src`,
+`static.files`, `trait.impl`, `type.impl`. `.github/workflows/docs-deploy.yml`'s publish step
+therefore generates its own landing `index.html` by listing `website/static/api/*/` and
+excluding exactly those five names — every other directory found is a real crate/binary and
+gets a link, so the landing page can never go stale when a crate is added, renamed, or
+removed; nothing needs to be hardcoded or kept in sync by hand. A stale `bhtune_desktop`
+entry from the deleted `arch-drop-desktop` crate was found locally during development,
+persisting in a dirty `target/doc/` from before that crate was removed from the workspace —
+the same publish step always runs `rm -rf target/doc` first specifically to guard against
+`Swatinem/rust-cache` ever restoring a stale `target/doc` containing docs for a since-deleted
+crate.
+
+**`docs/reference/api.md` links via Docusaurus's `pathname://` protocol**, e.g.
+`pathname:///api/bhtune_core/index.html`, not a normal Markdown link. This is deliberate and
+load-bearing: `checks.yml`'s PR-time `website` job builds the Docusaurus site without ever
+generating rustdoc content (that only happens in `docs-deploy.yml`, which runs on `main`
+pushes, not PRs), so `website/static/api/` genuinely does not exist at PR-build time.
+Confirmed empirically that `pathname://` links bypass Docusaurus's route-resolution
+machinery entirely and, critically, are **not checked by the `onBrokenLinks`/
+`onBrokenAnchors: 'throw'` gate** — the site builds successfully with these links present
+even when the target files are completely absent from disk. A normal internal Markdown link
+would have failed that gate on every single PR. The links still correctly receive the site's
+`baseUrl` (`/bhtune/`) prefix at build time, verified by grepping the built HTML output for
+`href=/bhtune/api/bhtune_core/index.html`-style attributes.
+
+**Two different "`/api/`" concepts exist on this project and `docs/reference/api.md`'s prose
+deliberately disambiguates them**: (1) `bhtune-server`'s live HTTP REST API, documented via
+OpenAPI/Scalar UI at `/api/docs` on a _running_ server instance (the functional surface the
+frontend and any integration script actually call); (2) this static rustdoc Rust-source
+reference, published at `/api/` on the docs website — a completely separate, statically
+hosted GitHub Pages site unrelated to any running server. Both nominally live under a path
+containing "/api/", so the page says so explicitly rather than leaving it to be inferred.
+
+**`docs-deploy.yml` gained a Rust toolchain** (`dtolnay/rust-toolchain@stable` +
+`Swatinem/rust-cache@v2`) and `protoc` (`taiki-e/install-action@v2`, the same tool the
+`opcda-bridge-proto`/`tonic-build` build dependency needs in `checks.yml`) purely to run
+`cargo doc`; it built no Rust code before this. The push-trigger `paths:` filter was widened
+to include `crates/**` and root `Cargo.toml`, since rustdoc content now depends on source
+changes, not just `docs/`/`website/` edits. `--all-features` (matching `checks.yml`'s
+clippy/test convention) ensures `bhtune-cli`'s optional `schemars` feature — which gates the
+JSON-Schema-deriving types `docs-generated-cli`'s `gen_docs` example needs — is included in
+the published docs.
 
 ## `build-matrix`: the release binary matrix
 
@@ -2949,7 +3004,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`/`docs-generated-cli`/`history-retention`/`history-cli`           | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above. `docs-generated-cli` (Phase 9) is also done: `examples/gen_docs.rs` regenerates the CLI reference, man pages, shell completions, and the `bhtune.toml`/template-catalog JSON Schema from the same `clap`/`serde` definitions, drift-gated in CI — see "`docs-generated-cli`: generating the CLI reference, man pages, completions, and config schema" above. `history-retention` (Phase 10) is also done: a new `retention` module (`cutoff_for`/`sweep_retention`) shared by the startup sweep, `bhtune-server`'s periodic ticker, and `history-cli`'s `prune` below, resolved through `resolve_retention_days`'s usual config precedence. `history-cli` is also done: `bhtune history prune` (`--older-than-days`/`--dry-run`/`--output json`) completes the `history` subcommand surface alongside the already-shipped `list`/`show`/`revert` |
 | `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-template-update-api`/`server-embed-spa`/`server-windows-service`/`history-retention`/`history-explorer-ui` | `server-http-api` + `openapi-contract` + `server-start-tune-api` + `server-template-update-api` + `server-embed-spa` + `history-retention` + `history-explorer-ui` done — real Axum binary (health/templates full CRUD/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below — `PUT /api/templates/{name}` editing an existing `user`-origin template in place (400 on a name mismatch, 404 if unknown, 409 if not user-owned), `GET /api/runs/{id}/export?format=csv                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | json`and`DELETE /api/runs/{id}`completing the history explorer (the delete guard checks the run's own DB`outcome`rather than the in-memory`ActiveRun`slot, closing a real race window — see the Status section above), the built SPA embedded directly into the binary via`rust-embed` with an SPA-fallback route, correct MIME types, and long-lived cache headers on hashed assets — see "`server-embed-spa`: embedding the built SPA into the binary" below — and a `spawn_retention_sweeper`background task resweeping every 24 hours (env-var-only config,`BHTUNE_RETENTION_DAYS`, since this binary has no `clap`) that logs and continues on failure rather than crashing the server; only Windows service support pending |
 | `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`/`history-explorer-ui`                                                                                                | All four done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above. Routing shell, Templates (List/Detail/Create/Edit), History (List/Detail, plus export CSV/JSON and delete actions), a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation), and a live PV/MV trend chart (`TrendChart`, uPlot-based, fed by a new SSE `useRunStream` hook while a run is active and by `useRun`'s `samples` once terminal) are all done and manually verified against a real running server                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `website/` (pnpm)  | `docs-site-scaffold`/`docs-site-deploy`/`docs-api-rustdoc`/`docs-versioning`                                                                                                    | `docs-site-scaffold` + `docs-site-deploy` done — a Docusaurus 3 site (`bhtune-website`) whose `docs` plugin points `path` directly at the repo-root `docs/` (not a website-local copy), so the published site and the Markdown read on GitHub can never diverge; `docs/internal/**` is excluded. `docs/intro.md` is the site root (`slug: /` + `routeBasePath: '/'`, no separate marketing homepage); sidebar ordering comes from `sidebar_position` frontmatter and `_category_.json` files already added to `docs/`. Search is `@easyops-cn/docusaurus-search-local` (static, offline, FOSS). `onBrokenLinks`/`onBrokenAnchors` are both `'throw'`, giving the site build a real drift gate for free (a CI `website` job runs `format:check`/`lint`/`typecheck`/`build` on every PR — the license-allowlist gate is covered once, workspace-wide, by the `frontend` job's `check:licenses` step). Live at [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/), published by `docs-deploy.yml` via `actions/deploy-pages` on every `main` push touching `docs/`/`website/`. Not yet done: the `cargo doc` API reference (`docs-api-rustdoc`) and release-time version snapshots (`docs-versioning`, deferred until `release-v1`). See "`docs-site-scaffold`: the Docusaurus documentation site" above for the full design.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `website/` (pnpm)  | `docs-site-scaffold`/`docs-site-deploy`/`docs-api-rustdoc`/`docs-versioning`                                                                                                    | `docs-site-scaffold` + `docs-site-deploy` + `docs-api-rustdoc` done — a Docusaurus 3 site (`bhtune-website`) whose `docs` plugin points `path` directly at the repo-root `docs/` (not a website-local copy), so the published site and the Markdown read on GitHub can never diverge; `docs/internal/**` is excluded. `docs/intro.md` is the site root (`slug: /` + `routeBasePath: '/'`, no separate marketing homepage); sidebar ordering comes from `sidebar_position` frontmatter and `_category_.json` files already added to `docs/`. Search is `@easyops-cn/docusaurus-search-local` (static, offline, FOSS). `onBrokenLinks`/`onBrokenAnchors` are both `'throw'`, giving the site build a real drift gate for free (a CI `website` job runs `format:check`/`lint`/`typecheck`/`build` on every PR — the license-allowlist gate is covered once, workspace-wide, by the `frontend` job's `check:licenses` step). Live at [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/), published by `docs-deploy.yml` via `actions/deploy-pages` on every `main` push touching `docs/`/`website/`/`crates/**`. The `cargo doc` API reference is published under `/api/` by that same workflow, indexed from `docs/reference/api.md` via a `pathname://` link (not broken-link-checked, since the content only exists after `docs-deploy.yml` runs on `main`, never during a PR's `website` job) — see "`docs-api-rustdoc`: publishing the Rust API reference" above for the full design. Not yet done: release-time version snapshots (`docs-versioning`, deferred until `release-v1`). See "`docs-site-scaffold`: the Docusaurus documentation site" above for the full design.                                                                           |
 
 ## Phases and todos (roadmap order)
 
@@ -3099,7 +3154,9 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    subscription-RPC blocker, multi-loop/batch tuning, and the history explorer (including what's
    deliberately _not_ planned — continuous historization and, for now, cross-run comparison) —
    linked from the README's existing compact roadmap section rather than duplicating it.
-   Remaining: `cargo doc` published alongside the site (`docs-api-rustdoc`), release-time
+   `docs-api-rustdoc` is also done: `cargo doc` output is published under `/api/` alongside the
+   site, indexed from a hand-written `docs/reference/api.md` — see "`docs-api-rustdoc`:
+   publishing the Rust API reference" above for the full design. Remaining: release-time
    version snapshots (`docs-versioning`, deferred until `release-v1`), and packaging:
    `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
    `release.yml`, but cutting the actual first tag is a deliberate call left to the project

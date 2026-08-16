@@ -83,6 +83,7 @@ const config: Config = {
             { label: "Introduction", to: "/" },
             { label: "Getting started", to: "/getting-started/installation" },
             { label: "DCS/PLC templates", to: "/dcs-templates" },
+            { label: "Rust API reference", to: "/reference/api" },
           ],
         },
         {

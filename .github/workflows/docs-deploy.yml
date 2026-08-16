@@ -1,16 +1,20 @@
 name: Deploy docs site
 
-# Publishes website/ (built against ../docs) to GitHub Pages at
-# https://bytehound-labs.github.io/bhtune/. Path-filtered so unrelated pushes to main
-# (e.g. crates/**-only changes) don't redeploy an unchanged site. `checks.yml`'s `website`
-# job already builds and lints on every PR; this workflow only ever runs on main, once a
-# docs change has actually merged.
+# Publishes website/ (built against ../docs, plus the generated Rust API reference under
+# /api/ -- see docs-api-rustdoc) to GitHub Pages at https://bytehound-labs.github.io/bhtune/.
+# Path-filtered so unrelated pushes to main don't redeploy an unchanged site. `crates/**` is
+# included because it changes the rustdoc content even when no Markdown changes; `checks.yml`'s
+# `website` job already builds and lints the Docusaurus site (without rustdoc, via a
+# `pathname://` link that isn't broken-link-checked -- see docs/reference/api.md) on every PR;
+# this workflow only ever runs on main, once a docs or code change has actually merged.
 on:
   push:
     branches: [main]
     paths:
       - "docs/**"
       - "website/**"
+      - "crates/**"
+      - "Cargo.toml"
       - "pnpm-lock.yaml"
       - ".github/workflows/docs-deploy.yml"
   workflow_dispatch:
@@ -29,6 +33,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: protoc
+
+      - name: Generate the Rust API reference (rustdoc)
+        # `--no-deps` publishes only this workspace's own crates, not every dependency's
+        # docs too. A clean `target/doc` first guards against a crate removed from the
+        # workspace (e.g. the deleted bhtune-desktop) lingering in a cache-restored dir.
+        run: |
+          rm -rf target/doc
+          cargo doc --workspace --no-deps --all-features --locked
+
+      - name: Publish the API reference under website/static/api/
+        # Docusaurus copies static/ into build/ verbatim, so anything placed here before
+        # the build step below ends up served at /api/ once deployed. The landing page
+        # lists every crate/binary rustdoc was actually run for, discovered from the
+        # output directory itself rather than hardcoded, so it can't go stale when a
+        # crate is added, renamed, or removed -- it only excludes rustdoc's own fixed set
+        # of shared-infrastructure directories (none of which are documented crates).
+        run: |
+          rm -rf website/static/api
+          mkdir -p website/static/api
+          cp -r target/doc/. website/static/api/
+          {
+            echo '<!doctype html><meta charset="utf-8">'
+            echo '<title>BHTune Rust API reference</title>'
+            echo '<h1>BHTune Rust API reference</h1>'
+            echo '<ul>'
+            for entry in website/static/api/*/; do
+              name="$(basename "$entry")"
+              case "$name" in
+                src | trait.impl | type.impl | static.files | search.index) continue ;;
+              esac
+              echo "<li><a href=\"./${name}/index.html\">${name}</a></li>"
+            done
+            echo '</ul>'
+            echo '<p><a href="../reference/api/">Back to the annotated reference</a></p>'
+          } >website/static/api/index.html
 
       - uses: pnpm/setup@v2
         with:

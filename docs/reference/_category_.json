@@ -3,6 +3,6 @@
   "position": 5,
   "link": {
     "type": "generated-index",
-    "description": "Generated reference material: the full CLI help text and the configuration schema. Never hand-edited -- see CONTRIBUTING.md."
+    "description": "cli.md and config.md are generated verbatim from the code (the full CLI help text and the configuration schema) and are never hand-edited -- see CONTRIBUTING.md. api.md is a short hand-written index into the full Rust API reference (rustdoc), which is too large to commit as Markdown and is instead published under /api/ on this site."
   }
 }
