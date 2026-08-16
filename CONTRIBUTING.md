@@ -68,6 +68,16 @@ Rust PRs must pass `cargo fmt --check --all`, `cargo clippy --workspace --all-ta
 check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
 is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`.
 
+## Documentation
+
+A documentation update is part of a PR's definition of done whenever it changes user-visible
+behavior — a new CLI flag, config key, HTTP endpoint, default value, or safety rule. Update
+whichever of `README.md`, `AGENTS.md`, and `docs/` describes the area you're changing; see
+"Documentation contract" in `AGENTS.md` for the full policy. If you use Copilot CLI against
+this repo, `.github/hooks/docs-drift.json` prints a one-line reminder at the end of a session
+that changed `crates/**` without touching any documentation surface — a safety net, not a
+substitute for doing this deliberately.
+
 ## Pull requests
 
 - Keep PRs small and focused — one logical change each.

@@ -177,7 +177,12 @@ in the process: the MRFT oscillation period silently lost sub-second precision b
 zeroing `ti_minutes`/`td_minutes` even for PI/PID). `backend-replay` and the golden-trace
 replay harness are not yet — the GUI plan reversed from a Tauri desktop app to a browser UI
 served by `bhtune-server` before any Tauri code was written (see "Key architectural
-decisions"). See "Phases and todos" below for what's next.
+decisions"). Phase 9's two front-loaded, run-now items are also done: `docs-contract` (see
+"Documentation contract" above) and `docs-copilot-hook` — a paired `sessionStart`/`sessionEnd`
+Copilot CLI hook (`.github/hooks/docs-drift.json`) that warns when a session changed
+`crates/**` without touching any documentation surface, covering both a session's already-
+committed-and-pushed changes and anything still uncommitted (see `.github/hooks/README.md`
+for why it's a pair, not a single hook). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -2356,6 +2361,49 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state �
 16. **A live PV/MV trend chart is a core UX expectation for the web GUI** — plan for high-rate
     streaming updates (multiple times per second) from the start; see "Chart library" below.
 
+## Documentation contract (`docs-contract`)
+
+A documentation update is part of the definition-of-done for any change that alters
+user-visible behavior — a new CLI flag or subcommand, a config key, an HTTP endpoint, a
+default value, an error message a user would act on, a template/catalog field, or a safety
+rule. There is no dedicated "catch up on docs" phase later; drift that isn't fixed in the same
+change tends to never get fixed.
+
+What to update, in order of how much it costs to get wrong:
+
+1. **Generated references** (CLI help text via `clap`, the OpenAPI spec, the generated TS
+   client) are never hand-edited and never go stale by definition — the build regenerates them
+   and CI's `git diff --exit-code` gates fail if a commit forgets to include the regenerated
+   output. Nothing to remember here beyond running the generator before committing.
+2. **This file (`AGENTS.md`)** — update the relevant phase's roadmap bullet under "Phases and
+   todos", the Status paragraph if the change is significant enough to shift what's next, and
+   (for anything correctness-critical or easy to silently regress) a new numbered item under
+   "Correctness-critical design details" or an addition to an existing one. This file is
+   written for future coding-agent sessions rather than end users, but it is exactly as
+   load-bearing as user-facing docs: a session that trusts a stale "not yet implemented" line
+   redoes already-finished work, and one that trusts a stale design-rule description can
+   reintroduce a bug that was already fixed once (see item 2 under "Correctness-critical design
+   details" for a real example of exactly that risk, just in the other direction — the rule was
+   documented correctly but the code didn't follow it).
+3. **`README.md`** — anything a new user or contributor reads first: setup, CLI usage,
+   architecture, the published roadmap. Keep it accurate to what's actually shipped, not to
+   what's planned.
+4. **`docs/`** (prose guides, `docs/dcs-templates.md`, `docs/v1-checklist.md`) and
+   `CONTRIBUTING.md` — update whichever of these describes the area being changed.
+
+Write documentation as state-of-the-world facts, not a changelog of what just happened.
+"The CLI rejects `--cycles-count 0`" is documentation; "Added validation for `--cycles-count`"
+is process narrative that belongs in the commit message and PR description, not in a file a
+reader opens to learn how the software behaves today.
+
+**Backstop, not a substitute.** `docs-copilot-hook` (a `sessionEnd` Copilot CLI hook, see
+`.github/hooks/README.md`) prints a cheap, non-blocking warning for the single most common
+miss — a session that changed `crates/**` without touching any documentation surface — but it
+is a safety net for an honest oversight, not a license to skip this step and let the hook catch
+it. It cannot judge whether documentation is actually _good_, and it has no way to catch drift
+in behavior that never touched `crates/**` at all (a `frontend/`-only or CI-workflow-only
+change with real user-visible impact, for instance).
+
 ## Conventions
 
 - **Trunk-based git flow**: single long-lived `main`, short-lived PR branches
@@ -2548,11 +2596,16 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    web UI (`e2e-playwright`); golden replay suite in CI; release build matrix for Linux/macOS/
    Windows (`build-matrix`, via `cargo-dist`, embedding the built SPA — no Tauri bundler or
    WebView runtime to manage).
-9. **Documentation and release** — README/usage docs and a getting-started guide, published
-   roadmap (OPC UA/Modbus backends, free remote/multi-user access, Step Test pending the bridge
-   `Subscribe` RPC, multi-loop/batch tuning), v0.1.0 with per-platform binaries, a Windows MSI
-   installer (`pkg-windows-installer`, the primary distribution artifact), and a secondary Docker
-   image (`pkg-docker`).
+9. **Documentation and release** — two prerequisites are already done, front-loaded ahead of
+   the rest of this phase since they're cheap and are what actually prevents drift: a
+   documentation contract in this file (`docs-contract`, see "Documentation contract" above)
+   and a paired `sessionStart`/`sessionEnd` Copilot CLI hook warning when a session changes
+   `crates/**` without touching any documentation surface (`docs-copilot-hook`, see
+   `.github/hooks/README.md`). Remaining: README/usage docs and a getting-started guide,
+   published roadmap (OPC UA/Modbus backends, free remote/multi-user access, Step Test pending
+   the bridge `Subscribe` RPC, multi-loop/batch tuning), v0.1.0 with per-platform binaries, a
+   Windows MSI installer (`pkg-windows-installer`, the primary distribution artifact), and a
+   secondary Docker image (`pkg-docker`).
 10. **History explorer** (low priority, post-v1) — a filterable/sortable run list and PV/MV
     trend view over already-recorded history (`history-explorer-ui`), age-based retention
     disabled by default (`history-retention`), and headless parity via `bhtune history

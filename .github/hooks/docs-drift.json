@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "bash .github/hooks/scripts/docs-drift-session-start.sh",
+        "powershell": "powershell -File .github/hooks/scripts/docs-drift-session-start.ps1",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "bash .github/hooks/scripts/docs-drift-session-end.sh",
+        "powershell": "powershell -File .github/hooks/scripts/docs-drift-session-end.ps1",
+        "cwd": ".",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}
