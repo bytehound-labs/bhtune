@@ -395,6 +395,77 @@
           }
         }
       },
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Update an existing, user-owned template.",
+        "description": "`PUT /api/templates/{name}` -- 404 if no template has that name, 400 if the body fails\n[`DcsTemplate::validate`] or its `name` doesn't match the path (renaming isn't supported\nhere -- delete and recreate instead, the same restriction\n[`bhtune_db::models::DcsTemplateRow::update`] itself has), 409 if the template's origin\nisn't [`TemplateOrigin::User`]: `builtin`/`catalog` rows are re-upserted from their\nsource file on every startup (see `bhtune_db::seed`), so an HTTP edit to one would just\nbe silently discarded on the next restart -- the same reasoning that keeps `bhtune\ntemplate import` from touching them either.",
+        "operationId": "update_template",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Template name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DcsTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Template updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The template failed validation, or its name doesn't match the path.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No template with that name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The template isn't user-owned and can't be edited over HTTP.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "templates"

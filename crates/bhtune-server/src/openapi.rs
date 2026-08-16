@@ -26,6 +26,7 @@ use crate::routes::{health, history, runs, templates};
         templates::list_templates,
         templates::get_template,
         templates::create_template,
+        templates::update_template,
         templates::delete_template,
         history::list_runs,
         history::show_run,

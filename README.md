@@ -48,8 +48,8 @@ A Cargo workspace of small, single-purpose crates:
 | `bhtune-core`    | Pure domain logic: the MRFT state machine, tuning math, and data model. No I/O, no async, no clock reads — this is what makes deterministic, replayable testing possible.                              |
 | `bhtune-backend` | The `Backend` trait (`read`/`write`/`browse`) and its implementations: OPC DA (via `opcda-bridge`), an in-process process simulator, and a golden-trace replay backend used for regression validation. |
 | `bhtune-db`      | SQLite persistence (`sqlx`, WAL mode): DCS/PLC templates, loops, tune runs, samples, and results.                                                                                                      |
-| `bhtune-cli`     | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                       |
-| `bhtune-server`  | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                            |
+| `bhtune-cli`     | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                        |
+| `bhtune-server`  | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                             |
 
 The frontend (`bhtune-frontend`: React + TypeScript + Vite + Tailwind CSS, for `bhtune-server`)
 lives under `frontend/` — a pnpm workspace package, kept separate from the Cargo workspace. See
@@ -93,7 +93,7 @@ cargo run --bin bhtune-server
 ```
 
 Binds `127.0.0.1:8787` by default (see the `bind` setting below) and exposes a JSON HTTP API —
-`GET /api/health`, `GET`/`POST /api/templates`, `GET`/`DELETE /api/templates/{name}`,
+`GET /api/health`, `GET`/`POST /api/templates`, `GET`/`PUT`/`DELETE /api/templates/{name}`,
 `GET /api/runs`/`GET /api/runs/{id}` for run history, and `POST /api/runs`/
 `POST /api/runs/{id}/cancel` to start and cancel a tune — using the same SQLite database and
 config precedence as the CLI. The full API contract is described by an OpenAPI 3.1 document,
@@ -135,17 +135,17 @@ the parse problem. See
 [`crates/bhtune-cli/bhtune.example.toml`](crates/bhtune-cli/bhtune.example.toml) for every
 available key.
 
-| Setting               | CLI flag        | Env var              | Config key    | Default                                                                                   |
-| --------------------- | --------------- | -------------------- | ------------- | ------------------------------------------------------------------------------------------ |
-| Database path         | `--db`          | `BHTUNE_DB`          | `db`          | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (or `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db` |
-| opcda-bridge gateway  | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host` | `localhost:7600`                                                                            |
-| Default OPC DA server | `--server`      | —                    | `server`      | none — must be set one way or another                                                      |
-| User template catalog | `--templates`   | `BHTUNE_TEMPLATES`   | `templates`   | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (or `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error here |
-| Log level             | `--log-level`   | `RUST_LOG`           | `log.level`   | `info`                                                                                      |
-| Log directory         | `--log-dir`     | —                     | `log.dir`     | Linux/macOS: `$XDG_DATA_HOME/bhtune/logs` (or `$HOME/.local/share/bhtune/logs`); Windows: `%APPDATA%\bhtune\logs` |
-| Log format            | `--log-format`  | —                     | `log.format`  | `pretty`                                                                                    |
-| Log rotation          | `--log-rotation`| —                     | `log.rotation`| `daily`                                                                                     |
-| HTTP bind address (`bhtune-server` only) | — | `BHTUNE_BIND` | `bind` | `127.0.0.1:8787`                                                       |
+| Setting                                  | CLI flag         | Env var              | Config key     | Default                                                                                                                                                                     |
+| ---------------------------------------- | ---------------- | -------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database path                            | `--db`           | `BHTUNE_DB`          | `db`           | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (or `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db`                                            |
+| opcda-bridge gateway                     | `--bridge-host`  | `BHTUNE_BRIDGE_HOST` | `bridge_host`  | `localhost:7600`                                                                                                                                                            |
+| Default OPC DA server                    | `--server`       | —                    | `server`       | none — must be set one way or another                                                                                                                                       |
+| User template catalog                    | `--templates`    | `BHTUNE_TEMPLATES`   | `templates`    | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (or `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error here |
+| Log level                                | `--log-level`    | `RUST_LOG`           | `log.level`    | `info`                                                                                                                                                                      |
+| Log directory                            | `--log-dir`      | —                    | `log.dir`      | Linux/macOS: `$XDG_DATA_HOME/bhtune/logs` (or `$HOME/.local/share/bhtune/logs`); Windows: `%APPDATA%\bhtune\logs`                                                           |
+| Log format                               | `--log-format`   | —                    | `log.format`   | `pretty`                                                                                                                                                                    |
+| Log rotation                             | `--log-rotation` | —                    | `log.rotation` | `daily`                                                                                                                                                                     |
+| HTTP bind address (`bhtune-server` only) | —                | `BHTUNE_BIND`        | `bind`         | `127.0.0.1:8787`                                                                                                                                                            |
 
 ## DCS/PLC templates
 
@@ -218,11 +218,11 @@ unattended runs against live plant equipment fail safe:
   whole run indefinitely.
 - **`--restore-timeout-secs <seconds>`** (default `30`) bounds putting the loop back afterwards,
   independently of `--timeout-secs`. If the restore can't be confirmed within that time, or a
-  *second* Ctrl+C arrives while it's in progress, the process prints which tag and value to
+  _second_ Ctrl+C arrives while it's in progress, the process prints which tag and value to
   check by hand and exits `6` — distinct from `2`, since "aborted and restored" and "aborted,
   restore abandoned" call for very different responses.
 - **Restoration is guaranteed on every exit path and never gives up early** — a run only ever
-  mutates a loop after switching it to manual, and *any* way that run can end (a clean
+  mutates a loop after switching it to manual, and _any_ way that run can end (a clean
   completion, an abort, or an error partway through setup) always attempts to put back exactly
   what was actually changed, never more and never less. If one part of the restore fails (say,
   the mode write is rejected), the rest are still attempted independently rather than the whole

@@ -38,8 +38,7 @@ export function useTemplate(name: string) {
 
 /**
  * `POST /api/templates` — always creates a `user`-origin template (see
- * `bhtune-server`'s `routes::templates` doc comment); there is no update endpoint, so
- * editing an existing template means deleting and recreating it.
+ * `bhtune-server`'s `routes::templates` doc comment).
  */
 export function useCreateTemplate() {
   const queryClient = useQueryClient();
@@ -55,6 +54,37 @@ export function useCreateTemplate() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: templatesKey });
+    },
+  });
+}
+
+/**
+ * `PUT /api/templates/{name}` — edits an existing `user`-origin template in place; the
+ * server rejects renames (400) and edits to `builtin`/`catalog`-origin templates (409),
+ * since those are re-seeded from their source file on every startup.
+ */
+export function useUpdateTemplate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      name,
+      template,
+    }: {
+      name: string;
+      template: DcsTemplate;
+    }) => {
+      const { data, error } = await apiClient.PUT("/api/templates/{name}", {
+        params: { path: { name } },
+        body: template,
+      });
+      if (error) {
+        throw new Error(apiErrorMessage(error));
+      }
+      return data;
+    },
+    onSuccess: (_data, { name }) => {
+      void queryClient.invalidateQueries({ queryKey: templatesKey });
+      void queryClient.invalidateQueries({ queryKey: templateKey(name) });
     },
   });
 }

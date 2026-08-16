@@ -137,7 +137,18 @@ export interface paths {
      * @description `GET /api/templates/{name}` -- 404 if no template has that name.
      */
     get: operations["get_template"];
-    put?: never;
+    /**
+     * Update an existing, user-owned template.
+     * @description `PUT /api/templates/{name}` -- 404 if no template has that name, 400 if the body fails
+     *     [`DcsTemplate::validate`] or its `name` doesn't match the path (renaming isn't supported
+     *     here -- delete and recreate instead, the same restriction
+     *     [`bhtune_db::models::DcsTemplateRow::update`] itself has), 409 if the template's origin
+     *     isn't [`TemplateOrigin::User`]: `builtin`/`catalog` rows are re-upserted from their
+     *     source file on every startup (see `bhtune_db::seed`), so an HTTP edit to one would just
+     *     be silently discarded on the next restart -- the same reasoning that keeps `bhtune
+     *     template import` from touching them either.
+     */
+    put: operations["update_template"];
     post?: never;
     /**
      * Delete a template by name.
@@ -961,6 +972,60 @@ export interface operations {
       };
       /** @description No template with that name. */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  update_template: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Template name */
+        name: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DcsTemplate"];
+      };
+    };
+    responses: {
+      /** @description Template updated. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TemplateResponse"];
+        };
+      };
+      /** @description The template failed validation, or its name doesn't match the path. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No template with that name. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The template isn't user-owned and can't be edited over HTTP. */
+      409: {
         headers: {
           [name: string]: unknown;
         };

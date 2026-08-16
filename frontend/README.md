@@ -37,17 +37,21 @@ can never merge.
 
 ## Routes
 
-| Path               | Screen                                                                                                                                                                  |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/templates`       | Template list, with delete.                                                                                                                                             |
-| `/templates/new`   | Create a template (all `DcsTemplate` fields).                                                                                                                           |
-| `/templates/:name` | Read-only template detail.                                                                                                                                              |
-| `/runs`            | Filterable, paginated tune-run history list.                                                                                                                            |
-| `/runs/new`        | Start a tune: connection, tag mapping, test parameters, simulator parameters, and write-back, all in one form.                                                          |
-| `/runs/:id`        | Run detail: configuration, initial readings, calculated results, write-back audit trail, and (while running) a polling-based live-progress banner with a cancel button. |
+| Path                    | Screen                                                                                                                                                                  |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/templates`            | Template list, with delete.                                                                                                                                             |
+| `/templates/new`        | Create a template (all `DcsTemplate` fields).                                                                                                                           |
+| `/templates/:name`      | Read-only template detail, with an Edit link for user-owned templates.                                                                                                  |
+| `/templates/:name/edit` | Edit a user-owned template (all fields except Name, which is immutable once created).                                                                                   |
+| `/runs`                 | Filterable, paginated tune-run history list.                                                                                                                            |
+| `/runs/new`             | Start a tune: connection, tag mapping, test parameters, simulator parameters, and write-back, all in one form.                                                          |
+| `/runs/:id`             | Run detail: configuration, initial readings, calculated results, write-back audit trail, and (while running) a polling-based live-progress banner with a cancel button. |
 
-There is no template edit screen (no update endpoint yet), and no live-updating trend chart
-on the run detail screen (that's the `history-explorer-ui` phase, blocked on the SSE stream
+Built-in and catalog templates can't be edited through the UI — they're re-seeded from
+their source file on every server startup, so an edit would just be discarded — but they
+can still be viewed, and deleting one to make room for a customized replacement works the
+same as for any other template. There is no live-updating trend chart on the run detail
+screen yet (that's the `history-explorer-ui` phase, blocked on the SSE stream
 `frontend-live-stream` adds); the run detail screen instead polls once per second while a run
 is active.
 

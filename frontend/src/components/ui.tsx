@@ -169,6 +169,7 @@ export function TextField({
   placeholder,
   full = false,
   hint,
+  disabled = false,
 }: {
   label: string;
   value: string;
@@ -177,6 +178,7 @@ export function TextField({
   placeholder?: string;
   full?: boolean;
   hint?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
@@ -188,8 +190,9 @@ export function TextField({
         type="text"
         value={value}
         placeholder={placeholder}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        className={fieldControlClass}
+        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:opacity-50`}
       />
       {hint && (
         <span className="mt-1 block text-xs text-slate-500">{hint}</span>

@@ -29,17 +29,27 @@ export function TemplateDetailPage() {
   const navigate = useNavigate();
   const template = useTemplate(name);
   const deleteTemplate = useDeleteTemplate();
+  const isUserOwned = template.isSuccess && template.data.origin === "user";
 
   return (
     <div>
       <PageHeading
         title={name}
-        description="Read-only. There is no update endpoint — editing a template means deleting and recreating it."
+        description={
+          isUserOwned
+            ? "User-owned template — editable."
+            : "Re-seeded from its source file on every startup — not editable here."
+        }
         actions={
           <>
             <Link to="/templates">
               <Button>Back to list</Button>
             </Link>
+            {isUserOwned && (
+              <Link to={`/templates/${encodeURIComponent(name)}/edit`}>
+                <Button>Edit</Button>
+              </Link>
+            )}
             <Button
               variant="danger"
               disabled={deleteTemplate.isPending}

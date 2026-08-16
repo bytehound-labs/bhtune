@@ -1,11 +1,12 @@
 //! Template CRUD routes: `GET /api/templates`, `GET /api/templates/{name}`,
-//! `POST /api/templates`, `DELETE /api/templates/{name}`.
+//! `POST /api/templates`, `PUT /api/templates/{name}`, `DELETE /api/templates/{name}`.
 //!
 //! Mirrors `bhtune-cli`'s `commands::template` behavior exactly (see `import_one` there):
 //! validate, then check for a name collision, then insert. HTTP-created templates are
 //! always [`TemplateOrigin::User`] -- the same origin the CLI's single-template `import`
 //! path assigns, as opposed to the auto-loaded `Builtin`/`Catalog` origins, which only ever
-//! come from the embedded catalog or a user catalog file, never from this endpoint.
+//! come from the embedded catalog or a user catalog file, never from this endpoint. `PUT`
+//! is likewise restricted to `User`-origin rows -- see `update_template`'s doc comment.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -128,6 +129,62 @@ pub(crate) async fn create_template(
     Ok((StatusCode::CREATED, Json(row.into())))
 }
 
+/// Update an existing, user-owned template.
+///
+/// `PUT /api/templates/{name}` -- 404 if no template has that name, 400 if the body fails
+/// [`DcsTemplate::validate`] or its `name` doesn't match the path (renaming isn't supported
+/// here -- delete and recreate instead, the same restriction
+/// [`bhtune_db::models::DcsTemplateRow::update`] itself has), 409 if the template's origin
+/// isn't [`TemplateOrigin::User`]: `builtin`/`catalog` rows are re-upserted from their
+/// source file on every startup (see `bhtune_db::seed`), so an HTTP edit to one would just
+/// be silently discarded on the next restart -- the same reasoning that keeps `bhtune
+/// template import` from touching them either.
+#[utoipa::path(
+    put,
+    path = "/api/templates/{name}",
+    tag = "templates",
+    params(
+        ("name" = String, Path, description = "Template name"),
+    ),
+    request_body = DcsTemplate,
+    responses(
+        (status = 200, description = "Template updated.", body = TemplateResponse),
+        (status = 400, description = "The template failed validation, or its name doesn't match the path.", body = ErrorBody),
+        (status = 404, description = "No template with that name.", body = ErrorBody),
+        (status = 409, description = "The template isn't user-owned and can't be edited over HTTP.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn update_template(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(template): Json<DcsTemplate>,
+) -> Result<Json<TemplateResponse>, ApiError> {
+    template
+        .validate()
+        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    if template.name != name {
+        return Err(ApiError::BadRequest(format!(
+            "the template name in the request body ('{}') must match the path ('{name}'); \
+             renaming isn't supported here -- delete and recreate instead",
+            template.name
+        )));
+    }
+    let existing = DcsTemplateRow::get_by_name(&state.pool, &name)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no template named '{name}'")))?;
+    match existing.origin {
+        TemplateOrigin::User => {}
+        TemplateOrigin::Builtin | TemplateOrigin::Catalog => {
+            return Err(ApiError::Conflict(format!(
+                "template '{name}' is re-seeded from its source file on every startup; \
+                 only user-created templates can be edited over HTTP"
+            )));
+        }
+    }
+    let row = DcsTemplateRow::update(&state.pool, existing.id, &template, Utc::now()).await?;
+    Ok(Json(row.into()))
+}
+
 /// Delete a template by name.
 ///
 /// `DELETE /api/templates/{name}` -- 404 if no template has that name, 409 if it is still
@@ -162,7 +219,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/templates", get(list_templates).post(create_template))
         .route(
             "/api/templates/{name}",
-            get(get_template).delete(delete_template),
+            get(get_template)
+                .put(update_template)
+                .delete(delete_template),
         )
 }
 
@@ -304,6 +363,110 @@ mod tests {
         let response = app
             .oneshot(
                 Request::post("/api/templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn update_edits_a_user_template_and_returns_200() {
+        let app = router().with_state(crate::test_support::in_memory_state().await);
+        let created = minimal_valid_template("Editable Template");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&created).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let mut updated = created;
+        updated["process_variable_suffix"] = serde_json::json!(".PVNEW");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::put("/api/templates/Editable%20Template")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&updated).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["process_variable_suffix"], ".PVNEW");
+
+        let response = app
+            .oneshot(
+                Request::get("/api/templates/Editable%20Template")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        assert_eq!(body["process_variable_suffix"], ".PVNEW");
+    }
+
+    #[tokio::test]
+    async fn update_404s_for_an_unknown_name() {
+        let app = router().with_state(crate::test_support::in_memory_state().await);
+        let body = minimal_valid_template("does-not-exist");
+        let response = app
+            .oneshot(
+                Request::put("/api/templates/does-not-exist")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_a_body_name_mismatch_with_400() {
+        let app = router().with_state(crate::test_support::in_memory_state().await);
+        let created = minimal_valid_template("Mismatch Template");
+        app.clone()
+            .oneshot(
+                Request::post("/api/templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&created).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let mut renamed = created;
+        renamed["name"] = serde_json::json!("A Different Name");
+        let response = app
+            .oneshot(
+                Request::put("/api/templates/Mismatch%20Template")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&renamed).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_editing_a_builtin_template_with_409() {
+        let app = router().with_state(crate::test_support::in_memory_state().await);
+        let body = minimal_valid_template("Yokogawa CentumVP");
+        let response = app
+            .oneshot(
+                Request::put("/api/templates/Yokogawa%20CentumVP")
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
