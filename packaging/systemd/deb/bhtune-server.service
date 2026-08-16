@@ -1,0 +1,62 @@
+# bhtune-server systemd unit -- .deb/.rpm packaging variant.
+#
+# Identical to `packaging/systemd/bhtune-server.service` except for `ExecStart`, which points
+# at `/usr/bin/bhtune-server` (where a `.deb`/`.rpm` installs it via `pkg-evaluate-others`)
+# instead of `/usr/local/bin/bhtune-server` (the AUR/manual-`install` convention). Debian
+# Policy 9.1.2 reserves `/usr/local/` for software not managed by the package manager, so a
+# `.deb`-installed binary must not live there -- hence a separate file rather than one
+# `ExecStart` shared between both packaging paths.
+#
+# `cargo-deb`'s `[package.metadata.deb.systemd-units]` picks this file up automatically by
+# `unit-name = "bhtune-server"` (see `crates/bhtune-cli/Cargo.toml`), so nothing here needs a
+# manual `install`/`systemctl enable` step -- the package's maintainer scripts do that.
+#
+# See the sibling file for the full `DynamicUser=`/hardening/`XDG_*` rationale, all of which
+# applies identically here.
+
+[Unit]
+Description=BHTune Server -- MRFT PID auto-tuning HTTP API and web GUI
+Documentation=https://github.com/bytehound-labs/bhtune
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/bhtune-server
+Restart=on-failure
+RestartSec=5
+
+DynamicUser=true
+StateDirectory=bhtune
+ConfigurationDirectory=bhtune
+Environment=XDG_CONFIG_HOME=/etc
+Environment=XDG_DATA_HOME=/var/lib
+
+# Hardening. bhtune-server needs no elevated privileges: it binds a single unprivileged TCP
+# port (127.0.0.1:8787 by default), reads its config/template files, and reads/writes its
+# own SQLite database -- nothing here needs a capability, device access, or write access to
+# the rest of the filesystem.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

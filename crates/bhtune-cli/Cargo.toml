@@ -120,3 +120,196 @@ libc = "0.2"
 clap-markdown = "0.1.5"
 clap_mangen = "0.3.3"
 clap_complete = "4.6.9"
+
+# `.deb` packaging (`pkg-evaluate-others`), built with `cargo deb -p bhtune-cli`. Lives on
+# this crate rather than `bhtune-server` because it follows the release archive's own "one
+# package, not two" precedent (see `.github/workflows/release.yml`'s single
+# `bhtune-$tag-$target` bundle): one `.deb` ships both binaries, this crate's man
+# pages/completions (`bhtune-server` has no CLI surface worth documenting), and the systemd
+# unit for `bhtune-server`. All relative `assets`/`unit-scripts` paths below are relative to
+# *this* Cargo.toml's directory (`crates/bhtune-cli/`), not the workspace root or CWD --
+# that's how `cargo-deb` resolves them -- hence the `../../` prefixes. The `target/release/`
+# prefix on the two binary paths is `cargo-deb`'s own documented magic string (see its
+# README): it is resolved against the real target dir/profile/cross-compilation triple, so
+# it must be written exactly as `target/release/...` even though the real build output may
+# land elsewhere.
+[package.metadata.deb]
+name = "bhtune"
+maintainer = "ByteHound Corp. <mike@bytehound.ca>"
+copyright = "2026, ByteHound Corp. <mike@bytehound.ca>"
+# Ships the actual AGPL-3.0 text in `/usr/share/doc/bhtune/copyright` (skip=0: include it
+# verbatim rather than guess how many header lines are safe to trim) instead of relying on
+# `/usr/share/common-licenses/AGPL-3`, which not every Debian-derived distro is guaranteed
+# to carry.
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+BHTune is a FOSS, cross-platform MRFT (Modified Relay Feedback Test) PID auto-tuner for \
+industrial control loops. This package installs both the headless `bhtune` CLI (for \
+scheduled/scripted tunes) and the `bhtune-server` HTTP API + browser GUI, talking to DCS/PLC \
+systems over OPC DA via the separate `opcda-bridge` gateway."""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+# Required by `cargo-deb`'s systemd integration even though this directory holds no
+# hand-written `postinst`/`postrm`/etc: without it, `cargo-deb` silently skips generating
+# *any* systemd lifecycle glue at all (confirmed by testing -- omitting this produced no
+# maintainer scripts, so a fresh install would need a manual `systemctl daemon-reload`
+# before `systemctl start bhtune-server` even saw the unit). This is a `[package.metadata.
+# deb]`-level key, not a `systemd-units` sub-table key (`cargo-deb` rejects it there with
+# `deny_unknown_fields`) -- see `cargo-deb`'s own `systemd.md`.
+maintainer-scripts = "../../packaging/systemd/deb"
+assets = [
+  [
+    "target/release/bhtune",
+    "usr/bin/",
+    "755",
+  ],
+  [
+    "target/release/bhtune-server",
+    "usr/bin/",
+    "755",
+  ],
+  [
+    "../../man/*.1",
+    "usr/share/man/man1/",
+    "644",
+  ],
+  [
+    "../../completions/bhtune.bash",
+    "usr/share/bash-completion/completions/bhtune",
+    "644",
+  ],
+  [
+    "../../completions/_bhtune",
+    "usr/share/zsh/vendor-completions/_bhtune",
+    "644",
+  ],
+  [
+    "../../completions/bhtune.fish",
+    "usr/share/fish/vendor_completions.d/bhtune.fish",
+    "644",
+  ],
+  [
+    "../../README.md",
+    "usr/share/doc/bhtune/README.md",
+    "644",
+  ],
+]
+
+# Picked up automatically from `../../packaging/systemd/deb/bhtune-server.service` via
+# `unit-name` below -- see that file's own header comment for why the `.deb`/`.rpm`
+# packaging path needs a variant distinct from the AUR/manual-install unit (different
+# `ExecStart` binary path: `/usr/bin/` vs `/usr/local/bin/`).
+[package.metadata.deb.systemd-units]
+unit-scripts = "../../packaging/systemd/deb"
+unit-name = "bhtune-server"
+enable = false
+start = false
+
+# `.rpm` packaging (`pkg-evaluate-others`), built with `cargo generate-rpm -p
+# crates/bhtune-cli` from the workspace root (after `cargo build --release` + `strip`ping
+# both binaries by hand -- unlike `cargo-deb`, this tool never invokes `cargo build` or a
+# stripper itself; see its own README). Despite its `--help` text ("Name of a crate in the
+# workspace"), `-p`/`--package` is actually a *path* to the crate's directory, joined with
+# `Cargo.toml` and resolved relative to the current directory (confirmed in its own
+# source, `main.rs`/`Config::new`) -- a bare crate name like `bhtune-cli` fails with
+# "No such file or directory", it must be the path `crates/bhtune-cli`. Mirrors the `.deb`
+# block above: one package, the same asset set,
+# and the same `.deb`-variant systemd unit. Unlike `cargo-deb`, relative asset/script paths
+# here resolve against the *current working directory* first, falling back to this
+# crate's own directory only if not found there (see `cargo-generate-rpm`'s own
+# `generate_expanded_path`/`load_script_if_path` source) -- so every path below is written
+# relative to the *workspace root* (how this tool is actually invoked, matching CI), with
+# no `../../` prefix, unlike the `.deb` block's crate-relative paths above.
+[package.metadata.generate-rpm]
+name = "bhtune"
+# Overrides the one-line RPM summary independently of this crate's own `description`
+# (unlike `cargo-deb`, which has no such override field and always inherits it verbatim --
+# see that block's comment above). Worth using here since `bhtune-cli`'s crate-level
+# description only describes the CLI, not the bundled `bhtune-server` binary.
+summary = "MRFT PID auto-tuner (CLI + HTTP API/web GUI) for industrial control loops over OPC DA"
+vendor = "ByteHound Corp."
+# `license`/`url` are left unset deliberately: both fall back to this crate's own
+# `package.license` (AGPL-3.0-or-later) and the workspace's `package.homepage`
+# respectively (see `cargo-generate-rpm`'s `create_rpm_builder` source), so there is
+# nothing to duplicate here.
+assets = [
+  { source = "target/release/bhtune", dest = "/usr/bin/bhtune", mode = "755" },
+  { source = "target/release/bhtune-server", dest = "/usr/bin/bhtune-server", mode = "755" },
+  { source = "man/*.1", dest = "/usr/share/man/man1/", mode = "644", doc = true },
+  { source = "completions/bhtune.bash", dest = "/usr/share/bash-completion/completions/bhtune", mode = "644" },
+  { source = "completions/_bhtune", dest = "/usr/share/zsh/vendor-completions/_bhtune", mode = "644" },
+  { source = "completions/bhtune.fish", dest = "/usr/share/fish/vendor_completions.d/bhtune.fish", mode = "644" },
+  { source = "README.md", dest = "/usr/share/doc/bhtune/README.md", mode = "644", doc = true },
+  { source = "LICENSE", dest = "/usr/share/doc/bhtune/LICENSE", mode = "644", doc = true },
+  { source = "packaging/systemd/deb/bhtune-server.service", dest = "/usr/lib/systemd/system/bhtune-server.service", mode = "644" },
+]
+
+# `cargo-generate-rpm` has no `cargo-deb`-style automatic `systemd-units` integration (no
+# equivalent of `dh_installsystemd`): the unit file above is just a plain asset, and its
+# enable/disable/reload lifecycle has to be scripted by hand below. The usual RPM
+# `%systemd_post`/`%systemd_preun`/`%systemd_postun_with_restart` macros can't be used
+# as-is -- this tool builds the RPM directly with no `rpmbuild`/spec file involved, so
+# macros are never expanded and would be embedded verbatim as broken, non-existent shell
+# commands. The scripts below are the literal shell these macros have expanded to for
+# years (confirmed against systemd upstream's own `macros.systemd.in`), using plain
+# `systemctl` calls rather than the newer `systemd-update-helper`-delegating rewrite some
+# distros now ship, since that helper's presence/path is not guaranteed across every
+# RPM-based distro. `$1` semantics (install vs. upgrade vs. final removal) are RPM's
+# standard scriptlet argument convention -- see the Fedora Packaging Guidelines'
+# Scriptlets page.
+post_install_script = '''
+if [ $1 -eq 1 ] ; then
+    # Initial installation: apply distro preset policy (enable or leave disabled)
+    systemctl preset bhtune-server.service >/dev/null 2>&1 || :
+fi
+'''
+pre_uninstall_script = '''
+if [ $1 -eq 0 ] ; then
+    # Final removal, not an upgrade: stop and disable the service
+    systemctl --no-reload disable bhtune-server.service >/dev/null 2>&1 || :
+    systemctl stop bhtune-server.service >/dev/null 2>&1 || :
+fi
+'''
+post_uninstall_script = '''
+systemctl daemon-reload >/dev/null 2>&1 || :
+if [ $1 -ge 1 ] ; then
+    # Package upgrade, not uninstall: restart the service if it was already running
+    systemctl try-restart bhtune-server.service >/dev/null 2>&1 || :
+fi
+'''
+
+[package.metadata.generate-rpm.requires]
+# No scriptlet-scoped `Requires(post):`/`Requires(preun):`/etc. support in this tool
+# (unlike a hand-written spec file) -- a plain unscoped dependency still guarantees
+# `systemctl` is present whenever the scripts above run.
+systemd = ""
+
+# `cargo-binstall` metadata (`pkg-eval-binstall`). Inert today -- `bhtune-cli` isn't on
+# crates.io yet (`release-plz.toml` has `publish = false` workspace-wide pending
+# `release-v1`) -- but ready the moment it is, since binstall only reads this from a
+# manifest it already fetched, needing no separate opt-in step. Only added to this crate,
+# not `bhtune-server` (which has its own `publish = false` and is meant to run as a system
+# service via the OS packages above, not as a `cargo install`/`cargo binstall`-managed CLI
+# tool).
+#
+# `{ version }` is always the bare crate version with no `v` prefix (binstall has no `{
+# tag }` variable), so the literal `v` before every `{ version }` below is required to
+# match this project's own `v`-prefixed release tags (`release.yml`'s trigger pattern and
+# `taiki-e/create-gh-release-action`'s tag naming) -- exactly the pattern binstall's own
+# docs show for this same situation.
+#
+# `bin-dir` is flat (`{ bin }{ binary-ext }`, no subdirectory) because
+# `taiki-e/upload-rust-binary-action`'s `leading-dir` input defaults to `false` --
+# confirmed in its README -- so `release.yml`'s archives place binaries at the archive
+# root, not nested in a `bhtune-$tag-$target/` directory the way binstall's own *default*
+# (unconfigured) path assumes.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/bhtune-v{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+# `release.yml`'s `upload-rust-binary-action` uses its own `zip: windows` default (unix
+# targets stay `tar`/`tgz`), so only the Windows target needs a format override here.
+[package.metadata.binstall.overrides.'cfg(windows)']
+pkg-fmt = "zip"

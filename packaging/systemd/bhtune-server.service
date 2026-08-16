@@ -12,12 +12,15 @@
 #
 # `ExecStart` below assumes the released binary was installed to
 # `/usr/local/bin/bhtune-server` (matching `pkg-aur`/a manual `install`); adjust the path if
-# yours lives elsewhere (e.g. a `.deb`/`.rpm` would normally use `/usr/bin/bhtune-server`).
+# yours lives elsewhere. A `.deb`/`.rpm` install uses `/usr/bin/bhtune-server` instead --
+# see the `deb/bhtune-server.service` sibling file, which `cargo-deb`/`cargo-generate-rpm`
+# install automatically (`pkg-evaluate-others`).
 #
 # `DynamicUser=true` creates an ephemeral, unprivileged, non-shell system user/group for this
-# unit's lifetime -- there is no separate `useradd`/postinst step to run first, which matters
-# because there is no `.deb`/`.rpm` packaging yet (see AGENTS.md's `pkg-evaluate-others`).
-# `StateDirectory=`/`ConfigurationDirectory=` have systemd create and `chown` the two
+# unit's lifetime -- there is no separate `useradd`/postinst step to run first, which is also
+# true of the `.deb`/`.rpm` variant (`pkg-evaluate-others`): both packaging paths lean on this
+# instead of a maintainer-script-created system user. `StateDirectory=`/
+# `ConfigurationDirectory=` have systemd create and `chown` the two
 # directories below to that dynamic user before this unit ever starts, so `bhtune-server`
 # itself never needs root or a manual `mkdir`/`chown` to write its database and logs.
 #
