@@ -1,5 +1,5 @@
-//! `bhtune-server` — the Axum HTTP/REST adapter over `bhtune-core`/`bhtune-db`, and (once
-//! `server-embed-spa`/`frontend-shell` land) the host for the React SPA. See AGENTS.md's
+//! `bhtune-server` — the Axum HTTP/REST adapter over `bhtune-core`/`bhtune-db`, and the host
+//! for the built React SPA (embedded via `rust-embed`, `server-embed-spa`). See AGENTS.md's
 //! "Web app architecture" section for why this, rather than a desktop GUI, is the primary
 //! v1 GUI adapter.
 //!
@@ -12,6 +12,7 @@ pub mod active_run;
 pub mod error;
 pub mod openapi;
 pub mod routes;
+mod spa;
 pub mod state;
 
 #[cfg(test)]
@@ -26,11 +27,17 @@ pub use state::AppState;
 /// directly in a test via `tower::ServiceExt::oneshot`.
 ///
 /// Alongside the JSON API routes, this mounts the OpenAPI contract itself two ways: the raw
-/// document at `GET /api/openapi.json` (for tooling -- CI's spec-diff gate, and eventually
-/// `frontend-shell`'s generated TS client) and an interactive Scalar UI at `/api/docs` (for a
-/// human exploring the API in a browser). [`utoipa_scalar::Scalar::with_url`] returns a
-/// state-generic `axum::Router<S>` with the UI's one route already attached, so it merges in
-/// directly rather than needing its own handler function.
+/// document at `GET /api/openapi.json` (for tooling -- CI's spec-diff gate, and the generated
+/// `frontend/` TS client) and an interactive Scalar UI at `/api/docs` (for a human exploring
+/// the API in a browser). [`utoipa_scalar::Scalar::with_url`] returns a state-generic
+/// `axum::Router<S>` with the UI's one route already attached, so it merges in directly
+/// rather than needing its own handler function.
+///
+/// Everything that isn't one of those routes falls through to [`spa::static_handler`], which
+/// serves the built React SPA -- so this one router is the whole HTTP surface of a real
+/// `bhtune-server` deployment, API and UI alike. None of the merged sub-routers set their own
+/// fallback (axum panics if two merged routers each declare one), so this is the only place
+/// `.fallback` is called.
 pub fn build_router(state: AppState) -> axum::Router {
     axum::Router::new()
         .merge(routes::health::router())
@@ -44,6 +51,7 @@ pub fn build_router(state: AppState) -> axum::Router {
             openapi::ApiDoc::openapi(),
         ))
         .with_state(state)
+        .fallback(spa::static_handler)
 }
 
 async fn openapi_json() -> axum::Json<utoipa::openapi::OpenApi> {

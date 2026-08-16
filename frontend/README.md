@@ -20,8 +20,10 @@ pnpm dev        # Vite dev server on http://localhost:5173, hot-reloading
 
 `vite.config.ts` proxies `/api/*` requests to `http://127.0.0.1:8787`, so run
 `cargo run -p bhtune-server` alongside `pnpm dev` to exercise the real HTTP API while
-developing. In production, `bhtune-server` serves the built SPA directly from the same origin
-(see the `server-embed-spa` phase in `AGENTS.md`) and no proxy is involved.
+developing. In production, `bhtune-server` embeds the built SPA (`rust-embed`, see
+`crates/bhtune-server/src/spa.rs`) and serves it directly from the same origin — build with
+`pnpm run build`, then `cargo run -p bhtune-server` serves both the API and the UI from one
+process with no proxy involved.
 
 ## Regenerating the API client
 

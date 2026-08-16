@@ -157,10 +157,14 @@ time, the SSE connection opened exactly once and closed cleanly on `done` (confi
 the browser's network log — no reconnect storm), and the chart handed off to the
 historical `samples` array with an identical rendered trend once the run completed, zero
 console errors.
-`server-embed-spa` and `server-windows-service` (the rest of Phase 7), `backend-replay`,
-and the replay harness are not yet — the GUI plan reversed from a Tauri desktop app to a
-browser UI served by `bhtune-server` before any Tauri code was written (see "Key
-architectural decisions"). See "Phases and todos" below for what's next.
+`server-embed-spa` is now done: the built SPA (`frontend/dist/`) is embedded directly into
+the `bhtune-server` binary via `rust-embed`, so a release build is a single self-contained
+executable — no separate static file server, Node, or nginx needed on the target host — see
+"`server-embed-spa`: embedding the built SPA into the binary" below for the full design.
+`server-windows-service` (the last item in Phase 7), `backend-replay`, and the replay
+harness are not yet — the GUI plan reversed from a Tauri desktop app to a browser UI served
+by `bhtune-server` before any Tauri code was written (see "Key architectural decisions").
+See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -503,6 +507,42 @@ after_tick)` (`bhtune-db`) is a new query — `tick > after_tick`, with `-1` as 
   and the chart handed off to the historical `samples` array with an identical rendered
   trend the moment the run reached `completed`, alongside populated results/write-back
   tables. Zero browser console errors throughout.
+- **`server-embed-spa` is done: the built SPA is embedded in the binary itself, not served
+  separately.** `crates/bhtune-server/src/spa.rs` defines an `Assets` struct
+  (`#[derive(RustEmbed)]`, `#[folder = "$CARGO_MANIFEST_DIR/../../frontend/dist/"]`,
+  `#[allow_missing = true]`) and a `static_handler(uri) -> Response`, wired in as
+  `build_router`'s single whole-router `.fallback(...)` (after every other merged route, so
+  `/api/*` always wins first — axum panics if two merged sub-routers each declare their own
+  fallback, which is why no other route module sets one). `#[allow_missing = true]` is what
+  lets `frontend/dist/` — gitignored, and never present in CI's Rust-only `check` job — be a
+  clean runtime condition (empty `Assets::iter()`) instead of the crate's default hard
+  compile-time error for a missing `#[folder]`. The `interpolate-folder-path` feature
+  substitutes `$CARGO_MANIFEST_DIR` with an absolute path at compile time, so resolution is
+  CWD-independent even in a debug build reading live from disk (rust-embed's documented
+  debug-mode default is "relative to wherever the binary is run from", which would be
+  fragile for a service manager starting the binary from an arbitrary directory) — confirmed
+  empirically by running a debug binary from an unrelated working directory and seeing it
+  still find its assets. The `mime-guess` feature gives `EmbeddedFile.metadata.mimetype()`
+  directly, avoiding a redundant direct `mime_guess` dependency; `deterministic-timestamps`
+  zeroes embedded files' timestamps for reproducible release builds. `static_handler` serves
+  a matched path with its real MIME type and one of two cache rules — `Cache-Control:
+no-cache` for `index.html` (it names the current build's content-hashed asset filenames,
+  so it must always be revalidated) and `public, max-age=31536000, immutable` for every
+  other embedded path (a Vite content hash means a new build always emits a new filename) —
+  falls back to `index.html` for any path whose last `/`-segment has no `.` (a client-side
+  route under React Router's `BrowserRouter`, which uses real HTML5 history paths, not hash
+  routing, so a server-side fallback is genuinely required for direct navigation/hard-refresh
+  to work), returns a real `404` for a missing dotted-extension path, and returns a `503`
+  with an actionable message (`run pnpm install && pnpm run build`, or `pnpm run dev` for
+  frontend development) when the SPA was never built at all. Manually verified end-to-end
+  against both a debug and a `--release` binary, run from a directory unrelated to the
+  crate: `/` served `index.html` with `no-cache`; a real hashed asset served with the
+  long-lived immutable cache header and the correct content type; `/runs/1` (a client-side
+  route) fell back to byte-identical `index.html` content; a genuinely missing asset path
+  404'd; `/api/health` still resolved correctly (proving the fallback never shadows a real
+  API route); and the 503 path was confirmed by temporarily moving `frontend/dist/` aside
+  and back. `frontend/vite.config.ts`'s dev-mode API proxy is untouched by this — it's a
+  `pnpm run dev` concern, orthogonal to how a release binary serves its own built assets.
 - **Every fallible route response is now typed with a real error schema, not
   `content?: never`.** `utoipa::path`'s `responses(...)` entries for 4xx statuses previously
   gave only a `description`, so `openapi-typescript` generated `content?: never` for them —
@@ -2117,6 +2157,96 @@ chance to pass the optimistic pre-check before either reaches the authoritative 
 is a deterministic, non-flaky test, not the "accept the gap" fallback that was the working
 assumption before it was attempted.
 
+## `server-embed-spa`: embedding the built SPA into the binary
+
+`crates/bhtune-server/src/spa.rs` embeds the built React SPA (`frontend/dist/`) directly into
+the `bhtune-server` binary, so a release build is one self-contained executable that needs
+nothing else — no separate static file server, no Node/nginx on the target host — matching the
+Windows-installer/single-binary deployment shape this project has targeted since the Tauri
+reversal (see "Key architectural decisions").
+
+**`rust-embed`, not a hand-rolled static file server.** `Assets` is a
+`#[derive(RustEmbed)]` struct:
+
+```rust
+#[derive(RustEmbed)]
+#[folder = "$CARGO_MANIFEST_DIR/../../frontend/dist/"]
+#[allow_missing = true]
+struct Assets;
+```
+
+Three feature choices, each verified empirically against the crate's actual behavior in an
+isolated scratch project rather than assumed from the README alone:
+
+- **`interpolate-folder-path`** substitutes `$CARGO_MANIFEST_DIR` with an absolute path at
+  compile time. Without it, rust-embed's documented debug-mode default resolves `#[folder]`
+  _relative to wherever the binary is run from_ (reading live from disk on every request) —
+  fine for `cargo run` from the repo root, fragile for a systemd unit or Windows Service
+  starting the binary from an arbitrary working directory. With the absolute path baked in,
+  resolution is CWD-independent in debug mode too — confirmed by building a debug binary and
+  running it from `/tmp`, and it still found its assets.
+- **`mime-guess`** exposes `EmbeddedFile.metadata.mimetype() -> &str` directly, so
+  `static_handler` never needs a redundant direct `mime_guess` dependency (the crate's own
+  official `axum-spa` example depends on `mime_guess` directly instead — read as a design
+  reference, not used as a dependency here).
+- **`deterministic-timestamps`** zeroes embedded files' timestamps, so a release binary built
+  twice from the same source is byte-reproducible.
+- **`#[allow_missing = true]`** (a struct attribute, not a Cargo feature) is what makes a
+  missing `frontend/dist/` a clean runtime condition — `Assets::iter()` empty,
+  `Assets::get(...)` always `None` — instead of rust-embed's default hard compile-time error.
+  This matters concretely: `frontend/dist/` is gitignored and CI's Rust-only `check` job never
+  runs `pnpm run build` first, so without this attribute the workspace simply would not
+  compile there.
+
+**`static_handler` is the whole router's single `.fallback(...)`**, appended in
+`build_router` after every other merged route module:
+
+- A path that matches an embedded file is served with its real MIME type and one of two
+  cache rules: `Cache-Control: no-cache` for `index.html` (it names the _current_ build's
+  content-hashed asset filenames, so it must always be revalidated) and
+  `public, max-age=31536000, immutable` for every other embedded path (a Vite content hash
+  means a new build always emits a new filename, so caching indefinitely is safe).
+- A path with no `.` in its last `/`-segment falls back to `index.html` — this is the SPA
+  route (React Router's `BrowserRouter` uses real HTML5 history paths, not hash routing, so a
+  server-side fallback is genuinely required for a direct load or hard refresh of, say,
+  `/runs/42` to work at all).
+- A path that _does_ look like a real static-asset request (has a dotted extension) but
+  doesn't match any embedded file is a real `404`, not a silent SPA-fallback — otherwise a
+  typo'd asset URL would return an HTML page with a `200`.
+- If the SPA was never built at all (`Assets::iter()` empty), every request gets a `503`
+  naming the fix (`run pnpm install && pnpm run build` in `frontend/`, or `pnpm run dev`
+  there against this server for local frontend development with hot-reload) instead of a
+  confusing generic 404.
+- Since this is the router's _only_ fallback, it never collides with another sub-router's
+  own fallback — axum panics at router-build time if two merged routers each declare one,
+  which is why no other route module in this crate sets one.
+
+**A subtle bug caught by writing a standalone verification script instead of trusting
+intuition.** The "does this path look like a real static asset" check needs the _last_
+`/`-segment. The first draft used `path.rsplit('/').next_back()`, which reads as "reverse-split,
+then take from the back" — but `rsplit`'s iterator already yields segments back-to-front, so
+`.next_back()` un-reverses that back to _front_-to-back order and returns the _first_ segment,
+not the last. A tiny standalone Rust script proved this empirically for `"assets/foo.js"`
+before the fix (`path.rsplit('/').next()`, which correctly returns `"foo.js"`) was trusted.
+
+**5 tests in `spa.rs`**, all gracefully degrading based on whether `frontend/dist/` actually
+exists locally (checked via a small `frontend_is_built()` helper) — they assert real file
+serving, correct cache headers, and SPA-fallback content when the SPA is built, and always
+assert the `503` path regardless, so the suite passes both in CI's Rust-only `check` job
+(where `frontend/dist/` never exists) and in a fully-built local dev environment. Manually
+verified end-to-end against both a debug and a `--release` binary, run from a directory
+unrelated to the crate (proving no accidental CWD dependency survived): `/` served
+`index.html` with `no-cache`; a real hashed asset served with the long-lived immutable cache
+header and the correct content type; `/runs/1` (a client-side route) fell back to
+byte-identical `index.html` content; a genuinely missing asset path 404'd; `/api/health`
+still resolved correctly (proving the fallback never shadows a real API route); and the 503
+path was confirmed twice — once via the unit tests, once by starting a real server with
+`frontend/dist/` temporarily moved aside and curling `/` directly.
+
+`frontend/vite.config.ts`'s dev-mode API proxy is unaffected by any of this — it is a
+`pnpm run dev` concern (hot-reload against a running `bhtune-server` for its API only), fully
+orthogonal to how a release binary serves its own already-built assets.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -2238,10 +2368,6 @@ simulator`), never triggered implicitly by a magic tag name or hidden UI state �
 - **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft; it does not bind anyone until the
   legal-entity question is resolved, the text has had a legal review, and a CLA-assistant check is
   added to the PR checks.
-- **`bhtune-server` has no `rust-embed` dependency yet** (`axum` landed with `server-http-api`;
-  `utoipa`/`utoipa-scalar` landed with `openapi-contract`). `rust-embed` arrives with
-  `server-embed-spa` — adding it prematurely risks breaking `cargo build --workspace` before
-  there's a built SPA for it to embed, for no benefit.
 - **A cross-project CI/CD audit against `opcda-bridge` hasn't happened yet.** See
   `cross-project-ci-audit` in "Phases and todos" — worth doing once both projects have settled a
   bit, not urgent.
@@ -2276,14 +2402,14 @@ that binary does something real and gains its own targeted tests.
 
 ## Crate map and phase status
 
-| Crate              | Phase                                                                                                                                 | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bhtune-core`      | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness`                                                  | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `bhtune-backend`   | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`                                                                  | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `bhtune-db`        | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance`                                         | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`                        | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above |
-| `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-template-update-api`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` + `server-start-tune-api` + `server-template-update-api` done — real Axum binary (health/templates full CRUD/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below — and `PUT /api/templates/{name}` editing an existing `user`-origin template in place (400 on a name mismatch, 404 if unknown, 409 if not user-owned); embedded SPA and Windows service pending                                   |
-| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`                                                                            | All three done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above. Routing shell, Templates (List/Detail/Create/Edit), History (List/Detail), a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation), and a live PV/MV trend chart (`TrendChart`, uPlot-based, fed by a new SSE `useRunStream` hook while a run is active and by `useRun`'s `samples` once terminal) are all done and manually verified against a real running server                                                                                                                                                                                               |
+| Crate              | Phase                                                                                                                                 | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`      | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness`                                                  | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `bhtune-backend`   | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`                                                                  | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `bhtune-db`        | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance`                                         | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`                        | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above                                                                                                                                                                                                                          |
+| `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-template-update-api`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` + `server-start-tune-api` + `server-template-update-api` + `server-embed-spa` done — real Axum binary (health/templates full CRUD/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below — `PUT /api/templates/{name}` editing an existing `user`-origin template in place (400 on a name mismatch, 404 if unknown, 409 if not user-owned), and the built SPA embedded directly into the binary via `rust-embed` with an SPA-fallback route, correct MIME types, and long-lived cache headers on hashed assets — see "`server-embed-spa`: embedding the built SPA into the binary" below; only Windows service support pending |
+| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`                                                                            | All three done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above. Routing shell, Templates (List/Detail/Create/Edit), History (List/Detail), a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation), and a live PV/MV trend chart (`TrendChart`, uPlot-based, fed by a new SSE `useRunStream` hook while a run is active and by `useRun`'s `samples` once terminal) are all done and manually verified against a real running server                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ## Phases and todos (roadmap order)
 
@@ -2373,9 +2499,15 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    `useRunStream` hook and a reusable `uPlot`-based `TrendChart` component replace that
    polling banner with a real live-updating PV/MV trend chart, handing off cleanly to the
    historical `samples` array once a run completes — see the dedicated bullet above for
-   the full design and its manual browser verification. Remaining: embedding the built SPA
-   into the `bhtune-server` binary (`server-embed-spa`) and running as a proper platform
-   service (`server-windows-service`). Replaces the earlier Tauri desktop GUI
+   the full design and its manual browser verification. `server-embed-spa` is now also
+   done: the built SPA is embedded directly into the `bhtune-server` binary via
+   `rust-embed` (an `Assets` struct over `frontend/dist/`, an SPA-fallback route, correct
+   MIME types via the `mime-guess` feature, and long-lived immutable cache headers on
+   Vite's content-hashed assets, versus `no-cache` on `index.html` itself), so a release
+   build is one self-contained executable with no separate static file server needed — see
+   "`server-embed-spa`: embedding the built SPA into the binary" above for the full design
+   and its manual end-to-end verification. Remaining: running as a proper platform service
+   (`server-windows-service`). Replaces the earlier Tauri desktop GUI
    phase — see "Key architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — fully automated E2E tune on Linux CI via CLI + simulator
    backend (no Windows, no external DCS dependency); Playwright E2E against the real web UI

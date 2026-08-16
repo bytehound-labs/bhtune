@@ -8,8 +8,10 @@ export default defineConfig({
   server: {
     // Proxy API calls to a locally running `bhtune-server` in dev mode, so
     // `pnpm dev` gets hot-reload while still exercising the real HTTP API
-    // instead of a mock. `server-embed-spa` replaces this with the SPA being
-    // served directly by bhtune-server itself in production builds.
+    // instead of a mock. In production builds, bhtune-server instead embeds
+    // and serves the built SPA directly from its own binary (via
+    // `rust-embed` -- see `crates/bhtune-server/src/spa.rs`), so this proxy
+    // is a dev-only concern.
     proxy: {
       "/api": {
         target: "http://127.0.0.1:8787",

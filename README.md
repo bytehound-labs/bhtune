@@ -53,9 +53,10 @@ A Cargo workspace of small, single-purpose crates:
 
 The frontend (`bhtune-frontend`: React + TypeScript + Vite + Tailwind CSS, for `bhtune-server`)
 lives under `frontend/` — a pnpm workspace package, kept separate from the Cargo workspace. See
-[`frontend/README.md`](frontend/README.md) for how to run it during development. It isn't
-embedded into the `bhtune-server` binary yet (that lands with `server-embed-spa`), so building
-and running it is currently a separate step from `cargo build`.
+[`frontend/README.md`](frontend/README.md) for how to run it during development. Once built
+(`pnpm run build`), `bhtune-server` embeds `frontend/dist/` directly into its own binary via
+`rust-embed`, so a release build is one self-contained executable — no separate static file
+server, Node, or nginx required on the target host.
 
 ### OPC DA bridge
 
@@ -101,13 +102,20 @@ config precedence as the CLI. The full API contract is described by an OpenAPI 3
 served as raw JSON at `GET /api/openapi.json` and as interactive documentation at `/api/docs`
 (a [Scalar](https://scalar.com/) UI — try it in a browser, or point any OpenAPI-aware tool at
 the JSON endpoint). The same document is checked in at [`openapi.json`](openapi.json) at the
-repo root for anyone who wants to read or diff it without running the server. The server does
-not yet serve the web UI itself — that embedding lands with `server-embed-spa` (see
-[Roadmap](#roadmap)) — but the frontend exists and can be run alongside the server during
-development:
+repo root for anyone who wants to read or diff it without running the server. Once the
+frontend is built, `bhtune-server` serves the web UI itself directly at `/` (embedded into the
+binary via `rust-embed` — see [Architecture](#architecture)):
 
 ```sh
-pnpm install        # from the repo root — this is a pnpm workspace
+pnpm install                     # from the repo root — this is a pnpm workspace
+pnpm --filter bhtune-frontend run build
+cargo run --bin bhtune-server    # now also serves the built UI at http://127.0.0.1:8787/
+```
+
+During frontend development, running the Vite dev server alongside `bhtune-server` instead
+gives hot-reload:
+
+```sh
 cd frontend
 pnpm dev             # http://localhost:5173, proxies /api/* to the server above
 ```

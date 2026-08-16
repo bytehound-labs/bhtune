@@ -45,6 +45,26 @@ axum = "0.8"
 # `sqlx`/`tonic`) so this doesn't add a new crate to the tree, only a new direct edge to one
 # already present.
 async-stream = "0.3"
+# `spa.rs` (`server-embed-spa`): embeds the built React SPA (`frontend/dist/`) into the
+# binary. Kept local rather than promoted to `[workspace.dependencies]` -- this is the only
+# crate that will ever serve a browser UI. `interpolate-folder-path` anchors the `#[folder]`
+# path at `$CARGO_MANIFEST_DIR` rather than the process's current working directory, so a
+# service manager (systemd, the eventual Windows Service) starting the binary from an
+# arbitrary directory still finds the assets -- verified empirically (a debug build run from
+# an unrelated directory still located its embedded folder). `mime-guess` gives
+# `EmbeddedFile::metadata.mimetype()` the correct `Content-Type` per file without a separate
+# direct `mime_guess` dependency. `deterministic-timestamps` zeroes embedded files' mtimes so
+# release builds stay byte-reproducible across CI runners (`build-matrix`). Deliberately
+# *not* using `debug-embed`: without it, a plain `cargo build`/`cargo run` (debug) reads
+# `frontend/dist/` live off disk on every request, so a rebuilt frontend shows up without
+# recompiling Rust -- only `--release` (used by `build-matrix`/the Windows installer)
+# actually embeds the bytes into the binary, which is the only build type that ships without
+# the source tree alongside it.
+rust-embed = { version = "8", features = [
+  "interpolate-folder-path",
+  "mime-guess",
+  "deterministic-timestamps",
+] }
 # `rt-multi-thread`/`macros` to run as an async binary; `signal` for graceful shutdown on
 # Ctrl+C/SIGTERM, matching `bhtune-cli`'s own Ctrl+C handling story (see `cancel.rs`) rather
 # than leaving a request in flight when the process is asked to stop. `sync` for
