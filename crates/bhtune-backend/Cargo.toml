@@ -36,6 +36,12 @@ rand = { version = "0.10", default-features = false, features = [
   "std",
   "std_rng",
 ] }
+# Only `ReplayBackend::from_fixture_json` needs to parse a golden-master trace's JSON, so
+# these stay local rather than promoted to `[workspace.dependencies]`, matching the
+# single-consumer convention already used for `async-trait`/`opcda-bridge`/`rand` above.
+# Same version pins `bhtune-core`/`bhtune-db` already use.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = [
