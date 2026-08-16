@@ -1,0 +1,8 @@
+{
+  "label": "Getting started",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "description": "Install BHTune and run your first tune, from either the CLI or the web GUI."
+  }
+}

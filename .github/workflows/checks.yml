@@ -157,3 +157,31 @@ jobs:
 
       - name: Build (typecheck + bundle)
         run: pnpm --filter bhtune-frontend run build
+
+  # `pnpm run check:licenses` (in the frontend job above) already covers the website's
+  # dependency tree too, since `pnpm licenses list` reports on the whole workspace -- no
+  # need to duplicate it here. The build step is the real value: Docusaurus defaults to
+  # `onBrokenLinks: 'throw'`/`onBrokenAnchors: 'throw'` (see website/docusaurus.config.ts),
+  # so it doubles as a drift gate against docs/ content referencing a renamed or deleted
+  # page -- already caught one real broken link during initial scaffolding.
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Check formatting
+        run: pnpm --filter bhtune-website run format:check
+
+      - name: Lint
+        run: pnpm --filter bhtune-website run lint
+
+      - name: Typecheck
+        run: pnpm --filter bhtune-website run typecheck
+
+      - name: Build (also a broken-link/anchor drift gate for docs/)
+        run: pnpm --filter bhtune-website run build

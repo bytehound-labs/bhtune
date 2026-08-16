@@ -1,0 +1,8 @@
+{
+  "label": "Guides",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "description": "How BHTune's tuning engine works, and the safety guarantees around running it unattended against live plant equipment."
+  }
+}

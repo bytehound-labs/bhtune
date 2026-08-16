@@ -39,7 +39,8 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   warning or justify an explicit `#[allow(...)]` with a comment.
 - Format frontend code (`frontend/`) with `pnpm --filter bhtune-frontend run format:check` /
   `pnpm exec prettier --write .`, and lint it with `pnpm --filter bhtune-frontend run lint`
-  ([oxlint](https://oxc.rs/)).
+  ([oxlint](https://oxc.rs/)). The documentation site (`website/`) uses the same tools via
+  `pnpm --filter bhtune-website run format:check`/`run lint`.
 - All of the above are enforced automatically by a
   [lefthook](https://github.com/evilmartians/lefthook) `pre-commit` hook (`.lefthook.yml`),
   which also formats `Cargo.toml`/TOML with `taplo` and Markdown/YAML/JSON/TypeScript/CSS with
@@ -82,7 +83,11 @@ argument, respectively. PRs touching `frontend/` must additionally pass `pnpm ru
 check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
 is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`
 (which also typechecks `frontend/e2e/`). `.github/workflows/e2e.yml` runs the Playwright
-suite above in CI on every push/PR, uploading the HTML report as an artifact if it fails.
+suite above in CI on every push/PR, uploading the HTML report as an artifact if it fails. PRs
+touching `docs/` or `website/` must pass `pnpm --filter bhtune-website run format:check`,
+`run lint`, `run typecheck`, and `run build` — the build step doubles as a broken-link/anchor
+check across `docs/`, since Docusaurus fails the build rather than shipping a dead link or
+a heading reference that no longer exists.
 
 ## Documentation
 

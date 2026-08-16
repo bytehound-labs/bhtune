@@ -1,3 +1,8 @@
+---
+slug: /
+sidebar_position: 1
+---
+
 # Introduction
 
 BHTune is a free, open-source PID control-loop auto-tuner for industrial DCS/PLC systems. It

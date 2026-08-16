@@ -1,3 +1,7 @@
+---
+sidebar_position: 3
+---
+
 # Web GUI quickstart
 
 `bhtune-server` is a single binary that serves both a REST + Server-Sent-Events API and the

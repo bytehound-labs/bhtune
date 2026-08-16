@@ -1,3 +1,7 @@
+---
+sidebar_position: 4
+---
+
 # DCS/PLC templates
 
 A **template** tells BHTune how one DCS/PLC vendor's PID controller block expresses itself
@@ -180,8 +184,8 @@ template, and a stale or wrong badge is worse than no badge at all.
    contributing it upstream, put it in your own catalog file instead — see the README's
    Configuration table for the `--templates`/`BHTUNE_TEMPLATES` auto-loaded catalog path.
 
-See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the repository's general contribution
-workflow (branching, commit style, the CLA).
+See [`CONTRIBUTING.md`](https://github.com/bytehound-labs/bhtune/blob/main/CONTRIBUTING.md)
+for the repository's general contribution workflow (branching, commit style, the CLA).
 
 ## CLI usage
 

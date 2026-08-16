@@ -55,6 +55,10 @@ the legacy application's captured traces is still in progress — track both via
 - [MRFT concepts](docs/guides/mrft-concepts.md) and [Safety](docs/guides/safety.md) — what the
   test actually does, and the guardrails around running it unattended against live equipment.
 
+All of this content also builds into a browsable, searchable documentation site — see
+[`website/`](website/README.md) — sourced directly from [`docs/`](docs/), so the site can never
+drift from what's in this repo.
+
 ## Architecture
 
 A Cargo workspace of small, single-purpose crates:
@@ -73,6 +77,11 @@ lives under `frontend/` — a pnpm workspace package, kept separate from the Car
 (`pnpm run build`), `bhtune-server` embeds `frontend/dist/` directly into its own binary via
 `rust-embed`, so a release build is one self-contained executable — no separate static file
 server, Node, or nginx required on the target host.
+
+The documentation site (`bhtune-website`: Docusaurus) lives under `website/`, a third pnpm
+workspace package alongside `frontend/`. It has no runtime relationship to `bhtune-server` or
+the CLI — it's a separate static site build that renders [`docs/`](docs/). See
+[`website/README.md`](website/README.md).
 
 ### OPC DA bridge
 

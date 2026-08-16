@@ -1,3 +1,7 @@
+---
+sidebar_position: 2
+---
+
 # CLI quickstart
 
 This walks through a complete tune from the command line against BHTune's built-in FOPDT
