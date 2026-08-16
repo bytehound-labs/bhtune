@@ -116,3 +116,85 @@ jobs:
           # setup all still work), but only actually upload on a real tag push -- a
           # `workflow_dispatch` dry run has no release to upload into.
           dry-run: ${{ github.event_name != 'push' }}
+
+  # Linux-only, and deliberately its own job rather than extra steps on `build`'s Linux
+  # leg: `upload-rust-binary-action` always passes an explicit `target:`, so it builds via
+  # `cargo build --target x86_64-unknown-linux-gnu` and leaves the binaries under
+  # `target/x86_64-unknown-linux-gnu/release/`, not the plain `target/release/` that
+  # crates/bhtune-cli/Cargo.toml's `[package.metadata.deb]`/`[package.metadata.generate-rpm]`
+  # asset paths assume (and that local packaging testing used). A second, untargeted
+  # `cargo build --release` here keeps those paths correct with zero cross-compilation
+  # path-resolution assumptions, at the cost of one extra compile -- cheap next to this
+  # workflow's existing 3-way matrix.
+  package-deb-rpm:
+    needs: create-release
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # for `gh release upload`
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-deb-rpm
+
+      # Same protoc/frontend-embed requirements as `build` above -- bhtune-backend's
+      # opcda-bridge-proto dependency and bhtune-server's rust-embed both need them present
+      # before `cargo build --release` runs.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: protoc
+
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Build frontend
+        run: pnpm --filter bhtune-frontend run build
+
+      - name: Build release binaries
+        run: cargo build --release --locked -p bhtune-cli -p bhtune-server
+
+      # Neither cargo-deb (with --no-build below) nor cargo-generate-rpm (which never
+      # builds at all) strips symbols themselves in this invocation -- confirmed by local
+      # testing. Matches the archives `upload-rust-binary-action` produces above, which are
+      # stripped by `cargo build`'s own release-profile default.
+      - name: Strip binaries
+        run: strip -s target/release/bhtune target/release/bhtune-server
+
+      # cargo-deb ships prebuilt Linux binaries taiki-e/install-action fetches directly;
+      # cargo-generate-rpm does not (confirmed against its GitHub Releases, which carry no
+      # binary assets), so it's built from source via a plain `cargo install` instead.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      - name: Install cargo-generate-rpm
+        run: cargo install cargo-generate-rpm --locked
+
+      # `-p` means different things between these two tools: cargo-deb's is a crate *name*,
+      # cargo-generate-rpm's is a *path* to the crate directory (its own --help text is
+      # misleading here -- see the Cargo.toml comment above the
+      # [package.metadata.generate-rpm] block for the source-level confirmation).
+      - name: Build .deb package
+        run: cargo deb -p bhtune-cli --no-build -o target/debian/
+
+      - name: Build .rpm package
+        run: cargo generate-rpm -p crates/bhtune-cli -o target/generate-rpm/
+
+      # Both tools name their output after the crate's own name/version (e.g.
+      # bhtune_0.1.0-1_amd64.deb, bhtune-0.1.0-1.x86_64.rpm), so every release already
+      # produces distinctly-named files with no manual rename step needed.
+      - name: Upload to release
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            target/debian/*.deb \
+            target/generate-rpm/*.rpm \
+            --clobber
