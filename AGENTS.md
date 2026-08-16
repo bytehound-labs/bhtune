@@ -161,10 +161,23 @@ console errors.
 the `bhtune-server` binary via `rust-embed`, so a release build is a single self-contained
 executable — no separate static file server, Node, or nginx needed on the target host — see
 "`server-embed-spa`: embedding the built SPA into the binary" below for the full design.
-`server-windows-service` (the last item in Phase 7), `backend-replay`, and the replay
-harness are not yet — the GUI plan reversed from a Tauri desktop app to a browser UI served
-by `bhtune-server` before any Tauri code was written (see "Key architectural decisions").
-See "Phases and todos" below for what's next.
+`server-windows-service` (the last item in Phase 7) is deliberately deferred, not merely
+unstarted: writing `#[cfg(windows)]` code against the `windows-service` crate in this
+environment would be unverifiable — `cargo check --target x86_64-pc-windows-gnu` fails
+workspace-wide because `libsqlite3-sys` needs an `x86_64-w64-mingw32-gcc` cross-compiler
+that isn't installed and can't be (`sudo apt-get install mingw-w64` fails with no
+passwordless sudo available). Revisit once a Windows machine or that toolchain is
+available, rather than shipping untested Windows-only code on faith. Phase 8's
+`e2e-simulator` is now done: a genuine, real-subprocess end-to-end test
+(`crates/bhtune-cli/tests/e2e_simulator.rs`) that runs `bhtune tune` against the simulator
+backend across a small process/controller-type matrix and asserts the _calculated_ PID
+results, not just row presence — a gap no earlier test closed (see "Correctness-critical
+design details" below, item 2, for the real `bhtune-core` bug this test caught and fixed
+in the process: the MRFT oscillation period silently lost sub-second precision by default,
+zeroing `ti_minutes`/`td_minutes` even for PI/PID). `backend-replay` and the golden-trace
+replay harness are not yet — the GUI plan reversed from a Tauri desktop app to a browser UI
+served by `bhtune-server` before any Tauri code was written (see "Key architectural
+decisions"). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -2287,6 +2300,18 @@ unit-test coverage, not just be caught incidentally by a golden-master replay fi
    reassembled — that discards sub-second precision and wraps incorrectly past 24 hours. This
    matters most on fast loops (flow/pressure) where the whole oscillation period is only a few
    seconds, so truncation error is a large fraction of the signal, not noise.
+   **Cautionary note:** `core-tuning-math`'s first implementation stated this rule correctly but
+   didn't actually follow it — `measure_oscillation` computed elapsed time via
+   `chrono::Duration::num_seconds()` (whole-second-truncating) _unconditionally_, with
+   `TuningMathCompat.replicate_period_truncation_bug` only gating an additional 24-hour wrap on
+   top of the already-truncated value. Every existing unit test used whole-second switch-time
+   offsets, so this was lossless in every test and went unnoticed until `e2e-simulator`'s real,
+   millisecond-spaced subprocess timing hit it directly, silently zeroing `ti_minutes`/
+   `td_minutes` even for PI/PID. Fixed by switching to `num_milliseconds()` for the default path;
+   see the `measure_oscillation_keeps_sub_second_precision_by_default` regression test in
+   `tuning_math.rs` and `e2e_simulator.rs`'s module doc for the full story. The lesson: writing
+   the rule down is not sufficient on its own — it needs test coverage with genuinely
+   sub-second-precision inputs, not just whole-second ones, to actually enforce it.
 3. **Switch timestamps must reuse the already-captured tick timestamp**, never a fresh wall-clock
    read at the moment a switch is performed — the two can differ by however long evaluation took,
    which is small but non-deterministic and breaks exact replay comparison.
@@ -2509,11 +2534,20 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    and its manual end-to-end verification. Remaining: running as a proper platform service
    (`server-windows-service`). Replaces the earlier Tauri desktop GUI
    phase — see "Key architectural decisions" above for the reversal.
-8. **End-to-end testing and CI** — fully automated E2E tune on Linux CI via CLI + simulator
-   backend (no Windows, no external DCS dependency); Playwright E2E against the real web UI
-   (`e2e-playwright`); golden replay suite in CI; release build matrix for Linux/macOS/Windows
-   (`build-matrix`, via `cargo-dist`, embedding the built SPA — no Tauri bundler or WebView
-   runtime to manage).
+8. **End-to-end testing and CI** — `e2e-simulator` is done: a genuine subprocess-level test
+   (`crates/bhtune-cli/tests/e2e_simulator.rs`) spawns the real `bhtune tune` binary against the
+   simulator backend across a small process/controller-type matrix (all `direction=reverse`, the
+   direction empirically confirmed to actually oscillate against this simulator's fixed FOPDT
+   parameters), then opens the resulting SQLite database directly and asserts the _calculated_
+   PID results are sane — positive, correctly-ordered `kp` across all three response levels,
+   response-level-invariant `ti_minutes`/`td_minutes`, and a non-empty sample trail — closing a
+   real gap no earlier test covered (existing subprocess tests only checked the JSON summary's
+   shape/exit code, and existing in-process tests only checked row presence/counts, never actual
+   values). Writing it surfaced and fixed a real `bhtune-core` bug in the process — see
+   "Correctness-critical design details" above, item 2. Remaining: Playwright E2E against the real
+   web UI (`e2e-playwright`); golden replay suite in CI; release build matrix for Linux/macOS/
+   Windows (`build-matrix`, via `cargo-dist`, embedding the built SPA — no Tauri bundler or
+   WebView runtime to manage).
 9. **Documentation and release** — README/usage docs and a getting-started guide, published
    roadmap (OPC UA/Modbus backends, free remote/multi-user access, Step Test pending the bridge
    `Subscribe` RPC, multi-loop/batch tuning), v0.1.0 with per-platform binaries, a Windows MSI

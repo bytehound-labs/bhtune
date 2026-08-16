@@ -27,12 +27,13 @@ use crate::{
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TuningMathCompat {
     /// Replicate `TuningConstantsCalc`'s period calculation, which reconstructs elapsed time
-    /// from a `TimeSpan`'s `.Hours`/`.Minutes`/`.Seconds` *component* properties (each
-    /// wrapping at 24/60/60) instead of its total duration — silently dropping whole days
-    /// for any MRFT run lasting 24 hours or longer. Real relay-test runs are essentially
-    /// never that long, so this is a latent defect rather than one likely to bite in
-    /// practice, but it is fixed by default; set this `true` only to reproduce it bit-for-bit
-    /// against a captured legacy trace.
+    /// from a `TimeSpan`'s `.Hours`/`.Minutes`/`.Seconds` *component* properties instead of
+    /// its total duration. That has two effects, both reproduced together when this is
+    /// `true`: sub-second precision is silently dropped (`.Seconds` is an integer), and whole
+    /// days are silently dropped for any run lasting 24 hours or longer (`.Hours` wraps at
+    /// 24). The default (`false`) keeps millisecond precision and never wraps; set this
+    /// `true` only to reproduce the legacy behavior bit-for-bit against a captured legacy
+    /// trace.
     pub replicate_period_truncation_bug: bool,
 }
 
@@ -153,17 +154,24 @@ pub fn measure_oscillation(
     };
 
     // `TuningConstantsCalc` reconstructs elapsed time from a `TimeSpan`'s `.Hours`/`.Minutes`/
-    // `.Seconds` component properties (each wrapping at 24/60/60) rather than its total
-    // duration. For any run under 24 hours (every real one) that's an exact reconstruction of
-    // the total elapsed seconds; the bug only bites for a run lasting a full day or more,
-    // which silently drops the whole-day count. `total_secs % 86_400` reproduces that wrap.
-    let total_secs = (*switch_times.last().unwrap() - switch_times[0]).num_seconds();
+    // `.Seconds` *component* properties -- each an integer, so the sub-second remainder is
+    // silently dropped -- and `.Hours` additionally wraps at 24, dropping whole days for a
+    // run lasting that long. Reproducing the bug therefore needs *both* effects: whole-second
+    // precision and a 24-hour wrap (`elapsed_ms / 1000 % 86_400`). The fixed default instead
+    // keeps millisecond precision (ample for any real polling cadence) and never wraps, using
+    // the duration's true elapsed time -- this matters in practice, not just past 24 hours:
+    // an oscillation period under one second (a fast loop with a short poll interval) used to
+    // collapse to exactly zero here even by default, silently zeroing `ti_minutes`/`td_minutes`
+    // for a real, measured oscillation (caught by `e2e-simulator`'s real-timing coverage,
+    // which -- unlike this module's other tests -- drives a real polling loop with genuine,
+    // sub-second switch-time deltas rather than hand-picked whole-second ones).
+    let elapsed_ms = (*switch_times.last().unwrap() - switch_times[0]).num_milliseconds();
     let secs_for_period = if compat.replicate_period_truncation_bug {
-        total_secs % 86_400
+        ((elapsed_ms / 1000) % 86_400) as f32
     } else {
-        total_secs
+        elapsed_ms as f32 / 1000.0
     };
-    let period_minutes = (secs_for_period as f32 / 60.0) / num_cycles_count as f32;
+    let period_minutes = (secs_for_period / 60.0) / num_cycles_count as f32;
     let frequency = 2.0 * std::f32::consts::PI / period_minutes;
 
     let pv_amp_raw = (peaks_sum - troughs_sum) / (2.0 * num_cycles_count as f32);
@@ -527,6 +535,47 @@ mod tests {
             },
         );
         assert_approx(buggy.period_minutes, 30.0, 1e-3);
+    }
+
+    /// A run lasting well under one second total: proves the *default* (non-compat) path
+    /// keeps millisecond precision rather than truncating to whole seconds the way
+    /// `TimeSpan.Seconds` does. Before this was fixed, elapsed time was computed via
+    /// `Duration::num_seconds()` *unconditionally* -- the compat flag only gated the extra
+    /// `% 86_400` day-wrap on top of it -- so any run completing in under a second (entirely
+    /// plausible for a fast loop with a short poll interval, and exactly the shape
+    /// `e2e-simulator`'s real-timing coverage exercises) silently collapsed `period_minutes`,
+    /// and therefore `ti_minutes`/`td_minutes`, to exactly zero even with
+    /// `TuningMathCompat::default()`.
+    #[test]
+    fn measure_oscillation_keeps_sub_second_precision_by_default() {
+        let t_ms = |offset_ms: i64| {
+            DateTime::<Utc>::UNIX_EPOCH + chrono::Duration::milliseconds(offset_ms)
+        };
+        // Same shape as `measure_oscillation_reverse_first_switch_is_peak` (2 cycles, first
+        // switch is a peak), but 300ms total elapsed instead of 120s.
+        let switch_times = [t_ms(0), t_ms(75), t_ms(150), t_ms(225), t_ms(300)];
+
+        let osc = measure_oscillation(
+            &[999.0, 52.0, 48.0],
+            &[50.0, 46.0],
+            &switch_times,
+            1,
+            ControllerDirection::Reverse,
+            flow_pi_config(),
+            PvRange {
+                high: 100.0,
+                low: 0.0,
+            },
+            TuningMathCompat::default(),
+        );
+
+        // period = (0.3s / 60) / 2 cycles = 0.0025 minutes -- small, but the bug this guards
+        // against collapsed it all the way to exactly 0.0, not just imprecisely small.
+        assert_approx(osc.period_minutes, 0.3 / 60.0 / 2.0, 1e-8);
+        assert!(
+            osc.period_minutes > 0.0,
+            "a sub-second run's period must not collapse to exactly zero"
+        );
     }
 
     // --- calculate_tuning_result -------------------------------------------------------------
