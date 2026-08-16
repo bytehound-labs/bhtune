@@ -1,0 +1,59 @@
+name: Deploy docs site
+
+# Publishes website/ (built against ../docs) to GitHub Pages at
+# https://bytehound-labs.github.io/bhtune/. Path-filtered so unrelated pushes to main
+# (e.g. crates/**-only changes) don't redeploy an unchanged site. `checks.yml`'s `website`
+# job already builds and lints on every PR; this workflow only ever runs on main, once a
+# docs change has actually merged.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "website/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/docs-deploy.yml"
+  workflow_dispatch:
+
+# Pages deployments are serialized (not cancelled mid-flight) so a fast-following push
+# can't interrupt a deployment and leave the site on a half-published build.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Build site
+        run: pnpm --filter bhtune-website run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
