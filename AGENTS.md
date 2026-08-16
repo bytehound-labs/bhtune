@@ -193,10 +193,15 @@ previous one finish can occasionally still be told a run is already active; `tun
 third TypeScript project (`tsconfig.e2e.json`, referenced from `tsconfig.json` alongside the
 existing `tsconfig.app.json`/`tsconfig.node.json`) wires `e2e/`/`playwright.config.ts` into
 the existing `tsc -b`/`pnpm run build` gate, so the suite's own source is genuinely
-typechecked in CI, not merely executed. A new `.github/workflows/e2e.yml` job builds the
-frontend, builds a debug `bhtune-server`, installs Chromium via `playwright install
+typechecked in CI, not merely executed. A new `.github/workflows/e2e.yml` job builds a debug
+`bhtune-server`, builds the frontend, installs Chromium via `playwright install
 --with-deps`, and runs the suite, uploading the Playwright HTML report as a CI artifact on
-failure. `backend-replay` and the golden-trace replay harness are not yet — the GUI plan
+failure. This workflow's first real run caught a genuine, previously-undiscovered production
+bug on its very first execution — `bhtune-server`'s new `build.rs` now fixes a `rust-embed`
+compile-time build-order trap where compiling the crate before `frontend/dist/` exists
+permanently breaks asset serving for that build, regardless of build order afterward; see
+"`server-embed-spa`: embedding the built SPA into the binary" below for the full mechanism
+and fix. `backend-replay` and the golden-trace replay harness are not yet — the GUI plan
 reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any
 Tauri code was written (see "Key architectural decisions"). Phase 9's two front-loaded,
 run-now items are also done: `docs-contract` (see
@@ -2238,6 +2243,44 @@ isolated scratch project rather than assumed from the README alone:
   runs `pnpm run build` first, so without this attribute the workspace simply would not
   compile there.
 
+**`crates/bhtune-server/build.rs`: neutralizing a rust-embed compile-time build-order trap.**
+`e2e-playwright`'s first real CI run failed every test with every route returning a literal
+`404 not found` body, even though the server started cleanly and logged nothing alarming — the
+plain job log showed only the failing Playwright assertions, and the actual cause only surfaced
+by downloading the run's `playwright-report` artifact and reading its page-snapshot error
+context, which showed `404 not found` as the entire rendered page for `/`. Root cause, traced
+into `rust-embed`'s own macro-expansion source (`rust-embed-impl`/`rust-embed-utils` 8.12.0):
+without `debug-embed`, the generated `get()` reads files from disk at runtime, but the
+path-traversal guard's reference path (`canonical_folder_path`) is computed via
+`Path::canonicalize()` **once, during the derive macro's expansion** — i.e. at `bhtune-server`'s
+own compile time, not at request time. If `frontend/dist/` doesn't exist at that exact instant,
+`canonicalize()` fails and the macro's fallback silently bakes in the raw, non-canonical folder
+path (with `../../` segments left uncollapsed) instead of erroring. At runtime, every
+`Assets::get(path)` call canonicalizes the _requested_ file's path — which resolves cleanly once
+`frontend/dist/` exists — and checks it `starts_with()` that bad compile-time-baked path; a clean
+canonical path can never `starts_with` an unclean one containing `../..`, so the guard rejects
+every single file, including `index.html`, permanently, until `bhtune-server` is fully
+recompiled. `.github/workflows/e2e.yml` builds `bhtune-server` before the frontend on a fresh
+runner — exactly the trigger order — but this is a real, latent trap for any contributor too:
+running `cargo build`/`cargo check`/`cargo test` on a fresh clone before ever running
+`pnpm run build` in `frontend/` permanently breaks asset serving for that build, and building the
+frontend afterward does not fix it — only a full recompile of `bhtune-server` specifically does.
+`build.rs` neutralizes this unconditionally: it `create_dir_all`s `frontend/dist/` (using the
+same `CARGO_MANIFEST_DIR`-relative path rust-embed's own attribute references) before the
+crate's own source — and therefore the `RustEmbed` derive macro — compiles, so `canonicalize()`
+always succeeds and the correct canonical path gets baked in regardless of build order. An
+empty, merely-existing directory is sufficient; `#[allow_missing = true]` and the `503` path
+above already handle "exists but empty" gracefully. Best-effort by design (`let _ = ...`, no
+panic if directory creation itself fails, e.g. a read-only filesystem), deferring to that same
+`allow_missing`/503 handling as the fallback safety net. Deliberately did not reorder
+`e2e.yml`'s build-server-then-build-frontend step order once this fix landed — that order now
+exercises this exact previously-broken scenario as an ongoing regression test on every CI run.
+Verified by forcing a genuine full recompile (`cargo clean -p bhtune-server`, not just deleting
+the binary, which Cargo can satisfy from cached fingerprinted objects without ever re-running
+the derive macro — a trap that produced a misleading "can't reproduce" result until caught) both
+without the fix (reproduced the exact `404 not found` CI failure) and with it (`pnpm run
+test:e2e`'s full 4-test Playwright suite passes against a server built in that same order).
+
 **`static_handler` is the whole router's single `.fallback(...)`**, appended in
 `build_router` after every other merged route module:
 
@@ -2621,9 +2664,9 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    `smoke.spec.ts` (app shell, health badge, seeded template list, header nav) and
    `tune.spec.ts` (a full tune through `/runs/new` with `e2e_simulator.rs`'s own
    millisecond-scale simulator parameters, asserting sane/ordered rendered Kp/Ti/Td values,
-   plus cancelling an in-flight run). `.github/workflows/e2e.yml` builds the frontend and a
-   debug `bhtune-server`, installs Chromium, and runs the suite in CI, uploading the HTML
-   report on failure. A direct dividend of dropping Tauri: `tauri-driver`/WebDriver would
+   plus cancelling an in-flight run). `.github/workflows/e2e.yml` builds a debug
+   `bhtune-server` and the frontend, installs Chromium, and runs the suite in CI, uploading
+   the HTML report on failure. A direct dividend of dropping Tauri: `tauri-driver`/WebDriver would
    have been markedly more fragile in CI than plain Playwright against a real browser.
    Remaining: golden replay suite in CI (`e2e-golden-ci`, blocked on `trace-fixtures`/
    `capture-traces`); release build matrix for Linux/macOS/
