@@ -41,6 +41,14 @@ pub struct BhtuneConfig {
     /// Overrides [`DEFAULT_BIND_ADDR`] -- the `host:port` `bhtune-server` listens on. Only
     /// meaningful to the server binary; see [`resolve_bind_addr`].
     pub bind: Option<String>,
+    /// Age-based history retention (`history-retention`): tune runs with `started_at` older
+    /// than this many days are deleted automatically on every startup (both binaries, via
+    /// `crate::db::open`) and, for `bhtune-server`, again on a periodic timer while it keeps
+    /// running -- see `crate::retention`. `None` (the default) means retain forever: there is
+    /// no built-in number of days, since at this project's data volumes (see AGENTS.md's
+    /// History explorer notes) an unexpected auto-delete of someone's baseline tune is a
+    /// worse failure mode than an ever-growing database file. See [`resolve_retention_days`].
+    pub retention_days: Option<u32>,
     /// `[log]` sub-table: level/directory/format/rotation for `crate::logging`'s tracing
     /// setup, mirroring `opcda-bridge-gateway`'s own `log.*` config conventions.
     #[serde(default)]
@@ -318,6 +326,15 @@ pub fn resolve_bridge_host(cli_host: Option<String>, config: &BhtuneConfig) -> S
     cli_host
         .or_else(|| config.bridge_host.clone())
         .unwrap_or_else(|| DEFAULT_BRIDGE_HOST.to_string())
+}
+
+/// Resolve the history retention policy (`history-retention`) with `CLI flag > env var >
+/// config file > default` precedence, matching [`resolve_bridge_host`]'s shape. The env var
+/// is already folded into `cli_days` by clap's `env` attribute on `Cli::retention_days`.
+/// `None` means retain forever -- there is no built-in default number of days; see
+/// [`BhtuneConfig::retention_days`] for why.
+pub fn resolve_retention_days(cli_days: Option<u32>, config: &BhtuneConfig) -> Option<u32> {
+    cli_days.or(config.retention_days)
 }
 
 /// Resolve `bhtune-server`'s bind address with `CLI flag > env var > config file > default`
@@ -913,6 +930,32 @@ controller_action_direct_value = "0"
             resolve_bind_addr(None, &BhtuneConfig::default()),
             DEFAULT_BIND_ADDR.to_string()
         );
+    }
+
+    #[test]
+    fn resolve_retention_days_cli_wins() {
+        let config = BhtuneConfig {
+            retention_days: Some(90),
+            ..Default::default()
+        };
+        assert_eq!(resolve_retention_days(Some(30), &config), Some(30));
+    }
+
+    #[test]
+    fn resolve_retention_days_config_wins_over_default() {
+        let config = BhtuneConfig {
+            retention_days: Some(90),
+            ..Default::default()
+        };
+        assert_eq!(resolve_retention_days(None, &config), Some(90));
+    }
+
+    #[test]
+    fn resolve_retention_days_default_is_retain_forever() {
+        // No CLI flag, env var, or config key at all -- the deliberate "ships disabled by
+        // default" behavior `history-retention`'s design note calls for, not merely the
+        // absence of a hardcoded number.
+        assert_eq!(resolve_retention_days(None, &BhtuneConfig::default()), None);
     }
 
     #[test]

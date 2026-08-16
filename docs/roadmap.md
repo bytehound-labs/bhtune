@@ -65,15 +65,22 @@ model.
 ## History explorer
 
 Every completed run, its calculated tuning results, and every write-back attempt are already
-recorded in SQLite as they happen — this isn't planned, it's already true (`tune_runs`,
-`tune_samples`, `tune_results`, and `tune_writes`, with a query/filter/pagination layer over all
-of them). What isn't built yet is a good way to _look_ at that history:
+recorded in SQLite as they happen (`tune_runs`, `tune_samples`, `tune_results`, and
+`tune_writes`, with a query/filter/pagination layer over all of them), and so is age-based
+retention and headless access to that history:
 
-- **Age-based retention** — delete runs older than a configurable number of days, off by
-  default (retain forever), resolved through the same `CLI > env > TOML > default` precedence
-  as every other setting.
-- **Headless history commands** — `bhtune history list`/`show`/`prune`, so the same data is
-  reachable without the web GUI.
+- **Age-based retention** — done. Off by default (retain forever): set
+  `--retention-days`/`BHTUNE_RETENTION_DAYS`/`retention_days` in `bhtune.toml` (the same
+  `CLI > env > TOML > default` precedence as every other setting) to delete runs older than N
+  days automatically, on every startup and, for `bhtune-server`, again every 24 hours while it
+  keeps running.
+- **Headless history commands** — done. `bhtune history list`/`show`/`revert`/`prune`
+  (`prune` applies the configured retention policy on demand, with `--dry-run` to preview the
+  count first and `--older-than-days` to override the configured policy for one invocation),
+  so all of this is reachable without the web GUI.
+
+What isn't built yet is a good way to _look_ at that history from the browser:
+
 - **A GUI history screen** — a filterable/sortable run list, a PV/MV trend chart per run (the
   same chart component the live view already uses), and the run's full parameters, calculated
   constants, and write-back audit trail in one place.

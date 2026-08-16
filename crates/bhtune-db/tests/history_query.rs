@@ -1305,3 +1305,171 @@ async fn tune_write_list_for_run_is_empty_when_nothing_was_written() {
     );
 }
 // }}}1
+
+// delete_matching (history-retention) {{{1
+
+#[tokio::test]
+async fn delete_matching_deletes_only_runs_matching_the_filter_and_returns_the_count() {
+    let pool = connect_in_memory().await.unwrap();
+    let t0 = Utc::now();
+    let old = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0 - Duration::days(100),
+    )
+    .await;
+    let recent = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0,
+    )
+    .await;
+
+    let cutoff = t0 - Duration::days(90);
+    let deleted =
+        TuneRunRow::delete_matching(&pool, &TuneRunFilter::default().with_started_before(cutoff))
+            .await
+            .unwrap();
+    assert_eq!(deleted, 1);
+
+    assert!(TuneRunRow::get(&pool, old.id).await.unwrap().is_none());
+    assert!(TuneRunRow::get(&pool, recent.id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn delete_matching_with_no_matches_deletes_nothing_and_returns_zero() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        Utc::now(),
+    )
+    .await;
+
+    let deleted = TuneRunRow::delete_matching(
+        &pool,
+        &TuneRunFilter::default().with_started_before(Utc::now() - Duration::days(365)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(deleted, 0);
+    assert!(TuneRunRow::get(&pool, run.id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn delete_matching_cascades_to_samples_results_and_writes() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC117",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now - Duration::days(200),
+    )
+    .await
+    .unwrap();
+
+    let tick = Tick {
+        time: now,
+        pv: 50.0,
+    };
+    let state = MrftState {
+        hysteresis: 1.0,
+        mv_value_current: 55.0,
+        mv_sign_next_step: 1,
+        counter_all_switches: 0,
+        cycles_completed: 0,
+        cycles_remaining: 2,
+    };
+    TuneSampleRow::insert(&pool, run.id, 0, tick, state, SampleQuality::Good)
+        .await
+        .unwrap();
+    let result_row = TuneResultRow::from_calculated(
+        run.id,
+        sample_tuning_result(ResponseLevel::Moderate),
+        sample_pid_parameters(ResponseLevel::Moderate),
+    );
+    TuneResultRow::insert(&pool, &result_row).await.unwrap();
+    let mut new_write = NewTuneWrite::new(ResponseLevel::Moderate, now);
+    new_write.success = true;
+    TuneWriteRow::insert(&pool, run.id, new_write)
+        .await
+        .unwrap();
+
+    let deleted = TuneRunRow::delete_matching(
+        &pool,
+        &TuneRunFilter::default().with_started_before(now - Duration::days(100)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(deleted, 1);
+
+    assert!(TuneRunRow::get(&pool, run.id).await.unwrap().is_none());
+    assert!(
+        TuneSampleRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        TuneResultRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        TuneWriteRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn delete_matching_with_an_empty_filter_deletes_every_run() {
+    let pool = connect_in_memory().await.unwrap();
+    seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        Utc::now(),
+    )
+    .await;
+    seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        Utc::now(),
+    )
+    .await;
+
+    let deleted = TuneRunRow::delete_matching(&pool, &TuneRunFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(deleted, 2);
+    assert_eq!(
+        TuneRunRow::count(&pool, &TuneRunFilter::default())
+            .await
+            .unwrap(),
+        0
+    );
+}
+// }}}1

@@ -1,0 +1,32 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-history-prune 1  "bhtune-history-prune " 
+.SH NAME
+bhtune\-history\-prune \- Delete runs older than the configured retention policy (`history\-retention`), without waiting for the next automatic startup sweep
+.SH SYNOPSIS
+\fBbhtune\-history\-prune\fR [\fB\-\-older\-than\-days\fR] [\fB\-\-dry\-run\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Delete runs older than the configured retention policy (`history\-retention`), without waiting for the next automatic startup sweep
+.SH OPTIONS
+.TP
+\fB\-\-older\-than\-days\fR \fI<OLDER_THAN_DAYS>\fR
+Delete runs older than this many days, overriding the configured `retention_days` policy for this invocation only. Required if no retention policy is configured at all (`\-\-retention\-days` / `BHTUNE_RETENTION_DAYS` / the config file\*(Aqs `retention_days` key) \-\- there is no default "prune everything older than X" to fall back to
+.TP
+\fB\-\-dry\-run\fR
+Report how many runs would be deleted, and as of what cutoff, without deleting anything
+.TP
+\fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
+How to print the prune outcome
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+table: Human\-readable text (default)
+.IP \(bu 2
+json: Pretty\-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)

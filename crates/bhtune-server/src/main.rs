@@ -23,6 +23,13 @@ use bhtune_server::{AppState, build_router};
 /// [`ActiveRun::cancel_and_wait`]'s own doc comment for what "giving up" logs.
 const SHUTDOWN_RUN_CANCEL_TIMEOUT: Duration = Duration::from_secs(35);
 
+/// How often the server re-applies `history-retention`'s policy for as long as it keeps
+/// running, on top of the one-shot sweep `db::open` already ran at startup. A day is far
+/// more than frequent enough for an age-based-in-days policy -- the oldest a run can ever
+/// linger past its cutoff is one interval -- while being infrequent enough that the sweep
+/// never meaningfully competes with real traffic for the database.
+const RETENTION_SWEEP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // `bhtune-server` has no `--config` flag (or any flags) of its own yet, so this always
@@ -66,7 +73,17 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("APPDATA").ok().as_deref(),
         cfg!(target_os = "windows"),
     )?;
-    let pool = db::open(&db_path, user_templates).await?;
+    let retention_days = config::resolve_retention_days(
+        std::env::var("BHTUNE_RETENTION_DAYS")
+            .ok()
+            .and_then(|s| s.parse().ok()),
+        &config,
+    );
+    let pool = db::open(&db_path, user_templates, retention_days).await?;
+
+    if let Some(days) = retention_days {
+        spawn_retention_sweeper(pool.clone(), days);
+    }
 
     let bind_addr = config::resolve_bind_addr(std::env::var("BHTUNE_BIND").ok(), &config);
     let addr: SocketAddr = bind_addr
@@ -132,4 +149,93 @@ async fn shutdown_signal() {
         () = terminate => {},
     }
     tracing::info!("shutdown signal received, draining in-flight requests");
+}
+
+/// Spawns the background task that re-applies `history-retention`'s policy every
+/// [`RETENTION_SWEEP_INTERVAL`] for as long as the server keeps running. Only ever called
+/// when a retention policy is actually configured (`main`'s `if let Some(days)` guard) --
+/// there is deliberately no task at all, not a task that immediately no-ops, when retention
+/// is disabled (the default), matching `db::open`'s own "skip entirely" behavior for
+/// `None`.
+///
+/// Not joined or cancelled anywhere: the task only ever does one cheap `DELETE` per tick and
+/// holds no resources between ticks, so letting it end abruptly when the process exits
+/// (rather than folding it into `main`'s otherwise-careful graceful-shutdown sequence) risks
+/// losing at most one in-progress sweep, never corrupting anything -- SQLite's own
+/// transaction guarantees cover the rest.
+fn spawn_retention_sweeper(pool: bhtune_db::SqlitePool, days: u32) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(RETENTION_SWEEP_INTERVAL);
+        // The first tick fires immediately; `db::open` already ran a startup sweep moments
+        // ago, so this first iteration would otherwise be a guaranteed-redundant no-op.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            retention_tick(&pool, days).await;
+        }
+    });
+}
+
+/// One periodic retention sweep. Logs a warning and returns on failure rather than
+/// propagating -- unlike `db::open`'s startup sweep (fatal by design, since a one-shot CLI
+/// invocation failing fast beats silently proceeding on what might be a broken database),
+/// crashing a long-running server over a background maintenance hiccup would drop every
+/// in-flight HTTP connection and any actively-running tune, a far worse outcome than
+/// skipping one sweep and retrying at the next interval.
+async fn retention_tick(pool: &bhtune_db::SqlitePool, days: u32) {
+    let now = chrono::Utc::now();
+    if let Err(e) = bhtune_cli::retention::sweep_retention(pool, days, now).await {
+        tracing::warn!(error = %e, "periodic retention sweep failed; will retry next interval");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bhtune_db::connect_in_memory;
+
+    #[tokio::test]
+    async fn retention_tick_deletes_runs_past_the_cutoff_and_logs_nothing_fatal() {
+        use bhtune_core::{ControllerType, LoopConfig, LoopTags, ProcessType, built_in_templates};
+        use bhtune_db::models::{TemplateOrigin, TuneBackend, TuneRunRow};
+
+        let pool = connect_in_memory().await.unwrap();
+        let template = built_in_templates().remove(0);
+        let tags = LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &template);
+        let config = LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 5.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 3,
+            mrft_delay_secs: 0,
+        };
+        let old_started_at = chrono::Utc::now() - chrono::Duration::days(100);
+        let old_run = TuneRunRow::start(
+            &pool,
+            None,
+            "LIC-X",
+            TuneBackend::Simulator,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            old_started_at,
+        )
+        .await
+        .unwrap();
+
+        retention_tick(&pool, 30).await;
+
+        assert!(TuneRunRow::get(&pool, old_run.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn retention_tick_on_a_pool_with_no_matching_runs_is_a_silent_no_op() {
+        let pool = connect_in_memory().await.unwrap();
+        // Nothing to delete, and no way for this to fail -- just confirms the helper
+        // returns cleanly rather than panicking on an empty database.
+        retention_tick(&pool, 30).await;
+    }
 }

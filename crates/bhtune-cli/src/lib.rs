@@ -10,7 +10,11 @@
 //!   database path, opcda-bridge gateway address, default OPC server, and the user-supplied
 //!   template catalog path (`template-user-catalog`).
 //! - [`db`] — opens the database and seeds the built-in and (if configured) user-catalog
-//!   DCS/PLC templates on every startup.
+//!   DCS/PLC templates on every startup, and runs the `history-retention` sweep if a policy
+//!   is configured.
+//! - [`retention`] — turns `history-retention`'s "N days" policy into a cutoff and a
+//!   logged deletion sweep, shared by [`db::open`]'s startup call, `bhtune-server`'s
+//!   periodic timer, and `bhtune history prune`.
 //! - [`backend`] — constructs the selected `Backend` implementation.
 //! - [`commands`] — one module per subcommand family: `tune`/`simulate`, `template`,
 //!   `history`, `export`, `opc`.
@@ -45,6 +49,7 @@ pub mod config;
 pub mod db;
 pub mod logging;
 pub mod output;
+pub mod retention;
 #[cfg(test)]
 mod test_support;
 
@@ -197,8 +202,9 @@ async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCod
         Ok(templates) => templates,
         Err(e) => return fail(&e, output_format),
     };
+    let retention_days = config::resolve_retention_days(cli.retention_days, &config);
 
-    match db::open(&db_path, user_templates).await {
+    match db::open(&db_path, user_templates, retention_days).await {
         Err(e) => fail(&e, output_format),
         Ok(pool) => {
             let result: anyhow::Result<ExitCode> = match cli.command {
@@ -288,6 +294,7 @@ mod tests {
             db: Some(blocker.join("bhtune.db")),
             config: None,
             templates: None,
+            retention_days: None,
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -308,6 +315,7 @@ mod tests {
             db: None,
             config: Some(PathBuf::from("/nonexistent/bhtune.toml")),
             templates: None,
+            retention_days: None,
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -329,6 +337,7 @@ mod tests {
             db: Some(db),
             config: None,
             templates: Some(PathBuf::from("/nonexistent/templates.toml")),
+            retention_days: None,
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -347,6 +356,7 @@ mod tests {
             db: Some(db),
             config: None,
             templates: None,
+            retention_days: None,
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -365,6 +375,7 @@ mod tests {
             db: Some(db),
             config: None,
             templates: None,
+            retention_days: None,
             log_level: None,
             log_dir: None,
             log_format: None,
@@ -492,6 +503,7 @@ mod tests {
                 db: Some(db.clone()),
                 config: None,
                 templates: None,
+                retention_days: None,
                 log_level: None,
                 log_dir: None,
                 log_format: None,
@@ -520,6 +532,7 @@ mod tests {
                 db: Some(db.clone()),
                 config: None,
                 templates: None,
+                retention_days: None,
                 log_level: None,
                 log_dir: None,
                 log_format: None,
@@ -540,6 +553,7 @@ mod tests {
                 db: Some(db.clone()),
                 config: None,
                 templates: None,
+                retention_days: None,
                 log_level: None,
                 log_dir: None,
                 log_format: None,
@@ -562,6 +576,7 @@ mod tests {
                 db: Some(db),
                 config: None,
                 templates: None,
+                retention_days: None,
                 log_level: None,
                 log_dir: None,
                 log_format: None,
@@ -590,6 +605,7 @@ mod tests {
             db: None,
             config: Some(config_file.path().to_path_buf()),
             templates: None,
+            retention_days: None,
             log_level: None,
             log_dir: None,
             log_format: None,

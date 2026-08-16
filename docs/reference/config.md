@@ -38,6 +38,15 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
       "description": "`[log]` sub-table: level/directory/format/rotation for `crate::logging`'s tracing\nsetup, mirroring `opcda-bridge-gateway`'s own `log.*` config conventions.",
       "$ref": "#/$defs/LogConfig"
     },
+    "retention_days": {
+      "description": "Age-based history retention (`history-retention`): tune runs with `started_at` older\nthan this many days are deleted automatically on every startup (both binaries, via\n`crate::db::open`) and, for `bhtune-server`, again on a periodic timer while it keeps\nrunning -- see `crate::retention`. `None` (the default) means retain forever: there is\nno built-in number of days, since at this project's data volumes (see AGENTS.md's\nHistory explorer notes) an unexpected auto-delete of someone's baseline tune is a\nworse failure mode than an ever-growing database file. See [`resolve_retention_days`].",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
     "server": {
       "description": "Default OPC DA server ProgID, used when `--server` is omitted. Unlike the other\nfields there is no built-in default -- if this is unset and `--server` is omitted,\nthe command errors (see [`resolve_server`]).",
       "type": [

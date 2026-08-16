@@ -17,6 +17,7 @@ This document contains the help content for the `bhtune` command-line program.
 * [`bhtune history list`↴](#bhtune-history-list)
 * [`bhtune history show`↴](#bhtune-history-show)
 * [`bhtune history revert`↴](#bhtune-history-revert)
+* [`bhtune history prune`↴](#bhtune-history-prune)
 * [`bhtune export`↴](#bhtune-export)
 * [`bhtune opc`↴](#bhtune-opc)
 * [`bhtune opc read`↴](#bhtune-opc-read)
@@ -43,6 +44,7 @@ Headless MRFT auto-tuner
 * `--config <PATH>` — Path to a TOML config file (default: platform-specific, see `crate::config`)
 * `--db <PATH>` — Path to the SQLite database file (default: a platform-standard data directory, see `crate::config::default_db_path_from`). CLI > `BHTUNE_DB` env var > `db` in the config file > platform default -- see `crate::config::resolve_db_path`
 * `--templates <PATH>` — Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default: platform-specific, next to the config file -- see `crate::config::templates_path_from`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > `BHTUNE_TEMPLATES` env var > `templates` in the config file > platform default -- see `crate::config::load_user_templates`
+* `--retention-days <RETENTION_DAYS>` — Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default: unset -- retain forever). CLI > `BHTUNE_RETENTION_DAYS` env var > `retention_days` in the config file > (no default) -- see `crate::config::resolve_retention_days`. `bhtune history prune` applies the same policy on demand, with a `--dry-run` preview, instead of waiting for the next startup
 * `--log-level <LOG_LEVEL>` — Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with `--output json`'s single-object contract; see `crate::logging`
 * `--log-dir <PATH>` — Directory to write log files to (default: a platform-standard data directory, see `crate::config::default_log_dir_from`)
 * `--log-format <LOG_FORMAT>` — Log file format: "pretty" or "json" (default: pretty)
@@ -327,6 +329,7 @@ Inspect past tune runs
 * `list` — List past runs, newest first
 * `show` — Show one run's full detail: config, initial readings, calculated results, and any PID write-back audit rows
 * `revert` — Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses if the run has none, if that write-back's pre-read itself failed (nothing to revert to), or if the run did not use the `opcda` backend (nothing live to revert against)
+* `prune` — Delete runs older than the configured retention policy (`history-retention`), without waiting for the next automatic startup sweep
 
 
 
@@ -402,6 +405,29 @@ Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to
 * `--server <SERVER>` — (default: the config file's `server` key; errors if neither is set.)
 * `--yes` — Confirm writing to a live loop. Required -- there is no interactive prompt for reverting, since there is no calculated result to choose between as there is for `tune`'s own write-back step
 * `--output <OUTPUT>` — How to print the revert outcome
+
+  Default value: `table`
+
+  Possible values:
+  - `table`:
+    Human-readable text (default)
+  - `json`:
+    Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+
+
+
+
+## `bhtune history prune`
+
+Delete runs older than the configured retention policy (`history-retention`), without waiting for the next automatic startup sweep
+
+**Usage:** `bhtune history prune [OPTIONS]`
+
+###### **Options:**
+
+* `--older-than-days <OLDER_THAN_DAYS>` — Delete runs older than this many days, overriding the configured `retention_days` policy for this invocation only. Required if no retention policy is configured at all (`--retention-days` / `BHTUNE_RETENTION_DAYS` / the config file's `retention_days` key) -- there is no default "prune everything older than X" to fall back to
+* `--dry-run` — Report how many runs would be deleted, and as of what cutoff, without deleting anything
+* `--output <OUTPUT>` — How to print the prune outcome
 
   Default value: `table`
 

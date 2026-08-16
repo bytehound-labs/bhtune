@@ -77,6 +77,15 @@ pub struct Cli {
     #[arg(long, global = true, env = "BHTUNE_TEMPLATES", value_name = "PATH")]
     pub templates: Option<PathBuf>,
 
+    /// Delete tune runs (and their samples/results/write-back audit rows) older than this
+    /// many days, automatically, on every startup (default: unset -- retain forever). CLI >
+    /// `BHTUNE_RETENTION_DAYS` env var > `retention_days` in the config file > (no default)
+    /// -- see `crate::config::resolve_retention_days`. `bhtune history prune` applies the
+    /// same policy on demand, with a `--dry-run` preview, instead of waiting for the next
+    /// startup.
+    #[arg(long, global = true, env = "BHTUNE_RETENTION_DAYS", value_parser = positive_u32)]
+    pub retention_days: Option<u32>,
+
     /// Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default:
     /// info). Diagnostic detail only -- never printed to stdout, so it can never interleave
     /// with `--output json`'s single-object contract; see `crate::logging`.
@@ -696,6 +705,24 @@ pub enum HistoryCommand {
         #[arg(long, value_enum, default_value = "table")]
         output: crate::output::OutputFormat,
     },
+    /// Delete runs older than the configured retention policy (`history-retention`), without
+    /// waiting for the next automatic startup sweep.
+    Prune {
+        /// Delete runs older than this many days, overriding the configured `retention_days`
+        /// policy for this invocation only. Required if no retention policy is configured at
+        /// all (`--retention-days` / `BHTUNE_RETENTION_DAYS` / the config file's
+        /// `retention_days` key) -- there is no default "prune everything older than X" to
+        /// fall back to.
+        #[arg(long, value_parser = positive_u32)]
+        older_than_days: Option<u32>,
+        /// Report how many runs would be deleted, and as of what cutoff, without deleting
+        /// anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// How to print the prune outcome.
+        #[arg(long, value_enum, default_value = "table")]
+        output: crate::output::OutputFormat,
+    },
 }
 
 impl HistoryCommand {
@@ -704,6 +731,7 @@ impl HistoryCommand {
             HistoryCommand::List { output, .. } => *output,
             HistoryCommand::Show { output, .. } => *output,
             HistoryCommand::Revert { output, .. } => *output,
+            HistoryCommand::Prune { output, .. } => *output,
         }
     }
 }
@@ -1204,6 +1232,51 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_history_prune_defaults() {
+        let cli = Cli::parse_from(["bhtune", "history", "prune"]);
+        let command =
+            expect_variant!(cli.command, Command::History { command } => command, "History");
+        let (older_than_days, dry_run, output) = expect_variant!(
+            command,
+            HistoryCommand::Prune { older_than_days, dry_run, output } => (older_than_days, dry_run, output),
+            "Prune"
+        );
+        assert_eq!(older_than_days, None);
+        assert!(!dry_run);
+        assert_eq!(output, crate::output::OutputFormat::Table);
+    }
+
+    #[test]
+    fn cli_parses_history_prune_with_older_than_days_and_dry_run() {
+        let cli = Cli::parse_from([
+            "bhtune",
+            "history",
+            "prune",
+            "--older-than-days",
+            "14",
+            "--dry-run",
+            "--output",
+            "json",
+        ]);
+        let command =
+            expect_variant!(cli.command, Command::History { command } => command, "History");
+        let (older_than_days, dry_run, output) = expect_variant!(
+            command,
+            HistoryCommand::Prune { older_than_days, dry_run, output } => (older_than_days, dry_run, output),
+            "Prune"
+        );
+        assert_eq!(older_than_days, Some(14));
+        assert!(dry_run);
+        assert_eq!(output, crate::output::OutputFormat::Json);
+    }
+
+    #[test]
+    fn cli_rejects_a_zero_history_prune_older_than_days() {
+        let result = Cli::try_parse_from(["bhtune", "history", "prune", "--older-than-days", "0"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn command_output_format_defaults_to_table_for_commands_without_the_concept() {
         let cli = Cli::parse_from(["bhtune", "template", "list"]);
         assert_eq!(
@@ -1236,6 +1309,7 @@ mod tests {
         assert_eq!(cli.db, None);
         assert_eq!(cli.config, None);
         assert_eq!(cli.templates, None);
+        assert_eq!(cli.retention_days, None);
     }
 
     #[test]
@@ -1248,6 +1322,8 @@ mod tests {
             "/etc/bhtune.toml",
             "--templates",
             "/etc/bhtune/templates.toml",
+            "--retention-days",
+            "30",
             "simulate",
         ]);
         assert_eq!(cli.db, Some(PathBuf::from("/data/bhtune.db")));
@@ -1256,6 +1332,15 @@ mod tests {
             cli.templates,
             Some(PathBuf::from("/etc/bhtune/templates.toml"))
         );
+        assert_eq!(cli.retention_days, Some(30));
+    }
+
+    #[test]
+    fn cli_rejects_a_zero_retention_days() {
+        // `positive_u32` -- `0` is a nonsensical "delete everything immediately" policy, not
+        // a legitimate "keep nothing older than zero days" configuration.
+        let result = Cli::try_parse_from(["bhtune", "--retention-days", "0", "simulate"]);
+        assert!(result.is_err());
     }
 
     #[test]

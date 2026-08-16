@@ -872,6 +872,31 @@ impl TuneRunRow {
             .await
             .map_err(DbError::Query)
     }
+
+    /// Deletes every run matching `filter` in one statement (SQLite treats a single
+    /// statement as its own transaction, so no explicit `BEGIN`/`COMMIT` is needed). Returns
+    /// the number of runs deleted. `tune_samples`/`tune_results`/`tune_writes`'s `ON DELETE
+    /// CASCADE` foreign keys (see `db-schema`'s migration) remove each deleted run's samples,
+    /// results, and write-back audit rows automatically.
+    ///
+    /// Shares [`push_filter`] with [`Self::list`]/[`Self::count`], so "what a `--dry-run`
+    /// preview reports" and "what an actual sweep deletes" can never disagree — used this way
+    /// by `history-retention`'s automatic sweep and `bhtune history prune`.
+    ///
+    /// An empty `filter` (every field `None`) matches and deletes every run in the table —
+    /// callers that mean to scope a deletion must build a `filter` that says so explicitly;
+    /// this function has no separate "are you sure" guard of its own, matching `count`/`list`
+    /// treating an empty filter as "everything" rather than "nothing".
+    pub async fn delete_matching(pool: &SqlitePool, filter: &TuneRunFilter) -> DbResult<u64> {
+        let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new("DELETE FROM tune_runs");
+        push_filter(&mut builder, filter);
+        let result = builder
+            .build()
+            .execute(pool)
+            .await
+            .map_err(DbError::Query)?;
+        Ok(result.rows_affected())
+    }
 }
 
 /// Appends `WHERE <conditions>` to `builder` for every `Some` field in `filter`, or nothing

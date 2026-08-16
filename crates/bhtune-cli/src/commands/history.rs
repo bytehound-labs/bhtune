@@ -30,6 +30,11 @@ pub async fn run(
             yes,
             output,
         } => revert(pool, config, run_id, bridge_host, server, yes, output).await,
+        HistoryCommand::Prune {
+            older_than_days,
+            dry_run,
+            output,
+        } => prune(pool, config, older_than_days, dry_run, output).await,
     }
 }
 
@@ -257,6 +262,90 @@ async fn list(
         }
     }
     Ok(())
+}
+
+/// `bhtune history prune` -- applies `history-retention`'s age-based policy on demand,
+/// instead of waiting for the next startup or (for `bhtune-server`) the next periodic sweep.
+///
+/// `older_than_days` overrides the configured `retention_days` policy for this invocation
+/// only, matching this project's usual per-invocation-flag-overrides-persistent-config
+/// pattern (mirroring `--db`/`--templates`); if neither is given there is nothing to prune
+/// against, and that's a plain error rather than silently doing nothing -- an operator who
+/// runs `bhtune history prune` clearly wants *something* deleted.
+///
+/// `--dry-run` reports a count and the exact cutoff timestamp that would be used, without
+/// deleting anything, via [`TuneRunRow::count`] against the same [`TuneRunFilter`] shape
+/// [`crate::retention::sweep_retention`] would delete against -- so a preview and the real
+/// run can never disagree about which runs match. It deliberately doesn't itemize every
+/// matching run (unlike `history list`, which paginates): the history table is allowed to be
+/// large, and a prune preview only needs to answer "how many, and as of when", matching the
+/// automatic sweep's own INFO log shape.
+async fn prune(
+    pool: &SqlitePool,
+    config: &crate::config::BhtuneConfig,
+    older_than_days: Option<u32>,
+    dry_run: bool,
+    output: OutputFormat,
+) -> anyhow::Result<()> {
+    let days = older_than_days.or(config.retention_days).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no retention policy configured; pass --older-than-days, or set --retention-days \
+             / BHTUNE_RETENTION_DAYS / the config file's retention_days key"
+        )
+    })?;
+    let now = chrono::Utc::now();
+    let cutoff = crate::retention::cutoff_for(days, now);
+
+    if dry_run {
+        let count =
+            TuneRunRow::count(pool, &TuneRunFilter::default().with_started_before(cutoff)).await?;
+        match output {
+            OutputFormat::Table => {
+                println!(
+                    "Would delete {count} run(s) started at or before {} ({days} day(s)).",
+                    cutoff.to_rfc3339()
+                );
+            }
+            OutputFormat::Json => {
+                let json = PruneJson {
+                    retention_days: days,
+                    cutoff,
+                    dry_run: true,
+                    deleted: count as u64,
+                };
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+        }
+        return Ok(());
+    }
+
+    let deleted = crate::retention::sweep_retention(pool, days, now).await?;
+    match output {
+        OutputFormat::Table => {
+            println!(
+                "Deleted {deleted} run(s) started at or before {} ({days} day(s)).",
+                cutoff.to_rfc3339()
+            );
+        }
+        OutputFormat::Json => {
+            let json = PruneJson {
+                retention_days: days,
+                cutoff,
+                dry_run: false,
+                deleted,
+            };
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct PruneJson {
+    retention_days: u32,
+    cutoff: chrono::DateTime<chrono::Utc>,
+    dry_run: bool,
+    deleted: u64,
 }
 
 /// Renders an optional PID constant reading/write for `history show`'s plain-text table --
@@ -1343,5 +1432,115 @@ mod tests {
         .unwrap();
 
         server.shutdown().await;
+    }
+
+    /// Starts a run with `started_at` set explicitly (unlike every other fixture in this
+    /// file, which always uses `chrono::Utc::now()`) so `prune`'s tests can put a run
+    /// unambiguously on either side of a retention cutoff.
+    async fn start_run_at(pool: &SqlitePool, started_at: chrono::DateTime<chrono::Utc>) -> i64 {
+        TuneRunRow::start(
+            pool,
+            None,
+            "Unit1.LIC101.PV",
+            TuneBackend::Simulator,
+            sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &sample_tags(),
+            started_at,
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn prune_errors_when_no_retention_policy_is_configured() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let config = crate::config::BhtuneConfig::default();
+        let err = prune(&pool, &config, None, false, OutputFormat::Table)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no retention policy configured"));
+    }
+
+    #[tokio::test]
+    async fn prune_dry_run_reports_the_count_without_deleting_anything() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let old_id = start_run_at(&pool, now - chrono::Duration::days(45)).await;
+        let recent_id = start_run_at(&pool, now - chrono::Duration::days(1)).await;
+        let config = crate::config::BhtuneConfig {
+            retention_days: Some(30),
+            ..Default::default()
+        };
+
+        prune(&pool, &config, None, true, OutputFormat::Table)
+            .await
+            .unwrap();
+        prune(&pool, &config, None, true, OutputFormat::Json)
+            .await
+            .unwrap();
+
+        // Nothing was actually deleted by either dry-run call.
+        assert!(TuneRunRow::get(&pool, old_id).await.unwrap().is_some());
+        assert!(TuneRunRow::get(&pool, recent_id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn prune_deletes_matching_runs_when_not_a_dry_run() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let old_id = start_run_at(&pool, now - chrono::Duration::days(45)).await;
+        let recent_id = start_run_at(&pool, now - chrono::Duration::days(1)).await;
+        let config = crate::config::BhtuneConfig {
+            retention_days: Some(30),
+            ..Default::default()
+        };
+
+        prune(&pool, &config, None, false, OutputFormat::Table)
+            .await
+            .unwrap();
+
+        assert!(TuneRunRow::get(&pool, old_id).await.unwrap().is_none());
+        assert!(TuneRunRow::get(&pool, recent_id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn prune_older_than_days_overrides_the_configured_policy() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        // 45 days old: survives the configured 90-day policy, but not an ad-hoc
+        // `--older-than-days 30` override.
+        let run_id = start_run_at(&pool, now - chrono::Duration::days(45)).await;
+        let config = crate::config::BhtuneConfig {
+            retention_days: Some(90),
+            ..Default::default()
+        };
+
+        prune(&pool, &config, Some(30), false, OutputFormat::Table)
+            .await
+            .unwrap();
+
+        assert!(TuneRunRow::get(&pool, run_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn prune_json_output_is_a_single_parseable_object() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let config = crate::config::BhtuneConfig {
+            retention_days: Some(30),
+            ..Default::default()
+        };
+        // Only proves the `Json` branch runs to completion and produces a well-formed
+        // `PruneJson` in both the dry-run and real-deletion cases -- the full
+        // one-JSON-value-on-stdout contract across every subcommand belongs to
+        // `safety-json-contract`'s dedicated subprocess test, not to this unit test.
+        prune(&pool, &config, None, true, OutputFormat::Json)
+            .await
+            .unwrap();
+        prune(&pool, &config, None, false, OutputFormat::Json)
+            .await
+            .unwrap();
     }
 }

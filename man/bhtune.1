@@ -4,7 +4,7 @@
 .SH NAME
 bhtune \- Headless MRFT auto\-tuner
 .SH SYNOPSIS
-\fBbhtune\fR [\fB\-\-config\fR] [\fB\-\-db\fR] [\fB\-\-templates\fR] [\fB\-\-log\-level\fR] [\fB\-\-log\-dir\fR] [\fB\-\-log\-format\fR] [\fB\-\-log\-rotation\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+\fBbhtune\fR [\fB\-\-config\fR] [\fB\-\-db\fR] [\fB\-\-templates\fR] [\fB\-\-retention\-days\fR] [\fB\-\-log\-level\fR] [\fB\-\-log\-dir\fR] [\fB\-\-log\-format\fR] [\fB\-\-log\-rotation\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
 .SH DESCRIPTION
 Headless MRFT auto\-tuner
 .SH OPTIONS
@@ -17,6 +17,9 @@ Path to the SQLite database file (default: a platform\-standard data directory, 
 .TP
 \fB\-\-templates\fR \fI<PATH>\fR
 Path to a user\-supplied DCS/PLC template catalog, auto\-loaded on every startup in addition to the built\-in templates (default: platform\-specific, next to the config file \-\- see `crate::config::templates_path_from`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > `BHTUNE_TEMPLATES` env var > `templates` in the config file > platform default \-\- see `crate::config::load_user_templates`
+.TP
+\fB\-\-retention\-days\fR \fI<RETENTION_DAYS>\fR
+Delete tune runs (and their samples/results/write\-back audit rows) older than this many days, automatically, on every startup (default: unset \-\- retain forever). CLI > `BHTUNE_RETENTION_DAYS` env var > `retention_days` in the config file > (no default) \-\- see `crate::config::resolve_retention_days`. `bhtune history prune` applies the same policy on demand, with a `\-\-dry\-run` preview, instead of waiting for the next startup
 .TP
 \fB\-\-log\-level\fR \fI<LOG_LEVEL>\fR
 Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default: info). Diagnostic detail only \-\- never printed to stdout, so it can never interleave with `\-\-output json`\*(Aqs single\-object contract; see `crate::logging`
