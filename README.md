@@ -4,6 +4,7 @@
 [![codecov](https://codecov.io/gh/bytehound-labs/bhtune/branch/main/graph/badge.svg?token=)](https://codecov.io/gh/bytehound-labs/bhtune)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
+[![Docs](https://img.shields.io/badge/docs-bytehound--labs.github.io%2Fbhtune-blue.svg)](https://bytehound-labs.github.io/bhtune/)
 
 A free, open-source PID loop auto-tuner for industrial control systems (DCS/PLC), built by
 [ByteHound](https://github.com/bytehound-labs).
@@ -55,7 +56,8 @@ the legacy application's captured traces is still in progress — track both via
 - [MRFT concepts](docs/guides/mrft-concepts.md) and [Safety](docs/guides/safety.md) — what the
   test actually does, and the guardrails around running it unattended against live equipment.
 
-All of this content also builds into a browsable, searchable documentation site — see
+All of this content also builds into a browsable, searchable documentation site, published at
+**[bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/)** — see
 [`website/`](website/README.md) — sourced directly from [`docs/`](docs/), so the site can never
 drift from what's in this repo.
 
