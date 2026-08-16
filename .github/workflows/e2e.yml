@@ -7,6 +7,13 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   e2e:
     runs-on: ubuntu-latest
@@ -32,7 +39,7 @@ jobs:
       # slower release build or a re-embed step between the frontend build below and the
       # suite that runs against it.
       - name: Build bhtune-server
-        run: cargo build -p bhtune-server
+        run: cargo build -p bhtune-server --locked
 
       - uses: pnpm/setup@v2
         with:

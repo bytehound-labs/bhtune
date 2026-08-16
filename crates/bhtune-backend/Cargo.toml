@@ -32,14 +32,23 @@ tokio = { version = "1", features = ["sync"] }
 # convention already used for `async-trait`/`opcda-bridge` above. `default-features = false`
 # drops `thread_rng`/`sys_rng`/OS-entropy machinery this crate never uses -- every RNG here
 # is explicitly seeded (see `FopdtProcess::new`) for reproducible simulation runs.
-rand = { version = "0.10", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.10", default-features = false, features = [
+  "std",
+  "std_rng",
+] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
+tokio = { version = "1", features = [
+  "rt",
+  "rt-multi-thread",
+  "macros",
+  "net",
+  "time",
+] }
 # Only for `simulator`'s end-to-end test proving a real `MrftEngine` completes a relay test
 # against `SimulatorBackend` through the actual `Backend` trait -- everywhere else in this
 # crate stays `bhtune-core`-free (see `backend-trait`'s design notes in `AGENTS.md`).
-bhtune-core = { path = "../bhtune-core" }
+bhtune-core.workspace = true
 # Pinned to the same versions `opcda-bridge` itself declares in its own `Cargo.toml`: this
 # crate's tests stand up a mock `Bridge` gRPC service to test `OpcDaBackend` end-to-end
 # against, and the generated `tonic`/`prost` types on both sides of that connection (the mock

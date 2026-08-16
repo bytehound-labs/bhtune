@@ -7,6 +7,13 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -27,10 +34,10 @@ jobs:
         run: cargo fmt --check --all
 
       - name: Lint with clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Run cargo-deny
         run: cargo deny check
@@ -49,7 +56,80 @@ jobs:
           git diff --exit-code -- docs/reference/ man/ completions/
 
       - name: Build workspace
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
+
+  # Fmt/clippy/test only -- not the doc/OpenAPI drift checks above (those regenerate and
+  # `git diff`, which is already exercised on Linux and would only add noise from CRLF
+  # checkout settings on Windows) and not a release/packaging build (that's `build-matrix`'s
+  # job, once it exists). This exists because bhtune ships a Windows MSI as its primary
+  # distribution artifact (see AGENTS.md's "Windows installer" plan), so proving the
+  # workspace actually builds and tests clean on Windows -- not just Linux -- is directly
+  # relevant, unlike a typical server-only project.
+  windows:
+    name: Windows validation
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete,protoc
+
+      - name: Check formatting
+        run: cargo fmt --check --all
+
+      - name: Lint with clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+  # Verifies every crate is actually publishable (correct manifests, no missing `version`
+  # requirements on path dependencies, etc.) even while `release-plz.toml` has
+  # `publish = false` workspace-wide -- catching a packaging break now is far cheaper than
+  # discovering it for the first time at `release-v1`.
+  package:
+    name: Package verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: protoc
+
+      - name: Verify publishable packages
+        run: cargo package --workspace --locked
+
+  # Mirrors opcda-bridge's `msrv` job. Re-verify the pinned toolchain version against
+  # `rust-version` in the root `Cargo.toml` whenever a dependency bump might raise the real
+  # floor further (see that field's own comment for how it was determined).
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@1.94.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: protoc
+
+      - name: Check the declared MSRV
+        run: cargo check --workspace --all-targets --all-features --locked
 
   frontend:
     runs-on: ubuntu-latest

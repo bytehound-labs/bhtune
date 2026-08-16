@@ -11,19 +11,39 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# Floor confirmed by direct test: `cargo check --workspace --all-targets --all-features
+# --locked` fails under rustc 1.88 (sqlx 0.9.0 requires 1.94.0) and succeeds under 1.94.1.
+# Re-verify with the same command whenever a dependency bump might raise this further.
+rust-version = "1.94"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/bytehound-labs/bhtune"
+homepage = "https://github.com/bytehound-labs/bhtune"
 
 # Pinned once here so every crate that needs a given dependency uses the same
 # version workspace-wide. Populated as later phases add real dependencies;
 # empty is a valid, intentional starting point for a scaffolding-only commit.
 [workspace.dependencies]
+# Internal workspace crates, each pinned to `path` + an explicit `version` requirement
+# (mirroring opcda-bridge's own `opcda-bridge`/`opcda-bridge-proto` entries) rather than a
+# bare `path`-only dependency. This is required, not stylistic: `cargo package` refuses to
+# package any crate whose path dependency has no version requirement ("all dependencies
+# must have a version requirement specified when packaging"), which would otherwise make
+# every crate depending on another workspace member unpublishable. `bhtune-server` has no
+# entry here since nothing in the workspace depends on it.
+bhtune-core = { path = "crates/bhtune-core", version = "0.1.0" }
+bhtune-backend = { path = "crates/bhtune-backend", version = "0.1.0" }
+bhtune-db = { path = "crates/bhtune-db", version = "0.1.0" }
+bhtune-cli = { path = "crates/bhtune-cli", version = "0.1.0" }
 # Deliberately does NOT enable the "clock"/"now" features: bhtune-core must never be able
 # to call `Utc::now()`, since the MRFT engine's determinism guarantee (see AGENTS.md) is
 # that all timestamps come in as `Tick` data, never read from the wall clock internally.
 # Disabling the feature at the Cargo level makes that a compile-time guarantee, not just a
 # code-review convention.
-chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "serde"] }
+chrono = { version = "0.4", default-features = false, features = [
+  "std",
+  "alloc",
+  "serde",
+] }
 # A single pin so `bhtune-db` and `bhtune-backend` (and any future crate needing fallible
 # I/O) always agree on the same version — library-appropriate error handling (typed,
 # matchable variants) as opposed to `anyhow`, which is reserved for binary crates that only

@@ -16,8 +16,8 @@ path = "src/lib.rs"
 # directly (`ProcessType`, `ControllerType`, `ControllerDirection`, `ResponseLevel`,
 # `LoopConfig`, `DcsTemplate`, `Tick`, `MrftState`) -- see that crate's `Cargo.toml` comment
 # for why the dependency is optional there but always-on here.
-bhtune-core = { path = "../bhtune-core", features = ["utoipa"] }
-bhtune-db = { path = "../bhtune-db", features = ["utoipa"] }
+bhtune-core = { workspace = true, features = ["utoipa"] }
+bhtune-db = { workspace = true, features = ["utoipa"] }
 # Reuses the CLI's config precedence (`bhtune.toml`/env var/default resolution -- including
 # the `bind` address this crate alone consumes, see `crate::config::resolve_bind_addr`),
 # database open/migrate/seed bootstrap, and tracing setup verbatim, rather than duplicating
@@ -29,7 +29,7 @@ bhtune-db = { path = "../bhtune-db", features = ["utoipa"] }
 # second reason to do it shows up. Revisit if this coupling ever becomes awkward (e.g. the
 # two crates' config needs diverge, or `bhtune-cli`'s `clap`/`csv` dependencies become a real
 # concern in this binary's footprint).
-bhtune-cli = { path = "../bhtune-cli" }
+bhtune-cli.workspace = true
 anyhow = "1"
 chrono.workspace = true
 serde = { version = "1", features = ["derive"] }

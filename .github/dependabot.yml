@@ -1,0 +1,41 @@
+version: 2
+updates:
+  # Cargo workspace: root Cargo.toml covers every crate under crates/*, since they all
+  # share one Cargo.lock.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-dependencies:
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - rust
+
+  # pnpm workspace root: covers both the root package.json and frontend/package.json,
+  # since they share one pnpm-lock.yaml.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - frontend
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - ci

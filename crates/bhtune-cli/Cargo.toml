@@ -15,9 +15,9 @@ name = "bhtune"
 path = "src/main.rs"
 
 [dependencies]
-bhtune-core = { path = "../bhtune-core" }
-bhtune-backend = { path = "../bhtune-backend" }
-bhtune-db = { path = "../bhtune-db" }
+bhtune-core.workspace = true
+bhtune-backend.workspace = true
+bhtune-db.workspace = true
 anyhow = "1"
 chrono.workspace = true
 # `derive` for the `Cli`/`Command` structs, `env` so flags like `--db`/`--bridge-host` can
