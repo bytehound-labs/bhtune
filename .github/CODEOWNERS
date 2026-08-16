@@ -1,0 +1,3 @@
+# Default owner for everything in the repository, used for automatic review
+# requests. See https://docs.github.com/articles/about-code-owners
+* @mikeboiko

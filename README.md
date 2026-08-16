@@ -6,7 +6,7 @@
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Docs](https://img.shields.io/badge/docs-bytehound--labs.github.io%2Fbhtune-blue.svg)](https://bytehound-labs.github.io/bhtune/)
 
-A free, open-source PID loop auto-tuner for industrial control systems (DCS/PLC), built by
+An open-source PID loop auto-tuner for industrial control systems (DCS/PLC), built by
 [ByteHound](https://github.com/bytehound-labs).
 
 ## What it does
@@ -23,7 +23,7 @@ BHTune is designed around a few core principles:
   OPC DA systems goes over the network to a small Windows-side gateway,
   [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) — BHTune itself runs on Linux,
   macOS, or Windows.
-- **Has no proprietary dependencies.** Every dependency is FOSS, machine-enforced in CI via
+- **Has no proprietary dependencies.** Every dependency is open-source, machine-enforced in CI via
   `cargo deny` (see [`deny.toml`](deny.toml)). There is no licensed UI toolkit, no licensed OPC
   SDK, and no hardware/software dongle.
 - **Has two faces, one engine.** A headless CLI for scheduled/scripted tuning and a browser-based
@@ -360,8 +360,8 @@ deferred, and what's deliberately not planned — lives at
 ## Roadmap
 
 - OPC UA and Modbus `Backend` implementations, alongside OPC DA.
-- Free remote/multi-user access to the web GUI: authentication, TLS, and an audit log of
-  who ran/wrote what. Free, like every other feature — there is no paid tier planned.
+- Remote/multi-user access to the web GUI: authentication, TLS, and an audit log of who
+  ran/wrote what.
 - Step Test, a simpler alternative manual tuning method. Blocked on adding a
   push/subscription RPC to `opcda-bridge`, since Step Test observes PV changes via an OPC DA
   subscription rather than polling reads.
@@ -382,5 +382,5 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). Contributions require signing the
 
 ## License
 
-[GNU AGPL v3.0-or-later](LICENSE). BHTune is free software: free to use, study, modify, and
-redistribute under the AGPL's terms.
+[GNU AGPL v3.0-or-later](LICENSE). BHTune is open-source software licensed under the AGPL's
+terms.

@@ -6,7 +6,7 @@ import { themes as prismThemes } from "prism-react-renderer";
 
 const config: Config = {
   title: "BHTune",
-  tagline: "Free, open-source PID auto-tuning for industrial DCS/PLC loops",
+  tagline: "Open-source PID auto-tuning for industrial DCS/PLC loops",
   favicon: "img/favicon.svg",
 
   future: {

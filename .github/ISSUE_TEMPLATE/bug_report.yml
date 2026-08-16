@@ -1,0 +1,52 @@
+name: Bug report
+description: Report something that isn't working as expected.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands, config (`bhtune.toml`), or UI steps used, if possible.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `bhtune --version` / `bhtune-server --version`, or the Docker image tag.
+    validations:
+      required: false
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      description: Which `Backend` implementation was in use?
+      options:
+        - OPC DA (via opcda-bridge)
+        - Simulator
+        - Replay
+        - Not applicable / not sure
+    validations:
+      required: false
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and architecture (e.g. Linux x86_64, Windows 11, macOS arm64, Docker).
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Output from `--output json`, `tracing` logs, or the browser console, as applicable.
+      render: shell
+    validations:
+      required: false

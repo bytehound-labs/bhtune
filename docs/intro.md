@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Introduction
 
-BHTune is a free, open-source PID control-loop auto-tuner for industrial DCS/PLC systems. It
+BHTune is an open-source PID control-loop auto-tuner for industrial DCS/PLC systems. It
 runs a Modified Relay Feedback Test (MRFT) against a live control loop, then calculates — and,
 with explicit confirmation, writes back — tuned PID constants for three levels of aggressiveness
 (Aggressive, Moderate, Sluggish), so an engineer can pick the one that fits the process.
@@ -21,7 +21,7 @@ DCS/PLC family.
   goes over the network to a small Windows-side gateway,
   [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) — BHTune runs on Linux,
   macOS, or Windows.
-- **Has no proprietary dependencies.** Every dependency is FOSS, machine-enforced in CI via
+- **Has no proprietary dependencies.** Every dependency is open-source, machine-enforced in CI via
   `cargo deny`. There is no licensed UI toolkit, no licensed OPC SDK, and no hardware/software
   license dongle.
 - **Has two faces, one engine.** A headless CLI for scheduled/scripted tuning and a

@@ -160,10 +160,10 @@ Everything in this section is deferred past v1, not permanently out of scope.
 - [ ] REQUIRED — assigning the entire active template onto the tuning engine immediately before a
       test starts (§4).
 
-## 8. Licensing — NOT PLANNED
+## 8. Licensing and access — NOT PLANNED
 
 - [ ] NOT PLANNED — any usage-gating, dongle/license-check, or "licensed loop count" concept, in
-      any form. BHTune is free, open-source software; there is no enforcement mechanism to build.
+      any form. BHTune is open-source software; no enforcement mechanism is part of the v1 build.
 
 ## 9. State / data model
 

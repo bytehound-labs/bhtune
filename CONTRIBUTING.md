@@ -6,9 +6,8 @@ BHTune is under active development. The practices below apply to all contributio
 
 Before your first pull request can be merged, you must sign the [Contributor License
 Agreement](CLA.md). A CLA-assistant bot will comment on your PR with instructions the first time
-you contribute. This is what lets ByteHound keep BHTune under the AGPL for everyone while also
-offering separate commercial licensing terms to enterprise customers — see the CLA itself for
-exactly what rights you are and are not granting.
+you contribute. The CLA documents the rights needed to accept and maintain contributions — see
+the CLA itself for exactly what rights you are and are not granting.
 
 ## Development workflow: trunk-based
 
@@ -45,11 +44,11 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   [lefthook](https://github.com/evilmartians/lefthook) `pre-commit` hook (`.lefthook.yml`),
   which also formats `Cargo.toml`/TOML with `taplo` and Markdown/YAML/JSON/TypeScript/CSS with
   `prettier`. Run `lefthook install` once after cloning to enable it.
-- No proprietary or non-FOSS dependencies, ever, on either side of the stack. `cargo deny check`
-  enforces this in CI for Rust dependencies against the allow-list in `deny.toml`; `pnpm run
-check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the equivalent allow-list for
-  npm dependencies. If either fails on a new dependency, look for a FOSS alternative rather than
-  widening the allow-list.
+- No proprietary or non-open-source dependencies, ever, on either side of the stack.
+  `cargo deny check` enforces this in CI for Rust dependencies against the allow-list in
+  `deny.toml`; `pnpm run check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the
+  equivalent allow-list for npm dependencies. If either fails on a new dependency, look for an
+  open-source alternative rather than widening the allow-list.
 
 ## Testing
 

@@ -6,10 +6,9 @@ sidebar_position: 6
 
 Everything below is planned, in the sense that a design exists and there is nothing blocking
 it in principle — but none of it is scheduled to a date, and it ships in whatever order makes
-sense as the project progresses. Every item here ships free, under the same
-[AGPL-3.0-or-later](https://github.com/bytehound-labs/bhtune/blob/main/LICENSE) license as
-everything else in BHTune. There is no paid tier planned, including for the remote/multi-user
-access work below.
+sense as the project progresses. The project is licensed under the
+[AGPL-3.0-or-later](https://github.com/bytehound-labs/bhtune/blob/main/LICENSE). The roadmap
+below describes planned capabilities without committing to a delivery schedule.
 
 If one of these matters to you sooner than it might otherwise land, say so on the
 [issue tracker](https://github.com/bytehound-labs/bhtune/issues) — real usage is what decides

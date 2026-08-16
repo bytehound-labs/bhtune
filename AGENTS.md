@@ -1,6 +1,6 @@
 # bhtune
 
-A free, open-source Rust PID control-loop auto-tuner for industrial DCS/PLC systems (Yokogawa
+An open-source Rust PID control-loop auto-tuner for industrial DCS/PLC systems (Yokogawa
 CentumVP, Honeywell Experion, Schneider Modicon, Allen-Bradley PlantPAx). Runs a Modified Relay
 Feedback Test (MRFT) against a live loop and calculates/writes back PID constants, via a CLI or a
 browser-based web GUI.
@@ -161,13 +161,15 @@ console errors.
 the `bhtune-server` binary via `rust-embed`, so a release build is a single self-contained
 executable — no separate static file server, Node, or nginx needed on the target host — see
 "`server-embed-spa`: embedding the built SPA into the binary" below for the full design.
-`server-windows-service` (the last item in Phase 7) is deliberately deferred, not merely
-unstarted: writing `#[cfg(windows)]` code against the `windows-service` crate in this
-environment would be unverifiable — `cargo check --target x86_64-pc-windows-gnu` fails
-workspace-wide because `libsqlite3-sys` needs an `x86_64-w64-mingw32-gcc` cross-compiler
-that isn't installed and can't be (`sudo apt-get install mingw-w64` fails with no
-passwordless sudo available). Revisit once a Windows machine or that toolchain is
-available, rather than shipping untested Windows-only code on faith. Phase 8's
+`server-windows-service` (the last item in Phase 7) was deferred while no Windows machine was
+reachable — writing `#[cfg(windows)]` code against the `windows-service` crate would have been
+unverifiable, since `cargo check --target x86_64-pc-windows-gnu` fails workspace-wide in this
+Linux sandbox (`libsqlite3-sys` needs an `x86_64-w64-mingw32-gcc` cross-compiler that isn't
+installed and can't be — no passwordless sudo to install `mingw-w64`). That blocker is now
+resolved: a real Windows 10 host (`hp`, reachable over SSH, already has a native
+`stable-x86_64-pc-windows-msvc` Rust toolchain plus `mingw64`) is available for building and
+testing this natively — no cross-compilation needed at all. Not yet implemented; unblocked and
+ready to pick up. Phase 8's
 `e2e-simulator` is now done: a genuine, real-subprocess end-to-end test
 (`crates/bhtune-cli/tests/e2e_simulator.rs`) that runs `bhtune tune` against the simulator
 backend across a small process/controller-type matrix and asserts the _calculated_ PID
@@ -303,11 +305,10 @@ system dependencies the Rust builder stage needs beyond `protoc` (`build-essenti
 ## Design philosophy and scope discipline
 
 Most PID auto-tuning tools for industrial DCS/PLC systems are Windows-only desktop applications
-built on proprietary, license-gated toolkits and OPC SDKs — expensive to license, impossible to
-audit, and impossible to run outside a hand-provisioned Windows machine. bhtune is designed from
-the ground up to avoid all of that:
+built on proprietary toolkits and OPC SDKs, limiting portability and auditability. bhtune is
+designed from the ground up to avoid all of that:
 
-- **100% FOSS dependencies, machine-enforced in CI** (`cargo deny`, see `deny.toml`) — not an
+- **100% open-source dependencies, machine-enforced in CI** (`cargo deny`, see `deny.toml`) — not an
   aspiration, a build gate.
 - **Zero Windows/COM dependency in the application itself** — OPC DA connectivity is delegated to
   a separate network-facing gateway process (see "Key architectural decisions" below), so bhtune
@@ -330,7 +331,8 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   timing or I/O — the golden-master regression suite depends on it.
 - **No proprietary dependencies, ever, machine-enforced.** `cargo deny check` (see `deny.toml`)
   fails CI on any dependency license not on the allow-list. This is not aspirational — if it
-  fails on a new dependency, find a FOSS alternative; don't widen the allow-list reflexively.
+  fails on a new dependency, find an open-source alternative; don't widen the allow-list
+  reflexively.
 - **Zero Windows/COM dependency in this application.** All OPC DA communication is delegated to
   the sibling project [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) over the
   network. bhtune itself builds and runs on Linux, macOS, and Windows identically.
@@ -380,10 +382,10 @@ error_message })` even when the backend _rejects_ the write (read-only tag, out 
   leak one implementation's parameters into the trait every other implementation would have to
   ignore.
 
-- **AGPL-3.0-or-later + CLA.** FOSS for everyone now; the CLA (see `CLA.md`, currently a draft —
-  not yet in force) is what would let ByteHound also offer separate commercial licensing terms to
-  enterprise customers later, without taking anything away from AGPL users. The CLA's legal
-  entity name is an open question — see "Open questions".
+- **AGPL-3.0-or-later + CLA.** BHTune is distributed under the AGPL. The CLA (see `CLA.md`,
+  currently a draft — not yet in force) records the rights needed to accept and maintain
+  contributions, naming ByteHound Corp. as the entity. Still outstanding before it's binding: a
+  legal review of the text, and wiring up a CLA-signing check (`cla-tooling`).
 - **v1 adapters: CLI + browser-based web GUI, served by `bhtune-server`.** There is no desktop
   app. The original plan called for a Tauri v2 desktop shell (see the deleted `bhtune-desktop`
   placeholder crate in git history) with a Dockerized web server as a possible future add-on;
@@ -749,18 +751,14 @@ check`.** A dependency-free Node script that parses `pnpm licenses list --json`'
 - **v1 binds to `127.0.0.1` by default; no authentication ships in v1.** Binding off-loopback
   (e.g. to a LAN interface so multiple engineers can reach a shared host) is an explicit,
   loud opt-in, not a default, and the Windows installer never opens a firewall port unless that
-  opt-in is chosen. Authentication, TLS, and audit logging are real, planned, **free** features
-  (not paywalled) deferred to post-v1 remote-access work (`server-remote-auth`, `server-tls`,
-  `server-audit-log`, `server-oidc`) rather than blocking v1. This is a judgement call worth
+  opt-in is chosen. Authentication, TLS, and audit logging are planned post-v1 remote-access
+  features (`server-remote-auth`, `server-tls`, `server-audit-log`, `server-oidc`) rather than
+  blocking v1. This is a judgement call worth
   re-examining before that host is ever reachable off a trusted OT network: the precedent that
   makes it defensible in the meantime is that `opcda-bridge-gateway` is _already_ an
   unauthenticated network service in this exact topology, and it is strictly more dangerous than
   an unauthenticated bhtune (it can read/write any tag, whereas bhtune only ever writes the PID
   constants of one user-selected loop).
-- **Nothing is paywalled, now or on the current roadmap.** The CLA exists solely to keep
-  relicensing _possible_ in the future without taking anything from AGPL users today — it is not
-  evidence of a planned paid tier, and no roadmap item (including the post-v1 remote-access work
-  above) is scoped as enterprise-only.
 - **Step Test is deferred**, not part of v1 (MRFT only). Step Test is an alternative, simpler
   manual tuning method that observes PV changes via an OPC DA _subscription_ rather than polling
   reads, and the bridge's protocol has no such push/subscription RPC yet — `ListServers`/`Read`/
@@ -768,9 +766,9 @@ check`.** A dependency-free Node script that parses `pnpm licenses list --json`'
   into a single `Vec` before returning). MRFT itself only needs unary polling reads, so this
   doesn't block v1 — Step Test is blocked on adding a live push/subscription RPC to
   `opcda-bridge`, distinct from `Browse`'s existing bounded stream.
-- **Plain, open SQLite. No encryption, no licensing, no loop-locking, no login gate.** All tune
+- **Plain, open SQLite. No encryption, no loop-locking, no login gate.** All tune
   history lives in a single, plain, open SQLite database anyone can inspect with any SQLite
-  browser. This is a deliberate simplicity choice: a free, open-source tool has no reason to
+  browser. This is a deliberate simplicity choice: an open-source tool has no reason to
   obfuscate its own data or gate its own usage.
 - **`bhtune-core` enums are mapped to SQLite `TEXT` columns without giving `bhtune-core` a
   `sqlx` dependency.** `bhtune-core` must stay dependency-free (see below), and Rust's orphan
@@ -2555,10 +2553,9 @@ installation.md`, etc.) because `docPath` is already correct relative to the con
 content root.
 
 **Search is `@easyops-cn/docusaurus-search-local`**, not Algolia DocSearch: fully static,
-offline, and FOSS, consistent with the project's no-proprietary-dependencies stance and
+offline, and open-source, consistent with the project's no-proprietary-dependencies stance and
 needing no third-party application/approval process. Worth revisiting once the site has
-enough content and traffic for Algolia's free-for-open-source tier to be worth the extra
-setup.
+enough content and traffic to justify the extra setup.
 
 **`onBrokenLinks`/`onBrokenAnchors` are both `'throw'`** (Docusaurus's own default, kept
 rather than relaxed), which makes `pnpm --filter bhtune-website run build` a real,
@@ -2659,6 +2656,71 @@ changes, not just `docs/`/`website/` edits. `--all-features` (matching `checks.y
 clippy/test convention) ensures `bhtune-cli`'s optional `schemars` feature — which gates the
 JSON-Schema-deriving types `docs-generated-cli`'s `gen_docs` example needs — is included in
 the published docs.
+
+## `docs-agent-ci`: the AI docs agent
+
+`.github/workflows/docs-agent.yml` runs GitHub Copilot CLI headless on every PR touching
+`crates/**` and auto-commits narrative-prose documentation updates onto the PR branch — tier 2
+of the documentation contract (see "Documentation contract" above). Tier 1
+(`docs/reference/**`, generated) is already diff-gated by `checks.yml`; tier 3 (`AGENTS.md`) is
+explicitly off limits to this workflow.
+
+**Guardrails, all load-bearing** (numbered comments in the workflow itself cross-reference
+these):
+
+1. **Infinite loop.** The agent's own commits carry a distinct git author identity
+   (`bhtune-docs-agent <bhtune-docs-agent@users.noreply.github.com>`), and a separate `guard`
+   job checks HEAD's author before anything else runs, skipping if it's already the agent's own
+   commit. This can't be done with `github.actor`: the agent authenticates with
+   `COPILOT_GITHUB_TOKEN`, a personal PAT (see below), so GitHub attributes its push to that
+   token's human owner — indistinguishable from that person pushing themselves. The commit
+   author, independent of which token performed the push, is the only reliable signal. The
+   `paths: crates/**` trigger filter is a second, structural line of defense (the agent only
+   ever touches `docs/**`/`README.md`, which doesn't match that filter), but the explicit
+   author check doesn't rely on that alone.
+2. **Blast radius.** The agent may only touch `docs/**` (excluding the generated
+   `docs/reference/**`) and `README.md`. Enforced twice: a `--deny-tool 'write(AGENTS.md)'`
+   flag blocks the one specific file that must never be auto-edited regardless of path-prefix
+   ambiguity in the CLI's own tool-permission matching, and a post-run `git status --porcelain`
+   check fails the job and discards every change if the diff touched anything outside the
+   allowed set — this second check is the one actually enumerated against the full allowlist,
+   not just the single denied file.
+3. **`AGENTS.md` is special.** The agent is instructed (and tool-blocked) to never edit it; if
+   it believes something here is stale, it says so in its final response instead, which gets
+   posted as a PR comment for a human to act on or ignore.
+4. **Fork PRs.** `pull_request` runs from forks never receive repo secrets, so
+   `COPILOT_GITHUB_TOKEN` is absent and the job skips itself — the safe default. Deliberately
+   not "fixed" with `pull_request_target` (write permissions in the context of untrusted fork
+   code is a known privilege-escalation foot-gun). A `workflow_dispatch` path with a `pr_number`
+   input exists instead, for a maintainer who has already read the diff to run manually; since
+   a fork PR's branch doesn't live in this repo, that path pushes to a new
+   `docs-agent/pr-<n>-followup` branch here rather than trying to push back into the fork.
+5. **Auth.** `COPILOT_GITHUB_TOKEN` is a personal classic PAT (scopes include `copilot`, needed
+   for Copilot CLI access — the default `GITHUB_TOKEN` cannot grant this) rather than a
+   dedicated machine account or GitHub App, since classic PATs are the only token type
+   confirmed to carry Copilot access, and a from-scratch bot identity was judged not worth the
+   setup cost for a project at this stage. This is a real, accepted trade-off: that token's
+   scopes are broader than this one workflow needs (a personal PAT can't be scoped to a single
+   repository the way a GitHub App installation can). The workflow only ever reads it from
+   `secrets.COPILOT_GITHUB_TOKEN`, so narrowing this later (a dedicated fine-grained PAT or App,
+   if one is ever confirmed to support Copilot CLI auth) is a secret-rotation, not a workflow
+   change.
+6. **Cost.** Each run consumes Copilot premium requests. The `crates/**` path filter keeps this
+   off PRs that can't have caused prose drift, and `--model` is pinned (`claude-sonnet-4.5`)
+   rather than left on auto-routing so a model upgrade never silently changes cost/behavior on
+   every future PR without a reviewed change here.
+
+**Validated locally** (flag parsing via a scratch-repo smoke test, then `actionlint` against
+the workflow file — it caught one real script-injection risk worth noting as a general
+lesson: `github.event.pull_request.head.ref` was originally interpolated directly into a
+`run:` shell block; since PR branch names are attacker-controlled and git ref names permit
+shell metacharacters like `$()`, GitHub's literal template substitution would have spliced
+attacker-controlled text directly into the script before the shell ever saw it. Fixed by
+passing it through `env:` instead, so the value becomes a runtime shell-variable expansion
+rather than a compile-time text substitution — the standard fix for this whole vulnerability
+class). Not yet validated against a real, non-trivial PR that actually warrants a prose
+change (only a trivial same-repo smoke PR) — treat the auto-commit path as unproven under
+real-world drift until one goes through it.
 
 ## `build-matrix`: the release binary matrix
 
@@ -2994,9 +3056,9 @@ change with real user-visible impact, for instance).
   `GITHUB_TOKEN`, so the release PR itself can trigger further CI). Shipping the workflow without
   the secret would produce a failing Actions run on every push to `main`. Add both workflows once
   the token is provisioned.
-- **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft; it does not bind anyone until the
-  legal-entity question is resolved, the text has had a legal review, and a CLA-assistant check is
-  added to the PR checks.
+- **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft naming ByteHound Corp. as the
+  entity; it does not bind anyone until the text has had a legal review and a CLA-assistant check
+  is added to the PR checks.
 
 ## Cross-project CI/CD audit (`cross-project-ci-audit`, done)
 
@@ -3038,7 +3100,7 @@ package` refuses to package. Fixed by giving `bhtune-core`/`bhtune-backend`/`bht
   `package` all having passed — `bhtune`'s five jobs are independent with no such
   aggregator, so equivalent protection means requiring all of them individually.
 - **Secret scanning + push protection enabled** on both `bytehound-labs/bhtune` and
-  `bytehound-labs/opcda-bridge` (both public repos, so free) — confirmed disabled on both
+  `bytehound-labs/opcda-bridge` (both public repositories) — confirmed disabled on both
   before this audit. `secret_scanning_validity_checks` did not take via the API on either
   repo despite repeated attempts (`secret_scanning`/`secret_scanning_push_protection` both
   enabled fine) — likely an org/plan-gated setting; low priority, flip manually in the repo
@@ -3057,13 +3119,28 @@ Deliberately **not** done, recommended instead:
   again and skip irrelevant jobs on doc-only changes, but requires renaming the existing
   `check` job (name collision with the aggregator pattern) — a larger, riskier restructuring
   than the rest of this audit, deferred rather than rushed.
-- **CODEOWNERS, issue templates, PR template** — absent on both repos, not just `bhtune`;
-  a shared gap rather than something to port one way.
 - **GitHub Actions SHA-pinning** for supply-chain hardening — easier now that both repos'
   `github-actions` Dependabot ecosystem is configured to keep pinned SHAs current, but not
   applied yet.
 - **CLA-enforcement bot** — separate pre-existing gap, tracked under "Deferred setup" below,
   not part of this audit's CI/CD scope.
+
+**Follow-up, implemented later:** **CODEOWNERS, issue templates, and a PR template** — a
+shared gap on both repos, not something to port one way — were added to both
+(`.github/CODEOWNERS`; `.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml`;
+`.github/pull_request_template.md`), each adapted to its own project's conventions rather
+than copy-pasted: `bhtune`'s PR template checklist includes the frontend lint/typecheck
+commands and the CLA-sign-off line from `CONTRIBUTING.md`; `opcda-bridge`'s omits both (no
+frontend, no CLA — MIT, no CLA required) and instead asks for hardware-in-the-loop manual
+verification notes, matching its own `CONTRIBUTING.md`'s "no live OPC DA server in CI" line.
+Both bug report forms ask for a version and platform; `bhtune`'s adds a `Backend` dropdown
+(OPC DA/simulator/replay) since that's a core `bhtune-backend` concept a maintainer would
+otherwise have to ask about, and `opcda-bridge`'s adds an OPC DA server vendor field instead,
+plus a note that the gateway crate is Windows-only. Neither repo has GitHub Discussions
+enabled (confirmed via `gh api repos/.../{repo}` before writing `config.yml`), so
+`blank_issues_enabled: true` with no `contact_links` was the right shape for both — forcing
+every report into a rigid form when there's nowhere else to ask would be worse than a
+free-form issue.
 
 ## Build / Test / Lint / Coverage
 
@@ -3103,7 +3180,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`/`docs-generated-cli`/`history-retention`/`history-cli`           | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above. `docs-generated-cli` (Phase 9) is also done: `examples/gen_docs.rs` regenerates the CLI reference, man pages, shell completions, and the `bhtune.toml`/template-catalog JSON Schema from the same `clap`/`serde` definitions, drift-gated in CI — see "`docs-generated-cli`: generating the CLI reference, man pages, completions, and config schema" above. `history-retention` (Phase 10) is also done: a new `retention` module (`cutoff_for`/`sweep_retention`) shared by the startup sweep, `bhtune-server`'s periodic ticker, and `history-cli`'s `prune` below, resolved through `resolve_retention_days`'s usual config precedence. `history-cli` is also done: `bhtune history prune` (`--older-than-days`/`--dry-run`/`--output json`) completes the `history` subcommand surface alongside the already-shipped `list`/`show`/`revert` |
 | `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-template-update-api`/`server-embed-spa`/`server-windows-service`/`history-retention`/`history-explorer-ui` | `server-http-api` + `openapi-contract` + `server-start-tune-api` + `server-template-update-api` + `server-embed-spa` + `history-retention` + `history-explorer-ui` done — real Axum binary (health/templates full CRUD/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below — `PUT /api/templates/{name}` editing an existing `user`-origin template in place (400 on a name mismatch, 404 if unknown, 409 if not user-owned), `GET /api/runs/{id}/export?format=csv                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | json`and`DELETE /api/runs/{id}`completing the history explorer (the delete guard checks the run's own DB`outcome`rather than the in-memory`ActiveRun`slot, closing a real race window — see the Status section above), the built SPA embedded directly into the binary via`rust-embed` with an SPA-fallback route, correct MIME types, and long-lived cache headers on hashed assets — see "`server-embed-spa`: embedding the built SPA into the binary" below — and a `spawn_retention_sweeper`background task resweeping every 24 hours (env-var-only config,`BHTUNE_RETENTION_DAYS`, since this binary has no `clap`) that logs and continues on failure rather than crashing the server; only Windows service support pending |
 | `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`/`history-explorer-ui`                                                                                                | All four done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above. Routing shell, Templates (List/Detail/Create/Edit), History (List/Detail, plus export CSV/JSON and delete actions), a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation), and a live PV/MV trend chart (`TrendChart`, uPlot-based, fed by a new SSE `useRunStream` hook while a run is active and by `useRun`'s `samples` once terminal) are all done and manually verified against a real running server                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `website/` (pnpm)  | `docs-site-scaffold`/`docs-site-deploy`/`docs-api-rustdoc`/`docs-versioning`                                                                                                    | `docs-site-scaffold` + `docs-site-deploy` + `docs-api-rustdoc` done — a Docusaurus 3 site (`bhtune-website`) whose `docs` plugin points `path` directly at the repo-root `docs/` (not a website-local copy), so the published site and the Markdown read on GitHub can never diverge; `docs/internal/**` is excluded. `docs/intro.md` is the site root (`slug: /` + `routeBasePath: '/'`, no separate marketing homepage); sidebar ordering comes from `sidebar_position` frontmatter and `_category_.json` files already added to `docs/`. Search is `@easyops-cn/docusaurus-search-local` (static, offline, FOSS). `onBrokenLinks`/`onBrokenAnchors` are both `'throw'`, giving the site build a real drift gate for free (a CI `website` job runs `format:check`/`lint`/`typecheck`/`build` on every PR — the license-allowlist gate is covered once, workspace-wide, by the `frontend` job's `check:licenses` step). Live at [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/), published by `docs-deploy.yml` via `actions/deploy-pages` on every `main` push touching `docs/`/`website/`/`crates/**`. The `cargo doc` API reference is published under `/api/` by that same workflow, indexed from `docs/reference/api.md` via a `pathname://` link (not broken-link-checked, since the content only exists after `docs-deploy.yml` runs on `main`, never during a PR's `website` job) — see "`docs-api-rustdoc`: publishing the Rust API reference" above for the full design. Not yet done: release-time version snapshots (`docs-versioning`, deferred until `release-v1`). See "`docs-site-scaffold`: the Docusaurus documentation site" above for the full design.                                                                           |
+| `website/` (pnpm)  | `docs-site-scaffold`/`docs-site-deploy`/`docs-api-rustdoc`/`docs-versioning`                                                                                                    | `docs-site-scaffold` + `docs-site-deploy` + `docs-api-rustdoc` done — a Docusaurus 3 site (`bhtune-website`) whose `docs` plugin points `path` directly at the repo-root `docs/` (not a website-local copy), so the published site and the Markdown read on GitHub can never diverge; `docs/internal/**` is excluded. `docs/intro.md` is the site root (`slug: /` + `routeBasePath: '/'`, no separate marketing homepage); sidebar ordering comes from `sidebar_position` frontmatter and `_category_.json` files already added to `docs/`. Search is `@easyops-cn/docusaurus-search-local` (static, offline, open-source). `onBrokenLinks`/`onBrokenAnchors` are both `'throw'`, giving the site build a real drift gate for free (a CI `website` job runs `format:check`/`lint`/`typecheck`/`build` on every PR — the license-allowlist gate is covered once, workspace-wide, by the `frontend` job's `check:licenses` step). Live at [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/), published by `docs-deploy.yml` via `actions/deploy-pages` on every `main` push touching `docs/`/`website/`/`crates/**`. The `cargo doc` API reference is published under `/api/` by that same workflow, indexed from `docs/reference/api.md` via a `pathname://` link (not broken-link-checked, since the content only exists after `docs-deploy.yml` runs on `main`, never during a PR's `website` job) — see "`docs-api-rustdoc`: publishing the Rust API reference" above for the full design. Not yet done: release-time version snapshots (`docs-versioning`, deferred until `release-v1`). See "`docs-site-scaffold`: the Docusaurus documentation site" above for the full design.                                                                    |
 
 ## Phases and todos (roadmap order)
 
@@ -3111,7 +3188,7 @@ that binary does something real and gains its own targeted tests.
    [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md) (done); capture golden-master reference traces
    from the simulator and, later, real field use; build the trace fixture normalizer.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
-   `cargo-deny` FOSS gate.
+   `cargo-deny` open-source dependency gate.
 2. **`opcda-bridge` reusable client library** (published upstream) — consumed as a plain
    crates.io dependency (`opcda-bridge = "0.2"`), local to `bhtune-backend`'s own `Cargo.toml`
    (see "Key architectural decisions" for why it stays out of `[workspace.dependencies]`).
@@ -3260,7 +3337,12 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    `.github/workflows/docker-publish.yml` build and publish
    `ghcr.io/bytehound-labs/bhtune` on every push to `main` (tagged `edge`) and every version
    tag (tagged with the version and `latest`), and build-only (no push) on every PR — see
-   "`pkg-docker`: the Docker image" below for the full design. Remaining: release-time
+   "`pkg-docker`: the Docker image" below for the full design. `docs-agent-ci` is also done:
+   `.github/workflows/docs-agent.yml` runs GitHub Copilot CLI headless on PRs touching
+   `crates/**` and auto-commits narrative-prose doc updates, guarded against infinite loops,
+   scope creep beyond `docs/**`+`README.md`, and fork PRs — see "`docs-agent-ci`: the AI docs
+   agent" above for the full guardrail design; not yet validated against a real PR with
+   genuine prose drift. Remaining: release-time
    version snapshots (`docs-versioning`, deferred until `release-v1`), and the rest of
    packaging: `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
    `release.yml`, but cutting the actual first tag is a deliberate call left to the project
@@ -3280,7 +3362,7 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
     (CSV/JSON download) and delete actions, all on the web GUI's run detail screen. This
     closes out Phase 10 — see `docs/roadmap.md` for what's deliberately left as an
     open-ended roadmap item instead (continuous historization, cross-run comparison/overlay).
-11. **Remote and multi-user access** (post-v1, free like everything else) — local accounts with
+11. **Remote and multi-user access** (post-v1) — local accounts with
     session cookies and revocable API tokens (`server-remote-auth`), TLS (`server-tls`), an
     audit log of who ran/wrote what (`server-audit-log`), and OIDC for SSO-managed orgs
     (`server-oidc`). Deferred, not blocking v1's `127.0.0.1`-by-default posture — see "Key
@@ -3289,9 +3371,10 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
     CI/CD and repo-hygiene setup against the sibling `opcda-bridge` project in both
     directions: MSRV enforcement, `windows`/`package` CI jobs, `--locked` everywhere,
     Dependabot, branch protection, and secret scanning — see "Cross-project CI/CD audit"
-    above for the full writeup, including what was deliberately deferred as a recommendation
-    rather than implemented (a `paths-filter`+aggregator-gate restructuring, CODEOWNERS/PR
-    templates, Actions SHA-pinning).
+    above for the full writeup. CODEOWNERS, issue templates, and a PR template (a shared gap
+    the audit found on both repos) were added to both as a follow-up. Still deferred as
+    recommendations rather than implemented: a `paths-filter`+aggregator-gate restructuring
+    of `checks.yml`, and Actions SHA-pinning.
 
 ## Other notes
 
@@ -3314,8 +3397,5 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
 
 ## Open questions
 
-- Which legal entity the CLA should ultimately name (the incorporated company vs. an individual)
-  — the one item here with real legal consequence; resolve before the first outside PR is merged,
-  not before this commit.
 - Whether the DCS/PLC templates should remain user-editable JSON/TOML exports in addition to
   SQLite rows, so site-specific tag maps can be shared between installations.

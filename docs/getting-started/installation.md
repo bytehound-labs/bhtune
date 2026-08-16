@@ -47,7 +47,7 @@ Skip to [Prerequisites](#prerequisites) below to build from source instead.
 - [`pnpm`](https://pnpm.io/) if you want to build or develop the web GUI's frontend. The CLI
   and server both build and run without it — the frontend is only needed to serve the browser
   UI from `bhtune-server`.
-- Nothing else. No Windows, no Docker, no proprietary SDKs — every dependency is FOSS
+- Nothing else. No Windows, no Docker, no proprietary SDKs — every dependency is open-source
   (machine-enforced in CI via `cargo deny`).
 
 ## Build the CLI and server
@@ -93,8 +93,7 @@ you need the exact precedence.)
 
 This holds `bhtune.db` (the SQLite database — every template, loop, tune run, sample, result,
 and write-back audit row) and `logs/` (structured `tracing` output). Nothing here is
-encrypted, license-gated, or hidden — it's a plain SQLite file you can open with any SQLite
-tool.
+encrypted or hidden — it's a plain SQLite file you can open with any SQLite tool.
 
 Every run is kept forever unless you opt in to a retention policy (`retention_days` in
 `bhtune.toml`, or `bhtune history prune` on demand) — see

@@ -1,0 +1,192 @@
+name: Docs agent
+
+# Tier 2 of the documentation contract (see AGENTS.md "Documentation contract"): this workflow
+# handles narrative prose only. Tier 1 (docs/reference/**, the OpenAPI spec, man pages,
+# completions) is mechanically generated and already diff-gated by checks.yml. AGENTS.md is
+# explicitly off limits -- this workflow may never auto-commit to it.
+#
+# It runs GitHub Copilot CLI headless and auto-commits prose updates onto the PR branch. Every
+# guardrail below is load-bearing -- read the comment before changing it. See the
+# `docs-agent-ci` entry in AGENTS.md for the full design rationale.
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: >-
+          PR number to run the docs agent against. For fork PRs only -- a maintainer must have
+          already read the diff, since fork PRs never get repo secrets automatically (see
+          GUARDRAIL 4 below).
+        required: true
+
+concurrency:
+  group: docs-agent-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Cheap, always-runs gate that decides whether the real job should do anything at all.
+  # Kept separate from docs-agent so the loop-prevention check in GUARDRAIL 1 happens before
+  # any Copilot CLI install/invocation, even on the (expected, frequent) skip path.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.decide.outputs.proceed }}
+      ref: ${{ steps.decide.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr_number) }}
+          fetch-depth: 2
+
+      - name: Decide whether to run
+        id: decide
+        run: |
+          # GUARDRAIL 1 (infinite loop): the agent's own commits carry a distinct git author
+          # identity (set in the "Run docs agent" step below). Detect that identity on HEAD and
+          # skip if it's already there.
+          #
+          # This can't be done with `github.actor` instead: the agent pushes using
+          # COPILOT_GITHUB_TOKEN, a personal PAT, so GitHub attributes that push to its human
+          # owner, not to a distinct bot identity -- indistinguishable from that person pushing
+          # themselves. The git commit author (independent of which token performed the push)
+          # is the only reliable signal here. The `paths: crates/**` filter above is a second,
+          # structural line of defense: the agent only ever touches docs/**/README.md, which
+          # doesn't match that filter, so its own push mostly wouldn't retrigger this workflow
+          # even without this check -- but don't rely on that alone.
+          author_email="$(git log -1 --pretty=format:'%ae')"
+          if [ "$author_email" = "bhtune-docs-agent@users.noreply.github.com" ]; then
+            echo "Last commit was made by the docs agent itself -- skipping to avoid a loop."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  docs-agent:
+    needs: guard
+    if: needs.guard.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Copilot token
+        id: token-check
+        run: |
+          # GUARDRAIL 4 (fork PRs): `pull_request` runs from forks never receive repo secrets,
+          # so COPILOT_GITHUB_TOKEN is empty here and this job skips itself -- the safe
+          # default. Do NOT "fix" this with `pull_request_target`; that trigger runs with
+          # write permissions in the context of the fork's (untrusted) code, a known
+          # privilege-escalation foot-gun. Outside contributions instead get the
+          # `workflow_dispatch` path above, run manually by a maintainer who already read the
+          # diff.
+          if [ -z "${{ secrets.COPILOT_GITHUB_TOKEN }}" ]; then
+            echo "COPILOT_GITHUB_TOKEN is not set (expected on fork PRs) -- skipping."
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.token-check.outputs.has_token == 'true'
+        with:
+          ref: ${{ needs.guard.outputs.ref }}
+          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+
+      - name: Install GitHub Copilot CLI
+        if: steps.token-check.outputs.has_token == 'true'
+        run: npm install -g @github/copilot
+
+      - name: Run docs agent
+        if: steps.token-check.outputs.has_token == 'true'
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          git config user.name "bhtune-docs-agent"
+          git config user.email "bhtune-docs-agent@users.noreply.github.com"
+          git fetch origin main --depth=1
+          copilot -p "$(cat .github/docs-agent-prompt.md)" \
+            --allow-all-tools \
+            --deny-tool 'write(AGENTS.md)' \
+            --no-ask-user \
+            --model claude-sonnet-4.5 \
+            --secret-env-vars COPILOT_GITHUB_TOKEN \
+            --silent \
+            | tee /tmp/docs-agent-output.txt
+          # GUARDRAIL 5 (COST): the path filter above already keeps this from running on every
+          # PR; --model is pinned rather than left on auto-routing so a model upgrade never
+          # silently changes behavior/cost on every future PR without a reviewed change here.
+
+      - name: Enforce blast radius
+        if: steps.token-check.outputs.has_token == 'true'
+        run: |
+          # GUARDRAIL 2 (blast radius): restrict to docs/** (excluding the generated
+          # docs/reference/**) and README.md. A wrong-but-plausible edit to source code is far
+          # more damaging than a wrong paragraph, so any other touched path -- including
+          # AGENTS.md, belt-and-suspenders alongside the --deny-tool above -- fails the job and
+          # discards every change the agent made.
+          changed="$(git status --porcelain=v1 | awk '{print $2}')"
+          bad=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/reference/*) bad="$bad$f"$'\n' ;;
+              docs/*) ;;
+              README.md) ;;
+              *) bad="$bad$f"$'\n' ;;
+            esac
+          done <<< "$changed"
+          if [ -n "$bad" ]; then
+            echo "::error::Docs agent touched disallowed paths -- discarding all its changes:"
+            echo "$bad"
+            git checkout -- .
+            git clean -fd
+            exit 1
+          fi
+
+      - name: Commit and push
+        if: steps.token-check.outputs.has_token == 'true'
+        env:
+          # Passed as env vars rather than interpolated directly into the script: a PR branch
+          # name is attacker-controlled (the PR author picks it) and git ref names permit shell
+          # metacharacters like `$()` or backticks, so splicing it into the script text
+          # directly would be a script-injection vector. A shell variable expansion at runtime
+          # is safe; a template-level substitution before the shell ever sees the script is not.
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No doc changes -- nothing to commit."
+            exit 0
+          fi
+          git add docs README.md
+          git commit -m "docs: sync prose with recent code changes (automated)"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # Fork PR: can't push to a branch that lives in the fork. Land the commit on a new
+            # branch in this repo instead and let the maintainer who triggered this take it
+            # from there (cherry-pick onto the fork PR, or open a follow-up PR).
+            branch="docs-agent/pr-${PR_NUMBER}-followup"
+            git push origin "HEAD:refs/heads/$branch"
+            echo "Pushed doc updates to $branch (fork PR #${PR_NUMBER} can't be pushed to directly)."
+          else
+            git push origin "HEAD:$HEAD_REF"
+          fi
+
+      - name: Post summary comment
+        if: steps.token-check.outputs.has_token == 'true' && always()
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          # GUARDRAIL 3 (AGENTS.md): the agent is told (and --deny-tool enforced) to never
+          # edit AGENTS.md, only to describe a proposed change in its final response instead.
+          # Posting that response here is what actually surfaces the proposal for human review.
+          pr_number="${{ github.event.pull_request.number || inputs.pr_number }}"
+          if [ -s /tmp/docs-agent-output.txt ]; then
+            { echo "**Docs agent:**"; echo; cat /tmp/docs-agent-output.txt; } | \
+              gh pr comment "$pr_number" --body-file - || true
+          fi
