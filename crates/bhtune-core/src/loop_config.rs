@@ -63,7 +63,7 @@ impl LoopConfig {
     /// amplitude against `[RELAY_AMP_PERCENT_MIN, RELAY_AMP_PERCENT_MAX]`, `num_cycles_count`
     /// must be at least 1 (zero previously reached `tuning_math::measure_oscillation`'s
     /// internal `assert!` and panicked mid-run, after the loop had already been switched to
-    /// manual and stroked -- see `docs/v1-checklist.md` §2), and `mrft_delay_secs` against
+    /// manual and stroked -- see `docs/internal/v1-checklist.md` §2), and `mrft_delay_secs` against
     /// `MRFT_DELAY_SECS_MAX`. This is real range validation at the model/construction level,
     /// not just a client-side keystroke filter or a single "not blank" check, so it applies
     /// no matter how the `LoopConfig` was built (CLI flags, an imported template, or a
@@ -253,7 +253,7 @@ mod tests {
 
     /// The motivating case: BHTune's predecessor let a leftover debug shortcut leave a
     /// four-digit value in this exact field with only a "not blank" check to catch it (see
-    /// `docs/v1-checklist.md` §2). `validate` must reject it.
+    /// `docs/internal/v1-checklist.md` §2). `validate` must reject it.
     #[test]
     fn validate_rejects_a_legacy_style_four_digit_value() {
         let mut cfg = sample();

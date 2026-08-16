@@ -35,9 +35,25 @@ BHTune is designed around a few core principles:
 
 ## Status
 
-Early scaffolding. Nothing is released yet. Track progress via the
-[issues](https://github.com/bytehound-labs/bhtune/issues)
-and [`AGENTS.md`](AGENTS.md), which records the phased implementation plan.
+Pre-release, but functional: the CLI and web GUI both run a complete MRFT tune end to end —
+against the built-in simulator with no setup at all, or against a real OPC DA loop via
+[`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) — including calculating PID
+constants, writing them back with confirmation and rollback, and recording full run history.
+See [Getting started](#getting-started) below to try it. No versioned release or prebuilt
+binaries exist yet (see [Installation](#installation)), and golden-master validation against
+the legacy application's captured traces is still in progress — track both via the
+[issues](https://github.com/bytehound-labs/bhtune/issues) and
+[`AGENTS.md`](AGENTS.md), which records the full phased implementation plan.
+
+## Getting started
+
+- [Installation](docs/getting-started/installation.md) — build from source.
+- [CLI quickstart](docs/getting-started/cli-quickstart.md) — run a tune from the command line
+  against the built-in simulator, no plant connection required.
+- [Web GUI quickstart](docs/getting-started/web-gui-quickstart.md) — the same tuning engine,
+  driven from a browser.
+- [MRFT concepts](docs/guides/mrft-concepts.md) and [Safety](docs/guides/safety.md) — what the
+  test actually does, and the guardrails around running it unattended against live equipment.
 
 ## Architecture
 
@@ -79,7 +95,8 @@ Not yet released. Once tagged, prebuilt binaries will be attached to the
 [Releases](https://github.com/bytehound-labs/bhtune/releases) page, and `bhtune-cli` will be
 published to [crates.io](https://crates.io) for `cargo install bhtune-cli`.
 
-To build from source (requires a Rust toolchain with 2024 edition support, i.e. Rust 1.85+):
+To build from source (requires a Rust toolchain supporting the 2024 edition — Rust 1.94 or
+newer, BHTune's declared MSRV, verified in CI):
 
 ```sh
 git clone https://github.com/bytehound-labs/bhtune.git
@@ -217,7 +234,9 @@ Windows Task Scheduler, CI):
 
 Scheduled/scripted tuning removes the one safeguard the interactive app always had: an operator
 watching the trend, able to hit Stop. `bhtune tune`/`bhtune simulate` build in guardrails so
-unattended runs against live plant equipment fail safe:
+unattended runs against live plant equipment fail safe. This section is the technical reference;
+[`docs/guides/safety.md`](docs/guides/safety.md) walks through the same guarantees in plain
+language, including exactly what happens on the first and second Ctrl+C:
 
 - **Relay amplitude is range-checked**, not just required to be non-blank — an out-of-range value
   is rejected before any backend connection or database write.
@@ -286,7 +305,7 @@ BHTune's tuning engine is validated by golden-master replay: recorded input/outp
 replayed through the engine and the results are asserted to match exactly, so future changes can
 never silently alter tuning behavior. The full v1 feature checklist — what's required, what's
 deferred, and what's deliberately not planned — lives at
-[`docs/v1-checklist.md`](docs/v1-checklist.md).
+[`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md).
 
 ## Roadmap
 

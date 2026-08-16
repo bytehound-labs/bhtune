@@ -2553,7 +2553,7 @@ diff --exit-code` gates fail if a commit forgets to include the regenerated outp
 3. **`README.md`** — anything a new user or contributor reads first: setup, CLI usage,
    architecture, the published roadmap. Keep it accurate to what's actually shipped, not to
    what's planned.
-4. **`docs/`** (prose guides, `docs/dcs-templates.md`, `docs/v1-checklist.md`) and
+4. **`docs/`** (prose guides, `docs/dcs-templates.md`, `docs/internal/v1-checklist.md`) and
    `CONTRIBUTING.md` — update whichever of these describes the area being changed.
 
 Write documentation as state-of-the-world facts, not a changelog of what just happened.
@@ -2716,7 +2716,7 @@ that binary does something real and gains its own targeted tests.
 ## Phases and todos (roadmap order)
 
 0. **Behavior specification and reference traces** — the v1 feature/acceptance checklist at
-   [`docs/v1-checklist.md`](docs/v1-checklist.md) (done); capture golden-master reference traces
+   [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md) (done); capture golden-master reference traces
    from the simulator and, later, real field use; build the trace fixture normalizer.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
    `cargo-deny` FOSS gate.

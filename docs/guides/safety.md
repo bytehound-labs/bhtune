@@ -1,0 +1,138 @@
+# Safety
+
+BHTune's MRFT test switches a real loop to manual and strokes its MV — the same as the legacy
+tool, but with one important difference: the legacy tool assumed an operator was always
+watching and could hit Stop. BHTune adds real guardrails for scheduled and scripted tunes that
+run with nobody present. This page explains exactly what those guardrails do, since "what
+happens if I press Ctrl+C" and "what happens if the network hiccups mid-test" both matter before
+you point BHTune at a real process.
+
+## Cancellation
+
+Pressing Ctrl+C during a `bhtune tune`/`bhtune simulate` run (or clicking **Cancel** on the web
+GUI's run detail screen, which triggers the same code path) is always safe:
+
+- **First Ctrl+C** stops polling immediately and starts the restore (see
+  [Restoration](#restoration) below). It works no matter when it's pressed — including mid-read
+  or mid-write to a stalled backend, not just while idle between poll ticks. Every in-flight
+  backend call is bounded by `--op-timeout-secs` (default 30s), so a stalled OPC DA read or
+  write is abandoned rather than waited on forever, which is what makes cancellation reliable
+  even against a wedged gateway or a black-holed network.
+- **Second Ctrl+C**, pressed while the restore itself is still running, forces an immediate hard
+  stop instead of waiting any longer for the restore to finish. BHTune prints exactly which MV
+  tag it was restoring and what value it was last written to, so you can put it back by hand.
+  This exits with a distinct code (`6`, see the exit code table below) rather than the normal
+  abort code, because "aborted and restored" and "aborted, restore abandoned — go check the
+  loop" are different situations for whoever (or whatever scheduler) is watching the exit code.
+- **`--timeout-secs`** (default 3600) is the overall wall-clock budget for the whole test. It
+  fires the same restore path as Ctrl+C — including working correctly mid-hung-read — and is
+  meant as the backstop for scheduled/unattended runs where nobody is present to press Ctrl+C at
+  all.
+- **`--restore-timeout-secs`** (default 30) bounds the restore step itself, independent of
+  `--timeout-secs` — a restore triggered by a timeout doesn't inherit an already-expired budget.
+
+Try it yourself: start a run with a long poll interval and press Ctrl+C while it's waiting
+between ticks (works immediately); then point it at an unreachable `--bridge-host` and press
+Ctrl+C — it should abort and report within `--op-timeout-secs`, not hang.
+
+## Input validation
+
+Every number that reaches the tuning engine is validated before any live I/O happens: relay
+amplitude, cycle counts (a zero cycle count is rejected outright rather than reaching the engine
+and panicking mid-test, which is what the earliest builds did), PV/MV ranges (must be finite and
+correctly ordered — a `NaN` or an inverted range is rejected, not silently propagated into a PID
+write), and the initial MV must fall inside the validated MV range. Command-line flags reject
+non-finite/out-of-range input immediately with a clear message; anything read from the backend
+(a real DCS/PLC's current ranges, for instance) is validated again right after being read, before
+the loop is ever switched to manual.
+
+## OPC quality
+
+Every OPC DA read reports a quality alongside its value (`Good`/`Uncertain`/`Bad`). BHTune
+enforces `Good` by default everywhere quality matters:
+
+- **Before the loop is touched** (initial PV/MV/range/mode/direction reads): any non-`Good`
+  reading is a hard failure. Nothing has been mutated yet, so this is a clean refusal.
+- **During the test** (every polled PV sample): a non-`Good` sample aborts the run and restores
+  the loop. A held or stale PV during a relay half-cycle would corrupt the exact period
+  measurement the test depends on — silently tolerating it is worse than aborting loudly. The
+  triggering sample is still recorded (with its real quality) before the abort.
+- **During write-back confirmation**: a non-`Good` readback is treated as an unconfirmed write,
+  which triggers rollback (see [PID write-back](#pid-write-back) below).
+
+`Bad` quality is never accepted under any flag. Sites whose gateway reports `Uncertain` as a
+matter of course can pass `--allow-uncertain-quality` to accept `Uncertain` (never `Bad`) —
+off by default, logged loudly every time it changes the outcome, and recorded on the run so
+history shows which runs executed under relaxed rules.
+
+## Restoration
+
+BHTune guarantees a best-effort restore on **every** exit path — successful completion, an
+error partway through, Ctrl+C, or a timeout — not just the happy path. Each mutation (mode
+switched to manual, setpoint captured, MV stroked, mode-attribute written, where applicable) is
+recorded the instant it actually succeeds, and the restore step always attempts to undo exactly
+what was recorded — nothing more, nothing that was never touched.
+
+The restore itself attempts every step independently rather than stopping at the first failure,
+so a rejected MV write doesn't also prevent the mode from being put back. `bhtune history show
+<run-id>` (or the run detail screen) reports the restore outcome as one of two states:
+**confirmed**, or **incomplete** — naming exactly which step(s) failed so you know what to check
+by hand. An incomplete restore exits with code `6`, distinct from a normal abort.
+
+## PID write-back
+
+Requesting `--write-pid <level>` (or the Write-back section of the New Run form) is the only
+part of a tune that writes tuning constants rather than just testing the loop, and it's the only
+part that requires `--yes` — an explicit, deliberate confirmation that no human needs to
+approve it interactively. BHTune:
+
+1. **Reads and persists the current P/I/D values first**, before writing anything. If this
+   pre-read fails, nothing is written at all.
+2. **Writes and verifies each constant individually** (P, then I, then D), checking the
+   readback against what was requested within a small tolerance — a DCS's own unit rounding
+   means a just-written value isn't always bit-identical on readback, so exact equality would
+   produce false failures.
+3. **Rolls back only what was actually confirmed** if any constant fails partway through — if P
+   succeeds and I fails, only P is rolled back (D, never attempted, needs nothing; I, never
+   confirmed, has nothing to put back).
+4. **Records every outcome**, including which case applies: nothing written, everything written
+   and confirmed, a partial write successfully rolled back, or — the case that needs a human —
+   a partial write whose rollback itself failed. That last case prints a message pointing at
+   `bhtune history revert <run-id>`, which writes the persisted previous values back under the
+   same pre-read/verify contract, so a write-back that turns out wrong can be undone later
+   without anyone having written the old numbers down by hand.
+
+## Network exposure
+
+`bhtune-server` binds `127.0.0.1` (localhost only) by default and ships with **no
+authentication** — anyone who can reach the port can start, cancel, or configure a tune.
+Binding to any other address (`BHTUNE_BIND=0.0.0.0:8787` or a LAN IP) is an explicit choice you
+make yourself; there is no installer-driven firewall rule or prompt that does this for you.
+Until authentication ships (a planned, not yet available, feature), treat a non-loopback bind
+the same way you'd treat any other unauthenticated service on your OT network: only do it on a
+trusted, isolated network, and prefer console/remote-desktop access to the host running
+`bhtune-server` over exposing it further.
+
+## Scripting and exit codes
+
+`--output json` emits exactly one parseable JSON value on stdout, on every path — success,
+abort, timeout, poor quality, restore-incomplete, or write-back failure — so a scheduler never
+has to guard against stray prose interleaved with the object it's trying to parse. Exit codes
+are equally specific:
+
+| Code | Meaning                                                                                   |
+| ---- | ----------------------------------------------------------------------------------------- |
+| `0`  | Completed successfully                                                                    |
+| `1`  | Setup error (unknown template, bad flag combination, database/backend connection failure) |
+| `2`  | Aborted by Ctrl+C, restore confirmed                                                      |
+| `3`  | Test completed, but the requested PID write-back failed                                   |
+| `4`  | `--timeout-secs` elapsed before the test finished                                         |
+| `5`  | A non-`Good` OPC sample aborted the run                                                   |
+| `6`  | The post-run restore could not be confirmed — check the loop by hand                      |
+
+## Next steps
+
+- [MRFT concepts](mrft-concepts.md) — what the test is actually doing while these guardrails
+  watch over it.
+- [CLI quickstart](../getting-started/cli-quickstart.md) — see `--output json` and the automation
+  flags in context.
