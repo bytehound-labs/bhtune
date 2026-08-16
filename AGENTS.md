@@ -224,8 +224,9 @@ MRFT concepts, safety) under `docs/getting-started/`+`docs/guides/`, linked from
 publishing that same `docs/` folder as a browsable, searchable site, with its own CI job.
 `docs-site-deploy` is also done: that site is live at
 [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/) — see
-"`docs-site-scaffold`: the Docusaurus documentation site" below. See "Phases and todos"
-below for what's next.
+"`docs-site-scaffold`: the Docusaurus documentation site" below. `docs-roadmap` is also done:
+[`docs/roadmap.md`](docs/roadmap.md) covers the fuller reasoning behind each item in the
+README's roadmap section. See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -2954,13 +2955,15 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    "Crate map and phase status" above for the full design. `docs-site-deploy` is also done:
    that site is live at
    [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/), published by
-   `docs-deploy.yml` via `actions/deploy-pages`. Remaining: `cargo doc` published alongside
-   the site (`docs-api-rustdoc`), release-time version snapshots (`docs-versioning`), a
-   published roadmap doc
-   (`docs-roadmap`; the README already carries a roadmap section, but this todo is about the
-   fuller doc-site version), v0.1.0 with per-platform binaries, a Windows MSI installer
-   (`pkg-windows-installer`, the primary distribution artifact, now unblocked for AUR too
-   since `pkg-aur` needs the man pages/completions `docs-generated-cli` just produced), and a
+   `docs-deploy.yml` via `actions/deploy-pages`. `docs-roadmap` is also done: `docs/roadmap.md`
+   covers OPC UA/Modbus backends, remote/multi-user access (Phase 11), the Step Test
+   subscription-RPC blocker, multi-loop/batch tuning, and the history explorer (including what's
+   deliberately _not_ planned — continuous historization and, for now, cross-run comparison) —
+   linked from the README's existing compact roadmap section rather than duplicating it.
+   Remaining: `cargo doc` published alongside the site (`docs-api-rustdoc`), release-time
+   version snapshots (`docs-versioning`), v0.1.0 with per-platform binaries, a Windows MSI
+   installer (`pkg-windows-installer`, the primary distribution artifact, now unblocked for AUR
+   too since `pkg-aur` needs the man pages/completions `docs-generated-cli` just produced), and a
    secondary Docker image (`pkg-docker`).
 10. **History explorer** (low priority, post-v1) — a filterable/sortable run list and PV/MV
     trend view over already-recorded history (`history-explorer-ui`), age-based retention

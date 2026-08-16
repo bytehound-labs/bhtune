@@ -330,6 +330,9 @@ deferred, and what's deliberately not planned — lives at
 - A history explorer: browsing/trend view over past runs, configurable retention, and
   cross-run comparison/overlay.
 
+See the [full roadmap](docs/roadmap.md) for the reasoning behind each item and its current
+status.
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md). Contributions require signing the
