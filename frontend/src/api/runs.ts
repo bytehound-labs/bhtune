@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
-import { apiErrorMessage } from "./errors";
+import { toApiError } from "./errors";
 import type { components, operations } from "./schema";
 
 export type RunSummaryResponse = components["schemas"]["RunSummaryResponse"];
@@ -25,10 +25,10 @@ export function useRuns(filter: RunListFilter = {}) {
   return useQuery({
     queryKey: runsKey(filter),
     queryFn: async () => {
-      const { data, error } = await apiClient.GET("/api/runs", {
+      const { data, error, response } = await apiClient.GET("/api/runs", {
         params: { query: filter },
       });
-      if (error) throw new Error(apiErrorMessage(error));
+      if (error) throw toApiError(error, response);
       return data;
     },
   });
@@ -50,10 +50,10 @@ export function useRun(id: number) {
   return useQuery({
     queryKey: runKey(id),
     queryFn: async () => {
-      const { data, error } = await apiClient.GET("/api/runs/{id}", {
+      const { data, error, response } = await apiClient.GET("/api/runs/{id}", {
         params: { path: { id } },
       });
-      if (error) throw new Error(apiErrorMessage(error));
+      if (error) throw toApiError(error, response);
       return data;
     },
     enabled: Number.isFinite(id),
@@ -169,10 +169,10 @@ export function useStartRun() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (request: StartRunRequest) => {
-      const { data, error } = await apiClient.POST("/api/runs", {
+      const { data, error, response } = await apiClient.POST("/api/runs", {
         body: request,
       });
-      if (error) throw new Error(apiErrorMessage(error));
+      if (error) throw toApiError(error, response);
       return data;
     },
     onSuccess: (data) => {
@@ -193,13 +193,47 @@ export function useCancelRun() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: number) => {
-      const { error } = await apiClient.POST("/api/runs/{id}/cancel", {
-        params: { path: { id } },
-      });
-      if (error) throw new Error(apiErrorMessage(error));
+      const { error, response } = await apiClient.POST(
+        "/api/runs/{id}/cancel",
+        {
+          params: { path: { id } },
+        },
+      );
+      if (error) throw toApiError(error, response);
     },
     onSuccess: (_data, id) => {
       void queryClient.invalidateQueries({ queryKey: runKey(id) });
     },
   });
+}
+
+/**
+ * `DELETE /api/runs/{id}` — 409 if the run is still active (cancel it first). Removes the
+ * run and its samples/results/write-back audit rows in one cascade (see `db-schema`'s
+ * `ON DELETE CASCADE`); there is no undo.
+ */
+export function useDeleteRun() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { error, response } = await apiClient.DELETE("/api/runs/{id}", {
+        params: { path: { id } },
+      });
+      if (error) throw toApiError(error, response);
+    },
+    onSuccess: (_data, id) => {
+      queryClient.removeQueries({ queryKey: runKey(id) });
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+}
+
+/**
+ * The URL for `GET /api/runs/{id}/export` — a plain link/anchor `href`, not a query hook:
+ * the browser's native download handling (triggered by the response's
+ * `Content-Disposition: attachment` header) is simpler and more robust than fetching the
+ * bytes in JS just to hand them back to the browser via a manufactured object URL.
+ */
+export function runExportUrl(id: number, format: "csv" | "json"): string {
+  return `/api/runs/${id}/export?format=${format}`;
 }

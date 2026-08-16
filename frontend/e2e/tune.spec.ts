@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
@@ -133,6 +134,77 @@ test.describe("running a tune from the browser", () => {
     await expect(
       page.getByText(/\d+ per-tick samples were recorded/),
     ).toBeVisible();
+  });
+
+  test("exports a completed run's samples as CSV and JSON downloads", async ({
+    page,
+  }) => {
+    test.setTimeout(45_000);
+
+    await page.goto("/runs/new");
+    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
+    await page.getByLabel("Cycles to skip").fill("1");
+    await page.getByLabel("Cycles to count").fill("2");
+    await page.getByLabel("Noise protection (s)").fill("0");
+    await page.getByLabel("Poll interval (ms)").fill("5");
+    await page.getByLabel("Time constant τ (s)").fill("0.01");
+    await page.getByLabel("Dead time (s)").fill("0.025");
+
+    await startTune(page);
+    await expect(page).toHaveURL(/\/runs\/\d+$/);
+    await expect(page.getByText("completed", { exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    const [csvDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: "Export CSV" }).click(),
+    ]);
+    expect(csvDownload.suggestedFilename()).toMatch(/^run-\d+\.csv$/);
+    const csvPath = await csvDownload.path();
+    const csvContents = await readFile(csvPath, "utf-8");
+    expect(csvContents.split("\n")[0]).toBe(
+      "tick,time,pv,pv_quality,hysteresis,mv_value_current,mv_sign_next_step,counter_all_switches,cycles_completed,cycles_remaining",
+    );
+
+    const [jsonDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: "Export JSON" }).click(),
+    ]);
+    expect(jsonDownload.suggestedFilename()).toMatch(/^run-\d+\.json$/);
+  });
+
+  test("deletes a completed run from its detail page", async ({ page }) => {
+    test.setTimeout(45_000);
+
+    await page.goto("/runs/new");
+    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
+    await page.getByLabel("Cycles to skip").fill("1");
+    await page.getByLabel("Cycles to count").fill("2");
+    await page.getByLabel("Noise protection (s)").fill("0");
+    await page.getByLabel("Poll interval (ms)").fill("5");
+    await page.getByLabel("Time constant τ (s)").fill("0.01");
+    await page.getByLabel("Dead time (s)").fill("0.025");
+
+    await startTune(page);
+    await expect(page).toHaveURL(/\/runs\/\d+$/);
+    await expect(page.getByText("completed", { exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    const runUrl = page.url();
+    const runId = runUrl.match(/\/runs\/(\d+)$/)?.[1];
+    expect(runId).toBeTruthy();
+
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.getByRole("button", { name: "Delete run" }).click();
+
+    await expect(page).toHaveURL(/\/runs$/);
+
+    // Navigating straight back to the deleted run's own URL now 404s -- proves the row is
+    // really gone, not just removed from the list view.
+    await page.goto(`/runs/${runId}`);
+    await expect(page.getByText(`no run with id ${runId}`)).toBeVisible();
   });
 
   test("cancels a running tune from the run detail page", async ({ page }) => {

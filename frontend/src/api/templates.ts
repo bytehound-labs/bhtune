@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
-import { apiErrorMessage } from "./errors";
+import { toApiError } from "./errors";
 import type { components } from "./schema";
 
 export type TemplateResponse = components["schemas"]["TemplateResponse"];
@@ -14,8 +14,8 @@ export function useTemplates() {
   return useQuery({
     queryKey: templatesKey,
     queryFn: async () => {
-      const { data, error } = await apiClient.GET("/api/templates");
-      if (error) throw new Error(apiErrorMessage(error));
+      const { data, error, response } = await apiClient.GET("/api/templates");
+      if (error) throw toApiError(error, response);
       return data;
     },
   });
@@ -26,10 +26,13 @@ export function useTemplate(name: string) {
   return useQuery({
     queryKey: templateKey(name),
     queryFn: async () => {
-      const { data, error } = await apiClient.GET("/api/templates/{name}", {
-        params: { path: { name } },
-      });
-      if (error) throw new Error(apiErrorMessage(error));
+      const { data, error, response } = await apiClient.GET(
+        "/api/templates/{name}",
+        {
+          params: { path: { name } },
+        },
+      );
+      if (error) throw toApiError(error, response);
       return data;
     },
     enabled: name.length > 0,
@@ -44,11 +47,11 @@ export function useCreateTemplate() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (template: DcsTemplate) => {
-      const { data, error } = await apiClient.POST("/api/templates", {
+      const { data, error, response } = await apiClient.POST("/api/templates", {
         body: template,
       });
       if (error) {
-        throw new Error(apiErrorMessage(error));
+        throw toApiError(error, response);
       }
       return data;
     },
@@ -73,12 +76,15 @@ export function useUpdateTemplate() {
       name: string;
       template: DcsTemplate;
     }) => {
-      const { data, error } = await apiClient.PUT("/api/templates/{name}", {
-        params: { path: { name } },
-        body: template,
-      });
+      const { data, error, response } = await apiClient.PUT(
+        "/api/templates/{name}",
+        {
+          params: { path: { name } },
+          body: template,
+        },
+      );
       if (error) {
-        throw new Error(apiErrorMessage(error));
+        throw toApiError(error, response);
       }
       return data;
     },
@@ -94,11 +100,14 @@ export function useDeleteTemplate() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (name: string) => {
-      const { error } = await apiClient.DELETE("/api/templates/{name}", {
-        params: { path: { name } },
-      });
+      const { error, response } = await apiClient.DELETE(
+        "/api/templates/{name}",
+        {
+          params: { path: { name } },
+        },
+      );
       if (error) {
-        throw new Error(apiErrorMessage(error));
+        throw toApiError(error, response);
       }
     },
     onSuccess: () => {

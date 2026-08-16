@@ -897,6 +897,22 @@ impl TuneRunRow {
             .map_err(DbError::Query)?;
         Ok(result.rows_affected())
     }
+
+    /// Deletes exactly one run by id (`history-explorer-ui`'s delete action). Returns
+    /// whether a row was actually deleted -- `false` if no run has that id, letting the
+    /// caller map that to a 404 rather than a silent no-op. Unlike
+    /// [`DcsTemplateRow::delete`], no foreign key ever blocks this: `tune_runs` has no
+    /// parent-side `RESTRICT` reference pointing at it, only the `ON DELETE CASCADE`
+    /// children (`tune_samples`/`tune_results`/`tune_writes`, see `db-schema`'s migration),
+    /// which SQLite removes automatically as part of the same statement.
+    pub async fn delete(pool: &SqlitePool, id: i64) -> DbResult<bool> {
+        let result = sqlx::query("DELETE FROM tune_runs WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await
+            .map_err(DbError::Query)?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 /// Appends `WHERE <conditions>` to `builder` for every `Some` field in `filter`, or nothing

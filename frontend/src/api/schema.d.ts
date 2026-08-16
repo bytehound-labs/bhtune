@@ -68,7 +68,13 @@ export interface paths {
     get: operations["show_run"];
     put?: never;
     post?: never;
-    delete?: never;
+    /**
+     * Delete one run and its recorded samples/results/write-back audit rows.
+     * @description `DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run is currently active
+     *     (still executing in a background task -- deleting the row out from under it would corrupt
+     *     whatever it tries to write next; cancel it first).
+     */
+    delete: operations["delete_run"];
     options?: never;
     head?: never;
     patch?: never;
@@ -93,6 +99,28 @@ export interface paths {
      *     `GET /api/runs/{id}` shows the eventual outcome.
      */
     post: operations["cancel_run"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/runs/{id}/export": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Export one run's recorded samples as CSV or JSON.
+     * @description `GET /api/runs/{id}/export?format=csv|json` -- 404 if no run has that id or it has no
+     *     recorded samples yet. Defaults to CSV. Sets `Content-Disposition: attachment` so a
+     *     browser downloads the response as a file rather than rendering it.
+     */
+    get: operations["export_run"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -450,6 +478,18 @@ export interface components {
       template_origin: components["schemas"]["TemplateOrigin"];
       writes: components["schemas"]["WriteResponse"][];
     };
+    /**
+     * @description Format for `GET /api/runs/{id}/export` -- deliberately a local, HTTP-facing enum rather
+     *     than reusing `bhtune_cli::args::ExportFormat` directly: that type is `clap`-oriented
+     *     (`ValueEnum`) and has no `Deserialize`/`ToSchema`, matching this module's own
+     *     DTO-decoupling convention (see the module doc comment). Converted to
+     *     `bhtune_cli::args::ExportFormat` at the one call site that needs it ([`export_run`]), so
+     *     the actual CSV/JSON serialization (`bhtune_cli::commands::export::samples_to_bytes`) is
+     *     implemented exactly once and the CLI's `bhtune export` and this route can never disagree
+     *     about what a run's export looks like.
+     * @enum {string}
+     */
+    RunExportFormat: "csv" | "json";
     RunListResponse: {
       /**
        * @description How many rows are in `runs` (this page) -- distinct from `total`, the count of every
@@ -894,6 +934,45 @@ export interface operations {
       };
     };
   };
+  delete_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Run id */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Run deleted. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description No run with that id. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The run is still active. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   cancel_run: {
     parameters: {
       query?: never;
@@ -914,6 +993,41 @@ export interface operations {
         content?: never;
       };
       /** @description No run with that id. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  export_run: {
+    parameters: {
+      query?: {
+        /** @description Defaults to `csv` when omitted, matching `bhtune export`'s own CLI default. */
+        format?: components["schemas"]["RunExportFormat"];
+      };
+      header?: never;
+      path: {
+        /** @description Run id */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The run's recorded samples, as CSV (default) or JSON. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "text/csv": unknown;
+        };
+      };
+      /** @description No run with that id, or it has no recorded samples. */
       404: {
         headers: {
           [name: string]: unknown;

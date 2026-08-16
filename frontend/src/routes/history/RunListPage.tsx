@@ -59,7 +59,7 @@ export function RunListPage() {
     <div>
       <PageHeading
         title="History"
-        description="Completed and in-progress tune runs. Live per-tick streaming lands in the frontend-live-stream phase."
+        description="Completed and in-progress tune runs, with live per-tick streaming for whichever run is still active."
         actions={
           <Link to="/runs/new">
             <Button variant="primary">New run</Button>

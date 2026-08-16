@@ -67,7 +67,10 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    relay switch count and cycles remaining. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
    [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows the
-   calculated Aggressive/Moderate/Sluggish PID constants and any write-back audit rows.
+   calculated Aggressive/Moderate/Sluggish PID constants and any write-back audit rows, plus
+   **Export CSV**/**Export JSON** download links and a **Delete run** button (with a
+   confirmation prompt — deleting a run also removes its recorded samples, results, and
+   write-back audit rows, and cannot be undone).
 4. **History** (`/runs`) — every past run, filterable by loop/outcome/process type, with the
    same detail view available for any completed run — not just the one you just started.
 

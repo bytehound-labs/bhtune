@@ -1,5 +1,11 @@
-import { Link, useParams } from "react-router";
-import { useCancelRun, useRun, useRunStream } from "../../api/runs";
+import { Link, useNavigate, useParams } from "react-router";
+import {
+  runExportUrl,
+  useCancelRun,
+  useDeleteRun,
+  useRun,
+  useRunStream,
+} from "../../api/runs";
 import {
   Badge,
   Button,
@@ -42,9 +48,12 @@ function dateTime(value: string | null | undefined): string {
 export function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
   const runId = Number(id);
+  const navigate = useNavigate();
   const run = useRun(runId);
   const cancelRun = useCancelRun();
+  const deleteRun = useDeleteRun();
   const isRunning = run.data?.outcome === "running";
+  const hasSamples = run.data ? run.data.samples.length > 0 : false;
   const stream = useRunStream(runId, isRunning);
   // While running, the live SSE feed is the source of truth (it replays every sample from
   // tick 0, so it's a complete trend on its own); once terminal, fall back to `useRun`'s
@@ -67,6 +76,35 @@ export function RunDetailPage() {
                 {cancelRun.isPending ? "Cancelling…" : "Cancel run"}
               </Button>
             )}
+            {!isRunning && hasSamples && (
+              <>
+                <a href={runExportUrl(runId, "csv")} download>
+                  <Button>Export CSV</Button>
+                </a>
+                <a href={runExportUrl(runId, "json")} download>
+                  <Button>Export JSON</Button>
+                </a>
+              </>
+            )}
+            {!isRunning && (
+              <Button
+                variant="danger"
+                disabled={deleteRun.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Delete run #${runId}? This removes its samples, results, and write-back audit rows and cannot be undone.`,
+                    )
+                  ) {
+                    deleteRun.mutate(runId, {
+                      onSuccess: () => navigate("/runs"),
+                    });
+                  }
+                }}
+              >
+                {deleteRun.isPending ? "Deleting…" : "Delete run"}
+              </Button>
+            )}
             <Link to="/runs">
               <Button>Back to history</Button>
             </Link>
@@ -82,6 +120,7 @@ export function RunDetailPage() {
       )}
       {run.isError && <ErrorBanner message={run.error.message} />}
       {cancelRun.isError && <ErrorBanner message={cancelRun.error.message} />}
+      {deleteRun.isError && <ErrorBanner message={deleteRun.error.message} />}
 
       {run.isSuccess && (
         <>

@@ -21,3 +21,28 @@ export function apiErrorMessage(error: unknown): string {
   }
   return "request failed";
 }
+
+/**
+ * An API failure that remembers its HTTP status code, so callers (namely
+ * `queryClient`'s default `retry`) can tell a permanent client error (404, 400, 409, ...)
+ * apart from a transient one (a 5xx, or a network failure) without re-parsing the message.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/**
+ * Builds the `ApiError` a `queryFn`/`mutationFn` should throw for a failed `openapi-fetch`
+ * call: `apiErrorMessage(error)` for the text, `response.status` for the code that lets
+ * `queryClient`'s default `retry` skip retrying permanent 4xx failures (see `queryClient.ts`)
+ * instead of stalling the UI in a loading state through several pointless retries.
+ */
+export function toApiError(error: unknown, response: Response): ApiError {
+  return new ApiError(apiErrorMessage(error), response.status);
+}

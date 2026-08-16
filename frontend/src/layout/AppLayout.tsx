@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
-import { apiErrorMessage } from "../api/errors";
+import { toApiError } from "../api/errors";
 
 /**
  * The `frontend-shell` health-check badge, relocated from the placeholder `App.tsx` into a
@@ -12,8 +12,8 @@ function HealthBadge() {
   const health = useQuery({
     queryKey: ["health"],
     queryFn: async () => {
-      const { data, error } = await apiClient.GET("/api/health");
-      if (error) throw new Error(apiErrorMessage(error));
+      const { data, error, response } = await apiClient.GET("/api/health");
+      if (error) throw toApiError(error, response);
       return data;
     },
     refetchInterval: 5000,

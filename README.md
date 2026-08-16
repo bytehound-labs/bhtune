@@ -332,9 +332,11 @@ deferred, and what's deliberately not planned — lives at
   push/subscription RPC to `opcda-bridge`, since Step Test observes PV changes via an OPC DA
   subscription rather than polling reads.
 - Multi-loop and batch tuning campaigns.
-- A GUI history explorer: a filterable/sortable run list and a PV/MV trend chart per run,
-  plus cross-run comparison/overlay. (Age-based retention and headless `history list`/
-  `show`/`prune` are already shipped — see [`docs/roadmap.md`](docs/roadmap.md#history-explorer).)
+- Cross-run comparison and overlay in the history explorer — charting several past runs of
+  the same loop together (e.g. "has this valve degraded since last year?"). Everything else
+  in the history explorer is already shipped: age-based retention, headless `history list`/
+  `show`/`prune`, and a GUI run list/detail screen with a PV/MV trend chart, export
+  (CSV/JSON), and delete — see [`docs/roadmap.md`](docs/roadmap.md#history-explorer).
 
 See the [full roadmap](docs/roadmap.md) for the reasoning behind each item and its current
 status.

@@ -1473,3 +1473,107 @@ async fn delete_matching_with_an_empty_filter_deletes_every_run() {
     );
 }
 // }}}1
+
+// delete (history-explorer-ui) {{{1
+
+#[tokio::test]
+async fn delete_removes_exactly_the_run_with_that_id_and_returns_true() {
+    let pool = connect_in_memory().await.unwrap();
+    let kept = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        Utc::now(),
+    )
+    .await;
+    let doomed = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        Utc::now(),
+    )
+    .await;
+
+    let deleted = TuneRunRow::delete(&pool, doomed.id).await.unwrap();
+    assert!(deleted);
+    assert!(TuneRunRow::get(&pool, doomed.id).await.unwrap().is_none());
+    assert!(TuneRunRow::get(&pool, kept.id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn delete_with_an_unknown_id_returns_false_and_deletes_nothing() {
+    let pool = connect_in_memory().await.unwrap();
+    seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        Utc::now(),
+    )
+    .await;
+
+    let deleted = TuneRunRow::delete(&pool, 999_999).await.unwrap();
+    assert!(!deleted);
+    assert_eq!(
+        TuneRunRow::count(&pool, &TuneRunFilter::default())
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn delete_cascades_to_samples_results_and_writes() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = seed_run(
+        &pool,
+        None,
+        TuneBackend::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        Utc::now(),
+    )
+    .await;
+    let sample = Tick {
+        time: Utc::now(),
+        pv: 50.0,
+    };
+    let state = MrftState {
+        hysteresis: 1.0,
+        mv_value_current: 55.0,
+        mv_sign_next_step: 1,
+        counter_all_switches: 0,
+        cycles_completed: 0,
+        cycles_remaining: 2,
+    };
+    TuneSampleRow::insert(&pool, run.id, 0, sample, state, SampleQuality::Good)
+        .await
+        .unwrap();
+    let result_row = TuneResultRow::from_calculated(
+        run.id,
+        sample_tuning_result(ResponseLevel::Aggressive),
+        sample_pid_parameters(ResponseLevel::Aggressive),
+    );
+    TuneResultRow::insert(&pool, &result_row).await.unwrap();
+
+    let deleted = TuneRunRow::delete(&pool, run.id).await.unwrap();
+    assert!(deleted);
+    assert!(
+        TuneSampleRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        TuneResultRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+// }}}1

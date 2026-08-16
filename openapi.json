@@ -239,6 +239,51 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Delete one run and its recorded samples/results/write-back audit rows.",
+        "description": "`DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run is currently active\n(still executing in a background task -- deleting the row out from under it would corrupt\nwhatever it tries to write next; cancel it first).",
+        "operationId": "delete_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Run deleted."
+          },
+          "404": {
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is still active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/runs/{id}/cancel": {
@@ -267,6 +312,55 @@
           },
           "404": {
             "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/export": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Export one run's recorded samples as CSV or JSON.",
+        "description": "`GET /api/runs/{id}/export?format=csv|json` -- 404 if no run has that id or it has no\nrecorded samples yet. Defaults to CSV. Sets `Content-Disposition: attachment` so a\nbrowser downloads the response as a file rather than rendering it.",
+        "operationId": "export_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Defaults to `csv` when omitted, matching `bhtune export`'s own CLI default.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/RunExportFormat"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's recorded samples, as CSV (default) or JSON.",
+            "content": {
+              "text/csv": {}
+            }
+          },
+          "404": {
+            "description": "No run with that id, or it has no recorded samples.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1083,6 +1177,14 @@
             }
           }
         }
+      },
+      "RunExportFormat": {
+        "type": "string",
+        "description": "Format for `GET /api/runs/{id}/export` -- deliberately a local, HTTP-facing enum rather\nthan reusing `bhtune_cli::args::ExportFormat` directly: that type is `clap`-oriented\n(`ValueEnum`) and has no `Deserialize`/`ToSchema`, matching this module's own\nDTO-decoupling convention (see the module doc comment). Converted to\n`bhtune_cli::args::ExportFormat` at the one call site that needs it ([`export_run`]), so\nthe actual CSV/JSON serialization (`bhtune_cli::commands::export::samples_to_bytes`) is\nimplemented exactly once and the CLI's `bhtune export` and this route can never disagree\nabout what a run's export looks like.",
+        "enum": [
+          "csv",
+          "json"
+        ]
       },
       "RunListResponse": {
         "type": "object",

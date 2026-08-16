@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::args::{ExportArgs, ExportFormat};
 
 #[derive(Serialize)]
-struct SampleRecord {
+pub struct SampleRecord {
     tick: i64,
     time: chrono::DateTime<chrono::Utc>,
     pv: f32,
@@ -43,6 +43,27 @@ impl From<&TuneSampleRow> for SampleRecord {
     }
 }
 
+/// Serializes a run's recorded samples to CSV or JSON bytes -- the one place this mapping is
+/// implemented, shared by this module's own `run()` (writing to a file or stdout) and
+/// `bhtune-server`'s `GET /api/runs/{id}/export` route (`history-explorer-ui`), so the CLI
+/// and the web GUI can never disagree about what a run's export looks like.
+pub fn samples_to_bytes(
+    samples: &[TuneSampleRow],
+    format: ExportFormat,
+) -> anyhow::Result<Vec<u8>> {
+    let records: Vec<SampleRecord> = samples.iter().map(SampleRecord::from).collect();
+    match format {
+        ExportFormat::Csv => {
+            let mut writer = csv::Writer::from_writer(Vec::new());
+            for record in &records {
+                writer.serialize(record)?;
+            }
+            Ok(writer.into_inner()?)
+        }
+        ExportFormat::Json => Ok(serde_json::to_vec_pretty(&records)?),
+    }
+}
+
 pub async fn run(pool: &SqlitePool, args: ExportArgs) -> anyhow::Result<()> {
     let samples = TuneSampleRow::list_for_run(pool, args.run_id).await?;
     if samples.is_empty() {
@@ -51,18 +72,8 @@ pub async fn run(pool: &SqlitePool, args: ExportArgs) -> anyhow::Result<()> {
             args.run_id
         );
     }
-    let records: Vec<SampleRecord> = samples.iter().map(SampleRecord::from).collect();
-
-    let bytes = match args.format {
-        ExportFormat::Csv => {
-            let mut writer = csv::Writer::from_writer(Vec::new());
-            for record in &records {
-                writer.serialize(record)?;
-            }
-            writer.into_inner()?
-        }
-        ExportFormat::Json => serde_json::to_vec_pretty(&records)?,
-    };
+    let record_count = samples.len();
+    let bytes = samples_to_bytes(&samples, args.format)?;
 
     match &args.output {
         Some(path) => {
@@ -70,7 +81,7 @@ pub async fn run(pool: &SqlitePool, args: ExportArgs) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("failed to write '{}': {e}", path.display()))?;
             println!(
                 "Exported {} sample(s) from run {} to '{}'.",
-                records.len(),
+                record_count,
                 args.run_id,
                 path.display()
             );
@@ -136,6 +147,33 @@ mod tests {
         .unwrap();
 
         (pool, run.id)
+    }
+
+    /// Proves the shared [`samples_to_bytes`] function directly, decoupled from this
+    /// module's own file/stdout-writing `run()` -- this is the exact contract
+    /// `bhtune-server`'s `GET /api/runs/{id}/export` route also depends on.
+    #[tokio::test]
+    async fn samples_to_bytes_csv_matches_the_cli_export_shape() {
+        let (pool, run_id) = pool_with_one_sample().await;
+        let samples = TuneSampleRow::list_for_run(&pool, run_id).await.unwrap();
+        let bytes = samples_to_bytes(&samples, ExportFormat::Csv).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "tick,time,pv,pv_quality,hysteresis,mv_value_current,mv_sign_next_step,counter_all_switches,cycles_completed,cycles_remaining"
+        );
+        assert!(lines.next().unwrap().starts_with("0,"));
+    }
+
+    #[tokio::test]
+    async fn samples_to_bytes_json_matches_the_cli_export_shape() {
+        let (pool, run_id) = pool_with_one_sample().await;
+        let samples = TuneSampleRow::list_for_run(&pool, run_id).await.unwrap();
+        let bytes = samples_to_bytes(&samples, ExportFormat::Json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed[0]["pv"], 50.0);
+        assert_eq!(parsed[0]["tick"], 0);
     }
 
     #[tokio::test]

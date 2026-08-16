@@ -1,6 +1,6 @@
-//! Read-only run-history routes: `GET /api/runs` (filtered, paginated list) and
-//! `GET /api/runs/{id}` (full run detail: config, initial readings, samples, results,
-//! writes).
+//! Run-history routes: `GET /api/runs` (filtered, paginated list), `GET /api/runs/{id}`
+//! (full run detail: config, initial readings, samples, results, writes), `GET
+//! /api/runs/{id}/export` (CSV/JSON sample export), and `DELETE /api/runs/{id}`.
 //!
 //! DTO shapes deliberately mirror `bhtune-cli`'s `commands::history` `--output json` JSON
 //! (`RunSummaryJson`/`RunDetailJson`/etc.) field-for-field, so the CLI and the HTTP API
@@ -9,11 +9,13 @@
 //! projection of the non-`Serialize` `bhtune-db` row types, rather than the row types
 //! themselves growing a `Serialize` impl). The one deliberate addition over the CLI's own
 //! `RunDetailJson` is a full `samples` array (not just a `samples_recorded` count) -- the
-//! future trend chart (`frontend-screens`/`history-explorer-ui`) needs the raw per-tick data,
-//! and the data-volume math in AGENTS.md's "History explorer" section (thousands of rows per
-//! run, not millions) says inlining it is cheap enough not to need its own paginated route.
+//! trend chart (`history-explorer-ui`) needs the raw per-tick data, and the data-volume math
+//! in AGENTS.md's "History explorer" section (thousands of rows per run, not millions) says
+//! inlining it is cheap enough not to need its own paginated route.
 
 use axum::extract::{Path, Query, State};
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use bhtune_core::{
@@ -357,10 +359,140 @@ pub(crate) async fn show_run(
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))
 }
 
+/// Format for `GET /api/runs/{id}/export` -- deliberately a local, HTTP-facing enum rather
+/// than reusing `bhtune_cli::args::ExportFormat` directly: that type is `clap`-oriented
+/// (`ValueEnum`) and has no `Deserialize`/`ToSchema`, matching this module's own
+/// DTO-decoupling convention (see the module doc comment). Converted to
+/// `bhtune_cli::args::ExportFormat` at the one call site that needs it ([`export_run`]), so
+/// the actual CSV/JSON serialization (`bhtune_cli::commands::export::samples_to_bytes`) is
+/// implemented exactly once and the CLI's `bhtune export` and this route can never disagree
+/// about what a run's export looks like.
+#[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RunExportFormat {
+    Csv,
+    Json,
+}
+
+impl From<RunExportFormat> for bhtune_cli::args::ExportFormat {
+    fn from(format: RunExportFormat) -> Self {
+        match format {
+            RunExportFormat::Csv => bhtune_cli::args::ExportFormat::Csv,
+            RunExportFormat::Json => bhtune_cli::args::ExportFormat::Json,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct RunExportQuery {
+    /// Defaults to `csv` when omitted, matching `bhtune export`'s own CLI default.
+    pub format: Option<RunExportFormat>,
+}
+
+/// Export one run's recorded samples as CSV or JSON.
+///
+/// `GET /api/runs/{id}/export?format=csv|json` -- 404 if no run has that id or it has no
+/// recorded samples yet. Defaults to CSV. Sets `Content-Disposition: attachment` so a
+/// browser downloads the response as a file rather than rendering it.
+#[utoipa::path(
+    get,
+    path = "/api/runs/{id}/export",
+    tag = "runs",
+    params(
+        ("id" = i64, Path, description = "Run id"),
+        RunExportQuery,
+    ),
+    responses(
+        (status = 200, description = "The run's recorded samples, as CSV (default) or JSON.", content_type = "text/csv"),
+        (status = 404, description = "No run with that id, or it has no recorded samples.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn export_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<i64>,
+    Query(query): Query<RunExportQuery>,
+) -> Result<Response, ApiError> {
+    let format = query.format.unwrap_or(RunExportFormat::Csv);
+    let samples = TuneSampleRow::list_for_run(&state.pool, run_id).await?;
+    if samples.is_empty() {
+        return Err(ApiError::NotFound(format!(
+            "run {run_id} has no recorded samples (unknown run id, or it never started)"
+        )));
+    }
+    let bytes = bhtune_cli::commands::export::samples_to_bytes(&samples, format.into())?;
+    let (content_type, extension) = match format {
+        RunExportFormat::Csv => ("text/csv", "csv"),
+        RunExportFormat::Json => ("application/json", "json"),
+    };
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!(
+            "attachment; filename=\"run-{run_id}.{extension}\""
+        ))
+        .map_err(|e| ApiError::Internal(e.into()))?,
+    );
+    Ok(response)
+}
+
+/// Delete one run and its recorded samples/results/write-back audit rows.
+///
+/// `DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run's own recorded
+/// `outcome` is still [`TuneOutcome::Running`] (deleting the row out from under an in-flight
+/// task would corrupt whatever it tries to write next; cancel it first). Deliberately checks
+/// the run row's own `outcome` rather than [`crate::active_run::ActiveRun`]'s in-memory
+/// active-run slot: `drive()` persists every terminal outcome (`persist_results` then
+/// `TuneRunRow::complete`/`fail`/`abort`) *before* returning, and `ActiveRun::release` only
+/// runs strictly after `drive()` returns (see `routes::runs::start_run`'s spawned task), so
+/// there is a real -- if brief -- window where a run's outcome is already durably
+/// `completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the slot is free yet.
+/// Checking the DB's own authoritative, durable state instead of the best-effort in-memory
+/// tracker closes that race outright, rather than requiring the caller to retry (as
+/// `frontend/e2e/tune.spec.ts`'s `startTune()` already has to for the equivalent gap on the
+/// *start* side).
+#[utoipa::path(
+    delete,
+    path = "/api/runs/{id}",
+    tag = "runs",
+    params(
+        ("id" = i64, Path, description = "Run id"),
+    ),
+    responses(
+        (status = 204, description = "Run deleted."),
+        (status = 404, description = "No run with that id.", body = ErrorBody),
+        (status = 409, description = "The run has not finished yet.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn delete_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let run = TuneRunRow::get(&state.pool, run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
+    if run.outcome == TuneOutcome::Running {
+        return Err(ApiError::Conflict(format!(
+            "run {run_id} has not finished yet; cancel it before deleting"
+        )));
+    }
+    if TuneRunRow::delete(&state.pool, run_id).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        // Only reachable if the row was deleted by a concurrent request between the
+        // `get` above and this call -- still a well-defined 404 ("no run with that id"
+        // is simply true again by the time this responds), not a real error.
+        Err(ApiError::NotFound(format!("no run with id {run_id}")))
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/runs", get(list_runs))
-        .route("/api/runs/{id}", get(show_run))
+        .route("/api/runs/{id}", get(show_run).delete(delete_run))
+        .route("/api/runs/{id}/export", get(export_run))
 }
 
 #[cfg(test)]
@@ -748,5 +880,206 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn export_run_defaults_to_csv_with_the_expected_headers_and_body() {
+        let state = crate::test_support::in_memory_state().await;
+        let (run_id, _loop_id) = seed_full_run(&state).await;
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{run_id}/export"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/csv"
+        );
+        assert_eq!(
+            response.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            &format!("attachment; filename=\"run-{run_id}.csv\"")
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "tick,time,pv,pv_quality,hysteresis,mv_value_current,mv_sign_next_step,counter_all_switches,cycles_completed,cycles_remaining"
+        );
+        assert!(lines.next().unwrap().starts_with("0,"));
+    }
+
+    #[tokio::test]
+    async fn export_run_supports_the_json_format() {
+        let state = crate::test_support::in_memory_state().await;
+        let (run_id, _loop_id) = seed_full_run(&state).await;
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{run_id}/export?format=json"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            response.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            &format!("attachment; filename=\"run-{run_id}.json\"")
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed[0]["tick"], 0);
+        assert_eq!(parsed[0]["pv"], 50.0);
+    }
+
+    #[tokio::test]
+    async fn export_run_404s_for_an_unknown_id() {
+        let app = router().with_state(crate::test_support::in_memory_state().await);
+        let response = app
+            .oneshot(
+                Request::get("/api/runs/999999/export")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn export_run_404s_for_a_run_with_no_recorded_samples() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{run_id}/export"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_run_removes_the_run_and_returns_204() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        // `seed_one_run` leaves `outcome = running` (it never calls `complete`/`fail`/
+        // `abort`); a real deletable run must have finished first.
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+        let pool = state.pool.clone();
+        let app = router().with_state(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::delete(format!("/api/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(TuneRunRow::get(&pool, run_id).await.unwrap().is_none());
+
+        // A follow-up GET for the same id now 404s -- proves the row is really gone, not
+        // just hidden.
+        let follow_up = app
+            .oneshot(
+                Request::get(format!("/api/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(follow_up.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_run_404s_for_an_unknown_id() {
+        let app = router().with_state(crate::test_support::in_memory_state().await);
+        let response = app
+            .oneshot(
+                Request::delete("/api/runs/999999")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_run_409s_when_the_run_has_not_finished_yet() {
+        let state = crate::test_support::in_memory_state().await;
+        // `seed_one_run` leaves `outcome = running` -- proves `delete_run` rejects a run
+        // based on its own durable DB outcome, with no `ActiveRun` bookkeeping involved at
+        // all (nothing here ever reserves a slot).
+        let run_id = seed_one_run(&state).await;
+        let pool = state.pool.clone();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::delete(format!("/api/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        // Still present -- the conflict must short-circuit before any delete is attempted.
+        assert!(TuneRunRow::get(&pool, run_id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_run_succeeds_for_a_completed_run_even_if_active_run_has_not_released_it_yet() {
+        // Regression test for the race this guard was rewritten to close: `drive()` persists
+        // a run's terminal outcome to the DB *before* returning, and `ActiveRun::release` only
+        // runs strictly after `drive()` returns (see `routes::runs::start_run`), so there is a
+        // real window where a run is already durably `completed` but `ActiveRun` still reports
+        // it as the active run. `delete_run` must succeed here regardless, since it checks the
+        // run's own DB outcome rather than `ActiveRun`.
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        state
+            .active_run
+            .start(run_id, handle, std::future::pending())
+            .await
+            .unwrap();
+        let pool = state.pool.clone();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::delete(format!("/api/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(TuneRunRow::get(&pool, run_id).await.unwrap().is_none());
     }
 }
