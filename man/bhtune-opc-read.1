@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc-read 1  "bhtune-opc-read " 
+.SH NAME
+bhtune\-opc\-read \- Read one or more tags
+.SH SYNOPSIS
+\fBbhtune\-opc\-read\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fITAGS\fR] 
+.SH DESCRIPTION
+Read one or more tags
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+(default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file\*(Aqs `bridge_host` key.)
+.TP
+\fB\-\-server\fR \fI<SERVER>\fR
+(default: the config file\*(Aqs `server` key; errors if neither is set.)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fITAGS\fR]
+

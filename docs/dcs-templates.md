@@ -69,6 +69,12 @@ every field below.
 
 ## Field reference
 
+The prose below documents each field's meaning; the same shape is also expressed as a
+machine-checked JSON Schema, generated straight from the `DcsTemplate` Rust type, at
+[`docs/reference/config.md`](reference/config.md) — useful for validating a catalog file or
+generating an editor with autocomplete, and guaranteed to never drift from what
+`bhtune template import` actually accepts.
+
 ### Identity
 
 | Field         | Type                       | Meaning                                                                                                                                                                                                                                                                                                                          |

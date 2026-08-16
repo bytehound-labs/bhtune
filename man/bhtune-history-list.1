@@ -1,0 +1,47 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-history-list 1  "bhtune-history-list " 
+.SH NAME
+bhtune\-history\-list \- List past runs, newest first
+.SH SYNOPSIS
+\fBbhtune\-history\-list\fR [\fB\-\-outcome\fR] [\fB\-\-limit\fR] [\fB\-\-offset\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+List past runs, newest first
+.SH OPTIONS
+.TP
+\fB\-\-outcome\fR \fI<OUTCOME>\fR
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+running
+.IP \(bu 2
+completed
+.IP \(bu 2
+failed
+.IP \(bu 2
+aborted
+.RE
+.TP
+\fB\-\-limit\fR \fI<LIMIT>\fR [default: 50]
+
+.TP
+\fB\-\-offset\fR \fI<OFFSET>\fR [default: 0]
+
+.TP
+\fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
+How to print the run list
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+table: Human\-readable text (default)
+.IP \(bu 2
+json: Pretty\-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)

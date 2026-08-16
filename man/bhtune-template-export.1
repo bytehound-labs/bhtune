@@ -1,0 +1,32 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-template-export 1  "bhtune-template-export " 
+.SH NAME
+bhtune\-template\-export \- Export a template to a file, e.g. as a starting point for a site\-specific copy or a community catalog contribution
+.SH SYNOPSIS
+\fBbhtune\-template\-export\fR [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> <\fIPATH\fR> 
+.SH DESCRIPTION
+Export a template to a file, e.g. as a starting point for a site\-specific copy or a community catalog contribution
+.SH OPTIONS
+.TP
+\fB\-\-format\fR \fI<FORMAT>\fR [default: json]
+File format to write. `toml` emits a single\-entry `[[template]]` catalog block, ready to paste into a catalog file or open as a contribution pull request
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+json
+.IP \(bu 2
+toml
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fINAME\fR>
+
+.TP
+<\fIPATH\fR>
+

@@ -6,52 +6,68 @@ pre-commit:
     - rebase
   commands:
     rustfmt-format:
-      glob: '**/*.rs'
+      glob: "**/*.rs"
       run: |
         echo "Formatting Rust files with rustfmt..."
         rustfmt {staged_files}
       stage_fixed: true
 
     clippy-lint:
-      glob: '**/*.rs'
+      glob: "**/*.rs"
       run: |
         echo "Linting Rust files with clippy..."
         cargo clippy --workspace --all-targets --all-features -- -D warnings
 
     check-release:
-      glob: '**/*.rs'
+      glob: "**/*.rs"
       run: |
         echo "Checking release profile..."
         cargo check --workspace --release
 
     taplo-format:
-      glob: '**/*.toml'
+      glob: "**/*.toml"
       run: |
         echo "Formatting TOML files with taplo..."
         taplo fmt {staged_files}
       stage_fixed: true
 
     prettier-format:
-      glob: '**/*.{md,yaml,yml,json,ts,tsx,css}'
+      glob: "**/*.{md,yaml,yml,json,ts,tsx,css}"
+      # docs/reference/** (clap-markdown, schemars), openapi.json (utoipa), and
+      # frontend/src/api/schema.d.ts (openapi-typescript) are all generated and
+      # checked for drift in CI via `cargo run --example ... | git diff --exit-code`
+      # against the *raw* generator output. Letting prettier reformat the committed
+      # copy would make that check fail forever, since CI never runs prettier before
+      # diffing. Never format generated files, even if a given generator's current
+      # output happens to already match prettier's style.
+      exclude:
+        - "docs/reference/**"
+        - "openapi.json"
+        - "frontend/src/api/schema.d.ts"
       run: |
         echo "Formatting files with prettier..."
         npx prettier --write {staged_files}
       stage_fixed: true
 
     oxlint-frontend:
-      glob: 'frontend/src/**/*.{ts,tsx}'
+      glob: "frontend/src/**/*.{ts,tsx}"
       run: |
         echo "Linting frontend files with oxlint..."
         pnpm --filter bhtune-frontend run lint
 
     frontend-typecheck:
-      glob: 'frontend/**/*.{ts,tsx}'
+      glob: "frontend/**/*.{ts,tsx}"
       run: |
         echo "Type-checking and building the frontend..."
         pnpm --filter bhtune-frontend run build
 
     shfmt-format:
-      glob: '**/*.{sh,bash}'
+      glob: "**/*.{sh,bash}"
+      # completions/bhtune.bash is generated (clap_complete) and drift-checked in CI
+      # against raw generator output — see the prettier-format comment above for why
+      # it must never be reformatted after the fact.
+      exclude:
+        - "completions/**"
       run: |
         echo "Formatting shell scripts with shfmt..."
         shfmt --apply-ignore -w {staged_files}

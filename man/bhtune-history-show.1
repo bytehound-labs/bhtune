@@ -1,0 +1,29 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-history-show 1  "bhtune-history-show " 
+.SH NAME
+bhtune\-history\-show \- Show one run\*(Aqs full detail: config, initial readings, calculated results, and any PID write\-back audit rows
+.SH SYNOPSIS
+\fBbhtune\-history\-show\fR [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRUN_ID\fR> 
+.SH DESCRIPTION
+Show one run\*(Aqs full detail: config, initial readings, calculated results, and any PID write\-back audit rows
+.SH OPTIONS
+.TP
+\fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
+How to print the run detail
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+table: Human\-readable text (default)
+.IP \(bu 2
+json: Pretty\-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIRUN_ID\fR>
+

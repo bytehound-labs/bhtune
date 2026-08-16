@@ -87,6 +87,13 @@ cd bhtune
 cargo build --workspace
 ```
 
+The full `bhtune` command reference — every subcommand, flag, and default — is generated
+directly from the CLI's own argument definitions and checked in at
+[`docs/reference/cli.md`](docs/reference/cli.md), so it can never drift from what the binary
+actually accepts. The same generation step also produces man pages (`man/*.1` — try `man
+./man/bhtune-tune.1`) and shell completions (`completions/bhtune.bash`, `completions/_bhtune`,
+`completions/bhtune.fish`); packaged releases install both into the usual system locations.
+
 ### Running the server
 
 ```sh
@@ -142,7 +149,8 @@ A missing file there is not an error, since it may simply not have been created 
 that _does_ exist but fails to parse as TOML is always a hard error, pointing at the file and
 the parse problem. See
 [`crates/bhtune-cli/bhtune.example.toml`](crates/bhtune-cli/bhtune.example.toml) for every
-available key.
+available key, or [`docs/reference/config.md`](docs/reference/config.md) for the generated
+JSON Schema (also covers one DCS/PLC template catalog entry — see below).
 
 | Setting                                  | CLI flag         | Env var              | Config key     | Default                                                                                                                                                                     |
 | ---------------------------------------- | ---------------- | -------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

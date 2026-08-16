@@ -1,0 +1,38 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-history-revert 1  "bhtune-history-revert " 
+.SH NAME
+bhtune\-history\-revert \- Undo a run\*(Aqs PID write\-back, writing its recorded pre\-write P/I/D values back to the live loop. Reverts whichever `write`\-kind write\-back that run last recorded; refuses if the run has none, if that write\-back\*(Aqs pre\-read itself failed (nothing to revert to), or if the run did not use the `opcda` backend (nothing live to revert against)
+.SH SYNOPSIS
+\fBbhtune\-history\-revert\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-yes\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRUN_ID\fR> 
+.SH DESCRIPTION
+Undo a run\*(Aqs PID write\-back, writing its recorded pre\-write P/I/D values back to the live loop. Reverts whichever `write`\-kind write\-back that run last recorded; refuses if the run has none, if that write\-back\*(Aqs pre\-read itself failed (nothing to revert to), or if the run did not use the `opcda` backend (nothing live to revert against)
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+(default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file\*(Aqs `bridge_host` key.)
+.TP
+\fB\-\-server\fR \fI<SERVER>\fR
+(default: the config file\*(Aqs `server` key; errors if neither is set.)
+.TP
+\fB\-\-yes\fR
+Confirm writing to a live loop. Required \-\- there is no interactive prompt for reverting, since there is no calculated result to choose between as there is for `tune`\*(Aqs own write\-back step
+.TP
+\fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
+How to print the revert outcome
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+table: Human\-readable text (default)
+.IP \(bu 2
+json: Pretty\-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIRUN_ID\fR>
+

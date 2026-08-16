@@ -1,0 +1,30 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-export 1  "bhtune-export " 
+.SH NAME
+bhtune\-export \- Export one run\*(Aqs recorded samples as CSV or JSON
+.SH SYNOPSIS
+\fBbhtune\-export\fR [\fB\-\-format\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRUN_ID\fR> 
+.SH DESCRIPTION
+Export one run\*(Aqs recorded samples as CSV or JSON
+.SH OPTIONS
+.TP
+\fB\-\-format\fR \fI<FORMAT>\fR [default: csv]
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+csv
+.IP \(bu 2
+json
+.RE
+.TP
+\fB\-\-output\fR \fI<OUTPUT>\fR
+Output file path (default: stdout)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIRUN_ID\fR>
+

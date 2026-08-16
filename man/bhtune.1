@@ -1,0 +1,61 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune 1  "bhtune 0.1.0" 
+.SH NAME
+bhtune \- Headless MRFT auto\-tuner
+.SH SYNOPSIS
+\fBbhtune\fR [\fB\-\-config\fR] [\fB\-\-db\fR] [\fB\-\-templates\fR] [\fB\-\-log\-level\fR] [\fB\-\-log\-dir\fR] [\fB\-\-log\-format\fR] [\fB\-\-log\-rotation\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Headless MRFT auto\-tuner
+.SH OPTIONS
+.TP
+\fB\-\-config\fR \fI<PATH>\fR
+Path to a TOML config file (default: platform\-specific, see `crate::config`)
+.TP
+\fB\-\-db\fR \fI<PATH>\fR
+Path to the SQLite database file (default: a platform\-standard data directory, see `crate::config::default_db_path_from`). CLI > `BHTUNE_DB` env var > `db` in the config file > platform default \-\- see `crate::config::resolve_db_path`
+.TP
+\fB\-\-templates\fR \fI<PATH>\fR
+Path to a user\-supplied DCS/PLC template catalog, auto\-loaded on every startup in addition to the built\-in templates (default: platform\-specific, next to the config file \-\- see `crate::config::templates_path_from`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > `BHTUNE_TEMPLATES` env var > `templates` in the config file > platform default \-\- see `crate::config::load_user_templates`
+.TP
+\fB\-\-log\-level\fR \fI<LOG_LEVEL>\fR
+Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default: info). Diagnostic detail only \-\- never printed to stdout, so it can never interleave with `\-\-output json`\*(Aqs single\-object contract; see `crate::logging`
+.TP
+\fB\-\-log\-dir\fR \fI<PATH>\fR
+Directory to write log files to (default: a platform\-standard data directory, see `crate::config::default_log_dir_from`)
+.TP
+\fB\-\-log\-format\fR \fI<LOG_FORMAT>\fR
+Log file format: "pretty" or "json" (default: pretty)
+.TP
+\fB\-\-log\-rotation\fR \fI<LOG_ROTATION>\fR
+Log file rotation: "hourly", "daily", or "never" (default: daily)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+bhtune\-tune(1)
+Run an MRFT tune against a real OPC DA loop or the in\-process simulator
+.TP
+bhtune\-simulate(1)
+Run a zero\-configuration demo MRFT tune against the built\-in FOPDT simulator
+.TP
+bhtune\-template(1)
+Inspect and manage DCS/PLC templates
+.TP
+bhtune\-history(1)
+Inspect past tune runs
+.TP
+bhtune\-export(1)
+Export one run\*(Aqs recorded samples as CSV or JSON
+.TP
+bhtune\-opc(1)
+Low\-level OPC DA passthrough (diagnostics) via the opcda\-bridge gateway, bypassing the tuning engine entirely
+.TP
+bhtune\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH VERSION
+v0.1.0

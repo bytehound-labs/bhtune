@@ -76,8 +76,8 @@ document at `GET /api/openapi.json` and an interactive Scalar UI at `/api/docs`.
 is also checked in at the repo root (`openapi.json`) and regenerated-and-diffed in CI
 (`cargo run -p bhtune-server --example gen_openapi` then `git diff --exit-code`), so it can
 never silently drift from the routes that actually produce it — the first use of this
-regenerate-and-diff pattern in the repo, and the template `docs-generated-cli` will reuse
-later for the CLI reference/man pages/completions. Every fallible route's error responses
+regenerate-and-diff pattern in the repo, later reused by `docs-generated-cli` for the CLI
+reference/man pages/completions/config schema. Every fallible route's error responses
 carry a real `body = ErrorBody` schema (`{"error": "<message>"}`) rather than an undocumented
 `description`-only entry, so the generated TS client types error bodies instead of `content?:
 never`. `frontend-shell` is also done: a pnpm
@@ -209,7 +209,16 @@ run-now items are also done: `docs-contract` (see
 Copilot CLI hook (`.github/hooks/docs-drift.json`) that warns when a session changed
 `crates/**` without touching any documentation surface, covering both a session's already-
 committed-and-pushed changes and anything still uncommitted (see `.github/hooks/README.md`
-for why it's a pair, not a single hook). See "Phases and todos" below for what's next.
+for why it's a pair, not a single hook). `docs-generated-cli` is also done: a new
+`crates/bhtune-cli/examples/gen_docs.rs` regenerates the full CLI reference
+(`docs/reference/cli.md`, `clap-markdown`), one git/cargo-style man page per command and
+subcommand (`man/*.1`, `clap_mangen`, recursing `Command::get_subcommands()` rather than a
+single flat page), bash/zsh/fish completions (`completions/`, `clap_complete`), and a JSON
+Schema reference for both `bhtune.toml` and the DCS/PLC template catalog shape
+(`docs/reference/config.md`, `schemars`) — reusing `gen_openapi`'s exact regenerate-and-diff
+idiom, now gated in CI by a new `checks.yml` step. See "`docs-generated-cli`: generating the
+CLI reference, man pages, completions, and config schema" below for the full design. See
+"Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -363,8 +372,8 @@ openapi.rs`'s `ApiDoc` (`#[derive(utoipa::OpenApi)]`) aggregates all of it into 
   route already attached, so it merges straight into `build_router` with no handwritten
   handler). It is also checked in at the repo root (`openapi.json`) and regenerated-and-diffed
   in CI (`cargo run -p bhtune-server --example gen_openapi` then `git diff --exit-code
-openapi.json`) — the first use of this pattern in the repo, and the template
-  `docs-generated-cli` will reuse later for the CLI reference/man pages/completions. There is
+openapi.json`) — the first use of this pattern in the repo, later reused by
+  `docs-generated-cli` for the CLI reference/man pages/completions/config schema. There is
   exactly one transport — `fetch` over HTTP — so no `ApiClient`-style interface with swappable
   backends is warranted; adding one would be pure ceremony with a single implementation.
   Generating the TypeScript client itself (`openapi-typescript`) landed with `frontend-shell`
@@ -2330,6 +2339,96 @@ path was confirmed twice — once via the unit tests, once by starting a real se
 `pnpm run dev` concern (hot-reload against a running `bhtune-server` for its API only), fully
 orthogonal to how a release binary serves its own already-built assets.
 
+## `docs-generated-cli`: generating the CLI reference, man pages, completions, and config schema
+
+A new `crates/bhtune-cli/examples/gen_docs.rs` regenerates four artifacts from the same
+`clap`/`serde` definitions every real `bhtune` invocation already parses against, so none of
+them can silently drift the way hand-written usage docs would — reusing `gen_openapi`'s exact
+regenerate-and-diff idiom (see "Key architectural decisions" above), the pattern that file's
+own doc comment named this example as the intended reuse of:
+
+```sh
+cargo run -p bhtune-cli --example gen_docs --features schemars
+```
+
+- **`docs/reference/cli.md`** — the full CLI reference as one Markdown document, via
+  `clap_markdown::help_markdown_custom::<bhtune_cli::args::Cli>(&options)`. `clap-markdown`
+  recurses the entire `Command` tree itself (no manual subcommand walk needed for this one),
+  producing a table of contents plus one section per command/subcommand with its usage,
+  options, and doc-comment prose.
+- **`man/*.1`** — one man page per command _and_ subcommand (`bhtune.1`, `bhtune-tune.1`,
+  `bhtune-template.1`, `bhtune-template-list.1`, ... 18 pages total), matching the convention
+  real multi-command tools use (git, cargo) rather than one flat page. `clap_mangen::Man`
+  only renders a single `clap::Command` at a time, so `gen_docs.rs` walks
+  `Command::get_subcommands()` recursively itself, renaming each nested `Command` to its full
+  hyphenated path (`cmd.name(...)`, e.g. `template` becomes `bhtune-template`) before
+  rendering, exactly mirroring how git/cargo name their own subcommand man pages. `Command::
+name` needs an owned `String` converted `impl Into<clap::builder::Str>`, which only exists
+  behind clap's `string` feature (not otherwise used by this crate, and not worth enabling
+  workspace-wide for one codegen example) — `gen_docs.rs` instead leaks the short-lived
+  recursion-computed name strings (`Box::leak`), which is fine for a one-shot process that
+  exits immediately after writing its output. These pages are what will let `pkg-aur` install
+  real content into `/usr/share/man/man1/` instead of shipping a binary with no man page at
+  all.
+- **`completions/bhtune.bash`, `completions/_bhtune` (zsh), `completions/bhtune.fish`** — via
+  `clap_complete::generate`, one file per shell using each shell's own conventional completion
+  file name.
+- **`docs/reference/config.md`** — JSON Schema for both `bhtune.toml` (`bhtune_cli::config::
+BhtuneConfig`/`LogConfig`) and one DCS/PLC template catalog entry (`bhtune_core::template::
+DcsTemplate`, the same type `template import`/the embedded and user catalogs all parse),
+  rendered as two labeled fenced JSON code blocks (`schemars::schema_for!` produces a schema
+  value, not prose, so there is no single-document API to lean on the way `clap-markdown`
+  provides for the CLI reference). `schemars`' derive macro picks up each field's own doc
+  comment as the schema's `description`, so this stays a real reflection of `template.rs`/
+  `config.rs`'s existing documentation rather than a second, driftable copy of it.
+
+**Where the `schemars` dependency lives, and why.** `DcsTemplate`'s derive lives in
+`bhtune-core`, a library target, not in the example itself — so `schemars` needed the same
+optional-feature treatment `bhtune-core` already has for `utoipa` (see "Key architectural
+decisions" above), not a plain dev-dependency: an optional regular `[dependencies]` entry,
+`#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]` alongside the existing
+`#[cfg_attr(feature = "utoipa", ...)]` on `DcsTemplate` and the four `pid_config` enums it
+embeds (`ProportionalType`/`IntegralType`/`DerivativeType`/`TimeUnit`), and a `schemars`
+feature forwarding from `bhtune-cli` to `bhtune-core/schemars`. `BhtuneConfig`/`LogConfig`
+(in `bhtune-cli` itself) get the same `cfg_attr` treatment directly. `clap-markdown`/
+`clap_mangen`/`clap_complete`, by contrast, are used only by `gen_docs.rs` itself, never by
+library-target code, so they stay plain `[dev-dependencies]` with no feature-gating —
+mirroring exactly why `cargo add --dev` is right for those three and wrong for `schemars`
+(a naive `cargo add --dev schemars` would put a library-target derive dependency somewhere
+only test/example targets can see it, silently breaking the ordinary release build the
+moment anyone tried to actually use the derive from `bhtune-core`'s own source). Off by
+default: neither `bhtune`/`bhtune-server`'s ordinary release builds nor `bhtune-core`'s own
+`cargo build -p bhtune-core` ever touch `schemars` — it is a docs-codegen-only concern.
+
+**CI enforcement**, added to `checks.yml`'s existing `check` job right after the OpenAPI
+drift step, same shape:
+
+```yaml
+- name: Regenerate CLI docs and check for drift
+  run: |
+    cargo run -p bhtune-cli --example gen_docs --features schemars
+    git diff --exit-code -- docs/reference/ man/ completions/
+```
+
+`clippy --all-features` (already run earlier in the same job) covers linting the example
+itself, since `--all-features` unifies in `schemars` and compiles `gen_docs` as part of
+`--all-targets`.
+
+**Gotcha: formatters must never touch generated files.** `.lefthook.yml`'s `prettier-format`
+(glob `**/*.{md,yaml,yml,json,ts,tsx,css}`) and `shfmt-format` (glob `**/*.{sh,bash}`) hooks
+would otherwise reformat `docs/reference/cli.md`, `docs/reference/config.md`, and
+`completions/bhtune.bash` on every commit that touches them — caught by hand before this
+phase's first push, since CI's drift check diffs _raw_ generator output against whatever is
+committed and never runs prettier/shfmt first, so a single reformatting pre-commit run would
+have made the drift check fail permanently. Both hooks now `exclude: ['docs/reference/**',
+...]`/`exclude: ['completions/**']`; `openapi.json` and `frontend/src/api/schema.d.ts` are
+excluded from `prettier-format` too, even though their generators currently happen to already
+produce prettier-compatible output, so a future version bump of `utoipa`/`openapi-typescript`
+can't silently reintroduce the same failure mode. Any future generated artifact should be
+added to these exclude lists (or `.prettierignore`) if its extension matches an existing
+format hook's glob — `man/*.1`, `completions/_bhtune` (no extension), and
+`completions/bhtune.fish` happen not to match any current glob, so they needed no exclusion.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -2436,10 +2535,11 @@ change tends to never get fixed.
 
 What to update, in order of how much it costs to get wrong:
 
-1. **Generated references** (CLI help text via `clap`, the OpenAPI spec, the generated TS
-   client) are never hand-edited and never go stale by definition — the build regenerates them
-   and CI's `git diff --exit-code` gates fail if a commit forgets to include the regenerated
-   output. Nothing to remember here beyond running the generator before committing.
+1. **Generated references** (the CLI reference/man pages/completions via `clap`, the OpenAPI
+   spec, the generated TS client, the `bhtune.toml`/template-catalog JSON Schema) are never
+   hand-edited and never go stale by definition — the build regenerates them and CI's `git
+diff --exit-code` gates fail if a commit forgets to include the regenerated output.
+   Nothing to remember here beyond running the generator before committing.
 2. **This file (`AGENTS.md`)** — update the relevant phase's roadmap bullet under "Phases and
    todos", the Status paragraph if the change is significant enough to shift what's next, and
    (for anything correctness-critical or easy to silently regress) a new numbered item under
@@ -2540,14 +2640,14 @@ that binary does something real and gains its own targeted tests.
 
 ## Crate map and phase status
 
-| Crate              | Phase                                                                                                                                 | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bhtune-core`      | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness`                                                  | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `bhtune-backend`   | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`                                                                  | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `bhtune-db`        | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance`                                         | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`                        | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above                                                                                                                                                                                                                          |
-| `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-template-update-api`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` + `server-start-tune-api` + `server-template-update-api` + `server-embed-spa` done — real Axum binary (health/templates full CRUD/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below — `PUT /api/templates/{name}` editing an existing `user`-origin template in place (400 on a name mismatch, 404 if unknown, 409 if not user-owned), and the built SPA embedded directly into the binary via `rust-embed` with an SPA-fallback route, correct MIME types, and long-lived cache headers on hashed assets — see "`server-embed-spa`: embedding the built SPA into the binary" below; only Windows service support pending |
-| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`                                                                            | All three done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above. Routing shell, Templates (List/Detail/Create/Edit), History (List/Detail), a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation), and a live PV/MV trend chart (`TrendChart`, uPlot-based, fed by a new SSE `useRunStream` hook while a run is active and by `useRun`'s `samples` once terminal) are all done and manually verified against a real running server                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Crate              | Phase                                                                                                                                 | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`      | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness`                                                  | `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` done (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); replay harness pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `bhtune-backend`   | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`                                                                  | `backend-trait` + `backend-opcda` + `backend-simulator` done (trait, error model, OPC DA implementation, and FOPDT simulator, all tested); replay pending                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `bhtune-db`        | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance`                                         | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`/`docs-generated-cli`   | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above. `docs-generated-cli` (Phase 9) is also done: `examples/gen_docs.rs` regenerates the CLI reference, man pages, shell completions, and the `bhtune.toml`/template-catalog JSON Schema from the same `clap`/`serde` definitions, drift-gated in CI — see "`docs-generated-cli`: generating the CLI reference, man pages, completions, and config schema" above |
+| `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-template-update-api`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` + `server-start-tune-api` + `server-template-update-api` + `server-embed-spa` done — real Axum binary (health/templates full CRUD/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below — `PUT /api/templates/{name}` editing an existing `user`-origin template in place (400 on a name mismatch, 404 if unknown, 409 if not user-owned), and the built SPA embedded directly into the binary via `rust-embed` with an SPA-fallback route, correct MIME types, and long-lived cache headers on hashed assets — see "`server-embed-spa`: embedding the built SPA into the binary" below; only Windows service support pending                                                                                                                                     |
+| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`                                                                            | All three done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above. Routing shell, Templates (List/Detail/Create/Edit), History (List/Detail), a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation), and a live PV/MV trend chart (`TrendChart`, uPlot-based, fed by a new SSE `useRunStream` hook while a run is active and by `useRun`'s `samples` once terminal) are all done and manually verified against a real running server                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Phases and todos (roadmap order)
 
@@ -2677,10 +2777,17 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    documentation contract in this file (`docs-contract`, see "Documentation contract" above)
    and a paired `sessionStart`/`sessionEnd` Copilot CLI hook warning when a session changes
    `crates/**` without touching any documentation surface (`docs-copilot-hook`, see
-   `.github/hooks/README.md`). Remaining: README/usage docs and a getting-started guide,
-   published roadmap (OPC UA/Modbus backends, free remote/multi-user access, Step Test pending
-   the bridge `Subscribe` RPC, multi-loop/batch tuning), v0.1.0 with per-platform binaries, a
-   Windows MSI installer (`pkg-windows-installer`, the primary distribution artifact), and a
+   `.github/hooks/README.md`). `docs-generated-cli` is also done: the CLI reference, man
+   pages, shell completions, and `bhtune.toml`/template-catalog JSON Schema all regenerate
+   from the real `clap`/`serde` definitions and are drift-gated in CI — see
+   "`docs-generated-cli`: generating the CLI reference, man pages, completions, and config
+   schema" above. Remaining: a Docusaurus docs site (`docs-site-scaffold`/`docs-site-deploy`),
+   `cargo doc` published alongside it (`docs-api-rustdoc`), README/usage docs and a
+   getting-started guide, published roadmap (OPC UA/Modbus backends, free remote/multi-user
+   access, Step Test pending the bridge `Subscribe` RPC, multi-loop/batch tuning), v0.1.0 with
+   per-platform binaries, a Windows MSI installer (`pkg-windows-installer`, the primary
+   distribution artifact, now unblocked for AUR too since `pkg-aur` needs the man pages/
+   completions `docs-generated-cli` just produced), and a
    secondary Docker image (`pkg-docker`).
 10. **History explorer** (low priority, post-v1) — a filterable/sortable run list and PV/MV
     trend view over already-recorded history (`history-explorer-ui`), age-based retention

@@ -1,0 +1,963 @@
+#compdef bhtune
+
+autoload -U is-at-least
+
+_bhtune() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+'-V[Print version]' \
+'--version[Print version]' \
+":: :_bhtune_commands" \
+"*::: :->bhtune" \
+&& ret=0
+    case $state in
+    (bhtune)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-command-$line[1]:"
+        case $line[1] in
+            (tune)
+_arguments "${_arguments_options[@]}" : \
+'-t+[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--backend simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
+'--tagname=[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--backend simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
+'--template=[DCS/PLC template name (see \`bhtune template list\`)]:TEMPLATE:_default' \
+'--process-type=[]:PROCESS_TYPE:(flow pressure-line pressure-vessel level temperature-mixing temperature-heat-exchange)' \
+'--controller-type=[]:CONTROLLER_TYPE:(p pi pid)' \
+'--relay-amp=[Relay amplitude, as a percentage of the MV range]:RELAY_AMP:_default' \
+'--cycles-skip=[Relay cycles to skip before counting begins (default\: looked up per \`--process-type\`)]:CYCLES_SKIP:_default' \
+'--cycles-count=[Relay cycles to count once the skip period ends (default\: looked up per \`--process-type\`)]:CYCLES_COUNT:_default' \
+'--noise-protection-secs=[Seconds a switch must persist before it'\''s accepted (default\: looked up per \`--process-type\`)]:NOISE_PROTECTION_SECS:_default' \
+'--mrft-delay=[Pre/post-test recording padding, in seconds (legacy\: \`--mrftDelayTime\`)]:MRFT_DELAY:_default' \
+'--backend=[Which backend drives this tune]:BACKEND:((opcda\:"A real OPC DA server, reached through an opcda-bridge gateway"
+simulator\:"The in-process FOPDT simulator — no external dependency at all"))' \
+'--bridge-host=[opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md'\''s OPC DA integration notes. Only meaningful with \`--backend opcda\` (default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via the \`BHTUNE_BRIDGE_HOST\` env var or the config file'\''s \`bridge_host\` key)]:BRIDGE_HOST:_default' \
+'--server=[OPC DA server ProgID (legacy\: \`-s\`/\`--opcServerID\`). Required with \`--backend opcda\`]:SERVER:_default' \
+'--sim-gain=[Simulator process gain (\`--backend simulator\` only)]:SIM_GAIN:_default' \
+'--sim-tau=[Simulator process time constant, in seconds (\`--backend simulator\` only)]:SIM_TAU:_default' \
+'--sim-dead-time=[Simulator dead time, in seconds (\`--backend simulator\` only)]:SIM_DEAD_TIME:_default' \
+'--sim-noise=[Simulator measurement noise amplitude (\`--backend simulator\` only)]:SIM_NOISE:_default' \
+'--sim-seed=[Simulator RNG seed, for reproducible noise (\`--backend simulator\` only)]:SIM_SEED:_default' \
+'--sim-initial-pv=[Simulator initial PV (\`--backend simulator\` only)]:SIM_INITIAL_PV:_default' \
+'--sim-initial-mv=[Simulator initial MV (\`--backend simulator\` only)]:SIM_INITIAL_MV:_default' \
+'--pv-range-high=[Fixed PV range high, overriding a live tag read (legacy\: the PV range "toggle tag/value" button). Required (defaults to 100.0) for \`--backend simulator\`, which has no range tags at all]:PV_RANGE_HIGH:_default' \
+'--pv-range-low=[Fixed PV range low, overriding a live tag read]:PV_RANGE_LOW:_default' \
+'--mv-range-high=[Fixed MV range high, overriding a live tag read]:MV_RANGE_HIGH:_default' \
+'--mv-range-low=[Fixed MV range low, overriding a live tag read]:MV_RANGE_LOW:_default' \
+'--direction=[Fixed controller direction, overriding a live tag read]:DIRECTION:(direct reverse)' \
+'--poll-interval-ms=[How often to poll the backend, in milliseconds (legacy\: the 800 ms WinForms timer)]:POLL_INTERVAL_MS:_default' \
+'--timeout-secs=[Hard wall-clock cap on this run'\''s total duration (including any \`--mrft-delay\` padding), in seconds. If the engine hasn'\''t reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop'\''s expected test duration -- temperature loops in particular can need much longer than the default]:TIMEOUT_SECS:_default' \
+'--name=[A friendly name for this run, recorded as \`loop_name\` (default\: the PV tag name)]:NAME:_default' \
+'--write-pid=[Non-interactively write this response level'\''s calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires \`--yes\`]:WRITE_PID:(aggressive moderate sluggish)' \
+'--op-timeout-secs=[Cap on any single backend read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and \`--timeout-secs\` both stay effective even mid-hung-read/write -- see AGENTS.md'\''s \`safety-cancellation\` section. Distinct from \`--timeout-secs\`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration]:OP_TIMEOUT_SECS:_default' \
+'--restore-timeout-secs=[Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of \`--timeout-secs\`, since a restore triggered *by* a timeout would otherwise inherit an already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits \`EXIT_RESTORE_INCOMPLETE\` with a warning naming the loop and its last-written value, instead of hanging indefinitely]:RESTORE_TIMEOUT_SECS:_default' \
+'--output=[How to print this run'\''s final outcome line]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'--yes[Confirm an unattended PID write-back. Required alongside \`--write-pid\` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without \`--write-pid\`]' \
+'--allow-uncertain-quality[Accept \`Quality\:\:Uncertain\` OPC readings instead of hard-failing on them. Off by default\: a stale/held value is indistinguishable from a live one to the MRFT engine, so tolerating it can silently corrupt the switch-period measurement the whole test depends on. Only for sites whose gateway reports \`Uncertain\` as a matter of course -- \`Quality\:\:Bad\` is never accepted, with or without this flag. Logged loudly when used and recorded on the run (\`tune_runs.allow_uncertain_quality\`), so history shows a run executed under relaxed rules]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(simulate)
+_arguments "${_arguments_options[@]}" : \
+'-t+[]:TAGNAME:_default' \
+'--tagname=[]:TAGNAME:_default' \
+'--template=[]:TEMPLATE:_default' \
+'--process-type=[]:PROCESS_TYPE:(flow pressure-line pressure-vessel level temperature-mixing temperature-heat-exchange)' \
+'--controller-type=[]:CONTROLLER_TYPE:(p pi pid)' \
+'--relay-amp=[]:RELAY_AMP:_default' \
+'--cycles-skip=[]:CYCLES_SKIP:_default' \
+'--cycles-count=[]:CYCLES_COUNT:_default' \
+'--noise-protection-secs=[]:NOISE_PROTECTION_SECS:_default' \
+'--mrft-delay=[]:MRFT_DELAY:_default' \
+'--sim-gain=[]:SIM_GAIN:_default' \
+'--sim-tau=[]:SIM_TAU:_default' \
+'--sim-dead-time=[]:SIM_DEAD_TIME:_default' \
+'--sim-noise=[]:SIM_NOISE:_default' \
+'--sim-seed=[]:SIM_SEED:_default' \
+'--sim-initial-pv=[]:SIM_INITIAL_PV:_default' \
+'--sim-initial-mv=[]:SIM_INITIAL_MV:_default' \
+'--poll-interval-ms=[]:POLL_INTERVAL_MS:_default' \
+'--timeout-secs=[See \`TuneArgs\:\:timeout_secs\`]:TIMEOUT_SECS:_default' \
+'--name=[]:NAME:_default' \
+'--write-pid=[See \`TuneArgs\:\:write_pid\`. Note the built-in FOPDT simulator has no PID constant tags at all (see \`build_loop_tags\`), so write-back is always skipped for \`simulate\` regardless of this flag -- it'\''s accepted here purely so \`simulate\`'\''s flag surface stays a strict defaulted subset of \`tune\`'\''s, matching every other field]:WRITE_PID:(aggressive moderate sluggish)' \
+'--op-timeout-secs=[See \`TuneArgs\:\:op_timeout_secs\`]:OP_TIMEOUT_SECS:_default' \
+'--restore-timeout-secs=[See \`TuneArgs\:\:restore_timeout_secs\`]:RESTORE_TIMEOUT_SECS:_default' \
+'--output=[See \`TuneArgs\:\:output\`]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'--yes[See \`TuneArgs\:\:yes\`]' \
+'--allow-uncertain-quality[See \`TuneArgs\:\:allow_uncertain_quality\`]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(template)
+_arguments "${_arguments_options[@]}" : \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_bhtune__subcmd__template_commands" \
+"*::: :->template" \
+&& ret=0
+
+    case $state in
+    (template)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-template-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(import)
+_arguments "${_arguments_options[@]}" : \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':path:_files' \
+&& ret=0
+;;
+(export)
+_arguments "${_arguments_options[@]}" : \
+'--format=[File format to write. \`toml\` emits a single-entry \`\[\[template\]\]\` catalog block, ready to paste into a catalog file or open as a contribution pull request]:FORMAT:(json toml)' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':path:_files' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__template__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-template-help-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(import)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(export)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(history)
+_arguments "${_arguments_options[@]}" : \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_bhtune__subcmd__history_commands" \
+"*::: :->history" \
+&& ret=0
+
+    case $state in
+    (history)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-history-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--outcome=[]:OUTCOME:(running completed failed aborted)' \
+'--limit=[]:LIMIT:_default' \
+'--offset=[]:OFFSET:_default' \
+'--output=[How to print the run list]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'--output=[How to print the run detail]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':run_id:_default' \
+&& ret=0
+;;
+(revert)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[(default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via \`BHTUNE_BRIDGE_HOST\` or the config file'\''s \`bridge_host\` key.)]:BRIDGE_HOST:_default' \
+'--server=[(default\: the config file'\''s \`server\` key; errors if neither is set.)]:SERVER:_default' \
+'--output=[How to print the revert outcome]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'--yes[Confirm writing to a live loop. Required -- there is no interactive prompt for reverting, since there is no calculated result to choose between as there is for \`tune\`'\''s own write-back step]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':run_id:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__history__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-history-help-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(revert)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(export)
+_arguments "${_arguments_options[@]}" : \
+'--format=[]:FORMAT:(csv json)' \
+'--output=[Output file path (default\: stdout)]:OUTPUT:_files' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':run_id:_default' \
+&& ret=0
+;;
+(opc)
+_arguments "${_arguments_options[@]}" : \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_bhtune__subcmd__opc_commands" \
+"*::: :->opc" \
+&& ret=0
+
+    case $state in
+    (opc)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-opc-command-$line[1]:"
+        case $line[1] in
+            (read)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[(default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via \`BHTUNE_BRIDGE_HOST\` or the config file'\''s \`bridge_host\` key.)]:BRIDGE_HOST:_default' \
+'--server=[(default\: the config file'\''s \`server\` key; errors if neither is set.)]:SERVER:_default' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+'*::tags:_default' \
+&& ret=0
+;;
+(write)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[]:BRIDGE_HOST:_default' \
+'--server=[]:SERVER:_default' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':tag:_default' \
+':value:_default' \
+&& ret=0
+;;
+(browse)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[]:BRIDGE_HOST:_default' \
+'--server=[]:SERVER:_default' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::path:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__opc__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-opc-help-command-$line[1]:"
+        case $line[1] in
+            (read)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(write)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(browse)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-help-command-$line[1]:"
+        case $line[1] in
+            (tune)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(simulate)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(template)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__help__subcmd__template_commands" \
+"*::: :->template" \
+&& ret=0
+
+    case $state in
+    (template)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-help-template-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(import)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(export)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(history)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__help__subcmd__history_commands" \
+"*::: :->history" \
+&& ret=0
+
+    case $state in
+    (history)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-help-history-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(revert)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(export)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(opc)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__help__subcmd__opc_commands" \
+"*::: :->opc" \
+&& ret=0
+
+    case $state in
+    (opc)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-help-opc-command-$line[1]:"
+        case $line[1] in
+            (read)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(write)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(browse)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+}
+
+(( $+functions[_bhtune_commands] )) ||
+_bhtune_commands() {
+    local commands; commands=(
+'tune:Run an MRFT tune against a real OPC DA loop or the in-process simulator' \
+'simulate:Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator' \
+'template:Inspect and manage DCS/PLC templates' \
+'history:Inspect past tune runs' \
+'export:Export one run'\''s recorded samples as CSV or JSON' \
+'opc:Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__export_commands] )) ||
+_bhtune__subcmd__export_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune export commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help_commands] )) ||
+_bhtune__subcmd__help_commands() {
+    local commands; commands=(
+'tune:Run an MRFT tune against a real OPC DA loop or the in-process simulator' \
+'simulate:Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator' \
+'template:Inspect and manage DCS/PLC templates' \
+'history:Inspect past tune runs' \
+'export:Export one run'\''s recorded samples as CSV or JSON' \
+'opc:Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__export_commands] )) ||
+_bhtune__subcmd__help__subcmd__export_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help export commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__help_commands] )) ||
+_bhtune__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__history_commands] )) ||
+_bhtune__subcmd__help__subcmd__history_commands() {
+    local commands; commands=(
+'list:List past runs, newest first' \
+'show:Show one run'\''s full detail\: config, initial readings, calculated results, and any PID write-back audit rows' \
+'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` backend (nothing live to revert against)' \
+    )
+    _describe -t commands 'bhtune help history commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__history__subcmd__list_commands] )) ||
+_bhtune__subcmd__help__subcmd__history__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help history list commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__history__subcmd__revert_commands] )) ||
+_bhtune__subcmd__help__subcmd__history__subcmd__revert_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help history revert commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__history__subcmd__show_commands] )) ||
+_bhtune__subcmd__help__subcmd__history__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help history show commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc_commands() {
+    local commands; commands=(
+'read:Read one or more tags' \
+'write:Write a value to one tag' \
+'browse:Browse tags under a path (empty for the top level)' \
+    )
+    _describe -t commands 'bhtune help opc commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__browse_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__browse_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help opc browse commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__read_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__read_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help opc read commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__write_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__write_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help opc write commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__simulate_commands] )) ||
+_bhtune__subcmd__help__subcmd__simulate_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help simulate commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__template_commands] )) ||
+_bhtune__subcmd__help__subcmd__template_commands() {
+    local commands; commands=(
+'list:List every template (built-in and user-imported)' \
+'show:Show one template'\''s full detail as JSON' \
+'import:Import a template from a file. Accepts either a single template as JSON (see \`template export\`'\''s default output shape) or a multi-template TOML catalog (the same \`\[\[template\]\]\` array-of-tables shape as the embedded/user catalog, see \`template export --format toml\`) -- the format is auto-detected from the file'\''s content, not its extension. A JSON single-template import is rejected outright if a template with that name already exists; a TOML catalog import instead skips (and reports) any template whose name already exists, so re-importing an updated community catalog only adds what'\''s new' \
+'export:Export a template to a file, e.g. as a starting point for a site-specific copy or a community catalog contribution' \
+'delete:Delete a template. Refuses if any saved loop still references it. A \`Builtin\`- or \`Catalog\`-origin template reappears automatically the next time bhtune starts unless it'\''s also removed from its source (bhtune-core'\''s embedded catalog for \`Builtin\`, which only a new bhtune release can change; the user catalog file for \`Catalog\`)' \
+    )
+    _describe -t commands 'bhtune help template commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__template__subcmd__delete_commands] )) ||
+_bhtune__subcmd__help__subcmd__template__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help template delete commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__template__subcmd__export_commands] )) ||
+_bhtune__subcmd__help__subcmd__template__subcmd__export_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help template export commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__template__subcmd__import_commands] )) ||
+_bhtune__subcmd__help__subcmd__template__subcmd__import_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help template import commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__template__subcmd__list_commands] )) ||
+_bhtune__subcmd__help__subcmd__template__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help template list commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__template__subcmd__show_commands] )) ||
+_bhtune__subcmd__help__subcmd__template__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help template show commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__tune_commands] )) ||
+_bhtune__subcmd__help__subcmd__tune_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help tune commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history_commands] )) ||
+_bhtune__subcmd__history_commands() {
+    local commands; commands=(
+'list:List past runs, newest first' \
+'show:Show one run'\''s full detail\: config, initial readings, calculated results, and any PID write-back audit rows' \
+'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` backend (nothing live to revert against)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune history commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history__subcmd__help_commands] )) ||
+_bhtune__subcmd__history__subcmd__help_commands() {
+    local commands; commands=(
+'list:List past runs, newest first' \
+'show:Show one run'\''s full detail\: config, initial readings, calculated results, and any PID write-back audit rows' \
+'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` backend (nothing live to revert against)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune history help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history__subcmd__help__subcmd__help_commands] )) ||
+_bhtune__subcmd__history__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune history help help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history__subcmd__help__subcmd__list_commands] )) ||
+_bhtune__subcmd__history__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune history help list commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history__subcmd__help__subcmd__revert_commands] )) ||
+_bhtune__subcmd__history__subcmd__help__subcmd__revert_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune history help revert commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history__subcmd__help__subcmd__show_commands] )) ||
+_bhtune__subcmd__history__subcmd__help__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune history help show commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history__subcmd__list_commands] )) ||
+_bhtune__subcmd__history__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune history list commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history__subcmd__revert_commands] )) ||
+_bhtune__subcmd__history__subcmd__revert_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune history revert commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__history__subcmd__show_commands] )) ||
+_bhtune__subcmd__history__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune history show commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc_commands] )) ||
+_bhtune__subcmd__opc_commands() {
+    local commands; commands=(
+'read:Read one or more tags' \
+'write:Write a value to one tag' \
+'browse:Browse tags under a path (empty for the top level)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune opc commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__browse_commands] )) ||
+_bhtune__subcmd__opc__subcmd__browse_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc browse commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help_commands() {
+    local commands; commands=(
+'read:Read one or more tags' \
+'write:Write a value to one tag' \
+'browse:Browse tags under a path (empty for the top level)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune opc help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__browse_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__browse_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help browse commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__help_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__read_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__read_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help read commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__write_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__write_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help write commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__read_commands] )) ||
+_bhtune__subcmd__opc__subcmd__read_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc read commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__write_commands] )) ||
+_bhtune__subcmd__opc__subcmd__write_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc write commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__simulate_commands] )) ||
+_bhtune__subcmd__simulate_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune simulate commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template_commands] )) ||
+_bhtune__subcmd__template_commands() {
+    local commands; commands=(
+'list:List every template (built-in and user-imported)' \
+'show:Show one template'\''s full detail as JSON' \
+'import:Import a template from a file. Accepts either a single template as JSON (see \`template export\`'\''s default output shape) or a multi-template TOML catalog (the same \`\[\[template\]\]\` array-of-tables shape as the embedded/user catalog, see \`template export --format toml\`) -- the format is auto-detected from the file'\''s content, not its extension. A JSON single-template import is rejected outright if a template with that name already exists; a TOML catalog import instead skips (and reports) any template whose name already exists, so re-importing an updated community catalog only adds what'\''s new' \
+'export:Export a template to a file, e.g. as a starting point for a site-specific copy or a community catalog contribution' \
+'delete:Delete a template. Refuses if any saved loop still references it. A \`Builtin\`- or \`Catalog\`-origin template reappears automatically the next time bhtune starts unless it'\''s also removed from its source (bhtune-core'\''s embedded catalog for \`Builtin\`, which only a new bhtune release can change; the user catalog file for \`Catalog\`)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune template commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__delete_commands] )) ||
+_bhtune__subcmd__template__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template delete commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__export_commands] )) ||
+_bhtune__subcmd__template__subcmd__export_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template export commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__help_commands] )) ||
+_bhtune__subcmd__template__subcmd__help_commands() {
+    local commands; commands=(
+'list:List every template (built-in and user-imported)' \
+'show:Show one template'\''s full detail as JSON' \
+'import:Import a template from a file. Accepts either a single template as JSON (see \`template export\`'\''s default output shape) or a multi-template TOML catalog (the same \`\[\[template\]\]\` array-of-tables shape as the embedded/user catalog, see \`template export --format toml\`) -- the format is auto-detected from the file'\''s content, not its extension. A JSON single-template import is rejected outright if a template with that name already exists; a TOML catalog import instead skips (and reports) any template whose name already exists, so re-importing an updated community catalog only adds what'\''s new' \
+'export:Export a template to a file, e.g. as a starting point for a site-specific copy or a community catalog contribution' \
+'delete:Delete a template. Refuses if any saved loop still references it. A \`Builtin\`- or \`Catalog\`-origin template reappears automatically the next time bhtune starts unless it'\''s also removed from its source (bhtune-core'\''s embedded catalog for \`Builtin\`, which only a new bhtune release can change; the user catalog file for \`Catalog\`)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune template help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__help__subcmd__delete_commands] )) ||
+_bhtune__subcmd__template__subcmd__help__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template help delete commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__help__subcmd__export_commands] )) ||
+_bhtune__subcmd__template__subcmd__help__subcmd__export_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template help export commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__help__subcmd__help_commands] )) ||
+_bhtune__subcmd__template__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template help help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__help__subcmd__import_commands] )) ||
+_bhtune__subcmd__template__subcmd__help__subcmd__import_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template help import commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__help__subcmd__list_commands] )) ||
+_bhtune__subcmd__template__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template help list commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__help__subcmd__show_commands] )) ||
+_bhtune__subcmd__template__subcmd__help__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template help show commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__import_commands] )) ||
+_bhtune__subcmd__template__subcmd__import_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template import commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__list_commands] )) ||
+_bhtune__subcmd__template__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template list commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__template__subcmd__show_commands] )) ||
+_bhtune__subcmd__template__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune template show commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__tune_commands] )) ||
+_bhtune__subcmd__tune_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune tune commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_bhtune" ]; then
+    _bhtune "$@"
+else
+    compdef _bhtune bhtune
+fi

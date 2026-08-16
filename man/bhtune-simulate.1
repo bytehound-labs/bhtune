@@ -1,0 +1,136 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-simulate 1  "bhtune-simulate " 
+.SH NAME
+bhtune\-simulate \- Run a zero\-configuration demo MRFT tune against the built\-in FOPDT simulator
+.SH SYNOPSIS
+\fBbhtune\-simulate\fR [\fB\-t\fR|\fB\-\-tagname\fR] [\fB\-\-template\fR] [\fB\-\-process\-type\fR] [\fB\-\-controller\-type\fR] [\fB\-\-relay\-amp\fR] [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-name\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-allow\-uncertain\-quality\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Run a zero\-configuration demo MRFT tune against the built\-in FOPDT simulator
+.SH OPTIONS
+.TP
+\fB\-t\fR, \fB\-\-tagname\fR \fI<TAGNAME>\fR [default: Sim.Loop1.PV]
+
+.TP
+\fB\-\-template\fR \fI<TEMPLATE>\fR [default: Yokogawa CentumVP]
+
+.TP
+\fB\-\-process\-type\fR \fI<PROCESS_TYPE>\fR [default: flow]
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+flow
+.IP \(bu 2
+pressure\-line
+.IP \(bu 2
+pressure\-vessel
+.IP \(bu 2
+level
+.IP \(bu 2
+temperature\-mixing
+.IP \(bu 2
+temperature\-heat\-exchange
+.RE
+.TP
+\fB\-\-controller\-type\fR \fI<CONTROLLER_TYPE>\fR [default: pi]
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+p
+.IP \(bu 2
+pi
+.IP \(bu 2
+pid
+.RE
+.TP
+\fB\-\-relay\-amp\fR \fI<RELAY_AMP>\fR [default: 10]
+
+.TP
+\fB\-\-cycles\-skip\fR \fI<CYCLES_SKIP>\fR
+
+.TP
+\fB\-\-cycles\-count\fR \fI<CYCLES_COUNT>\fR
+
+.TP
+\fB\-\-noise\-protection\-secs\fR \fI<NOISE_PROTECTION_SECS>\fR
+
+.TP
+\fB\-\-mrft\-delay\fR \fI<MRFT_DELAY>\fR [default: 0]
+
+.TP
+\fB\-\-sim\-gain\fR \fI<SIM_GAIN>\fR [default: 1]
+
+.TP
+\fB\-\-sim\-tau\fR \fI<SIM_TAU>\fR [default: 2]
+
+.TP
+\fB\-\-sim\-dead\-time\fR \fI<SIM_DEAD_TIME>\fR [default: 5]
+
+.TP
+\fB\-\-sim\-noise\fR \fI<SIM_NOISE>\fR [default: 0]
+
+.TP
+\fB\-\-sim\-seed\fR \fI<SIM_SEED>\fR [default: 0]
+
+.TP
+\fB\-\-sim\-initial\-pv\fR \fI<SIM_INITIAL_PV>\fR [default: 50]
+
+.TP
+\fB\-\-sim\-initial\-mv\fR \fI<SIM_INITIAL_MV>\fR [default: 50]
+
+.TP
+\fB\-\-poll\-interval\-ms\fR \fI<POLL_INTERVAL_MS>\fR [default: 800]
+
+.TP
+\fB\-\-timeout\-secs\fR \fI<TIMEOUT_SECS>\fR [default: 3600]
+See `TuneArgs::timeout_secs`
+.TP
+\fB\-\-name\fR \fI<NAME>\fR
+
+.TP
+\fB\-\-yes\fR
+See `TuneArgs::yes`
+.TP
+\fB\-\-write\-pid\fR \fI<WRITE_PID>\fR
+See `TuneArgs::write_pid`. Note the built\-in FOPDT simulator has no PID constant tags at all (see `build_loop_tags`), so write\-back is always skipped for `simulate` regardless of this flag \-\- it\*(Aqs accepted here purely so `simulate`\*(Aqs flag surface stays a strict defaulted subset of `tune`\*(Aqs, matching every other field
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+aggressive
+.IP \(bu 2
+moderate
+.IP \(bu 2
+sluggish
+.RE
+.TP
+\fB\-\-allow\-uncertain\-quality\fR
+See `TuneArgs::allow_uncertain_quality`
+.TP
+\fB\-\-op\-timeout\-secs\fR \fI<OP_TIMEOUT_SECS>\fR [default: 30]
+See `TuneArgs::op_timeout_secs`
+.TP
+\fB\-\-restore\-timeout\-secs\fR \fI<RESTORE_TIMEOUT_SECS>\fR [default: 30]
+See `TuneArgs::restore_timeout_secs`
+.TP
+\fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
+See `TuneArgs::output`
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+table: Human\-readable text (default)
+.IP \(bu 2
+json: Pretty\-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)

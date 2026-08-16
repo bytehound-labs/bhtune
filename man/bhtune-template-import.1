@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-template-import 1  "bhtune-template-import " 
+.SH NAME
+bhtune\-template\-import \- Import a template from a file. Accepts either a single template as JSON (see `template export`\*(Aqs default output shape) or a multi\-template TOML catalog (the same `[[template]]` array\-of\-tables shape as the embedded/user catalog, see `template export \-\-format toml`) \-\- the format is auto\-detected from the file\*(Aqs content, not its extension. A JSON single\-template import is rejected outright if a template with that name already exists; a TOML catalog import instead skips (and reports) any template whose name already exists, so re\-importing an updated community catalog only adds what\*(Aqs new
+.SH SYNOPSIS
+\fBbhtune\-template\-import\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIPATH\fR> 
+.SH DESCRIPTION
+Import a template from a file. Accepts either a single template as JSON (see `template export`\*(Aqs default output shape) or a multi\-template TOML catalog (the same `[[template]]` array\-of\-tables shape as the embedded/user catalog, see `template export \-\-format toml`) \-\- the format is auto\-detected from the file\*(Aqs content, not its extension. A JSON single\-template import is rejected outright if a template with that name already exists; a TOML catalog import instead skips (and reports) any template whose name already exists, so re\-importing an updated community catalog only adds what\*(Aqs new
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIPATH\fR>
+

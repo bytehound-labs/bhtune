@@ -26,9 +26,16 @@ toml.workspace = true
 # because it and `bhtune-db` are both in the same workspace build, `bhtune-core` itself
 # doesn't need to (and doesn't) depend on `bhtune-db`.
 utoipa = { workspace = true, optional = true, features = ["chrono"] }
+# Optional, feature-gated, same rationale as `utoipa` immediately above: derives
+# `schemars::JsonSchema` on `DcsTemplate` (and the types it embeds) so `bhtune-cli`'s
+# `docs-generated-cli` codegen (`examples/gen_docs.rs`) can emit a real JSON Schema for the
+# DCS/PLC template catalog shape instead of hand-written prose that silently drifts. Off by
+# default; only `bhtune-cli`'s `schemars` feature enables it (`bhtune-core/schemars`).
+schemars = { version = "1", optional = true, features = ["derive"] }
 
 [features]
 utoipa = ["dep:utoipa"]
+schemars = ["dep:schemars"]
 
 [dev-dependencies]
 serde_json = "1"

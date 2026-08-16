@@ -42,7 +42,13 @@ toml.workspace = true
 # (`safety-cancellation`), listed explicitly here even though `test_support.rs` was already
 # pulling `sync` in transitively via dev-dependency feature unification, so the real
 # (non-test) binary's own dependency on it isn't left implicit.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync"] }
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "time",
+  "signal",
+  "sync",
+] }
 # Structured logging (`cli-logging`), matching `opcda-bridge-gateway`'s own `tracing`
 # stack/versions/features exactly so both projects' logging conventions stay recognizable to
 # the same user -- see `crate::logging`. Single-consumer within this workspace so far
@@ -52,6 +58,23 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signa
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+# Optional, feature-gated: derives `schemars::JsonSchema` on `config::BhtuneConfig` so
+# `docs-generated-cli`'s `examples/gen_docs.rs` can emit a real JSON Schema for `bhtune.toml`
+# instead of hand-written prose that silently drifts from the actual fields -- the same
+# "generation can't drift, hand-written duplicates silently do" reasoning as `bhtune-core`'s
+# `utoipa` feature (see that crate's `Cargo.toml`). A derive macro is compile-time-only, so
+# gating it behind a feature (rather than the dependency being unconditional) keeps `schemars`
+# out of the ordinary `bhtune`/`bhtune-server` release binaries entirely -- it is a docs-codegen
+# concern, never a runtime one. Also forwards to `bhtune-core/schemars` so the same invocation
+# schemas `DcsTemplate` (the DCS/PLC template catalog shape) in one pass.
+schemars = { version = "1", optional = true, features = ["derive"] }
+
+[features]
+schemars = ["dep:schemars", "bhtune-core/schemars"]
+
+[[example]]
+name = "gen_docs"
+required-features = ["schemars"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -88,3 +111,12 @@ tokio = { version = "1", features = ["test-util"] }
 # `#[cfg(unix)]` gate; already present transitively (tokio/mio), so this just names the
 # version directly rather than introducing a new dependency to the build graph.
 libc = "0.2"
+# `examples/gen_docs.rs` only (`docs-generated-cli`): regenerates `docs/reference/cli.md`,
+# man pages under `man/`, and shell completions under `completions/` from the same `Cli`/
+# `Command` clap definitions every real invocation of `bhtune` already parses against, so
+# these can never drift the way hand-written usage docs would. Dev-dependencies rather than
+# regular ones since nothing at runtime in the shipped `bhtune` binary needs to *generate*
+# its own docs -- only `cargo run -p bhtune-cli --example gen_docs` does.
+clap-markdown = "0.1.5"
+clap_mangen = "0.3.3"
+clap_complete = "4.6.9"

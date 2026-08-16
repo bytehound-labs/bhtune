@@ -1,0 +1,26 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc 1  "bhtune-opc " 
+.SH NAME
+bhtune\-opc \- Low\-level OPC DA passthrough (diagnostics) via the opcda\-bridge gateway, bypassing the tuning engine entirely
+.SH SYNOPSIS
+\fBbhtune\-opc\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Low\-level OPC DA passthrough (diagnostics) via the opcda\-bridge gateway, bypassing the tuning engine entirely
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+bhtune\-opc\-read(1)
+Read one or more tags
+.TP
+bhtune\-opc\-write(1)
+Write a value to one tag
+.TP
+bhtune\-opc\-browse(1)
+Browse tags under a path (empty for the top level)
+.TP
+bhtune\-opc\-help(1)
+Print this message or the help of the given subcommand(s)

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// How a DCS expresses the proportional term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProportionalType {
     /// Kp: dimensionless gain.
@@ -17,6 +18,7 @@ pub enum ProportionalType {
 /// How a DCS expresses the integral term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum IntegralType {
     /// Ti: reset time.
@@ -30,6 +32,7 @@ pub enum IntegralType {
 /// How a DCS expresses the derivative term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DerivativeType {
     /// Td: derivative time.
@@ -41,6 +44,7 @@ pub enum DerivativeType {
 /// The time unit a DCS expects for integral/derivative parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TimeUnit {
     Seconds,

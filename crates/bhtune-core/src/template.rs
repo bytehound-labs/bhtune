@@ -15,6 +15,7 @@ use crate::pid_config::{DerivativeType, IntegralType, ProportionalType, TimeUnit
 /// One DCS/PLC vendor's conventions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DcsTemplate {
     pub name: String,
 

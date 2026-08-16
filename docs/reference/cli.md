@@ -1,0 +1,506 @@
+# bhtune CLI reference
+
+This document contains the help content for the `bhtune` command-line program.
+
+**Command Overview:**
+
+* [`bhtune`↴](#bhtune)
+* [`bhtune tune`↴](#bhtune-tune)
+* [`bhtune simulate`↴](#bhtune-simulate)
+* [`bhtune template`↴](#bhtune-template)
+* [`bhtune template list`↴](#bhtune-template-list)
+* [`bhtune template show`↴](#bhtune-template-show)
+* [`bhtune template import`↴](#bhtune-template-import)
+* [`bhtune template export`↴](#bhtune-template-export)
+* [`bhtune template delete`↴](#bhtune-template-delete)
+* [`bhtune history`↴](#bhtune-history)
+* [`bhtune history list`↴](#bhtune-history-list)
+* [`bhtune history show`↴](#bhtune-history-show)
+* [`bhtune history revert`↴](#bhtune-history-revert)
+* [`bhtune export`↴](#bhtune-export)
+* [`bhtune opc`↴](#bhtune-opc)
+* [`bhtune opc read`↴](#bhtune-opc-read)
+* [`bhtune opc write`↴](#bhtune-opc-write)
+* [`bhtune opc browse`↴](#bhtune-opc-browse)
+
+## `bhtune`
+
+Headless MRFT auto-tuner
+
+**Usage:** `bhtune [OPTIONS] <COMMAND>`
+
+###### **Subcommands:**
+
+* `tune` — Run an MRFT tune against a real OPC DA loop or the in-process simulator
+* `simulate` — Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator
+* `template` — Inspect and manage DCS/PLC templates
+* `history` — Inspect past tune runs
+* `export` — Export one run's recorded samples as CSV or JSON
+* `opc` — Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely
+
+###### **Options:**
+
+* `--config <PATH>` — Path to a TOML config file (default: platform-specific, see `crate::config`)
+* `--db <PATH>` — Path to the SQLite database file (default: a platform-standard data directory, see `crate::config::default_db_path_from`). CLI > `BHTUNE_DB` env var > `db` in the config file > platform default -- see `crate::config::resolve_db_path`
+* `--templates <PATH>` — Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default: platform-specific, next to the config file -- see `crate::config::templates_path_from`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > `BHTUNE_TEMPLATES` env var > `templates` in the config file > platform default -- see `crate::config::load_user_templates`
+* `--log-level <LOG_LEVEL>` — Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with `--output json`'s single-object contract; see `crate::logging`
+* `--log-dir <PATH>` — Directory to write log files to (default: a platform-standard data directory, see `crate::config::default_log_dir_from`)
+* `--log-format <LOG_FORMAT>` — Log file format: "pretty" or "json" (default: pretty)
+* `--log-rotation <LOG_ROTATION>` — Log file rotation: "hourly", "daily", or "never" (default: daily)
+
+
+
+## `bhtune tune`
+
+Run an MRFT tune against a real OPC DA loop or the in-process simulator
+
+**Usage:** `bhtune tune [OPTIONS] --tagname <TAGNAME> --template <TEMPLATE> --process-type <PROCESS_TYPE> --controller-type <CONTROLLER_TYPE> --relay-amp <RELAY_AMP> --backend <BACKEND>`
+
+###### **Options:**
+
+* `-t`, `--tagname <TAGNAME>` — PV tag prefix; the rest of the tag set is derived from it using `--template`'s suffix convention. Ignored for `--backend simulator`, which uses two fixed internal tag names instead
+* `--template <TEMPLATE>` — DCS/PLC template name (see `bhtune template list`)
+* `--process-type <PROCESS_TYPE>`
+
+  Possible values: `flow`, `pressure-line`, `pressure-vessel`, `level`, `temperature-mixing`, `temperature-heat-exchange`
+
+* `--controller-type <CONTROLLER_TYPE>`
+
+  Possible values: `p`, `pi`, `pid`
+
+* `--relay-amp <RELAY_AMP>` — Relay amplitude, as a percentage of the MV range
+* `--cycles-skip <CYCLES_SKIP>` — Relay cycles to skip before counting begins (default: looked up per `--process-type`)
+* `--cycles-count <CYCLES_COUNT>` — Relay cycles to count once the skip period ends (default: looked up per `--process-type`)
+* `--noise-protection-secs <NOISE_PROTECTION_SECS>` — Seconds a switch must persist before it's accepted (default: looked up per `--process-type`)
+* `--mrft-delay <MRFT_DELAY>` — Pre/post-test recording padding, in seconds (legacy: `--mrftDelayTime`)
+
+  Default value: `0`
+* `--backend <BACKEND>` — Which backend drives this tune
+
+  Possible values:
+  - `opcda`:
+    A real OPC DA server, reached through an opcda-bridge gateway
+  - `simulator`:
+    The in-process FOPDT simulator — no external dependency at all
+
+* `--bridge-host <BRIDGE_HOST>` — opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md's OPC DA integration notes. Only meaningful with `--backend opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file's `bridge_host` key)
+* `--server <SERVER>` — OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--backend opcda`
+* `--sim-gain <SIM_GAIN>` — Simulator process gain (`--backend simulator` only)
+
+  Default value: `1`
+* `--sim-tau <SIM_TAU>` — Simulator process time constant, in seconds (`--backend simulator` only)
+
+  Default value: `2`
+* `--sim-dead-time <SIM_DEAD_TIME>` — Simulator dead time, in seconds (`--backend simulator` only)
+
+  Default value: `5`
+* `--sim-noise <SIM_NOISE>` — Simulator measurement noise amplitude (`--backend simulator` only)
+
+  Default value: `0`
+* `--sim-seed <SIM_SEED>` — Simulator RNG seed, for reproducible noise (`--backend simulator` only)
+
+  Default value: `0`
+* `--sim-initial-pv <SIM_INITIAL_PV>` — Simulator initial PV (`--backend simulator` only)
+
+  Default value: `50`
+* `--sim-initial-mv <SIM_INITIAL_MV>` — Simulator initial MV (`--backend simulator` only)
+
+  Default value: `50`
+* `--pv-range-high <PV_RANGE_HIGH>` — Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle tag/value" button). Required (defaults to 100.0) for `--backend simulator`, which has no range tags at all
+* `--pv-range-low <PV_RANGE_LOW>` — Fixed PV range low, overriding a live tag read
+* `--mv-range-high <MV_RANGE_HIGH>` — Fixed MV range high, overriding a live tag read
+* `--mv-range-low <MV_RANGE_LOW>` — Fixed MV range low, overriding a live tag read
+* `--direction <DIRECTION>` — Fixed controller direction, overriding a live tag read
+
+  Possible values: `direct`, `reverse`
+
+* `--poll-interval-ms <POLL_INTERVAL_MS>` — How often to poll the backend, in milliseconds (legacy: the 800 ms WinForms timer)
+
+  Default value: `800`
+* `--timeout-secs <TIMEOUT_SECS>` — Hard wall-clock cap on this run's total duration (including any `--mrft-delay` padding), in seconds. If the engine hasn't reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop's expected test duration -- temperature loops in particular can need much longer than the default
+
+  Default value: `3600`
+* `--name <NAME>` — A friendly name for this run, recorded as `loop_name` (default: the PV tag name)
+* `--yes` — Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without `--write-pid`
+* `--write-pid <WRITE_PID>` — Non-interactively write this response level's calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires `--yes`
+
+  Possible values: `aggressive`, `moderate`, `sluggish`
+
+* `--allow-uncertain-quality` — Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. Off by default: a stale/held value is indistinguishable from a live one to the MRFT engine, so tolerating it can silently corrupt the switch-period measurement the whole test depends on. Only for sites whose gateway reports `Uncertain` as a matter of course -- `Quality::Bad` is never accepted, with or without this flag. Logged loudly when used and recorded on the run (`tune_runs.allow_uncertain_quality`), so history shows a run executed under relaxed rules
+* `--op-timeout-secs <OP_TIMEOUT_SECS>` — Cap on any single backend read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even mid-hung-read/write -- see AGENTS.md's `safety-cancellation` section. Distinct from `--timeout-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration
+
+  Default value: `30`
+* `--restore-timeout-secs <RESTORE_TIMEOUT_SECS>` — Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of `--timeout-secs`, since a restore triggered *by* a timeout would otherwise inherit an already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits `EXIT_RESTORE_INCOMPLETE` with a warning naming the loop and its last-written value, instead of hanging indefinitely
+
+  Default value: `30`
+* `--output <OUTPUT>` — How to print this run's final outcome line
+
+  Default value: `table`
+
+  Possible values:
+  - `table`:
+    Human-readable text (default)
+  - `json`:
+    Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+
+
+
+
+## `bhtune simulate`
+
+Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator
+
+**Usage:** `bhtune simulate [OPTIONS]`
+
+###### **Options:**
+
+* `-t`, `--tagname <TAGNAME>`
+
+  Default value: `Sim.Loop1.PV`
+* `--template <TEMPLATE>`
+
+  Default value: `Yokogawa CentumVP`
+* `--process-type <PROCESS_TYPE>`
+
+  Default value: `flow`
+
+  Possible values: `flow`, `pressure-line`, `pressure-vessel`, `level`, `temperature-mixing`, `temperature-heat-exchange`
+
+* `--controller-type <CONTROLLER_TYPE>`
+
+  Default value: `pi`
+
+  Possible values: `p`, `pi`, `pid`
+
+* `--relay-amp <RELAY_AMP>`
+
+  Default value: `10`
+* `--cycles-skip <CYCLES_SKIP>`
+* `--cycles-count <CYCLES_COUNT>`
+* `--noise-protection-secs <NOISE_PROTECTION_SECS>`
+* `--mrft-delay <MRFT_DELAY>`
+
+  Default value: `0`
+* `--sim-gain <SIM_GAIN>`
+
+  Default value: `1`
+* `--sim-tau <SIM_TAU>`
+
+  Default value: `2`
+* `--sim-dead-time <SIM_DEAD_TIME>`
+
+  Default value: `5`
+* `--sim-noise <SIM_NOISE>`
+
+  Default value: `0`
+* `--sim-seed <SIM_SEED>`
+
+  Default value: `0`
+* `--sim-initial-pv <SIM_INITIAL_PV>`
+
+  Default value: `50`
+* `--sim-initial-mv <SIM_INITIAL_MV>`
+
+  Default value: `50`
+* `--poll-interval-ms <POLL_INTERVAL_MS>`
+
+  Default value: `800`
+* `--timeout-secs <TIMEOUT_SECS>` — See `TuneArgs::timeout_secs`
+
+  Default value: `3600`
+* `--name <NAME>`
+* `--yes` — See `TuneArgs::yes`
+* `--write-pid <WRITE_PID>` — See `TuneArgs::write_pid`. Note the built-in FOPDT simulator has no PID constant tags at all (see `build_loop_tags`), so write-back is always skipped for `simulate` regardless of this flag -- it's accepted here purely so `simulate`'s flag surface stays a strict defaulted subset of `tune`'s, matching every other field
+
+  Possible values: `aggressive`, `moderate`, `sluggish`
+
+* `--allow-uncertain-quality` — See `TuneArgs::allow_uncertain_quality`
+* `--op-timeout-secs <OP_TIMEOUT_SECS>` — See `TuneArgs::op_timeout_secs`
+
+  Default value: `30`
+* `--restore-timeout-secs <RESTORE_TIMEOUT_SECS>` — See `TuneArgs::restore_timeout_secs`
+
+  Default value: `30`
+* `--output <OUTPUT>` — See `TuneArgs::output`
+
+  Default value: `table`
+
+  Possible values:
+  - `table`:
+    Human-readable text (default)
+  - `json`:
+    Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+
+
+
+
+## `bhtune template`
+
+Inspect and manage DCS/PLC templates
+
+**Usage:** `bhtune template <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List every template (built-in and user-imported)
+* `show` — Show one template's full detail as JSON
+* `import` — Import a template from a file. Accepts either a single template as JSON (see `template export`'s default output shape) or a multi-template TOML catalog (the same `[[template]]` array-of-tables shape as the embedded/user catalog, see `template export --format toml`) -- the format is auto-detected from the file's content, not its extension. A JSON single-template import is rejected outright if a template with that name already exists; a TOML catalog import instead skips (and reports) any template whose name already exists, so re-importing an updated community catalog only adds what's new
+* `export` — Export a template to a file, e.g. as a starting point for a site-specific copy or a community catalog contribution
+* `delete` — Delete a template. Refuses if any saved loop still references it. A `Builtin`- or `Catalog`-origin template reappears automatically the next time bhtune starts unless it's also removed from its source (bhtune-core's embedded catalog for `Builtin`, which only a new bhtune release can change; the user catalog file for `Catalog`)
+
+
+
+## `bhtune template list`
+
+List every template (built-in and user-imported)
+
+**Usage:** `bhtune template list`
+
+
+
+## `bhtune template show`
+
+Show one template's full detail as JSON
+
+**Usage:** `bhtune template show <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>`
+
+
+
+## `bhtune template import`
+
+Import a template from a file. Accepts either a single template as JSON (see `template export`'s default output shape) or a multi-template TOML catalog (the same `[[template]]` array-of-tables shape as the embedded/user catalog, see `template export --format toml`) -- the format is auto-detected from the file's content, not its extension. A JSON single-template import is rejected outright if a template with that name already exists; a TOML catalog import instead skips (and reports) any template whose name already exists, so re-importing an updated community catalog only adds what's new
+
+**Usage:** `bhtune template import <PATH>`
+
+###### **Arguments:**
+
+* `<PATH>`
+
+
+
+## `bhtune template export`
+
+Export a template to a file, e.g. as a starting point for a site-specific copy or a community catalog contribution
+
+**Usage:** `bhtune template export [OPTIONS] <NAME> <PATH>`
+
+###### **Arguments:**
+
+* `<NAME>`
+* `<PATH>`
+
+###### **Options:**
+
+* `--format <FORMAT>` — File format to write. `toml` emits a single-entry `[[template]]` catalog block, ready to paste into a catalog file or open as a contribution pull request
+
+  Default value: `json`
+
+  Possible values: `json`, `toml`
+
+
+
+
+## `bhtune template delete`
+
+Delete a template. Refuses if any saved loop still references it. A `Builtin`- or `Catalog`-origin template reappears automatically the next time bhtune starts unless it's also removed from its source (bhtune-core's embedded catalog for `Builtin`, which only a new bhtune release can change; the user catalog file for `Catalog`)
+
+**Usage:** `bhtune template delete <NAME>`
+
+###### **Arguments:**
+
+* `<NAME>`
+
+
+
+## `bhtune history`
+
+Inspect past tune runs
+
+**Usage:** `bhtune history <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List past runs, newest first
+* `show` — Show one run's full detail: config, initial readings, calculated results, and any PID write-back audit rows
+* `revert` — Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses if the run has none, if that write-back's pre-read itself failed (nothing to revert to), or if the run did not use the `opcda` backend (nothing live to revert against)
+
+
+
+## `bhtune history list`
+
+List past runs, newest first
+
+**Usage:** `bhtune history list [OPTIONS]`
+
+###### **Options:**
+
+* `--outcome <OUTCOME>`
+
+  Possible values: `running`, `completed`, `failed`, `aborted`
+
+* `--limit <LIMIT>`
+
+  Default value: `50`
+* `--offset <OFFSET>`
+
+  Default value: `0`
+* `--output <OUTPUT>` — How to print the run list
+
+  Default value: `table`
+
+  Possible values:
+  - `table`:
+    Human-readable text (default)
+  - `json`:
+    Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+
+
+
+
+## `bhtune history show`
+
+Show one run's full detail: config, initial readings, calculated results, and any PID write-back audit rows
+
+**Usage:** `bhtune history show [OPTIONS] <RUN_ID>`
+
+###### **Arguments:**
+
+* `<RUN_ID>`
+
+###### **Options:**
+
+* `--output <OUTPUT>` — How to print the run detail
+
+  Default value: `table`
+
+  Possible values:
+  - `table`:
+    Human-readable text (default)
+  - `json`:
+    Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+
+
+
+
+## `bhtune history revert`
+
+Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses if the run has none, if that write-back's pre-read itself failed (nothing to revert to), or if the run did not use the `opcda` backend (nothing live to revert against)
+
+**Usage:** `bhtune history revert [OPTIONS] <RUN_ID>`
+
+###### **Arguments:**
+
+* `<RUN_ID>`
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>` — (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file's `bridge_host` key.)
+* `--server <SERVER>` — (default: the config file's `server` key; errors if neither is set.)
+* `--yes` — Confirm writing to a live loop. Required -- there is no interactive prompt for reverting, since there is no calculated result to choose between as there is for `tune`'s own write-back step
+* `--output <OUTPUT>` — How to print the revert outcome
+
+  Default value: `table`
+
+  Possible values:
+  - `table`:
+    Human-readable text (default)
+  - `json`:
+    Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+
+
+
+
+## `bhtune export`
+
+Export one run's recorded samples as CSV or JSON
+
+**Usage:** `bhtune export [OPTIONS] <RUN_ID>`
+
+###### **Arguments:**
+
+* `<RUN_ID>`
+
+###### **Options:**
+
+* `--format <FORMAT>`
+
+  Default value: `csv`
+
+  Possible values: `csv`, `json`
+
+* `--output <OUTPUT>` — Output file path (default: stdout)
+
+
+
+## `bhtune opc`
+
+Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely
+
+**Usage:** `bhtune opc <COMMAND>`
+
+###### **Subcommands:**
+
+* `read` — Read one or more tags
+* `write` — Write a value to one tag
+* `browse` — Browse tags under a path (empty for the top level)
+
+
+
+## `bhtune opc read`
+
+Read one or more tags
+
+**Usage:** `bhtune opc read [OPTIONS] [TAGS]...`
+
+###### **Arguments:**
+
+* `<TAGS>`
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>` — (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file's `bridge_host` key.)
+* `--server <SERVER>` — (default: the config file's `server` key; errors if neither is set.)
+
+
+
+## `bhtune opc write`
+
+Write a value to one tag
+
+**Usage:** `bhtune opc write [OPTIONS] <TAG> <VALUE>`
+
+###### **Arguments:**
+
+* `<TAG>`
+* `<VALUE>`
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>`
+* `--server <SERVER>`
+
+
+
+## `bhtune opc browse`
+
+Browse tags under a path (empty for the top level)
+
+**Usage:** `bhtune opc browse [OPTIONS] [PATH]`
+
+###### **Arguments:**
+
+* `<PATH>`
+
+  Default value: ``
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>`
+* `--server <SERVER>`
+
+
+

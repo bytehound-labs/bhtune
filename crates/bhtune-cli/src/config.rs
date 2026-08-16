@@ -22,6 +22,7 @@ pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 /// value missing from the file (or the file itself missing) falls back to the env var / CLI
 /// flag / built-in default resolution in the `resolve_*` functions below.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BhtuneConfig {
     /// Overrides the default SQLite database path (see [`default_db_path_from`]).
     pub db: Option<PathBuf>,
@@ -51,6 +52,7 @@ pub struct BhtuneConfig {
 /// the same `CLI flag > env var > config file > default` precedence as the rest of
 /// [`BhtuneConfig`].
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LogConfig {
     pub level: Option<String>,
     pub dir: Option<String>,

@@ -73,8 +73,12 @@ check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the equivalent 
 ## CI
 
 Rust PRs must pass `cargo fmt --check --all`, `cargo clippy --workspace --all-targets
---all-features -- -D warnings`, `cargo test --workspace`, `cargo deny check`, and
-`cargo machete` before merge. PRs touching `frontend/` must additionally pass `pnpm run
+--all-features -- -D warnings`, `cargo test --workspace`, `cargo deny check`, `cargo
+machete`, and a check that the generated OpenAPI spec (`openapi.json`) and CLI reference
+(`docs/reference/cli.md`, `man/`, `completions/`) are up to date before merge — run `cargo
+run -p bhtune-server --example gen_openapi` and `cargo run -p bhtune-cli --example gen_docs
+--features schemars` and commit the result after changing an HTTP route/DTO or a `clap`
+argument, respectively. PRs touching `frontend/` must additionally pass `pnpm run
 check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
 is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`
 (which also typechecks `frontend/e2e/`). `.github/workflows/e2e.yml` runs the Playwright

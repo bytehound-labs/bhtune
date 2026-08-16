@@ -43,6 +43,11 @@ jobs:
           cargo run -p bhtune-server --example gen_openapi
           git diff --exit-code openapi.json
 
+      - name: Regenerate CLI docs and check for drift
+        run: |
+          cargo run -p bhtune-cli --example gen_docs --features schemars
+          git diff --exit-code -- docs/reference/ man/ completions/
+
       - name: Build workspace
         run: cargo build --workspace
 
