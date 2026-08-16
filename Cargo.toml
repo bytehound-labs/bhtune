@@ -54,6 +54,13 @@ thiserror = "2"
 # `bhtune.toml`/the user template catalog (`cli-config`/`template-user-catalog`) -- promoted
 # here once bhtune-core became a second consumer. Same major version `opcda-bridge` uses.
 toml = "1"
+# `bhtune-cli` has used this from the start; `bhtune-server` became a second consumer with
+# `server-windows-service` (its `install`/`uninstall`/`start`/`stop`/`status` subcommands and
+# `--config` flag) -- promoted here rather than duplicating the version pin. Only `derive` is
+# common to both; `bhtune-cli`'s own `Cargo.toml` adds `env` on top, since `bhtune-server`'s
+# handful of flags have no env-var-flag equivalents (matching `utoipa`'s `chrono`-on-top
+# pattern below).
+clap = { version = "4", features = ["derive"] }
 # `bhtune-core` and `bhtune-db` derive `utoipa::ToSchema` behind an optional `utoipa`
 # feature each (see their `Cargo.toml` comments), and `bhtune-server` derives the rest plus
 # emits the OpenAPI document itself (`openapi-contract`) -- three consumers, pinned once so

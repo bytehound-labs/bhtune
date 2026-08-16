@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  bhtune-server launchd LaunchDaemon (macOS).
+
+  A LaunchDaemon, not a LaunchAgent: this is a network-listening service that should run
+  regardless of whether anyone is logged in, not something tied to one user's session.
+
+  Install and load (as root — LaunchDaemons live in a root-owned directory):
+    sudo mkdir -p /usr/local/etc/bhtune /usr/local/var/bhtune /usr/local/var/log
+    sudo install -m 644 packaging/launchd/com.bytehound-labs.bhtune-server.plist \
+        /Library/LaunchDaemons/
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.bytehound-labs.bhtune-server.plist
+
+  Check on it:
+    sudo launchctl print system/com.bytehound-labs.bhtune-server
+    tail -f /usr/local/var/log/bhtune-server.log
+
+  Stop and unload:
+    sudo launchctl bootout system/com.bytehound-labs.bhtune-server
+
+  (`launchctl bootstrap`/`bootout` are the modern replacement for the deprecated
+  `launchctl load`/`unload` — use those instead on macOS versions where `bootstrap`/
+  `bootout` aren't available.)
+
+  `ProgramArguments` below assumes the released binary was installed to
+  `/usr/local/bin/bhtune-server` (Homebrew's own convention on Intel Macs; Apple Silicon
+  Homebrew installs use `/opt/homebrew/bin` instead — adjust the path to match).
+
+  `EnvironmentVariables` steers bhtune's own path resolution (see
+  `bhtune_cli::config::{config_path_from, default_db_path_from, default_log_dir_from}`) onto
+  the Homebrew-style `/usr/local/etc`/`/usr/local/var` convention, without bhtune needing any
+  launchd-specific code of its own. This resolves to:
+    config: /usr/local/etc/bhtune/bhtune.toml   (optional — a missing file means "defaults")
+    data:   /usr/local/var/bhtune/bhtune.db
+            /usr/local/var/bhtune/logs/
+
+  Unlike systemd's `DynamicUser=`/`StateDirectory=`, launchd has no equivalent "create and
+  chown a directory for me" mechanism, so this daemon runs as root (the LaunchDaemon default
+  when no `UserName` key is given) and `bhtune-server` creates the directories above itself
+  on first start. Add `UserName`/`GroupName` keys here once a dedicated, lower-privileged
+  account exists to run it as (e.g. one a future Homebrew formula/pkg installer provisions)
+  — there is no such account to point at yet, so this template is honest about running as
+  root rather than inventing one prematurely.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bytehound-labs.bhtune-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/bhtune-server</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>XDG_CONFIG_HOME</key>
+        <string>/usr/local/etc</string>
+        <key>XDG_DATA_HOME</key>
+        <string>/usr/local/var</string>
+    </dict>
+
+    <!-- Start at boot, and restart automatically if the process ever exits (crash or
+         otherwise) — matching the systemd unit's `Restart=on-failure` intent, though
+         launchd's `KeepAlive` (without a `SuccessfulExit` qualifier) restarts
+         unconditionally, which is the closer launchd equivalent to a long-running network
+         service. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Separate from bhtune-server's own rotating file logs (see
+         docs/getting-started/installation.md): this captures whatever reaches stderr/stdout
+         before logging is initialized, plus a panic's output, which the app's own log file
+         cannot record. The parent directory must already exist — launchd does not create
+         it — see the `mkdir -p` step above. -->
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/bhtune-server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/bhtune-server.error.log</string>
+</dict>
+</plist>

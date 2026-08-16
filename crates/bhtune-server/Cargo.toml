@@ -89,6 +89,26 @@ utoipa = { workspace = true, features = ["chrono"] }
 # `swagger-ui-*.zip` binary blob to keep in sync with a released version.
 utoipa-scalar = { version = "0.3", features = ["axum"] }
 tracing = "0.1"
+# Only used to name `WorkerGuard`'s type directly (`run.rs`'s `BoundServer::log_guard` field)
+# -- `bhtune_cli::logging::init_tracing`'s actual return value already comes from this same
+# dependency in `bhtune-cli`'s own `Cargo.toml` (same version pinned there), so this doesn't
+# add a second copy of the crate to the build graph.
+tracing-appender = "0.2"
+# `cli.rs`'s `Cli`/`ServiceCommand` (`server-windows-service`): a `--config` flag plus the
+# `install`/`uninstall`/`start`/`stop`/`status` subcommands that manage the platform service.
+# Second consumer of the workspace pin (`bhtune-cli` is the first) -- see that entry's
+# comment in the root `Cargo.toml`. No `env` feature needed here: unlike `bhtune-cli`'s
+# flags, nothing on this binary's small surface has an env-var equivalent.
+clap.workspace = true
+
+# Windows Service Control Manager (SCM) integration (`server-windows-service`), kept as a
+# target-specific (not workspace-level) dependency since no other crate will ever touch it --
+# matching `rust-embed`/`utoipa-scalar` above. Same version opcda-bridge-gateway already
+# depends on and has cleared this project's `cargo deny check` license gate with, for the
+# same reason: one FOSS crate wrapping the `windows-sys` SCM bindings rather than hand-rolling
+# unsafe FFI against `advapi32.dll` in this crate directly.
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

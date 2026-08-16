@@ -99,6 +99,102 @@ Every run is kept forever unless you opt in to a retention policy (`retention_da
 `bhtune.toml`, or `bhtune history prune` on demand) — see
 [CLI quickstart](cli-quickstart.md#look-at-what-it-calculated).
 
+## Run as a background service
+
+Running `bhtune-server` from an interactive terminal is fine for trying it out, but a shared,
+always-on deployment should register it with the host OS's own service manager instead, so it
+starts at boot and restarts automatically without anyone needing to keep a terminal open.
+
+### Windows
+
+`bhtune-server.exe` registers itself directly with the Service Control Manager (SCM) — no
+separate installer or third-party service wrapper needed:
+
+```powershell
+bhtune-server.exe install    # registers the service (does not start it)
+bhtune-server.exe start
+bhtune-server.exe status
+bhtune-server.exe stop
+bhtune-server.exe uninstall  # stops it first if still running, then removes it
+```
+
+`install` registers a service named `BhtuneServer` ("BHTune Server" in `services.msc`), set to
+start automatically and run as `LocalSystem`.
+
+**A config/database gotcha worth knowing before you install.** BHTune's default config and
+data paths live under `%APPDATA%` (see [above](#where-bhtune-stores-its-data)), which resolves
+_per user account_. A Windows service normally runs as `LocalSystem`, whose `%APPDATA%` is a
+hidden system-profile folder — a different location entirely from the one your own
+interactive login resolves to. If you've been testing `bhtune-server` from your own terminal
+and then install it as a service with no further changes, the service will _not_ see the
+config or database you were using: it will look like a fresh install, with an empty database
+and only the four built-in templates.
+
+The fix is to pin an explicit, absolute config file at install time, and have that file itself
+name absolute (not default-relative) paths for the database and logs, so nothing about it
+depends on which account ends up running the service:
+
+```powershell
+mkdir C:\ProgramData\bhtune
+```
+
+```toml
+# C:\ProgramData\bhtune\bhtune.toml
+db = 'C:\ProgramData\bhtune\bhtune.db'
+
+[log]
+dir = 'C:\ProgramData\bhtune\logs'
+```
+
+```powershell
+bhtune-server.exe --config C:\ProgramData\bhtune\bhtune.toml install
+bhtune-server.exe start
+```
+
+`--config` is captured into the service's own registered launch command at install time (not
+just used once, interactively), so every future start of the service — after a reboot, after
+`stop`/`start`, after a Windows update — resolves the same config file and the same database,
+regardless of which account the SCM happens to run it as.
+
+### Linux (systemd)
+
+```sh
+sudo install -m755 target/release/bhtune-server /usr/local/bin/bhtune-server
+sudo install -Dm644 packaging/systemd/bhtune-server.service \
+    /etc/systemd/system/bhtune-server.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now bhtune-server
+```
+
+The provided [`packaging/systemd/bhtune-server.service`](https://github.com/bytehound-labs/bhtune/blob/main/packaging/systemd/bhtune-server.service)
+unit uses `DynamicUser=true` (an ephemeral, unprivileged account systemd creates for the
+service's lifetime — no separate `useradd` step) plus `StateDirectory=`/
+`ConfigurationDirectory=` so the database and logs live at `/var/lib/bhtune/` and an optional
+config file at `/etc/bhtune/bhtune.toml`, both owned correctly with no manual `chown` needed.
+Unlike the Windows service above, this sidesteps the per-account path problem entirely — a
+systemd-managed service's environment is set once, in the unit file itself, not inherited from
+whichever user happens to be logged in. Check on it with `systemctl status bhtune-server` and
+`journalctl -u bhtune-server -f`; stop it with `sudo systemctl disable --now bhtune-server`.
+
+### macOS (launchd)
+
+```sh
+sudo install -m755 target/release/bhtune-server /usr/local/bin/bhtune-server
+sudo mkdir -p /usr/local/etc/bhtune /usr/local/var/bhtune /usr/local/var/log
+sudo install -m 644 packaging/launchd/com.bytehound-labs.bhtune-server.plist \
+    /Library/LaunchDaemons/
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.bytehound-labs.bhtune-server.plist
+```
+
+The provided [`packaging/launchd/com.bytehound-labs.bhtune-server.plist`](https://github.com/bytehound-labs/bhtune/blob/main/packaging/launchd/com.bytehound-labs.bhtune-server.plist)
+registers a LaunchDaemon (not a per-user LaunchAgent, since this is a network service that
+should run regardless of login state) pointed at the Homebrew-style `/usr/local/etc`/
+`/usr/local/var` paths (Apple Silicon Homebrew installs use `/opt/homebrew` instead — adjust
+the binary path in the plist to match). Check on it with
+`sudo launchctl print system/com.bytehound-labs.bhtune-server` and
+`tail -f /usr/local/var/log/bhtune-server.log`; stop and unload it with
+`sudo launchctl bootout system/com.bytehound-labs.bhtune-server`.
+
 ## Next steps
 
 - [CLI quickstart](cli-quickstart.md) — run your first tune from the command

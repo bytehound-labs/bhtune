@@ -198,6 +198,24 @@ See [`frontend/README.md`](frontend/README.md) for details. The
 server shuts down gracefully on Ctrl+C (and on Unix, `SIGTERM`), draining in-flight requests
 rather than dropping connections.
 
+`bhtune-server` also accepts a `--config <path>` flag to pin an explicit config file, which
+matters once it's running unattended as a background service rather than from an interactive
+terminal.
+
+### Run as a background service
+
+For a shared, always-on deployment, `bhtune-server` registers with each platform's native
+service manager instead of running from an interactive terminal:
+
+- **Windows**: `bhtune-server.exe install`, then `start` — see
+  `bhtune-server.exe --help` for `uninstall`/`stop`/`status` too.
+- **Linux**: install the provided [systemd unit](packaging/systemd/bhtune-server.service).
+- **macOS**: install the provided [launchd daemon](packaging/launchd/com.bytehound-labs.bhtune-server.plist).
+
+Full step-by-step instructions — including a config/database path gotcha worth knowing about
+before installing the Windows service — are in
+[Run as a background service](docs/getting-started/installation.md#run-as-a-background-service).
+
 ## Configuration
 
 Every setting resolves with the same precedence, highest first:

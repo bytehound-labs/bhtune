@@ -1,0 +1,84 @@
+# bhtune-server systemd unit (Linux)
+#
+# Install and enable:
+#   sudo install -Dm644 packaging/systemd/bhtune-server.service \
+#       /etc/systemd/system/bhtune-server.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now bhtune-server
+#
+# Check on it:
+#   systemctl status bhtune-server
+#   journalctl -u bhtune-server -f
+#
+# `ExecStart` below assumes the released binary was installed to
+# `/usr/local/bin/bhtune-server` (matching `pkg-aur`/a manual `install`); adjust the path if
+# yours lives elsewhere (e.g. a `.deb`/`.rpm` would normally use `/usr/bin/bhtune-server`).
+#
+# `DynamicUser=true` creates an ephemeral, unprivileged, non-shell system user/group for this
+# unit's lifetime -- there is no separate `useradd`/postinst step to run first, which matters
+# because there is no `.deb`/`.rpm` packaging yet (see AGENTS.md's `pkg-evaluate-others`).
+# `StateDirectory=`/`ConfigurationDirectory=` have systemd create and `chown` the two
+# directories below to that dynamic user before this unit ever starts, so `bhtune-server`
+# itself never needs root or a manual `mkdir`/`chown` to write its database and logs.
+#
+# `XDG_CONFIG_HOME`/`XDG_DATA_HOME` below are what actually steer bhtune's own path
+# resolution (see `bhtune_cli::config::{config_path_from, default_db_path_from,
+# default_log_dir_from}`) onto the FHS-standard locations `ConfigurationDirectory=`/
+# `StateDirectory=` just created, without bhtune needing any systemd-specific code of its
+# own -- the same environment variables work identically for a plain `XDG_CONFIG_HOME=/etc
+# XDG_DATA_HOME=/var/lib bhtune-server` run by hand, with no systemd involved at all.
+#
+# This resolves to:
+#   config: /etc/bhtune/bhtune.toml       (optional -- a missing file just means "defaults")
+#   data:   /var/lib/bhtune/bhtune.db
+#           /var/lib/bhtune/logs/
+#
+# To pin an explicit config path instead (e.g. a non-default location), add
+# `ExecStart=... --config /path/to/bhtune.toml` -- see `bhtune-server --help`.
+
+[Unit]
+Description=BHTune Server -- MRFT PID auto-tuning HTTP API and web GUI
+Documentation=https://github.com/bytehound-labs/bhtune
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bhtune-server
+Restart=on-failure
+RestartSec=5
+
+DynamicUser=true
+StateDirectory=bhtune
+ConfigurationDirectory=bhtune
+Environment=XDG_CONFIG_HOME=/etc
+Environment=XDG_DATA_HOME=/var/lib
+
+# Hardening. bhtune-server needs no elevated privileges: it binds a single unprivileged TCP
+# port (127.0.0.1:8787 by default), reads its config/template files, and reads/writes its
+# own SQLite database -- nothing here needs a capability, device access, or write access to
+# the rest of the filesystem.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

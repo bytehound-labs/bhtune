@@ -9,9 +9,12 @@
 //! `bhtune-cli` already uses for the same reason.
 
 pub mod active_run;
+pub mod cli;
 pub mod error;
 pub mod openapi;
 pub mod routes;
+pub mod run;
+pub mod service;
 mod spa;
 pub mod state;
 

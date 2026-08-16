@@ -24,7 +24,7 @@ chrono.workspace = true
 # also be set via `BHTUNE_DB`/`BHTUNE_BRIDGE_HOST`; only this crate parses CLI args, so it
 # stays local rather than promoted to `[workspace.dependencies]`, matching the project's
 # single-consumer-dependency convention (see the root `Cargo.toml`).
-clap = { version = "4", features = ["derive", "env"] }
+clap = { workspace = true, features = ["env"] }
 # CSV export (`bhtune export`) generates its header row from the same `#[derive(Serialize)]`
 # struct as its data rows, making the legacy app's MV/SV column-transposition bug (see
 # AGENTS.md's bug register) structurally impossible to reintroduce.
