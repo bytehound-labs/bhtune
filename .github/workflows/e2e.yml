@@ -1,0 +1,58 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Not confirmed strictly required to build just `bhtune-server` in isolation, but
+      # included defensively -- `bhtune-backend`'s `opcda-bridge` dependency may need it
+      # transitively, matching `checks.yml`'s `check` job installing it before any
+      # workspace-wide build.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: protoc
+
+      # Deliberately a plain debug build, not `--release`: `bhtune-server`'s asset embed
+      # (`crates/bhtune-server/src/spa.rs`) omits the `debug-embed` feature, so a debug
+      # binary reads `frontend/dist/` live off disk on every request instead of needing a
+      # baked-in copy. This is what lets the E2E job build the server once, without a
+      # slower release build or a re-embed step between the frontend build below and the
+      # suite that runs against it.
+      - name: Build bhtune-server
+        run: cargo build -p bhtune-server
+
+      - uses: pnpm/setup@v2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Build frontend
+        run: pnpm --filter bhtune-frontend run build
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E suite
+        run: pnpm --filter bhtune-frontend run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7

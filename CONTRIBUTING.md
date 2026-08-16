@@ -59,6 +59,16 @@ check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the equivalent 
   direct unit-test coverage.
 - Coverage is tracked by Codecov and enforced at 100% (`codecov.yml`). Add tests for new code —
   including error branches and edge cases — in the same PR.
+- End-to-end browser tests live in `frontend/e2e/` (Playwright), driving a real
+  `bhtune-server` running the simulator backend through the actual built UI — no mocked HTTP
+  layer. Run locally with:
+
+  ```sh
+  pnpm --filter bhtune-frontend run build   # builds frontend/dist/
+  cargo build -p bhtune-server              # debug build serves dist/ live off disk
+  npx --prefix frontend playwright install chromium   # first run only
+  pnpm --filter bhtune-frontend run test:e2e
+  ```
 
 ## CI
 
@@ -66,7 +76,9 @@ Rust PRs must pass `cargo fmt --check --all`, `cargo clippy --workspace --all-ta
 --all-features -- -D warnings`, `cargo test --workspace`, `cargo deny check`, and
 `cargo machete` before merge. PRs touching `frontend/` must additionally pass `pnpm run
 check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
-is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`.
+is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`
+(which also typechecks `frontend/e2e/`). `.github/workflows/e2e.yml` runs the Playwright
+suite above in CI on every push/PR, uploading the HTML report as an artifact if it fails.
 
 ## Documentation
 

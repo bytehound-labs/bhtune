@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "format:check": "prettier --check .",
     "generate:api": "openapi-typescript ../openapi.json -o src/api/schema.d.ts && prettier --write src/api/schema.d.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.4",
@@ -20,6 +21,7 @@
     "uplot": "^1.6.32"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query-devtools": "^5.101.4",
     "@types/node": "^24.13.3",

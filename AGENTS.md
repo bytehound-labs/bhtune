@@ -174,10 +174,32 @@ backend across a small process/controller-type matrix and asserts the _calculate
 results, not just row presence — a gap no earlier test closed (see "Correctness-critical
 design details" below, item 2, for the real `bhtune-core` bug this test caught and fixed
 in the process: the MRFT oscillation period silently lost sub-second precision by default,
-zeroing `ti_minutes`/`td_minutes` even for PI/PID). `backend-replay` and the golden-trace
-replay harness are not yet — the GUI plan reversed from a Tauri desktop app to a browser UI
-served by `bhtune-server` before any Tauri code was written (see "Key architectural
-decisions"). Phase 9's two front-loaded, run-now items are also done: `docs-contract` (see
+zeroing `ti_minutes`/`td_minutes` even for PI/PID). `e2e-playwright` is also done: a
+Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
+served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
+off disk rather than needing a re-embed step — see `server-embed-spa`'s `rust-embed`
+feature gating) running the in-process simulator backend, with no mocked HTTP layer and no
+Vite dev server involved. `smoke.spec.ts` covers the app shell, the health badge reaching a
+real backend, the seeded built-in template list, and header nav; `tune.spec.ts` drives
+`/runs/new` with the same millisecond-scale simulator parameters `e2e_simulator.rs` uses and
+asserts the _rendered_ Kp/Ti/Td values are sane and correctly ordered (not just that the
+page didn't crash), plus a second test cancelling an in-flight run. This surfaced a genuine,
+benign transient race in `bhtune-server` itself, worth documenting rather than masking:
+`ActiveRun::release` only runs once a run's background task returns from `drive()` — one
+`await` _after_ the same `drive()` call already persisted the outcome a client observes as
+"completed" over SSE/REST — so a client that submits a new run the instant it sees the
+previous one finish can occasionally still be told a run is already active; `tune.spec.ts`'s
+`startTune` helper retries through this rather than papering over it with a fixed sleep. A
+third TypeScript project (`tsconfig.e2e.json`, referenced from `tsconfig.json` alongside the
+existing `tsconfig.app.json`/`tsconfig.node.json`) wires `e2e/`/`playwright.config.ts` into
+the existing `tsc -b`/`pnpm run build` gate, so the suite's own source is genuinely
+typechecked in CI, not merely executed. A new `.github/workflows/e2e.yml` job builds the
+frontend, builds a debug `bhtune-server`, installs Chromium via `playwright install
+--with-deps`, and runs the suite, uploading the Playwright HTML report as a CI artifact on
+failure. `backend-replay` and the golden-trace replay harness are not yet — the GUI plan
+reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any
+Tauri code was written (see "Key architectural decisions"). Phase 9's two front-loaded,
+run-now items are also done: `docs-contract` (see
 "Documentation contract" above) and `docs-copilot-hook` — a paired `sessionStart`/`sessionEnd`
 Copilot CLI hook (`.github/hooks/docs-drift.json`) that warns when a session changed
 `crates/**` without touching any documentation surface, covering both a session's already-
@@ -2592,8 +2614,19 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    real gap no earlier test covered (existing subprocess tests only checked the JSON summary's
    shape/exit code, and existing in-process tests only checked row presence/counts, never actual
    values). Writing it surfaced and fixed a real `bhtune-core` bug in the process — see
-   "Correctness-critical design details" above, item 2. Remaining: Playwright E2E against the real
-   web UI (`e2e-playwright`); golden replay suite in CI; release build matrix for Linux/macOS/
+   "Correctness-critical design details" above, item 2. `e2e-playwright` is also done: a
+   Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
+   served by a real `bhtune-server` binary (debug profile -- serves `frontend/dist/` live off
+   disk, no re-embed step needed between runs) over the in-process simulator backend --
+   `smoke.spec.ts` (app shell, health badge, seeded template list, header nav) and
+   `tune.spec.ts` (a full tune through `/runs/new` with `e2e_simulator.rs`'s own
+   millisecond-scale simulator parameters, asserting sane/ordered rendered Kp/Ti/Td values,
+   plus cancelling an in-flight run). `.github/workflows/e2e.yml` builds the frontend and a
+   debug `bhtune-server`, installs Chromium, and runs the suite in CI, uploading the HTML
+   report on failure. A direct dividend of dropping Tauri: `tauri-driver`/WebDriver would
+   have been markedly more fragile in CI than plain Playwright against a real browser.
+   Remaining: golden replay suite in CI (`e2e-golden-ci`, blocked on `trace-fixtures`/
+   `capture-traces`); release build matrix for Linux/macOS/
    Windows (`build-matrix`, via `cargo-dist`, embedding the built SPA — no Tauri bundler or
    WebView runtime to manage).
 9. **Documentation and release** — two prerequisites are already done, front-loaded ahead of
