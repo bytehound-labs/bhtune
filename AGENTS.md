@@ -287,7 +287,18 @@ appeared, leaving the page stuck on "Loading run…" for several seconds. Fixed 
 through every `queryFn`/`mutationFn` in `runs.ts`/`templates.ts`/`AppLayout.tsx`, and a
 `queryClient` default `retry` that skips retrying any 4xx response — permanent failures —
 while keeping the default 3-retry behavior for genuinely transient ones (network drops,
-5xx). See "Phases and todos" below for what's next.
+5xx). `pkg-docker` is now done too: a multi-stage `Dockerfile` (pnpm frontend build → `cargo
+build --release` for `bhtune-cli`+`bhtune-server` → a slim `debian:bookworm-slim` runtime)
+builds both binaries into a single ~110 MB image, published to
+`ghcr.io/bytehound-labs/bhtune` by a new `.github/workflows/docker-publish.yml` — tagged
+`edge` on every push to `main`, additionally under the version and `latest` once a release
+tag exists, and build-only (no push, no registry credentials touched) on every PR, so a
+broken Dockerfile fails the PR that broke it rather than surfacing at release time. See
+"`pkg-docker`: the Docker image" below for the full design, including the two build-time-only
+system dependencies the Rust builder stage needs beyond `protoc` (`build-essential`, for
+`bhtune-db`'s bundled-SQLite `cc` compile step — easy to miss since the plain, non-`slim`
+`rust` image includes it by default and only `slim` doesn't) and the container-specific
+`BHTUNE_BIND=0.0.0.0:8787` default's rationale. See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -388,8 +399,8 @@ error_message })` even when the backend _rejects_ the write (read-only tag, out 
   a 100%-coverage, golden-master validation posture. Nothing here reduces to "just add Docker" —
   a plain installer (`pkg-windows-installer`) is the primary distribution artifact precisely
   because Docker is frequently banned or unavailable on OT networks; the Docker image
-  (`pkg-docker`) is a secondary channel for IT-managed Linux hosts, not the deployment path this
-  decision was optimized for.
+  (`pkg-docker`, done — see "`pkg-docker`: the Docker image" below) is a secondary channel for
+  IT-managed Linux hosts, not the deployment path this decision was optimized for.
 - **`server-http-api` is done: `bhtune-server` is a real Axum binary, not a placeholder.**
   `bhtune_server::build_router` merges `GET /api/health`, `GET`/`POST /api/templates`,
   `GET`/`DELETE /api/templates/{name}`, and `GET /api/runs` (filtered, paginated list)/
@@ -2721,6 +2732,94 @@ built, and shipping a first public release before that gate is green would let u
 an unverified reimplementation of code that writes PID constants to live plant equipment.
 See `release-v1` in "Phases and todos" below.
 
+## `pkg-docker`: the Docker image
+
+A multi-stage root `Dockerfile` plus `.github/workflows/docker-publish.yml` publish
+`ghcr.io/bytehound-labs/bhtune`, a ~110 MB image bundling both binaries and the embedded
+SPA. This is deliberately a **secondary** distribution channel: the Windows MSI
+(`pkg-windows-installer`) remains the primary one, since OT sites frequently prohibit or
+simply lack container runtimes — see the "v1 adapters" bullet above under "Key
+architectural decisions" for the full reasoning. Nothing about shipping a Docker image
+changes that ordering.
+
+**Three stages, each stripped to exactly what the next stage or the runtime needs.**
+`frontend` (`node:22-slim`) builds the React SPA with `pnpm`; `builder`
+(`rust:1-slim-bookworm`) compiles `bhtune`/`bhtune-server` in release mode; `runtime`
+(`debian:bookworm-slim`) contains only the two resulting binaries, `ca-certificates`, and a
+non-root user — no Node, no Rust toolchain, no source tree. Manifests are copied before
+source in the `frontend` stage specifically so `pnpm install --frozen-lockfile` is
+cache-hit across rebuilds that only touch application code.
+
+**The `frontend/dist/`-before-`cargo build` ordering is load-bearing, not just
+convenient.** `bhtune-server`'s `rust-embed` usage only embeds `frontend/dist/` into the
+binary for `--release` builds (see `server-embed-spa`'s design section) — there is no
+after-the-fact embed step, so the Dockerfile must `COPY --from=frontend
+/src/frontend/dist/ frontend/dist/` before running `cargo build --release`, exactly
+mirroring `build-matrix`'s `release.yml` step ordering above. Verified directly, not just
+by reading the code: an earlier local build run with the copy ordered _after_ `cargo
+build` produced a container that served a 503 for every static asset; reordering the copy
+and rebuilding fixed it, confirming the failure mode is real rather than theoretical before
+trusting the final Dockerfile.
+
+**The Rust builder stage needs two system packages beyond `protoc`, because `slim` isn't
+`rust`.** `protobuf-compiler` is already a known requirement — `opcda-bridge-proto`
+compiles `bridge.proto` via `tonic-build` at build time, the same non-dev requirement
+`build-matrix` installs via `taiki-e/install-action` above. `build-essential` is the new
+one this todo surfaced: `bhtune-db`'s bundled SQLite (`libsqlite3-sys`) compiles a small C
+amalgamation via the `cc` crate at build time, and unlike the default (non-`slim`) `rust`
+image, `rust:1-slim-bookworm` does not include a C compiler at all. Skipping it fails the
+build with a `cc` "not found" error rather than anything SQLite-specific, which is easy to
+misdiagnose as a missing Rust dependency instead of a missing system one.
+
+**`BHTUNE_BIND=0.0.0.0:8787` is the image's own default, deliberately overriding the
+native binary's `127.0.0.1`-only default.** The security posture recorded in "Web app
+architecture" above (bind loopback by default, LAN exposure as a loud explicit opt-in) is
+preserved, not weakened, by this override: a container's loopback interface is invisible to
+`docker run -p`/`--publish` port mapping, so binding `127.0.0.1` _inside_ the container
+would make the server unreachable even with a port published, which is a confusing
+footgun rather than a safety feature. Running this image and choosing to publish a port is
+itself the explicit opt-in that `127.0.0.1`-by-default exists to require on the native
+binary — Docker's own network isolation is the real boundary. Verified empirically: the
+server was reachable via `curl` from outside the container only with this override in
+place, matching the reasoning rather than assuming it.
+
+**`.dockerignore` had one real mistake, caught before it shipped.** An early draft
+excluded `website/` wholesale to keep docs-site content out of the build context. That
+broke the `frontend` stage's `COPY website/package.json website/package.json` step, since
+`website` is a real `pnpm-workspace.yaml` member (see `build-matrix`'s and `docs-site-scaffold`'s
+notes on this same fact) whose manifest `pnpm install --frozen-lockfile` needs to resolve
+the lockfile, even though only `frontend/` is ever actually built. Fixed by excluding only
+the docs-site's content subdirectories (`website/docs`, `website/blog`, `website/src`,
+`website/static`, and its two root config files) rather than the whole directory, which
+still keeps `website/package.json` copyable. Also excludes build artifacts (`target/`,
+`node_modules/`, `frontend/dist/`), VCS/editor metadata, `tests/golden/raw/` (large and
+scheduled for deletion anyway — see `cleanup-golden-traces`), and local secrets/DB files
+(`.env`, `*.db*`).
+
+**Publish workflow: build on every trigger, push only on a real push.** A `pull_request`
+or manual `workflow_dispatch` run builds the full image — proving the Dockerfile still
+works on every PR that touches it — but pushes nothing and touches no registry
+credentials, matching `release.yml`'s own dry-run convention above. Only a push to `main`
+or a `v[0-9]+.*` tag logs into GHCR and pushes. `docker/metadata-action`'s default
+`flavor: latest=auto` adds a `latest` tag only alongside a real `type=semver` tag (i.e.
+only on a version-tag push, never on a plain push to `main`), and `type=edge,branch=main`
+only fires when the active ref genuinely is `refs/heads/main` — so a PR run and a tag-push
+run each produce exactly the tags they should with no extra `enable:`/`if:` conditions
+needed. Both facts were confirmed against `docker/metadata-action`'s own README rather than
+assumed. Build layers are cached via `type=gha`, shared across runs the same way
+`checks.yml`'s Rust jobs already cache `~/.cargo`/`target`.
+
+**Validated locally end-to-end before ever touching CI.** Built the image from a clean
+checkout; ran it with a published port and confirmed `/api/health`, `/`, and
+`/api/openapi.json` all return real content (not the SPA-fallback 503 a broken
+`rust-embed` build would produce); confirmed the SPA's hashed JS/CSS assets carry
+`Cache-Control: public, max-age=31536000, immutable` while `/` does not; confirmed a
+client-side route (`/runs/new`) still serves the SPA shell rather than 404ing; confirmed
+the SQLite database file is created under `/var/lib/bhtune/`, owned by the non-root
+`bhtune` user; and confirmed `docker exec ... bhtune template list` (the CLI binary) reads
+the same database the running server just seeded, proving both binaries share
+`BHTUNE_DB` correctly inside the container.
+
 ## Validation strategy: golden-master replay
 
 The engine's confidence story is golden-master replay: recorded input/output traces (tick-by-tick
@@ -3156,15 +3255,19 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    linked from the README's existing compact roadmap section rather than duplicating it.
    `docs-api-rustdoc` is also done: `cargo doc` output is published under `/api/` alongside the
    site, indexed from a hand-written `docs/reference/api.md` — see "`docs-api-rustdoc`:
-   publishing the Rust API reference" above for the full design. Remaining: release-time
-   version snapshots (`docs-versioning`, deferred until `release-v1`), and packaging:
-   `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
+   publishing the Rust API reference" above for the full design. Packaging's secondary Docker
+   channel, `pkg-docker`, is also done: a multi-stage `Dockerfile` plus
+   `.github/workflows/docker-publish.yml` build and publish
+   `ghcr.io/bytehound-labs/bhtune` on every push to `main` (tagged `edge`) and every version
+   tag (tagged with the version and `latest`), and build-only (no push) on every PR — see
+   "`pkg-docker`: the Docker image" below for the full design. Remaining: release-time
+   version snapshots (`docs-versioning`, deferred until `release-v1`), and the rest of
+   packaging: `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
    `release.yml`, but cutting the actual first tag is a deliberate call left to the project
    owner, not automatic — see "`build-matrix`: the release binary matrix" above), a
    Windows MSI installer (`pkg-windows-installer`, the primary distribution artifact), and
    `pkg-aur` (already unblocked — it needs the man pages/completions `docs-generated-cli`
-   produces plus `build-matrix`'s Linux archive, both done), and a secondary Docker image
-   (`pkg-docker`).
+   produces plus `build-matrix`'s Linux archive, both done).
 10. **History explorer** (low priority, post-v1, done) — mostly a reader of data earlier
     phases already write, so deliberately scheduled after v1. `history-retention` is done:
     age-based deletion of runs older than a configurable number of days, off by default

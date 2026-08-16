@@ -1,0 +1,97 @@
+name: Docker image
+
+# Builds the multi-stage Dockerfile (frontend build -> cargo build -> slim runtime; see
+# AGENTS.md's "pkg-docker" design section) and publishes it to
+# ghcr.io/bytehound-labs/bhtune. This is a *secondary* distribution channel for
+# IT-managed Linux hosts -- the Windows MSI installer (pkg-windows-installer) is the
+# primary path, since OT sites frequently prohibit or simply lack container runtimes.
+#
+# Every trigger builds the image, so a broken Dockerfile fails CI on the PR that broke it
+# rather than being discovered at release time. Only a real push (to main, or a version
+# tag) also publishes -- a pull_request or workflow_dispatch run is a pure build-only
+# smoke test, matching release.yml's own dry-run convention (nothing is pushed unless
+# `github.event_name == 'push'`).
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v[0-9]+.*"
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "crates/**"
+      - "frontend/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/docker-publish.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "crates/**"
+      - "frontend/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/docker-publish.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v4
+
+      # No credentials are needed for a build-only run (pull_request/workflow_dispatch),
+      # and forked PRs wouldn't have them anyway -- see docs-agent-ci's identical reasoning
+      # in AGENTS.md for why a secrets-gated step must never run unconditionally.
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `latest=auto` (the default flavor) adds `latest` only alongside a real
+      # `type=semver` tag, i.e. only on a version-tag push -- never on a plain push to
+      # main. `type=edge` likewise only fires when the active ref actually is `main`, so
+      # it produces nothing on a pull_request or a tag push.
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=edge,branch=main
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

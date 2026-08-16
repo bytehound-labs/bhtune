@@ -6,7 +6,39 @@ sidebar_position: 1
 
 BHTune has not made its first tagged release yet — see the
 [Releases](https://github.com/bytehound-labs/bhtune/releases) page for prebuilt binaries once
-one exists. Until then, build from source.
+one exists. Until then, run the published Docker image or build from source.
+
+## Run via Docker
+
+The fastest way to try BHTune: a multi-stage image (frontend build → `cargo build --release` →
+slim Debian runtime) is published to
+[GHCR](https://github.com/bytehound-labs/bhtune/pkgs/container/bhtune) on every push to `main`
+(tagged `edge`), and additionally under the version and `latest` once a release tag exists. No
+Rust toolchain, pnpm, or C compiler needed on the host — just Docker:
+
+```sh
+docker run -d --name bhtune \
+  -p 8787:8787 \
+  -v bhtune-data:/var/lib/bhtune \
+  ghcr.io/bytehound-labs/bhtune:edge
+```
+
+Open `http://localhost:8787` for the web GUI. The image bundles both binaries, so the headless
+CLI is available the same way, sharing the running server's database through the mounted
+volume:
+
+```sh
+docker exec bhtune bhtune history list
+```
+
+The image sets `BHTUNE_BIND=0.0.0.0:8787` and `BHTUNE_DB=/var/lib/bhtune/bhtune.db` as its own
+defaults — see [`Dockerfile`](https://github.com/bytehound-labs/bhtune/blob/main/Dockerfile)
+for the full build and [Configuration precedence](../reference/config.md) for how to override
+either with `docker run -e`. This is a secondary distribution channel aimed at IT-managed Linux
+hosts; a Windows installer is the primary path for this project's actual users, since OT sites
+frequently prohibit or simply lack container runtimes.
+
+Skip to [Prerequisites](#prerequisites) below to build from source instead.
 
 ## Prerequisites
 

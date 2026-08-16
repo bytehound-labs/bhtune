@@ -1,0 +1,36 @@
+# Build artifacts -- never needed in the build context, and huge.
+target/
+node_modules/
+**/node_modules/
+frontend/dist/
+website/build/
+website/.docusaurus/
+
+# Version control and editor/IDE metadata.
+.git/
+.github/
+.vscode/
+.idea/
+
+# Golden-master migration fixtures -- large, irrelevant to a container build, and
+# themselves scheduled for deletion once core-replay-harness lands (see AGENTS.md).
+tests/golden/raw/
+
+# Local tooling state and secrets that must never enter an image layer.
+.env
+.envsync.yaml
+*.db
+*.db-wal
+*.db-shm
+
+# Docs site content -- not part of the shipped binaries. Note: website/package.json is
+# still needed (it's a real pnpm workspace member -- see pnpm-workspace.yaml -- so its
+# manifest must be present for `pnpm install --frozen-lockfile` to resolve the lockfile),
+# so only the docs *content* is excluded here, not the whole website/ directory.
+docs/
+website/docs/
+website/blog/
+website/src/
+website/static/
+website/docusaurus.config.ts
+website/sidebars.ts

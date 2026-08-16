@@ -102,17 +102,41 @@ scaffolding workspace intentionally does not declare unused dependencies.
 
 ## Installation
 
-Not yet released — no `v0.1.0` tag has been cut. Release tooling is in place
-(`.github/workflows/release.yml`, `taiki-e/upload-rust-binary-action`): once a version tag is
-pushed, prebuilt Linux/macOS/Windows archives (each bundling both `bhtune` and
-`bhtune-server`) attach automatically to the [Releases](https://github.com/bytehound-labs/bhtune/releases)
-page. A Windows installer, a Docker image, and an AUR package are committed follow-on
-distribution channels, not yet built. Publishing to [crates.io](https://crates.io), Homebrew,
-and a few other channels is still an open evaluation, not a commitment — see the
-[roadmap](docs/roadmap.md).
+No `v0.1.0` tag has been cut yet, so there are no versioned release archives. Two ways to run
+BHTune today:
 
-To build from source (requires a Rust toolchain supporting the 2024 edition — Rust 1.94 or
-newer, BHTune's declared MSRV, verified in CI):
+### Docker
+
+A multi-stage image (frontend build → `cargo build --release` → slim Debian runtime, ~110 MB)
+is published to [GHCR](https://github.com/bytehound-labs/bhtune/pkgs/container/bhtune) —
+tagged `edge` on every push to `main`, and additionally under the version and `latest` once a
+release tag exists. It bundles both `bhtune` and `bhtune-server`; the host needs neither a
+Rust toolchain, pnpm, nor a C compiler:
+
+```sh
+docker run -d --name bhtune \
+  -p 8787:8787 \
+  -v bhtune-data:/var/lib/bhtune \
+  ghcr.io/bytehound-labs/bhtune:edge
+```
+
+Open `http://localhost:8787` for the web GUI. The `bhtune` CLI is available in the same
+image, sharing the running server's database via the mounted volume:
+
+```sh
+docker exec bhtune bhtune history list
+```
+
+See the [`Dockerfile`](Dockerfile) for the full build and the image's baked-in defaults
+(`BHTUNE_BIND=0.0.0.0:8787`, `BHTUNE_DB=/var/lib/bhtune/bhtune.db` — both overridable with
+`docker run -e`). This is a _secondary_ distribution channel for IT-managed Linux hosts; a
+Windows installer is the primary path for this project's actual users, since OT sites
+frequently prohibit or simply lack container runtimes.
+
+### Build from source
+
+Requires a Rust toolchain supporting the 2024 edition (Rust 1.94 or newer, BHTune's declared
+MSRV, verified in CI):
 
 ```sh
 git clone https://github.com/bytehound-labs/bhtune.git
@@ -126,6 +150,16 @@ directly from the CLI's own argument definitions and checked in at
 actually accepts. The same generation step also produces man pages (`man/*.1` — try `man
 ./man/bhtune-tune.1`) and shell completions (`completions/bhtune.bash`, `completions/_bhtune`,
 `completions/bhtune.fish`); packaged releases install both into the usual system locations.
+
+### What's still coming
+
+Once a version tag is pushed, release tooling already in place
+(`.github/workflows/release.yml`, `taiki-e/upload-rust-binary-action`) attaches prebuilt
+Linux/macOS/Windows archives (each bundling both `bhtune` and `bhtune-server`) to the
+[Releases](https://github.com/bytehound-labs/bhtune/releases) page automatically. A Windows
+installer and an AUR package are committed follow-on distribution channels, not yet built.
+Publishing to [crates.io](https://crates.io), Homebrew, and a few other channels is still an
+open evaluation, not a commitment — see the [roadmap](docs/roadmap.md).
 
 ### Running the server
 
