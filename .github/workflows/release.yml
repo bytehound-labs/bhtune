@@ -183,8 +183,14 @@ jobs:
       - name: Build .deb package
         run: cargo deb -p bhtune-cli --no-build -o target/debian/
 
+      # Unlike cargo-deb, cargo-generate-rpm does not create a missing `-o` directory
+      # itself: confirmed by CI failing here with "Is a directory (os error 21)" on a
+      # trailing-slash path that doesn't exist yet, since it then treats the path as a
+      # literal (non-existent) *file* target rather than a directory to create.
       - name: Build .rpm package
-        run: cargo generate-rpm -p crates/bhtune-cli -o target/generate-rpm/
+        run: |
+          mkdir -p target/generate-rpm
+          cargo generate-rpm -p crates/bhtune-cli -o target/generate-rpm/
 
       # Both tools name their output after the crate's own name/version (e.g.
       # bhtune_0.1.0-1_amd64.deb, bhtune-0.1.0-1.x86_64.rpm), so every release already
