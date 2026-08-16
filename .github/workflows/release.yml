@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: write # for taiki-e/create-gh-release-action
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: taiki-e/create-gh-release-action@v1
         with:
@@ -67,7 +67,7 @@ jobs:
     permissions:
       contents: write # for taiki-e/upload-rust-binary-action
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -133,7 +133,7 @@ jobs:
     permissions:
       contents: write # for `gh release upload`
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
