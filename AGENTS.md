@@ -2606,9 +2606,73 @@ change with real user-visible impact, for instance).
 - **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft; it does not bind anyone until the
   legal-entity question is resolved, the text has had a legal review, and a CLA-assistant check is
   added to the PR checks.
-- **A cross-project CI/CD audit against `opcda-bridge` hasn't happened yet.** See
-  `cross-project-ci-audit` in "Phases and todos" — worth doing once both projects have settled a
-  bit, not urgent.
+
+## Cross-project CI/CD audit (`cross-project-ci-audit`, done)
+
+Compared `bhtune`'s CI/CD, lefthook, and repo-hygiene setup against the sibling
+`opcda-bridge` project in both directions. The flow was overwhelmingly one-directional
+(`opcda-bridge` → `bhtune`): `opcda-bridge` is the more mature project and already embodied
+the practices below before this audit — `homepage`, `cargo machete`, `cargo deny`, and its
+own `windows`/`msrv`/`package` CI jobs all predate this audit on that side. Checked
+specifically for anything worth proposing back the other way and found nothing of
+substance beyond what's noted below; both repos came out of this audit with equivalent
+Dependabot/security posture instead.
+
+Pulled into `bhtune` from `opcda-bridge`'s example:
+
+- **MSRV declared and enforced.** `rust-version = "1.94"` in `[workspace.package]`
+  (empirically determined — `sqlx@0.9.0` requires it, higher than `opcda-bridge`'s own 1.88
+  floor), with a standalone `msrv` CI job pinning `dtolnay/rust-toolchain@1.94.0` and running
+  `cargo check --workspace --all-targets --all-features --locked`.
+- **`windows` and `package` CI jobs.** `windows` runs fmt/clippy/test on `windows-latest`
+  (skipping the Linux-only doc/OpenAPI drift `git diff` checks, which are CRLF-sensitive);
+  `package` runs `cargo package --workspace --locked`, which immediately surfaced a real bug —
+  every workspace-internal path dependency lacked a `version` requirement, which `cargo
+package` refuses to package. Fixed by giving `bhtune-core`/`bhtune-backend`/`bhtune-db`/
+  `bhtune-cli` `{ path, version }` entries in `[workspace.dependencies]` and switching every
+  consumer to `.workspace = true`, mirroring `opcda-bridge`'s own already-working pattern
+  exactly.
+- **`concurrency` groups, `permissions: contents: read`, and `--locked` everywhere** across
+  `checks.yml`/`coverage.yml`/`e2e.yml`.
+- **`.github/dependabot.yml`** — weekly grouped updates for `cargo`, `npm` (pnpm workspace
+  root, covering both root and `frontend/package.json`), and `github-actions`, each labeled
+  (`dependencies`/`rust`/`frontend`/`ci` — created on the repo, since Dependabot silently
+  skips labels that don't already exist).
+- **Branch protection on `main`** — required status checks naming every job context
+  (`check`, `frontend`, `Windows validation`, `MSRV`, `Package verification`, `coverage`,
+  `e2e`), `strict: false`, `enforce_admins: false` (preserves the existing direct-push
+  workflow), `allow_force_pushes`/`allow_deletions: false`. `opcda-bridge`'s own rule only
+  requires `check`+`coverage` because its `checks.yml` uses a `dorny/paths-filter` +
+  aggregator-gate structure where `check` is a final job that gates on `windows`/`msrv`/
+  `package` all having passed — `bhtune`'s five jobs are independent with no such
+  aggregator, so equivalent protection means requiring all of them individually.
+- **Secret scanning + push protection enabled** on both `bytehound-labs/bhtune` and
+  `bytehound-labs/opcda-bridge` (both public repos, so free) — confirmed disabled on both
+  before this audit. `secret_scanning_validity_checks` did not take via the API on either
+  repo despite repeated attempts (`secret_scanning`/`secret_scanning_push_protection` both
+  enabled fine) — likely an org/plan-gated setting; low priority, flip manually in the repo
+  Settings UI if wanted.
+
+Ported from `bhtune` to `opcda-bridge` (the one item that went the other way, discovered
+while auditing rather than pre-existing on either side): **`.github/dependabot.yml`** for
+`cargo` + `github-actions` (no `npm` — pure Rust workspace, no frontend), with matching
+`dependencies`/`rust`/`ci` labels created using the same colors as `bhtune`'s.
+
+Deliberately **not** done, recommended instead:
+
+- **`dorny/paths-filter` + aggregator-gate restructuring of `bhtune`'s `checks.yml`**,
+  matching `opcda-bridge`'s `changes` → fan-out (`windows`/`linux`/`package`/`msrv`) →
+  aggregator (`check`) shape. Would let branch protection require a single `check` context
+  again and skip irrelevant jobs on doc-only changes, but requires renaming the existing
+  `check` job (name collision with the aggregator pattern) — a larger, riskier restructuring
+  than the rest of this audit, deferred rather than rushed.
+- **CODEOWNERS, issue templates, PR template** — absent on both repos, not just `bhtune`;
+  a shared gap rather than something to port one way.
+- **GitHub Actions SHA-pinning** for supply-chain hardening — easier now that both repos'
+  `github-actions` Dependabot ecosystem is configured to keep pinned SHAs current, but not
+  applied yet.
+- **CLA-enforcement bot** — separate pre-existing gap, tracked under "Deferred setup" below,
+  not part of this audit's CI/CD scope.
 
 ## Build / Test / Lint / Coverage
 
@@ -2799,12 +2863,13 @@ list`/`show`/`prune` (`history-cli`). A reader of data earlier phases already wr
     audit log of who ran/wrote what (`server-audit-log`), and OIDC for SSO-managed orgs
     (`server-oidc`). Deferred, not blocking v1's `127.0.0.1`-by-default posture — see "Key
     architectural decisions" above.
-12. **Cross-project CI/CD audit** (`cross-project-ci-audit`, not urgent/blocking) — compare
-    `bhtune`'s CI/CD, lefthook, release-plz, and repo-hygiene setup against the sibling
-    `opcda-bridge` project in both directions: pull over anything `opcda-bridge` has that
-    `bhtune` is missing, and separately propose anything `bhtune` ended up doing differently
-    (or better) that `opcda-bridge` might want to adopt too. Worth doing once both projects have
-    settled a bit rather than right after initial scaffolding.
+12. **Cross-project CI/CD audit** (`cross-project-ci-audit`, done) — compared `bhtune`'s
+    CI/CD and repo-hygiene setup against the sibling `opcda-bridge` project in both
+    directions: MSRV enforcement, `windows`/`package` CI jobs, `--locked` everywhere,
+    Dependabot, branch protection, and secret scanning — see "Cross-project CI/CD audit"
+    above for the full writeup, including what was deliberately deferred as a recommendation
+    rather than implemented (a `paths-filter`+aggregator-gate restructuring, CODEOWNERS/PR
+    templates, Actions SHA-pinning).
 
 ## Other notes
 
