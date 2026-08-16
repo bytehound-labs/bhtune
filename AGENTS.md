@@ -211,9 +211,8 @@ step captures real SPA assets, via `taiki-e/create-gh-release-action` +
 in place of the originally-planned `cargo-dist` once that sibling project's simpler setup
 was reviewed — see "`build-matrix`: the release binary matrix" below for the full design,
 including why this does not by itself mean `release-v1` should happen yet.
-`backend-replay` and the golden-trace replay harness are not yet — the GUI plan
-reversed from a Tauri desktop app to a browser UI served by `bhtune-server` before any
-Tauri code was written (see "Key architectural decisions"). Phase 9's two front-loaded,
+`backend-replay` (a trace-driven `Backend` implementation for validation) is the one
+remaining item in Phase 4 — not yet started. Phase 9's two front-loaded,
 run-now items are also done: `docs-contract` (see
 "Documentation contract" above) and `docs-copilot-hook` — a paired `sessionStart`/`sessionEnd`
 Copilot CLI hook (`.github/hooks/docs-drift.json`) that warns when a session changed
@@ -308,7 +307,9 @@ first real trace captured on the `hp` Windows host) is normalized by
 not just argued, to reproduce the legacy C# app's tuning behavior exactly. See "Validation
 strategy: golden-master replay" below for the two genuine legacy-CSV-logger precision limits
 this surfaced (both independently confirmed against the real C# source, not worked around by
-loosening tolerances blindly). See "Phases and todos" below for what's next.
+loosening tolerances blindly). `capture-traces` is deliberately closed at this one trace (no
+more are planned) and `cleanup-golden-traces`/`e2e-golden-ci`/`core-bug-register` are also done
+— see "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -2862,9 +2863,10 @@ the lockfile, even though only `frontend/` is ever actually built. Fixed by excl
 the docs-site's content subdirectories (`website/docs`, `website/blog`, `website/src`,
 `website/static`, and its two root config files) rather than the whole directory, which
 still keeps `website/package.json` copyable. Also excludes build artifacts (`target/`,
-`node_modules/`, `frontend/dist/`), VCS/editor metadata, `tests/golden/raw/` (large and
-scheduled for deletion anyway — see `cleanup-golden-traces`), and local secrets/DB files
-(`.env`, `*.db*`).
+`node_modules/`, `frontend/dist/`), VCS/editor metadata, `tests/golden/raw/` (kept excluded
+as a guard against a future large capture bloating the build context, even though the
+existing raw captures have since been deleted — see `cleanup-golden-traces`), and local
+secrets/DB files (`.env`, `*.db*`).
 
 **Publish workflow: build on every trigger, push only on a real push.** A `pull_request`
 or manual `workflow_dispatch` run builds the full image — proving the Dockerfile still
@@ -2941,33 +2943,67 @@ Reference traces are captured two ways, neither of which requires Windows:
    types, action directions, and edge cases (non-zero MV range floor, varied skip/count cycles).
    `bhtune-backend`'s own test suite already includes one such run (a full `MrftEngine` driven
    through `SimulatorBackend` to completion).
-2. **Real traces recorded from field use** (`capture-traces`) — one is captured and replayed so
-   far (`flow_pi_direct`); the other 5 process types, PID/temperature controllers, reverse action,
-   cascade (non-zero MV range floor), and varied skip/count remain to be captured on the `hp`
-   Windows host and run through `scripts/convert_golden_trace.py` + a new `golden_replay.rs` test
-   function each.
+2. **Real traces recorded from field use** (`capture-traces`, done) — one trace was captured and
+   replayed (`flow_pi_direct`, Flow/PI/Reverse). Deliberately closed here rather than continuing
+   through the other 5 process types, PID/temperature controllers, reverse action, and cascade:
+   the one trace already fully proves the capture-to-fixture-to-harness pipeline works and that
+   the Rust engine matches the legacy app exactly for a real field recording, and the marginal
+   parity evidence 5 more captures would add wasn't judged worth the recurring `hp` Windows-VM
+   time against higher-priority phases (server/frontend/packaging). `scripts/convert_golden_trace.py`
+   remains ready to normalize further captures if one is ever recorded opportunistically, but no
+   more are planned.
 
 Snapshot a run as a fixture only after manually verifying the engine's output is
 control-theoretically correct for that scenario — the fixture then guards against future
 regressions; it is not itself the source of truth for correctness.
 
-## Correctness-critical design details
+`cleanup-golden-traces` is also done: the raw `flow_pi_direct_*.csv` captures under
+`tests/golden/raw/` were deleted once `core-replay-harness` went green, since the normalized
+`tests/golden/fixtures/flow_pi_direct.json` is what the harness actually reads at runtime and is
+fully self-contained — the raw CSVs had no remaining purpose beyond provenance, which git history
+(commit `0301538`) already preserves permanently. `scripts/convert_golden_trace.py`'s own
+docstring records how the fixture was produced, so the provenance is documented even with the raw
+files gone.
+
+## Correctness-critical design details (also the legacy bug register, `core-bug-register`)
 
 These are easy to get subtly wrong, so they're called out explicitly. Each should have direct
-unit-test coverage, not just be caught incidentally by a golden-master replay fixture.
+unit-test coverage, not just be caught incidentally by a golden-master replay fixture. This list
+also **is** `core-bug-register`'s deliverable: every legacy defect found during the migration is
+covered somewhere below with an explicit replicate-or-fix decision, tagged with one of:
 
-1. **The MV boundary clamp must be dimensionally consistent on both sides.** If the relay step
+- **`[fixed, compat flag available]`** — the correct behavior ships by default; the old, buggy
+  behavior can still be reproduced on demand via a `*Compat` struct field, for bug-for-bug replay
+  against a legacy trace if one is ever needed.
+- **`[fixed, no flag needed]`** — the correct behavior ships and the bug has no legitimate reason
+  to ever be reproduced (it was pure defect, never a documented or relied-upon behavior).
+- **`[structurally impossible]`** — stronger than "fixed": the bug's precondition cannot occur in
+  the new design at all (a compile-time guarantee or a data structure that can't represent the
+  invalid state), not merely "we were careful this time."
+- **`[not applicable — feature dropped]`** — the subsystem the bug lived in (licensing,
+  loop-locking, log encryption) was not ported at all, per the plan's locked decisions, so the
+  bug has nothing to attach to.
+- **`[preserved rule]`** — not a bug: a real legacy behavior that must be kept exactly as-is,
+  included here because it is just as easy to accidentally break as an actual defect.
+
+1. **`[fixed, compat flag available]` The MV boundary clamp must be dimensionally consistent on
+   both sides.** If the relay step
    down would drive MV below its configured floor, clamp the relay amplitude to
    `MvValueIni - MvLowerRange` (the actual distance from the initial value down to the floor), not
    an expression that adds the floor back onto the initial value. Get this wrong and cascaded
    loops with a non-zero MV floor get an incorrect (usually oversized) relay amplitude — it's
    silently masked whenever the floor is 0 (the common 0–100% case), which makes it easy to miss
-   in testing.
-2. **The MRFT oscillation period must use full-precision elapsed time** (total seconds as a
+   in testing. Legacy: `CheckMVboundaries`, `OPCClass.cs` ~line 355. Fixed by default in
+   `core-mrft`; replicable via `MrftCompat.replicate_lower_clamp_bug`.
+2. **`[fixed, compat flag available]` The MRFT oscillation period must use full-precision elapsed
+   time** (total seconds as a
    floating-point value), never truncated into separate hour/minute/second integer components and
    reassembled — that discards sub-second precision and wraps incorrectly past 24 hours. This
    matters most on fast loops (flow/pressure) where the whole oscillation period is only a few
-   seconds, so truncation error is a large fraction of the signal, not noise.
+   seconds, so truncation error is a large fraction of the signal, not noise. Legacy:
+   `CalculatedMRFTperiodMinutes`, `OPCClass.cs` ~line 743 (uses `TimeSpan.Seconds`, an
+   integer-truncating property, instead of `.TotalSeconds`). Fixed by default in
+   `core-tuning-math`; replicable via `TuningMathCompat.replicate_period_truncation_bug`.
    **Cautionary note:** `core-tuning-math`'s first implementation stated this rule correctly but
    didn't actually follow it — `measure_oscillation` computed elapsed time via
    `chrono::Duration::num_seconds()` (whole-second-truncating) _unconditionally_, with
@@ -2979,50 +3015,140 @@ unit-test coverage, not just be caught incidentally by a golden-master replay fi
    see the `measure_oscillation_keeps_sub_second_precision_by_default` regression test in
    `tuning_math.rs` and `e2e_simulator.rs`'s module doc for the full story. The lesson: writing
    the rule down is not sufficient on its own — it needs test coverage with genuinely
-   sub-second-precision inputs, not just whole-second ones, to actually enforce it.
-3. **Switch timestamps must reuse the already-captured tick timestamp**, never a fresh wall-clock
+   sub-second-precision inputs, not just whole-second ones, to actually enforce it. Separately,
+   `core-replay-harness`'s `flow_pi_direct` fixture needed its own dedicated, narrower
+   `PERIOD_TOLERANCE_MINUTES` for exactly this reason — see "Validation strategy" above.
+3. **`[structurally impossible]` Switch timestamps must reuse the already-captured tick
+   timestamp**, never a fresh wall-clock
    read at the moment a switch is performed — the two can differ by however long evaluation took,
-   which is small but non-deterministic and breaks exact replay comparison.
-4. **Lookup tables must be sized to exactly the number of process types that exist (6)** — no
-   extra, unreachable rows/columns in the tuning-constant or default-cycle data.
-5. **If a CSV/tabular export format is ever added**, generate the header and each data row's
+   which is small but non-deterministic and breaks exact replay comparison. Legacy:
+   `MRFTperformSwitch`, `OPCClass.cs` ~line 430 (stores `DateTime.Now` instead of the tick's own
+   `TimeCurrent`). Stronger than a default-off compat flag: `chrono`'s `clock`/`now` features are
+   disabled workspace-wide, so `bhtune-core` cannot call `Utc::now()` even by accident — verified
+   by temporarily adding such a call and confirming it fails to compile (see `backend-opcda`'s
+   notes above for where this was re-verified after `opcda-bridge`/`tonic` entered the dependency
+   graph).
+4. **`[structurally impossible]` Lookup tables must be sized to exactly the number of process
+   types that exist (6)** — no
+   extra, unreachable rows/columns in the tuning-constant or default-cycle data. Legacy:
+   `matrixCyclesSkip`/`matrixCyclesTest`/`matrixNoiseProt` each held 7 elements against only 6
+   process types in the dropdown, leaving the 7th permanently unreachable. `ProcessType::ALL` is a
+   `[ProcessType; 6]` and every lookup table in `constants.rs` is a plain `[T; 6]` array — the
+   array length and the enum's variant count are the same 6 by construction, and
+   `constants.rs`'s own tests assert `.len() == 6` on each table, so a 7th row could not silently
+   exist even as an authoring mistake.
+5. **`[preserved rule]` If a CSV/tabular export format is ever added**, generate the header and
+   each data row's
    column order from the same single ordered list of field names — never maintain them as two
    independently hand-written strings; that's exactly the kind of thing that silently drifts out
-   of sync.
-6. **PID unit labels (Kp vs. PB; Ti vs. Ri vs. Ki; Td vs. Kd) must refresh on every relevant state
+   of sync. Legacy: Step Test's dynamic CSV log wrote the header `Time,PV,SV,MV,P,I,D` but the
+   data rows as `Time,PV,MV,SV,P,I,D` — the MV and SV columns transposed. Not yet applicable to
+   bhtune (Step Test is a deferred phase, per the plan's locked decisions), but recorded here so
+   the eventual port doesn't repeat it; `bhtune-cli`'s existing `export.rs` (CSV/JSON of one run's
+   samples) already follows the single-source-of-truth pattern this item calls for.
+6. **`[fixed, no flag needed]` PID unit labels (Kp vs. PB; Ti vs. Ri vs. Ki; Td vs. Kd) must
+   refresh on every relevant state
    change** — process-type change, template switch, and app startup — not only from a single
    settings-changed event handler. A partial refresh trigger is an easy way to end up with stale
-   unit labels on a results screen.
-7. **Tag-name derivation from a single PV tag must use the active DCS/PLC template's own
+   unit labels on a results screen. Legacy: `UpdateAllPIDlabels()` was only wired to the
+   PropertyGrid's change handler, never called at startup or on template switch. Not applicable in
+   the same form in bhtune's web frontend — React re-derives unit labels from component state on
+   every render, so there is no separate "refresh" step that can be forgotten — but the underlying
+   rule (labels must always reflect current process type/template, not a stale cached value) still
+   held during `frontend-screens`/`template-cli` and is worth remembering if a non-React adapter
+   is ever added.
+7. **`[fixed, no flag needed]` Tag-name derivation from a single PV tag must use the active
+   DCS/PLC template's own
    configured suffix convention, never a hardcoded literal** — different DCS/PLC families name
    their PV item differently (e.g. a `.PV` dot-suffix convention vs. no such convention at all).
-8. **Relay amplitude needs real, enforced range validation at the model/construction level** — not
+   Legacy: `-t`/`--tagname` unconditionally appended the literal `".PV"`. Fixed: `bhtune-core`'s
+   `derive_tag(pv_tag, suffix)` takes the suffix from the active `DcsTemplate`'s own
+   `process_variable_suffix` field (and the equivalent field for every other derived tag) — the
+   convention is template data, never Rust logic.
+8. **`[fixed, no flag needed]` Relay amplitude needs real, enforced range validation at the
+   model/construction level** — not
    just client-side keystroke filtering plus a single "not blank" check. An unvalidated numeric
    field that only rejects blanks is exactly how a nonsensical value reaches a live control loop.
-9. **Any file export feature must write to a path the user explicitly chooses, or a documented
+   Legacy: the hidden debug codes `2014`/`2015`/`2016` typed into the Relay Amplitude box were
+   validated only as "not blank", so a leftover debug code could become a 2014% relay step. Fixed:
+   the debug codes were dropped entirely rather than ported (see item 10 below), and
+   `safety-validation`/`LoopConfig::validate()` enforces real bounds on `relay_amp_percent` at
+   construction time regardless.
+9. **`[fixed, no flag needed]` Any file export feature must write to a path the user explicitly
+   chooses, or a documented
    platform-standard data directory** — never an implicit hardcoded path or "wherever the process
-   happened to start".
-10. **Test/demo mode must be a first-class, explicit backend choice** (e.g. `--backend
+   happened to start". Legacy: `TuningConstantsExport()` wrote to a hardcoded developer path
+   (`C:\Dropbox\Auto-Tuner Proj\...`); `LogLoopLocking()` wrote to the current working directory
+   rather than the log directory. Fixed: `bhtune-cli`'s `export`/`history export` commands take an
+   explicit `--output <path>` (or write structured data to stdout for piping), and logging
+   (`cli-logging`) resolves its directory through the normal config precedence, defaulting to a
+   documented platform-standard data directory — never an implicit/hardcoded path.
+10. **`[fixed, no flag needed]` Test/demo mode must be a first-class, explicit backend choice**
+    (e.g. `--backend
 simulator`), never triggered implicitly by a magic tag name or hidden UI state — an implicit
-    trigger is surprising and easy to leave enabled accidentally.
-11. **PID-type selection must be modeled as proper enums** (`ProportionalType`, `IntegralType`,
+    trigger is surprising and easy to leave enabled accidentally. Legacy: `OPCClass.Python` gated
+    a hardcoded branch triggered by typing the magic tag name `Simulink.Device1.Python.PV`, which
+    also **returned early from `ResetOPC`, skipping all DCS mode-revert logic**, and shelled out to
+    a hardcoded `RunModel.bat` path while blocking the UI thread for 7 seconds. Fixed:
+    `backend-simulator`'s `SimulatorBackend` is selected explicitly (`--backend simulator`), is a
+    real, in-process, non-blocking FOPDT model with no shell-out, and shares the exact same
+    restore/mode-revert path every other backend uses — there is no special-cased early return.
+11. **`[fixed, no flag needed]` PID-type selection must be modeled as proper enums**
+    (`ProportionalType`, `IntegralType`,
     `DerivativeType`, controller action direction, etc.), never as comparisons against magic
-    display strings or sentinel values.
-12. **PID is only offered for the two Temperature process types**; every other process type offers
+    display strings or sentinel values. Legacy: PID type selection compared against display
+    strings (`"Kp - Proportional Gain"`, `"Ti - Reset Time"`, `"Ri - Reset Rate"`, `"Ki - Reset
+Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a sentinel string
+    `"__reverse__"` forced a mismatch against `ControllerActionDirect` when the user selected
+    Reverse manually. Fixed: `core-model` ported these as proper `serde`-backed Rust enums
+    (`ControllerDirection`, etc.) decoupled from any UI display label.
+12. **`[preserved rule]` PID is only offered for the two Temperature process types**; every other
+    process type offers
     only P and PI. This is a deliberate domain rule (rooted in which tuning-constant columns are
-    actually calibrated), not an arbitrary restriction to relax.
-13. **Skip/count/noise-protection defaults are auto-populated per process type** from lookup
-    tables whenever the process type changes.
-14. **On the final MRFT step, MV snaps back to the initial value** rather than taking a full relay
-    step.
-15. **Significant-digit display formatting needs care.** Naive numeric rounding to N digits is not
+    actually calibrated), not an arbitrary restriction to relax. Preserved as
+    `ProcessType::allows_pid()`.
+13. **`[preserved rule]` Skip/count/noise-protection defaults are auto-populated per process type**
+    from lookup
+    tables whenever the process type changes. Preserved via `constants.rs`'s
+    `DEFAULT_CYCLES_SKIP`/`DEFAULT_CYCLES_TEST`/`DEFAULT_NOISE_PROTECTION_SECS` tables (see item 4
+    above for their sizing).
+14. **`[preserved rule]` On the final MRFT step, MV snaps back to the initial value** rather than
+    taking a full relay
+    step. Preserved in `core-mrft`'s `MrftEngine::step`.
+15. **`[fixed by design in this project, not a compat concern]` Significant-digit display
+    formatting needs care.** Naive numeric rounding to N digits is not
     the same as significant-digit formatting (e.g. `0.00123` vs. `123000` both have 3 significant
     digits but very different rounding behavior). Decide up front whether exact significant-digit
     formatting matters for a given field or whether straightforward rounding is an acceptable,
     documented simplification for display-only purposes — don't assume the two are
-    interchangeable.
-16. **A live PV/MV trend chart is a core UX expectation for the web GUI** — plan for high-rate
-    streaming updates (multiple times per second) from the start; see "Chart library" below.
+    interchangeable. Legacy: `FormatSigDigs` implemented significant-digit rounding via string
+    formatting for on-screen values. Not applicable in the same form: display formatting is now
+    entirely the web frontend's concern (plain `toFixed`-style rounding in React/TypeScript, e.g.
+    `RunDetailPage.tsx`), not something `bhtune-core` computes or stores — there is no
+    calculated/persisted value this affects, only how a number is rendered, so exact legacy
+    parity was judged not worth replicating here.
+16. **`[new feature, not a legacy bug]` A live PV/MV trend chart is a core UX expectation for the
+    web GUI** — plan for high-rate
+    streaming updates (multiple times per second) from the start; see "Chart library" below. The
+    legacy app never had a trend chart at all (`Telerik.WinControls.ChartView` was referenced in
+    the `.csproj` but no chart control was ever built), so this is new scope, not parity work —
+    shipped via `frontend-live-stream`'s `TrendChart` (uPlot).
+17. **`[not applicable — feature dropped]` A licensing/loop-locking ledger's connection-open
+    logic must handle a missing database file without throwing from an unobserved async task.**
+    Legacy: `SQLock.CheckDB()` called `.Open()` on a `null` `SQLiteConnection` whenever
+    `SQLock.db` was absent, so a genuinely fresh install could throw inside a fire-and-forget task
+    nobody awaited. Moot: bhtune has no license-gated loop-locking ledger at all — `bhtune-db`'s
+    SQLite schema (`db-schema`) was designed plain from the start (see `db-drop-legacy`), so there
+    is no `SQLock`-equivalent connection-open path that could reproduce this.
+18. **`[not applicable — feature dropped]` Log "encryption" and a login gate must provide genuine
+    protection, or not exist at all.** Legacy: logs were "encrypted" with AES-GCM using the
+    password `"imbcontrols2016"` hardcoded in the shipped binary — trivially reversible by anyone
+    holding the exe — and `Login.cs` (which shared the same hardcoded password) was itself dead
+    code, since `Program.cs` ran `MainForm` directly and never instantiated the login form, making
+    the documented `--unlockApp` flag a literal no-op. Moot: per the plan's locked decisions,
+    bhtune ships no log encryption and no login gate at all — logs and the database are plain,
+    matching the "no need to obfuscate/encrypt/hide anything" requirement — so there is no
+    encryption or auth subsystem left to get subtly wrong in this way.
 
 ## Documentation contract (`docs-contract`)
 
@@ -3234,9 +3360,13 @@ that binary does something real and gains its own targeted tests.
    [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md) (done); the trace fixture
    normalizer (`scripts/convert_golden_trace.py`) and the first real captured-and-normalized
    trace (`flow_pi_direct`) are done — see "Validation strategy: golden-master replay" above.
-   Capturing the remaining 5 process types, PID/temperature, reverse action, cascade, and varied
-   skip/count on the `hp` Windows host (`capture-traces`) is ongoing; `cleanup-golden-traces`
-   (deleting the raw CSV captures once parity is thoroughly proven) stays deliberately last.
+   `capture-traces` is deliberately closed at this one trace: it already proves the full
+   hp-VM capture workflow end-to-end and unblocked `core-replay-harness`, and the remaining 5
+   process types/PID/reverse-action/cascade/skip-count combinations were a judgement call not
+   to pursue further — the marginal parity evidence they'd add isn't worth the recurring
+   Windows-VM time against higher-priority phases. `cleanup-golden-traces` (deleting the raw
+   CSV captures now that parity is proven) is also done — see "Validation strategy:
+   golden-master replay" above.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
    `cargo-deny` open-source dependency gate.
 2. **`opcda-bridge` reusable client library** (published upstream) — consumed as a plain
@@ -3246,6 +3376,9 @@ that binary does something real and gains its own targeted tests.
    golden-master replay harness are all done, with the correctness-critical details above baked
    in and unit-tested directly, plus one real captured trace now proving exact behavioral parity
    with the legacy C# app (see "Validation strategy: golden-master replay" above).
+   `core-bug-register` is also done: every legacy defect found during the migration has an
+   explicit replicate-or-fix decision — see "Correctness-critical design details (also the legacy
+   bug register, `core-bug-register`)" above, which doubles as that register.
 4. **Backends** — the `Backend` trait (`backend-trait`, done: `read`/`write`/`browse` plus
    `TagId`/`TagValue`/`TagWrite`/`WriteOutcome`/`TagNode`/`BackendError` in `crates/
 bhtune-backend`), its OPC DA implementation (`backend-opcda`, done: `OpcDaBackend` in
@@ -3358,8 +3491,10 @@ stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
    own tooling, in place of the originally-planned `cargo-dist`), building the frontend
    first so the release build's `rust-embed` step captures real SPA assets — no Tauri
    bundler or WebView runtime to manage. See "`build-matrix`: the release binary matrix"
-   above for the full design. Remaining: golden replay suite in CI (`e2e-golden-ci`,
-   blocked on `trace-fixtures`/`capture-traces`).
+   above for the full design. `e2e-golden-ci` is also done — no dedicated workflow step was
+   needed: `checks.yml`'s existing `cargo test --workspace` already auto-discovers and runs
+   `crates/bhtune-core/tests/golden_replay.rs` on every push/PR to `main`, the same way
+   `e2e-simulator`'s subprocess test rides the same step rather than a separate job.
 9. **Documentation and release** — two prerequisites are already done, front-loaded ahead of
    the rest of this phase since they're cheap and are what actually prevents drift: a
    documentation contract in this file (`docs-contract`, see "Documentation contract" above)
