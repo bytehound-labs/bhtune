@@ -1100,6 +1100,26 @@ impl TuneSampleRow {
             .map_err(DbError::Query)?;
         rows.into_iter().map(row_to_tune_sample).collect()
     }
+
+    /// Lists only the samples of `run_id` recorded *after* `after_tick`, ordered by tick --
+    /// what `bhtune-server`'s `GET /api/runs/{id}/stream` (`frontend-live-stream`) polls on
+    /// every iteration so it never re-sends a tick it has already pushed to the browser.
+    /// Pass `-1` to fetch every sample from the very first tick (`tune_samples.tick` is
+    /// `>= 0`, so nothing is ever excluded by that sentinel).
+    pub async fn list_for_run_since(
+        pool: &SqlitePool,
+        run_id: i64,
+        after_tick: i64,
+    ) -> DbResult<Vec<TuneSampleRow>> {
+        let rows =
+            sqlx::query("SELECT * FROM tune_samples WHERE run_id = ? AND tick > ? ORDER BY tick")
+                .bind(run_id)
+                .bind(after_tick)
+                .fetch_all(pool)
+                .await
+                .map_err(DbError::Query)?;
+        rows.into_iter().map(row_to_tune_sample).collect()
+    }
 }
 
 fn row_to_tune_sample(row: SqliteRow) -> DbResult<TuneSampleRow> {

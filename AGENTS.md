@@ -129,11 +129,38 @@ direct edit-URL visit to a builtin/catalog template instead renders a warning ba
 disables Save, matching the server's 409 rather than letting the user hit it blind.
 Manually verified end-to-end (create a user template, edit and save it, confirm the
 change persists; visit a builtin template's edit URL directly and confirm the disabled
-warning state) against a real running server, zero console errors.
-`server-embed-spa`, `frontend-live-stream`, and `server-windows-service` (the rest of
-Phase 7), `backend-replay`, and the replay harness are not yet — the GUI plan reversed
-from a Tauri desktop app to a browser UI served by `bhtune-server` before any Tauri code
-was written (see "Key architectural decisions"). See "Phases and todos" below for what's next.
+warning state) against a real running server, zero console errors. This closed out
+`frontend-screens`'s last remaining gap.
+`frontend-live-stream` is now done: `GET /api/runs/{id}/stream` (Server-Sent Events) polls
+`TuneSampleRow::list_for_run_since` (a new `bhtune-db` query — `tick > after_tick`, with
+`-1` as the "everything" sentinel) and `TuneRunRow::get` every 300ms inside an
+`async-stream::stream!` generator, replaying every sample from tick 0 on every connection
+and terminating with exactly one `done` event (`RunStreamDone { outcome }`) once the run
+leaves `Running` — see `crates/bhtune-server/src/routes/stream.rs`'s module doc for why
+this polls the same database every other reader uses rather than adding a broadcast
+channel (zero risk to the already-tested CLI/server tick loop). On the frontend, a new
+`useRunStream` hook (`frontend/src/api/runs.ts`) consumes it via a plain `EventSource`
+(untyped — SSE has no typed-client support, unlike the rest of the API — with events
+manually parsed against the generated `SampleResponse`/`TuneOutcome` schema types),
+closing the connection and invalidating `useRun`'s query cache the instant `done` arrives.
+A new reusable `TrendChart` component (`frontend/src/components/TrendChart.tsx`) renders
+the resulting `samples` array with `uPlot` (PV on the left scale, MV on a right `mv`
+scale), using a `useRef`-held instance and `setData` for incremental updates rather than
+recreating the plot on every sample — the same component will later serve
+`history-explorer-ui`, differing only in whether `samples` comes from the live stream or
+a finished run's REST payload. `RunDetailPage` now switches between the two sources based
+on `outcome`, and `useRun`'s own polling was relaxed from a 1s to a 5s fallback now that
+the SSE stream (with its `done`-triggered invalidation) is the primary live-update
+mechanism, not a once-a-second full-`samples`-refetch. Manually verified against a real
+running server: the chart streamed the live relay square-wave/PV-oscillation in real
+time, the SSE connection opened exactly once and closed cleanly on `done` (confirmed via
+the browser's network log — no reconnect storm), and the chart handed off to the
+historical `samples` array with an identical rendered trend once the run completed, zero
+console errors.
+`server-embed-spa` and `server-windows-service` (the rest of Phase 7), `backend-replay`,
+and the replay harness are not yet — the GUI plan reversed from a Tauri desktop app to a
+browser UI served by `bhtune-server` before any Tauri code was written (see "Key
+architectural decisions"). See "Phases and todos" below for what's next.
 
 ## Design philosophy and scope discipline
 
@@ -437,6 +464,45 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
   still-mounted detail query in the instant before `navigate()` unmounts it; predates this
   slice, from the original `frontend-screens` commit, and harmless — noted here as a minor
   future cleanup opportunity, not fixed as part of this slice).
+- **`frontend-live-stream` is done: SSE supersedes the interim polling banner with a real
+  live-updating trend chart.** Backend: `TuneSampleRow::list_for_run_since(pool, run_id,
+after_tick)` (`bhtune-db`) is a new query — `tick > after_tick`, with `-1` as the
+  documented "everything" sentinel since `tick >= 0` always — polled by a new
+  `GET /api/runs/{id}/stream` handler (`crates/bhtune-server/src/routes/stream.rs`) inside
+  an `async-stream::stream!` generator on a 300ms interval, emitting a `sample` SSE event
+  per new tick (same `SampleResponse` DTO `history.rs` already used) and exactly one final
+  `done` event (`RunStreamDone { outcome }`) once the run leaves `Running`. Polls the
+  database rather than adding a broadcast channel deliberately — zero risk to the
+  already-tested CLI/server tick loop, and the endpoint replays every sample from tick 0
+  on every connection, so it behaves identically whether a client connects mid-run or
+  reconnects after a drop. Returning `Result<impl IntoResponse, ApiError>` (never naming
+  `Sse<impl Stream<...>>` or boxing/pinning a `dyn Stream`) is what let this ship without
+  adding `futures-core` as a direct dependency. Frontend: a new `useRunStream(id, enabled)`
+  hook (`frontend/src/api/runs.ts`) opens a plain `EventSource` (untyped — SSE has no
+  `openapi-fetch` support, unlike the rest of the API — parsing each event's `data` against
+  the generated `SampleResponse`/`TuneOutcome` schema types by hand), accumulates `sample`
+  events into its own `samples` array, and on `done` closes the connection _and_
+  invalidates `useRun`'s query cache so the final `results`/`writes`/`restore_status`
+  appear immediately rather than waiting on a poll. A new reusable `TrendChart` component
+  (`frontend/src/components/TrendChart.tsx`) takes a plain `samples` prop and renders it
+  with `uPlot` — a `useRef`-held instance created once (PV on the left scale, MV on a right
+  `mv` scale, a `ResizeObserver` for responsive width) and fed via `setData` on every new
+  `samples` array, uPlot's own incremental-update path, rather than recreating the plot per
+  sample; the same component will serve `history-explorer-ui` later unchanged, differing
+  only in whether its `samples` prop comes from the live stream or a finished run's REST
+  payload. `RunDetailPage` now renders `TrendChart` fed by `useRunStream` while
+  `outcome === "running"` and by `run.data.samples` once terminal — exactly one source is
+  ever "live" at a time, so no de-duplication logic is needed. `useRun`'s own
+  `refetchInterval` was relaxed from 1s to 5s now that it's just a safety net (in case an
+  SSE connection is silently dropped by an intermediary) rather than the primary live-
+  update mechanism. Manually verified against a real running `bhtune-server` + Vite dev
+  server via browser automation: the chart streamed the live relay square-wave (MV) and
+  resulting PV oscillation in real time as ticks arrived; the network log showed exactly
+  one `GET /api/runs/{id}/stream` request for the whole run (no reconnect storm — proving
+  `source.close()` in the `done` handler pre-empts the browser's default SSE auto-retry);
+  and the chart handed off to the historical `samples` array with an identical rendered
+  trend the moment the run reached `completed`, alongside populated results/write-back
+  tables. Zero browser console errors throughout.
 - **Every fallible route response is now typed with a real error schema, not
   `content?: never`.** `utoipa::path`'s `responses(...)` entries for 4xx statuses previously
   gave only a `description`, so `openapi-typescript` generated `content?: never` for them —
@@ -2217,7 +2283,7 @@ that binary does something real and gains its own targeted tests.
 | `bhtune-db`        | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance`                                         | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`                        | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above |
 | `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-template-update-api`/`server-embed-spa`/`server-windows-service` | `server-http-api` + `openapi-contract` + `server-start-tune-api` + `server-template-update-api` done — real Axum binary (health/templates full CRUD/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below — and `PUT /api/templates/{name}` editing an existing `user`-origin template in place (400 on a name mismatch, 404 if unknown, 409 if not user-owned); embedded SPA and Windows service pending                                   |
-| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`                                                                            | `frontend-shell` done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above; `frontend-screens` in progress — routing shell, Templates (List/Detail/Create/Edit), History (List/Detail), and a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation and a polling-based live-progress banner) all done and manually verified against a real running server; remaining: only the live PV/MV trend chart (blocked on `frontend-live-stream`/SSE)                                                                                                                                                                                          |
+| `frontend/` (pnpm) | `frontend-shell`/`frontend-screens`/`frontend-live-stream`                                                                            | All three done — React + TS + Vite + Tailwind CSS v4 SPA (`bhtune-frontend`), TanStack Query, a typed `openapi-fetch` client generated from `openapi.json` with its own CI drift gate, and an npm license-allowlist gate mirroring `cargo-deny` — see "Key architectural decisions" above. Routing shell, Templates (List/Detail/Create/Edit), History (List/Detail), a combined New Run screen (Connection/Tag-mapping/Test-parameters/Simulator/Write-back in one form, plus run cancellation), and a live PV/MV trend chart (`TrendChart`, uPlot-based, fed by a new SSE `useRunStream` hook while a run is active and by `useRun`'s `samples` once terminal) are all done and manually verified against a real running server                                                                                                                                                                                               |
 
 ## Phases and todos (roadmap order)
 
@@ -2286,28 +2352,30 @@ delete`, and validating a single-JSON-template import too), and `template-docs` 
    pnpm-workspace React + TS + Vite + Tailwind CSS v4 SPA using TanStack Query against a typed
    `openapi-fetch` client generated from that same spec, with its own CI-enforced
    regenerate-and-diff gate and a new npm license-allowlist gate mirroring `cargo-deny` — see
-   "Key architectural decisions" above for all of this. `frontend-screens` is well under
-   way: a `react-router` routing shell (`AppLayout` nav + health badge), the Templates
-   screens (List/Detail/Create/Edit), and the History screens
-   (List/Detail — no trend chart yet, that's `history-explorer-ui`) are done and verified
-   against a real running server. `server-start-tune-api` is now done:
+   "Key architectural decisions" above for all of this. `frontend-screens` is now fully
+   done: a `react-router` routing shell (`AppLayout` nav + health badge), the Templates
+   screens (List/Detail/Create/Edit), and the History screens (List/Detail) are done and
+   verified against a real running server. `server-start-tune-api` is now done:
    `POST /api/runs`/`POST /api/runs/{id}/cancel` start and cancel a real tune over HTTP,
    reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration rather than duplicating it —
    see "`server-start-tune-api`: starting and cancelling a tune over HTTP" above, including
    the `Send`-trait fix this required in `bhtune-cli` before a tune could be spawned as a
-   background task at all. That unblocked `frontend-screens`'s second slice, also now done
+   background task at all. That unblocked `frontend-screens`'s second slice, also done
    and manually verified against a real running server: a combined New Run screen
    (Connection, Tag mapping, Test parameters, Simulator parameters, and Write-back-on-
-   completion in one form), run cancellation, and a polling-based live-progress banner on
-   the run detail screen (the deliberate interim substitute for the not-yet-built SSE
-   stream) — see the dedicated bullet above for the two real bugs this manual verification
-   caught and fixed. `server-template-update-api` is now done too:
-   `PUT /api/templates/{name}` edits an existing `user`-origin template in place, which
-   unblocked `frontend-screens`'s third slice, the Template Edit screen — see the dedicated
-   bullet above. Remaining: embedding the built SPA into the `bhtune-server` binary
-   (`server-embed-spa`); the live PV/MV trend chart, blocked on live per-tick streaming to
-   the UI over SSE (`frontend-live-stream`); running as a
-   proper platform service (`server-windows-service`). Replaces the earlier Tauri desktop GUI
+   completion in one form), run cancellation, and (at the time) a polling-based
+   live-progress banner on the run detail screen — see the dedicated bullet above for the
+   two real bugs this manual verification caught and fixed. `server-template-update-api` is
+   done too: `PUT /api/templates/{name}` edits an existing `user`-origin template in place,
+   which unblocked `frontend-screens`'s third slice, the Template Edit screen — see the
+   dedicated bullet above. `frontend-live-stream` is now also done: `GET /api/runs/{id}/
+stream` (SSE, polling a new `TuneSampleRow::list_for_run_since` query) plus a
+   `useRunStream` hook and a reusable `uPlot`-based `TrendChart` component replace that
+   polling banner with a real live-updating PV/MV trend chart, handing off cleanly to the
+   historical `samples` array once a run completes — see the dedicated bullet above for
+   the full design and its manual browser verification. Remaining: embedding the built SPA
+   into the `bhtune-server` binary (`server-embed-spa`) and running as a proper platform
+   service (`server-windows-service`). Replaces the earlier Tauri desktop GUI
    phase — see "Key architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — fully automated E2E tune on Linux CI via CLI + simulator
    backend (no Windows, no external DCS dependency); Playwright E2E against the real web UI

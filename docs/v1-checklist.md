@@ -72,7 +72,7 @@ validation.
       editing (see §7).
 - [ ] NOT PLANNED — any licensing/loop-status UI. BHTune has no license gating of any kind.
 - [ ] REQUIRED — Help — offline/online help content.
-- [ ] REQUIRED — a live PV/MV trend chart in the web GUI (`frontend-live-stream` phase,
+- [x] REQUIRED — a live PV/MV trend chart in the web GUI (`frontend-live-stream` phase,
       `uPlot` per `AGENTS.md`), handling high-rate streaming updates (multiple times per second).
 
 ## 4. MRFT lifecycle

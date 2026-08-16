@@ -823,6 +823,132 @@ async fn tune_sample_rejects_duplicate_tick_for_the_same_run() {
     let dup = TuneSampleRow::insert(&pool, run.id, 0, sample, state, SampleQuality::Good).await;
     assert!(dup.is_err(), "duplicate (run_id, tick) must be rejected");
 }
+
+#[tokio::test]
+async fn tune_sample_list_for_run_since_only_returns_ticks_after_the_given_one() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC108",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+
+    for tick in 0..5i64 {
+        let sample = Tick {
+            time: now + Duration::milliseconds(tick * 800),
+            pv: 50.0 + tick as f32,
+        };
+        let state = MrftState {
+            hysteresis: 1.0,
+            mv_value_current: 55.0,
+            mv_sign_next_step: 1,
+            counter_all_switches: tick as u32,
+            cycles_completed: 0,
+            cycles_remaining: 2,
+        };
+        TuneSampleRow::insert(&pool, run.id, tick, sample, state, SampleQuality::Good)
+            .await
+            .unwrap();
+    }
+
+    // `-1` (the "nothing sent yet" sentinel `GET /api/runs/{id}/stream`'s first poll uses)
+    // must behave exactly like `list_for_run`: every sample, in order.
+    let all = TuneSampleRow::list_for_run_since(&pool, run.id, -1)
+        .await
+        .unwrap();
+    assert_eq!(
+        all.iter().map(|s| s.tick_index).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4]
+    );
+
+    // A tick in the middle of the recorded range returns only the strictly-later ones.
+    let since_2 = TuneSampleRow::list_for_run_since(&pool, run.id, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        since_2.iter().map(|s| s.tick_index).collect::<Vec<_>>(),
+        vec![3, 4]
+    );
+
+    // The most recently sent tick: nothing new yet.
+    let since_4 = TuneSampleRow::list_for_run_since(&pool, run.id, 4)
+        .await
+        .unwrap();
+    assert!(since_4.is_empty());
+
+    // A tick past the end of the recorded range (as if a caller's cursor were somehow ahead
+    // of what's stored) is also just empty, not an error.
+    let since_99 = TuneSampleRow::list_for_run_since(&pool, run.id, 99)
+        .await
+        .unwrap();
+    assert!(since_99.is_empty());
+}
+
+#[tokio::test]
+async fn tune_sample_list_for_run_since_is_scoped_to_the_given_run() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let run_a = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC109A",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+    let run_b = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC109B",
+        TuneBackend::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+
+    let sample = Tick {
+        time: now,
+        pv: 50.0,
+    };
+    let state = MrftState {
+        hysteresis: 1.0,
+        mv_value_current: 55.0,
+        mv_sign_next_step: 1,
+        counter_all_switches: 0,
+        cycles_completed: 0,
+        cycles_remaining: 2,
+    };
+    TuneSampleRow::insert(&pool, run_a.id, 0, sample, state, SampleQuality::Good)
+        .await
+        .unwrap();
+    TuneSampleRow::insert(&pool, run_b.id, 0, sample, state, SampleQuality::Good)
+        .await
+        .unwrap();
+
+    let a_samples = TuneSampleRow::list_for_run_since(&pool, run_a.id, -1)
+        .await
+        .unwrap();
+    assert_eq!(a_samples.len(), 1);
+    assert_eq!(a_samples[0].run_id, run_a.id);
+}
 // }}}1
 
 // tune_results {{{1

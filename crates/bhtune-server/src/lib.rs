@@ -37,6 +37,7 @@ pub fn build_router(state: AppState) -> axum::Router {
         .merge(routes::templates::router())
         .merge(routes::history::router())
         .merge(routes::runs::router())
+        .merge(routes::stream::router())
         .route("/api/openapi.json", axum::routing::get(openapi_json))
         .merge(utoipa_scalar::Scalar::with_url(
             "/api/docs",

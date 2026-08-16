@@ -12,7 +12,7 @@
 use utoipa::OpenApi;
 
 use crate::error::ErrorBody;
-use crate::routes::{health, history, runs, templates};
+use crate::routes::{health, history, runs, stream, templates};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -32,6 +32,7 @@ use crate::routes::{health, history, runs, templates};
         history::show_run,
         runs::start_run,
         runs::cancel_run,
+        stream::stream_run,
     ),
     components(schemas(
         health::Health,
@@ -44,6 +45,7 @@ use crate::routes::{health, history, runs, templates};
         history::WriteResponse,
         history::RunDetailResponse,
         runs::StartRunRequest,
+        stream::RunStreamDone,
         ErrorBody,
     )),
     tags(

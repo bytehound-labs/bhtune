@@ -99,6 +99,32 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/runs/{id}/stream": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Stream per-tick engine state for one run over Server-Sent Events.
+     * @description `GET /api/runs/{id}/stream` -- 404 if no run has that id. Emits a `sample` event (JSON
+     *     body: [`SampleResponse`], the same shape `GET /api/runs/{id}`'s `samples` array already
+     *     uses) for every tick recorded so far, and every new tick recorded while connected, followed
+     *     by exactly one final `done` event (JSON body: [`RunStreamDone`]) once the run reaches a
+     *     terminal outcome -- after which the connection closes. Safe to open at any point in a run's
+     *     lifecycle, including after it has already finished: in that case every sample is replayed
+     *     once as a burst of `sample` events, immediately followed by `done`.
+     */
+    get: operations["stream_run"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/templates": {
     parameters: {
       query?: never;
@@ -433,6 +459,16 @@ export interface components {
       runs: components["schemas"]["RunSummaryResponse"][];
       /** Format: int64 */
       total: number;
+    };
+    /**
+     * @description The final event emitted on every `GET /api/runs/{id}/stream` connection, named `done`,
+     *     immediately before the stream closes. Deliberately carries only the outcome rather than
+     *     duplicating the full run detail: the frontend already has `GET /api/runs/{id}` (via
+     *     `useRun`) for the config/results/write-back-audit shape, so `done` just signals "stop
+     *     listening and go refetch that" rather than growing this endpoint a second response shape.
+     */
+    RunStreamDone: {
+      outcome: components["schemas"]["TuneOutcome"];
     };
     /**
      * @description One run in `GET /api/runs`'s `runs` array -- deliberately a subset matching the CLI's own
@@ -876,6 +912,38 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description No run with that id. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  stream_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Run id */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description A `text/event-stream` of `sample` events (data: SampleResponse) followed by one final `done` event (data: RunStreamDone). */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "text/event-stream": components["schemas"]["SampleResponse"];
+        };
       };
       /** @description No run with that id. */
       404: {

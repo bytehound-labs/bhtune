@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { apiErrorMessage } from "./errors";
@@ -9,6 +10,7 @@ export type SampleResponse = components["schemas"]["SampleResponse"];
 export type ResultResponse = components["schemas"]["ResultResponse"];
 export type WriteResponse = components["schemas"]["WriteResponse"];
 export type StartRunRequest = components["schemas"]["StartRunRequest"];
+export type TuneOutcome = components["schemas"]["TuneOutcome"];
 
 /** Query params accepted by `GET /api/runs` — every field optional (see `RunListQuery`). */
 export type RunListFilter = NonNullable<
@@ -34,9 +36,15 @@ export function useRuns(filter: RunListFilter = {}) {
 
 /**
  * `GET /api/runs/{id}` — one run's full detail: config, readings, samples, results, writes.
- * Polls every second while the run is `"running"` (there's no push channel yet — that's
- * `frontend-live-stream`'s SSE endpoint — so this is the interim way to watch a run
- * progress) and stops polling once it reaches a terminal outcome.
+ *
+ * While a run is `"running"`, `useRunStream` (SSE, `frontend-live-stream`) is the live
+ * source of truth for per-tick samples — see `RunDetailPage` — so this no longer needs to
+ * re-fetch the whole (ever-growing) `samples` array once a second the way it did before
+ * that endpoint existed. The 5s poll here is now just a safety net for the terminal
+ * `outcome`/`results`/`writes` fields in case the SSE connection never reaches `done` (a
+ * proxy that buffers or drops long-lived streams, say); the common case is an immediate,
+ * exact-moment refetch triggered by `useRunStream` itself the instant its `done` event
+ * arrives, well ahead of this fallback.
  */
 export function useRun(id: number) {
   return useQuery({
@@ -50,8 +58,105 @@ export function useRun(id: number) {
     },
     enabled: Number.isFinite(id),
     refetchInterval: (query) =>
-      query.state.data?.outcome === "running" ? 1000 : false,
+      query.state.data?.outcome === "running" ? 5000 : false,
   });
+}
+
+/** State kept by {@link useRunStream}. */
+export interface RunStreamState {
+  /** Every `sample` event received so far, in tick order. The stream always replays every
+   * sample from tick 0 on connect (see `bhtune-server`'s `routes::stream` module doc), so
+   * this array is a complete, standalone trend the moment the first event arrives — it
+   * does not need to be merged with `useRun`'s own `samples`. */
+  samples: SampleResponse[];
+  /** Set once the terminal `done` event arrives (and the connection has been closed);
+   * `null` while still streaming. */
+  outcome: TuneOutcome | null;
+  /** True after a dropped connection until either a successful reconnect or `done`
+   * arrives. `EventSource` retries automatically on its own, so this is informational
+   * (e.g. a small "reconnecting…" note) rather than a fatal error state. */
+  reconnecting: boolean;
+}
+
+const emptyRunStreamState: RunStreamState = {
+  samples: [],
+  outcome: null,
+  reconnecting: false,
+};
+
+/**
+ * Consumes `GET /api/runs/{id}/stream` over Server-Sent Events to drive a live-updating
+ * trend chart while a run is in progress. `enabled` should be `false` once the caller
+ * already knows the run is no longer running (see `RunDetailPage`) — there is nothing left
+ * to stream for a finished run beyond the instant `done` replay, and `useRun`'s own
+ * `samples` is the cheaper source for a run that's already over.
+ *
+ * Deliberately keeps its own `samples` array rather than appending onto `useRun`'s: the SSE
+ * endpoint always replays every sample from tick 0 on every new connection (so it behaves
+ * identically whether the page loads mid-run or a dropped connection has to reconnect),
+ * which would double-count against whatever `useRun` had already fetched if the two were
+ * merged.
+ */
+export function useRunStream(id: number, enabled: boolean): RunStreamState {
+  const queryClient = useQueryClient();
+  const [state, setState] = useState<RunStreamState>(emptyRunStreamState);
+
+  useEffect(() => {
+    if (!enabled || !Number.isFinite(id)) {
+      setState(emptyRunStreamState);
+      return;
+    }
+
+    setState(emptyRunStreamState);
+    const source = new EventSource(`/api/runs/${id}/stream`);
+
+    source.addEventListener("sample", (event) => {
+      const sample = JSON.parse(
+        (event as MessageEvent<string>).data,
+      ) as SampleResponse;
+      setState((prev) => ({
+        ...prev,
+        reconnecting: false,
+        samples: [...prev.samples, sample],
+      }));
+    });
+
+    source.addEventListener("done", (event) => {
+      const done = JSON.parse((event as MessageEvent<string>).data) as {
+        outcome: TuneOutcome;
+      };
+      // The server has already ended its response by the time this fires; closing here
+      // just pre-empts the browser's own auto-reconnect from racing to reopen a stream
+      // with nothing left to say.
+      source.close();
+      setState((prev) => ({
+        ...prev,
+        outcome: done.outcome,
+        reconnecting: false,
+      }));
+      void queryClient.invalidateQueries({ queryKey: runKey(id) });
+    });
+
+    source.onopen = () => {
+      setState((prev) => ({ ...prev, reconnecting: false }));
+    };
+
+    source.onerror = () => {
+      // A connection the browser has given up on (e.g. the run id turned out not to
+      // exist, or the server sent a malformed response) reports `readyState === CLOSED`;
+      // anything else is a transient drop `EventSource` is already retrying on its own.
+      setState((prev) => ({
+        ...prev,
+        reconnecting: source.readyState !== EventSource.CLOSED,
+      }));
+    };
+
+    return () => {
+      source.close();
+    };
+  }, [id, enabled, queryClient]);
+
+  return state;
 }
 
 /**

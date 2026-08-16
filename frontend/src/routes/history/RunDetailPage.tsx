@@ -1,5 +1,5 @@
 import { Link, useParams } from "react-router";
-import { useCancelRun, useRun } from "../../api/runs";
+import { useCancelRun, useRun, useRunStream } from "../../api/runs";
 import {
   Badge,
   Button,
@@ -9,6 +9,7 @@ import {
   PageHeading,
   Section,
 } from "../../components/ui";
+import { TrendChart } from "../../components/TrendChart";
 
 const originTone = {
   builtin: "success",
@@ -44,6 +45,12 @@ export function RunDetailPage() {
   const run = useRun(runId);
   const cancelRun = useCancelRun();
   const isRunning = run.data?.outcome === "running";
+  const stream = useRunStream(runId, isRunning);
+  // While running, the live SSE feed is the source of truth (it replays every sample from
+  // tick 0, so it's a complete trend on its own); once terminal, fall back to `useRun`'s
+  // plain REST `samples`, which is cheaper than keeping a stream open for a run that's
+  // already over.
+  const trendSamples = isRunning ? stream.samples : (run.data?.samples ?? []);
 
   return (
     <div>
@@ -81,14 +88,14 @@ export function RunDetailPage() {
           {isRunning && (
             <div className="mb-6 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
               <p className="text-slate-300">
-                Run in progress — this page refreshes automatically every
-                second. There is no live push channel yet
-                (frontend-live-stream), so a chart can't stream in real time,
-                but the latest recorded sample is shown below.
+                Run in progress — streaming live via SSE.
+                {stream.reconnecting && (
+                  <span className="ml-2 text-amber-400">Reconnecting…</span>
+                )}
               </p>
-              {run.data.samples.length > 0 ? (
+              {stream.samples.length > 0 ? (
                 (() => {
-                  const latest = run.data.samples[run.data.samples.length - 1];
+                  const latest = stream.samples[stream.samples.length - 1];
                   return (
                     <p className="mt-2 font-mono text-slate-400">
                       Tick {latest.tick_index}: PV {num(latest.sample.pv)}, MV{" "}
@@ -103,6 +110,19 @@ export function RunDetailPage() {
               )}
             </div>
           )}
+
+          <section className="mb-6">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+              Trend
+            </h2>
+            {trendSamples.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                No samples recorded yet for this run.
+              </p>
+            ) : (
+              <TrendChart samples={trendSamples} />
+            )}
+          </section>
 
           <Section title="Summary">
             <Field label="Loop" value={run.data.loop_name} />
@@ -362,10 +382,8 @@ export function RunDetailPage() {
           </section>
 
           <p className="text-sm text-slate-500">
-            {run.data.samples.length} per-tick samples{" "}
-            {isRunning ? "recorded so far" : "were recorded"} for this run. A
-            trend chart is planned for the history explorer
-            (history-explorer-ui), not yet built.
+            {trendSamples.length} per-tick samples{" "}
+            {isRunning ? "recorded so far" : "were recorded"} for this run.
           </p>
         </>
       )}

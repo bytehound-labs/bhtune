@@ -278,6 +278,50 @@
         }
       }
     },
+    "/api/runs/{id}/stream": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Stream per-tick engine state for one run over Server-Sent Events.",
+        "description": "`GET /api/runs/{id}/stream` -- 404 if no run has that id. Emits a `sample` event (JSON\nbody: [`SampleResponse`], the same shape `GET /api/runs/{id}`'s `samples` array already\nuses) for every tick recorded so far, and every new tick recorded while connected, followed\nby exactly one final `done` event (JSON body: [`RunStreamDone`]) once the run reaches a\nterminal outcome -- after which the connection closes. Safe to open at any point in a run's\nlifecycle, including after it has already finished: in that case every sample is replayed\nonce as a burst of `sample` events, immediately followed by `done`.",
+        "operationId": "stream_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A `text/event-stream` of `sample` events (data: SampleResponse) followed by one final `done` event (data: RunStreamDone).",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/templates": {
       "get": {
         "tags": [
@@ -1062,6 +1106,18 @@
           "total": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "RunStreamDone": {
+        "type": "object",
+        "description": "The final event emitted on every `GET /api/runs/{id}/stream` connection, named `done`,\nimmediately before the stream closes. Deliberately carries only the outcome rather than\nduplicating the full run detail: the frontend already has `GET /api/runs/{id}` (via\n`useRun`) for the config/results/write-back-audit shape, so `done` just signals \"stop\nlistening and go refetch that\" rather than growing this endpoint a second response shape.",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/TuneOutcome"
           }
         }
       },
