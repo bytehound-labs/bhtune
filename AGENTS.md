@@ -183,9 +183,28 @@ still cannot compile `#[cfg(windows)]` code directly (`libsqlite3-sys` needs an
 sudo to install `mingw-w64`), so the Windows-specific SCM glue was verified by careful
 line-by-line comparison against the already-CI-proven `opcda-bridge-gateway` reference
 implementation and against the `windows-service` 0.8 API surface on docs.rs, plus the real
-`windows-latest` CI job, rather than compiled locally; manual confirmation against a live
-Service Control Manager on the `hp` Windows host is the one remaining step before this item
-is fully closed out. Phase 8's
+`windows-latest` CI job, rather than compiled locally — and then manually verified against a
+live Service Control Manager on the `hp` Windows host, exercising every subcommand against
+a real, freshly-cloned build: `install` (confirmed via `sc qc` — exact expected
+`SERVICE_NAME`/`DISPLAY_NAME`/`AUTO_START`/`LocalSystem`, and, with `--config <path>`, the
+path correctly baked into `BINARY_PATH_NAME`), `start` (confirmed via `sc query` showing
+`RUNNING`, the process actually listening in the `Services` session, and a real HTTP
+`/api/health` request succeeding), `stop` (clean `WIN32_EXIT_CODE 0`, process actually gone
+from `tasklist`), and `uninstall` (service fully deregistered, `status` correctly returning
+to the pre-install "does not exist" error). Also confirmed the interactive/foreground
+fallback (`is_run_outside_scm`) genuinely serves requests when run outside the SCM, and that
+a `--config` pointing at a custom `db`/`log.dir` is actually honored by a `LocalSystem`-run
+service rather than falling back to that account's own profile directory — the exact gotcha
+the installation guide documents a mitigation for. `protoc` turned out to be a previously
+undocumented build prerequisite on Windows (transitively via `opcda-bridge-proto`'s gRPC
+codegen; `choco install protoc` resolves it) and has been added to the installation guide.
+No code defects were found; two apparent anomalies during testing (an interactive run
+started via `cmd /c start /b` over SSH leaving no process behind, and a log file that `dir`
+reported as 0 bytes while running) were both root-caused to test-methodology artifacts, not
+real bugs — `start /b` doesn't survive the invoking SSH channel closing, and `dir` shows a
+stale cached size for a file another process still has open for writing (`type` confirmed
+the real-time content was correct and matched Linux's own output exactly). This item is now
+fully closed out. Phase 8's
 `e2e-simulator` is now done: a genuine, real-subprocess end-to-end test
 (`crates/bhtune-cli/tests/e2e_simulator.rs`) that runs `bhtune tune` against the simulator
 backend across a small process/controller-type matrix and asserts the _calculated_ PID
@@ -3484,8 +3503,10 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    pointing at the systemd/launchd equivalents, new `install`/`uninstall`/`start`/`stop`/
    `status` subcommands and a `--config` flag in `cli.rs`, and `main.rs` rewritten as a thin
    platform-split dispatcher — see the Status section above for the full design, the
-   packaging files it ships (`packaging/systemd/`, `packaging/launchd/`), and how the
-   Windows-only code was verified without a local Windows toolchain. This closes out Phase 7
+   packaging files it ships (`packaging/systemd/`, `packaging/launchd/`), and its full manual
+   verification against a live Service Control Manager on the `hp` Windows host (every
+   subcommand, the interactive fallback, and the `--config` gotcha's mitigation, with no
+   defects found). This closes out Phase 7
    entirely. Replaces the earlier Tauri desktop GUI
    phase — see "Key architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — `e2e-simulator` is done: a genuine subprocess-level test

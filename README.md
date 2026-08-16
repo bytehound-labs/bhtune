@@ -136,7 +136,10 @@ frequently prohibit or simply lack container runtimes.
 ### Build from source
 
 Requires a Rust toolchain supporting the 2024 edition (Rust 1.94 or newer, BHTune's declared
-MSRV, verified in CI):
+MSRV, verified in CI) and the Protocol Buffers compiler `protoc` on `PATH` (needed transitively
+by [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge)'s gRPC codegen build
+script — see [Installation](docs/getting-started/installation.md#prerequisites) for
+per-platform install commands):
 
 ```sh
 git clone https://github.com/bytehound-labs/bhtune.git

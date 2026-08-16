@@ -44,11 +44,18 @@ Skip to [Prerequisites](#prerequisites) below to build from source instead.
 
 - A Rust toolchain supporting the 2024 edition (Rust 1.94 or newer — this is BHTune's declared
   MSRV, verified in CI).
+- The Protocol Buffers compiler, `protoc`, on `PATH` — needed transitively by
+  [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge)'s gRPC codegen build
+  script. On Windows, `choco install protoc` is the most reliable option (`winget` can fail
+  on hosts where its `msstore` source prompts for a one-time terms-of-service acceptance).
+  On Linux, install your distro's `protobuf-compiler` package; on macOS,
+  `brew install protobuf`.
 - [`pnpm`](https://pnpm.io/) if you want to build or develop the web GUI's frontend. The CLI
   and server both build and run without it — the frontend is only needed to serve the browser
   UI from `bhtune-server`.
-- Nothing else. No Windows, no Docker, no proprietary SDKs — every dependency is open-source
-  (machine-enforced in CI via `cargo deny`).
+
+No Windows, no Docker, and no proprietary SDKs are required beyond the above — every
+dependency, `protoc` included, is open-source (machine-enforced in CI via `cargo deny`).
 
 ## Build the CLI and server
 
