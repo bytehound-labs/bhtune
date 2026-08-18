@@ -402,7 +402,27 @@ rows, matching `history list`'s table having no connection column either); `bhtu
 `history show` gained a "Connection:" line in `Table` mode and the same two fields in its
 `RunDetailJson`, so the CLI and HTTP API stay in JSON-shape parity. Unblocks
 `api-post-run-write` and `ui-prefill-last-run`, both of which need a stored, trustworthy
-connection/request to act on.
+connection/request to act on. Its own next todo, `ui-simulator-greyout`, is also done:
+`components/ui.tsx`'s `NumberField`/`SelectField`/`CheckboxField` gained a `disabled` prop,
+matching `TextField`'s pre-existing `disabled:cursor-not-allowed disabled:opacity-50`
+pattern, and `NewRunPage.tsx` now disables — rather than hides — every field the simulator
+driver genuinely ignores: the OPC DA server ProgID and bridge host (previously conditionally
+hidden outright; now always rendered, so switching drivers no longer reflows the form), the
+tag name (the simulator hardcodes its own PV/MV tags), the write-back level and its
+confirmation checkbox (the simulator has no PID constant tags to write to), the
+`--allow-uncertain-quality` checkbox (the simulator always reports `Good`), and the
+op/restore timeouts (no out-of-process I/O to time out) — each with a one-line hint
+explaining why. The template,
+PV/MV ranges, controller direction, process type, controller type, relay amplitude, cycles,
+poll interval, run timeout, and MRFT delay padding fields all stay enabled, since they are
+genuinely used regardless of driver — the template's unit conversions apply to every run,
+and the simulator's lack of its own range/direction tags makes those four fields _more_
+required, not less. `buildRequest()`'s tag-name check is skipped whenever the field is
+disabled, matching the rule that a disabled field must be excluded from client-side
+validation. Manually verified against a real running server via browser automation (not
+just typechecked): confirmed the disabled state, hint text, and enabled/disabled field list
+match exactly in both driver modes, and that the existing Playwright E2E suite (which never
+exercises the opcda-only fields) still passes unmodified.
 
 ## Design philosophy and scope discipline
 

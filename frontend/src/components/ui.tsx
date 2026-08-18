@@ -218,6 +218,7 @@ export function NumberField({
   min,
   max,
   full = false,
+  disabled = false,
 }: {
   label: string;
   value: number | "";
@@ -229,6 +230,7 @@ export function NumberField({
   min?: number;
   max?: number;
   full?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
@@ -243,10 +245,11 @@ export function NumberField({
         step={step}
         min={min}
         max={max}
+        disabled={disabled}
         onChange={(e) =>
           onChange(e.target.value === "" ? "" : e.target.valueAsNumber)
         }
-        className={fieldControlClass}
+        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:opacity-50`}
       />
       {hint && (
         <span className="mt-1 block text-xs text-slate-500">{hint}</span>
@@ -269,6 +272,7 @@ export function SelectField<T extends string>({
   placeholder,
   required = false,
   hint,
+  disabled = false,
 }: {
   label: string;
   value: T;
@@ -278,6 +282,7 @@ export function SelectField<T extends string>({
   placeholder?: string;
   required?: boolean;
   hint?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
@@ -288,7 +293,8 @@ export function SelectField<T extends string>({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
-        className={fieldControlClass}
+        disabled={disabled}
+        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:opacity-50`}
       >
         {placeholder !== undefined && <option value="">{placeholder}</option>}
         {options.map((option) => (
@@ -310,11 +316,13 @@ export function CheckboxField({
   checked,
   onChange,
   hint,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
   hint?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className="flex items-start gap-2 pt-5">
@@ -322,9 +330,10 @@ export function CheckboxField({
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-950"
+        disabled={disabled}
+        className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
       />
-      <span>
+      <span className={disabled ? "opacity-50" : undefined}>
         <span className="block text-sm text-slate-200">{label}</span>
         {hint && <span className="block text-xs text-slate-500">{hint}</span>}
       </span>

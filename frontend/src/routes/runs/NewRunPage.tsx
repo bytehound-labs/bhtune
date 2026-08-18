@@ -138,7 +138,11 @@ function toOptional(value: NumOrBlank): number | undefined {
  * trip — the server re-validates everything regardless, this is purely for fast feedback. */
 function buildRequest(form: FormState): StartRunRequest | string {
   if (!form.template) return "Choose a template.";
-  if (!form.tagname.trim()) return "Tag name is required.";
+  // Tag name is disabled (and therefore excluded from validation) for the simulator driver,
+  // which hardcodes its own PV/MV tags and ignores this field entirely.
+  if (form.driver !== "simulator" && !form.tagname.trim()) {
+    return "Tag name is required.";
+  }
   if (form.driver === "opcda" && !form.server.trim()) {
     return "OPC DA server ProgID is required for the opcda driver.";
   }
@@ -329,33 +333,41 @@ export function NewRunPage() {
           />
           <TextField
             label="Tag name"
-            required
+            required={form.driver !== "simulator"}
+            disabled={form.driver === "simulator"}
             value={form.tagname}
             onChange={(v) => set("tagname", v)}
             hint={
               form.driver === "simulator"
-                ? "Ignored for the simulator driver, but still required."
+                ? "Disabled — the simulator hardcodes its own PV/MV tags and ignores this."
                 : "PV tag prefix; the rest of the tag set is derived from it via the template's suffixes."
             }
           />
-          {form.driver === "opcda" && (
-            <>
-              <TextField
-                label="OPC DA server ProgID"
-                required
-                value={form.server}
-                onChange={(v) => set("server", v)}
-                placeholder="e.g. Matrikon.OPC.Simulation"
-              />
-              <TextField
-                label="Bridge host"
-                value={form.bridgeHost}
-                onChange={(v) => set("bridgeHost", v)}
-                placeholder="Defaults to this server's own configured bridge host"
-                hint="opcda-bridge gateway address (host:port)."
-              />
-            </>
-          )}
+          <TextField
+            label="OPC DA server ProgID"
+            required={form.driver === "opcda"}
+            disabled={form.driver === "simulator"}
+            value={form.server}
+            onChange={(v) => set("server", v)}
+            placeholder="e.g. Matrikon.OPC.Simulation"
+            hint={
+              form.driver === "simulator"
+                ? "Disabled — the simulator never contacts a gateway."
+                : undefined
+            }
+          />
+          <TextField
+            label="Bridge host"
+            disabled={form.driver === "simulator"}
+            value={form.bridgeHost}
+            onChange={(v) => set("bridgeHost", v)}
+            placeholder="Defaults to this server's own configured bridge host"
+            hint={
+              form.driver === "simulator"
+                ? "Disabled — the simulator never contacts a gateway."
+                : "opcda-bridge gateway address (host:port)."
+            }
+          />
         </FormSection>
 
         <FormSection title="Test parameters">
@@ -435,7 +447,12 @@ export function NewRunPage() {
             onChange={(v) => set("opTimeoutSecs", v)}
             min={1}
             step={1}
-            hint="Cap on any single driver read/write."
+            disabled={form.driver === "simulator"}
+            hint={
+              form.driver === "simulator"
+                ? "Disabled — the simulator has no out-of-process I/O to time out."
+                : "Cap on any single driver read/write."
+            }
           />
           <NumberField
             label="Restore timeout (s)"
@@ -443,13 +460,23 @@ export function NewRunPage() {
             onChange={(v) => set("restoreTimeoutSecs", v)}
             min={1}
             step={1}
-            hint="Cap on restoring the loop afterward."
+            disabled={form.driver === "simulator"}
+            hint={
+              form.driver === "simulator"
+                ? "Disabled — the simulator has no out-of-process I/O to time out."
+                : "Cap on restoring the loop afterward."
+            }
           />
           <CheckboxField
             label="Allow uncertain quality"
             checked={form.allowUncertainQuality}
             onChange={(v) => set("allowUncertainQuality", v)}
-            hint="Accept Quality::Uncertain readings instead of aborting. Bad quality is never accepted."
+            disabled={form.driver === "simulator"}
+            hint={
+              form.driver === "simulator"
+                ? "Disabled — the simulator always reports Good quality."
+                : "Accept Quality::Uncertain readings instead of aborting. Bad quality is never accepted."
+            }
           />
         </FormSection>
 
@@ -575,12 +602,23 @@ export function NewRunPage() {
             onChange={(v) => set("writePid", v)}
             options={RESPONSE_LEVELS}
             placeholder="Don't write back automatically"
+            disabled={form.driver === "simulator"}
+            hint={
+              form.driver === "simulator"
+                ? "Disabled — the simulator has no PID constant tags to write to."
+                : undefined
+            }
           />
           <CheckboxField
             label="Confirm unattended write-back"
             checked={form.yes}
             onChange={(v) => set("yes", v)}
-            hint="Required whenever a write-back level is chosen — writing to a live loop with no prompt must be a deliberate choice."
+            disabled={form.driver === "simulator"}
+            hint={
+              form.driver === "simulator"
+                ? "Disabled — the simulator has no PID constant tags to write to."
+                : "Required whenever a write-back level is chosen — writing to a live loop with no prompt must be a deliberate choice."
+            }
           />
         </FormSection>
 
