@@ -2,6 +2,17 @@ import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
+ * Locates the outcome badge specifically (`RunDetailPage`'s "Outcome" field value), scoped
+ * to `<dd>` (value) elements and matched on exact full text. This disambiguates it from the
+ * unrelated "Completed" field *label* (a `<dt>`, for the completion-timestamp field) which
+ * renders the identical text now that outcomes use friendly, capitalized labels
+ * (`ui-friendly-process-names`) instead of the raw lowercase wire value.
+ */
+function outcomeBadge(page: Page, outcome: "Completed" | "Aborted") {
+  return page.locator("dd").filter({ hasText: new RegExp(`^${outcome}$`) });
+}
+
+/**
  * Clicks "Start tune" and waits for navigation to the new run's detail page, retrying the
  * click if the server still reports the *previous* run as active.
  *
@@ -84,9 +95,8 @@ test.describe("running a tune from the browser", () => {
     // The SSE-driven live banner (`frontend-live-stream`) invalidates the run query the
     // instant its `done` event arrives, so this resolves close to real completion time
     // rather than waiting for `useRun`'s 5s polling fallback -- see `api/runs.ts`'s
-    // `useRunStream` doc comment. Exact-match "completed" (lowercase) can't collide with
-    // the unrelated "Completed" (capitalized) field label rendered alongside it.
-    await expect(page.getByText("completed", { exact: true })).toBeVisible({
+    // `useRunStream` doc comment.
+    await expect(outcomeBadge(page, "Completed")).toBeVisible({
       timeout: 30_000,
     });
 
@@ -152,7 +162,7 @@ test.describe("running a tune from the browser", () => {
 
     await startTune(page);
     await expect(page).toHaveURL(/\/runs\/\d+$/);
-    await expect(page.getByText("completed", { exact: true })).toBeVisible({
+    await expect(outcomeBadge(page, "Completed")).toBeVisible({
       timeout: 30_000,
     });
 
@@ -188,7 +198,7 @@ test.describe("running a tune from the browser", () => {
 
     await startTune(page);
     await expect(page).toHaveURL(/\/runs\/\d+$/);
-    await expect(page.getByText("completed", { exact: true })).toBeVisible({
+    await expect(outcomeBadge(page, "Completed")).toBeVisible({
       timeout: 30_000,
     });
 
@@ -228,7 +238,7 @@ test.describe("running a tune from the browser", () => {
     await expect(cancelButton).toBeVisible();
     await cancelButton.click();
 
-    await expect(page.getByText("aborted", { exact: true })).toBeVisible({
+    await expect(outcomeBadge(page, "Aborted")).toBeVisible({
       timeout: 30_000,
     });
     await expect(

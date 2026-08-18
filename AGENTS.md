@@ -424,6 +424,37 @@ just typechecked): confirmed the disabled state, hint text, and enabled/disabled
 match exactly in both driver modes, and that the existing Playwright E2E suite (which never
 exercises the opcda-only fields) still passes unmodified.
 
+Phase 7.5's next todo, `ui-friendly-process-names`, is also done. Every enum that leaked into
+the UI as its raw snake_case wire value (`process_type`, `controller_type`,
+`controller_direction`, `response_level`, `driver`, `outcome`) now renders a friendly display
+label instead, via new `frontend/src/lib/enumLabels.ts` — six `Record<EnumType, string>` maps
+(`PROCESS_TYPE_LABELS`, `CONTROLLER_TYPE_LABELS`, `DIRECTION_LABELS`,
+`RESPONSE_LEVEL_LABELS`, `DRIVER_LABELS`, `OUTCOME_LABELS`) typed directly against the
+generated OpenAPI schema types, so a new enum member fails `tsc` rather than silently falling
+back to raw text. `ProcessType`/`ControllerType`/`ControllerDirection`/`ResponseLevel` reuse
+the legacy app's own dropdown/results-tab strings verbatim (e.g. `pressure_line` → "Pressure
+(Line)", `temperature_heat_exchange` → "Temperature (Heat Exchange)"), since control
+engineers already know that vocabulary; `TuneDriver`/`TuneOutcome` have no legacy precedent,
+so they use plain title case ("OPC DA", "Simulator", "Replay"; "Running", "Completed",
+"Failed", "Aborted").
+`components/ui.tsx`'s `SelectField` gained an optional `displayLabel` prop and was
+re-parameterized from one generic to two (`SelectField<Value extends string, Option extends
+Value = Value>`) — `Value` types the field's own state (which may include the `""`
+placeholder sentinel for an optional field), `Option` types the rendered choices and
+`displayLabel`'s parameter, and letting them differ is what lets a label map keyed only on
+real enum members type-check against an optional-enum field without also having to cover the
+empty sentinel. `NewRunPage.tsx`, `RunListPage.tsx`, and `RunDetailPage.tsx` all wire the
+relevant label maps into every `SelectField`/filter/table-cell/badge that previously rendered
+a raw enum value (the Template dropdown's free-form names are deliberately left alone — no
+label map applies to them); the two `capitalize` CSS-class workarounds on the response-level
+table cells are removed now that the label text itself is already properly cased. Fixed a
+resulting Playwright ambiguity in `tune.spec.ts`: the outcome badge's text changed from raw
+lowercase (`"completed"`) to the capitalized label (`"Completed"`), which collided with
+`RunDetailPage`'s pre-existing, unrelated "Completed" field _label_ (the completion-timestamp
+field's `<dt>`) once both rendered the identical string — resolved with a shared `outcomeBadge()`
+helper that scopes the locator to `<dd>` (value) elements only, since that field's own `<dd>`
+holds a formatted timestamp, never the literal word "Completed".
+
 ## Design philosophy and scope discipline
 
 Most PID auto-tuning tools for industrial DCS/PLC systems are Windows-only desktop applications

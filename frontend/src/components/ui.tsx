@@ -261,9 +261,15 @@ export function NumberField({
 /**
  * A labeled `<select>` for a fixed set of enum options. `placeholder`, when given, renders a
  * leading `value=""` option with human-readable text (e.g. "Auto-detect") — for an optional
- * enum field where `T` includes `""` for "unset".
+ * enum field where `T` includes `""` for "unset". `displayLabel`, when given, maps each raw
+ * option value to human-readable text (e.g. `pressure_line` -> "Pressure (Line)", via one of
+ * the maps in `lib/enumLabels`); omit it for genuinely free-form options (e.g. template
+ * names) where the raw value already is the display text.
  */
-export function SelectField<T extends string>({
+export function SelectField<
+  Value extends string,
+  Option extends Value = Value,
+>({
   label,
   value,
   onChange,
@@ -273,16 +279,18 @@ export function SelectField<T extends string>({
   required = false,
   hint,
   disabled = false,
+  displayLabel,
 }: {
   label: string;
-  value: T;
-  onChange: (value: T) => void;
-  options: readonly T[];
+  value: Value;
+  onChange: (value: Value) => void;
+  options: readonly Option[];
   full?: boolean;
   placeholder?: string;
   required?: boolean;
   hint?: string;
   disabled?: boolean;
+  displayLabel?: (value: Option) => string;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
@@ -292,14 +300,14 @@ export function SelectField<T extends string>({
       </span>
       <select
         value={value}
-        onChange={(e) => onChange(e.target.value as T)}
+        onChange={(e) => onChange(e.target.value as Value)}
         disabled={disabled}
         className={`${fieldControlClass} disabled:cursor-not-allowed disabled:opacity-50`}
       >
         {placeholder !== undefined && <option value="">{placeholder}</option>}
         {options.map((option) => (
           <option key={option} value={option}>
-            {option}
+            {displayLabel ? displayLabel(option) : option}
           </option>
         ))}
       </select>

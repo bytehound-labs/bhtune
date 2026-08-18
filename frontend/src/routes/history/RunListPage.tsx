@@ -3,6 +3,11 @@ import { Link } from "react-router";
 import { useRuns } from "../../api/runs";
 import type { RunListFilter } from "../../api/runs";
 import {
+  DRIVER_LABELS,
+  OUTCOME_LABELS,
+  PROCESS_TYPE_LABELS,
+} from "../../lib/enumLabels";
+import {
   Badge,
   Button,
   EmptyState,
@@ -76,7 +81,7 @@ export function RunListPage() {
           <option value="">All process types</option>
           {PROCESS_TYPES.map((p) => (
             <option key={p} value={p}>
-              {p}
+              {PROCESS_TYPE_LABELS[p]}
             </option>
           ))}
         </select>
@@ -88,7 +93,7 @@ export function RunListPage() {
           <option value="">All outcomes</option>
           {OUTCOMES.map((o) => (
             <option key={o} value={o}>
-              {o}
+              {OUTCOME_LABELS[o]}
             </option>
           ))}
         </select>
@@ -100,7 +105,7 @@ export function RunListPage() {
           <option value="">All drivers</option>
           {DRIVERS.map((b) => (
             <option key={b} value={b}>
-              {b}
+              {DRIVER_LABELS[b]}
             </option>
           ))}
         </select>
@@ -140,14 +145,16 @@ export function RunListPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-3 text-slate-400">
-                      {run.process_type}
+                      {PROCESS_TYPE_LABELS[run.process_type]}
                     </td>
                     <td className="px-4 py-3">
                       <Badge tone={outcomeTone[run.outcome]}>
-                        {run.outcome}
+                        {OUTCOME_LABELS[run.outcome]}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 text-slate-400">{run.driver}</td>
+                    <td className="px-4 py-3 text-slate-400">
+                      {DRIVER_LABELS[run.driver]}
+                    </td>
                     <td className="px-4 py-3 text-slate-400">
                       {new Date(run.started_at).toLocaleString()}
                     </td>

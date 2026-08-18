@@ -7,6 +7,14 @@ import {
   useRunStream,
 } from "../../api/runs";
 import {
+  CONTROLLER_TYPE_LABELS,
+  DIRECTION_LABELS,
+  DRIVER_LABELS,
+  OUTCOME_LABELS,
+  PROCESS_TYPE_LABELS,
+  RESPONSE_LEVEL_LABELS,
+} from "../../lib/enumLabels";
+import {
   Badge,
   Button,
   ErrorBanner,
@@ -169,11 +177,11 @@ export function RunDetailPage() {
               label="Outcome"
               value={
                 <Badge tone={outcomeTone[run.data.outcome]}>
-                  {run.data.outcome}
+                  {OUTCOME_LABELS[run.data.outcome]}
                 </Badge>
               }
             />
-            <Field label="Driver" value={run.data.driver} />
+            <Field label="Driver" value={DRIVER_LABELS[run.data.driver]} />
             <Field
               label="Template"
               value={
@@ -214,10 +222,13 @@ export function RunDetailPage() {
           </Section>
 
           <Section title="Test configuration">
-            <Field label="Process type" value={run.data.config.process_type} />
+            <Field
+              label="Process type"
+              value={PROCESS_TYPE_LABELS[run.data.config.process_type]}
+            />
             <Field
               label="Controller type"
-              value={run.data.config.controller_type}
+              value={CONTROLLER_TYPE_LABELS[run.data.config.controller_type]}
             />
             <Field
               label="Relay amplitude"
@@ -257,7 +268,11 @@ export function RunDetailPage() {
               />
               <Field
                 label="Controller direction"
-                value={run.data.initial_readings.controller_direction}
+                value={
+                  DIRECTION_LABELS[
+                    run.data.initial_readings.controller_direction
+                  ]
+                }
               />
               <Field
                 label="Setpoint initial"
@@ -299,8 +314,8 @@ export function RunDetailPage() {
                   <tbody className="divide-y divide-slate-800">
                     {run.data.results.map((result) => (
                       <tr key={result.response_level}>
-                        <td className="px-4 py-3 font-medium capitalize">
-                          {result.response_level}
+                        <td className="px-4 py-3 font-medium">
+                          {RESPONSE_LEVEL_LABELS[result.response_level]}
                         </td>
                         <td className="px-4 py-3 font-mono">
                           {num(result.kp)}
@@ -359,8 +374,8 @@ export function RunDetailPage() {
                     {run.data.writes.map((write, i) => (
                       <tr key={i}>
                         <td className="px-4 py-3">{write.kind}</td>
-                        <td className="px-4 py-3 capitalize">
-                          {write.response_level}
+                        <td className="px-4 py-3">
+                          {RESPONSE_LEVEL_LABELS[write.response_level]}
                         </td>
                         <td className="px-4 py-3 text-slate-400">
                           {dateTime(write.written_at)}
@@ -413,7 +428,7 @@ export function RunDetailPage() {
                   .map((w, i) => (
                     <ErrorBanner
                       key={i}
-                      message={`${w.response_level}: ${w.error_message}`}
+                      message={`${RESPONSE_LEVEL_LABELS[w.response_level]}: ${w.error_message}`}
                     />
                   ))}
               </div>

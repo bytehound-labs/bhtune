@@ -5,6 +5,13 @@ import type { StartRunRequest } from "../../api/runs";
 import { useTemplates } from "../../api/templates";
 import type { components } from "../../api/schema";
 import {
+  CONTROLLER_TYPE_LABELS,
+  DIRECTION_LABELS,
+  DRIVER_LABELS,
+  PROCESS_TYPE_LABELS,
+  RESPONSE_LEVEL_LABELS,
+} from "../../lib/enumLabels";
+import {
   Button,
   CheckboxField,
   ErrorBanner,
@@ -314,6 +321,7 @@ export function NewRunPage() {
             value={form.driver}
             onChange={(v) => setDriver(v)}
             options={DRIVERS}
+            displayLabel={(v) => DRIVER_LABELS[v]}
           />
           <SelectField
             label="Template"
@@ -376,12 +384,14 @@ export function NewRunPage() {
             value={form.processType}
             onChange={setProcessType}
             options={PROCESS_TYPES}
+            displayLabel={(v) => PROCESS_TYPE_LABELS[v]}
           />
           <SelectField
             label="Controller type"
             value={form.controllerType}
             onChange={(v) => set("controllerType", v)}
             options={controllerTypeOptions}
+            displayLabel={(v) => CONTROLLER_TYPE_LABELS[v]}
           />
           <NumberField
             label="Relay amplitude (%)"
@@ -486,6 +496,7 @@ export function NewRunPage() {
             value={form.direction}
             onChange={(v) => set("direction", v)}
             options={DIRECTIONS}
+            displayLabel={(v) => DIRECTION_LABELS[v]}
             placeholder="Auto-detect (read live tag)"
             required={form.driver === "simulator"}
             hint={
@@ -601,6 +612,7 @@ export function NewRunPage() {
             value={form.writePid}
             onChange={(v) => set("writePid", v)}
             options={RESPONSE_LEVELS}
+            displayLabel={(v) => RESPONSE_LEVEL_LABELS[v]}
             placeholder="Don't write back automatically"
             disabled={form.driver === "simulator"}
             hint={
