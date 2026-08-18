@@ -115,6 +115,24 @@
             }
           },
           {
+            "name": "opc_server",
+            "in": "query",
+            "description": "Filters on the run's recorded, *resolved* OPC server (`db-run-request-snapshot`) --\nalways absent for a simulator/replay run, so this filter alone never matches one.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "description": "Filters on the run's recorded, resolved bridge host, matching `opc_server` above.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -1092,6 +1110,13 @@
           "writes"
         ],
         "properties": {
+          "bridge_host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The resolved bridge host this run actually used, matching `opc_server` above."
+          },
           "completed_at": {
             "type": [
               "string",
@@ -1127,6 +1152,13 @@
           },
           "loop_name": {
             "type": "string"
+          },
+          "opc_server": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The resolved OPC DA server ProgID this run actually used, or `None` for a\nsimulator/replay run (`db-run-request-snapshot`). This is what `history revert`\ntrusts over any `--server` flag -- see `bhtune-cli::commands::history`."
           },
           "outcome": {
             "$ref": "#/components/schemas/TuneOutcome"

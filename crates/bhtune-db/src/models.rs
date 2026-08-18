@@ -461,6 +461,14 @@ pub struct TuneRunRow {
     pub loop_id: Option<i64>,
     pub loop_name: String,
     pub driver: TuneDriver,
+    /// The OPC DA server ProgID this run actually used -- `None` for a non-opcda run, or for
+    /// any run started before [`TuneRunRow::record_connection`] is called (see that method's
+    /// doc comment). Flat and filterable rather than folded into `request_json`, since
+    /// `bhtune history revert` must know exactly which plant a past run touched.
+    pub opc_server: Option<String>,
+    /// The opcda-bridge gateway host this run actually used -- `None` for a non-opcda run,
+    /// or before [`TuneRunRow::record_connection`] is called. See `opc_server`.
+    pub bridge_host: Option<String>,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub outcome: TuneOutcome,
@@ -481,6 +489,14 @@ pub struct TuneRunRow {
     /// Snapshot of the resolved [`LoopTags`] this run actually used, deserialized from
     /// `tags_json`.
     pub tags: LoopTags,
+    /// The complete run request exactly as submitted (CLI flags or the HTTP
+    /// `POST /api/runs` body), before any config-driven defaulting -- raw JSON rather than a
+    /// typed struct, since its shape is owned by `bhtune-cli`/`bhtune-server`, not
+    /// `bhtune-db`. `"{}"` for any run started before
+    /// [`TuneRunRow::record_connection`] is called. Powers `ui-prefill-last-run` and
+    /// "duplicate this run"; never treat this as the source of truth for connection
+    /// facts -- that's `opc_server`/`bridge_host` above.
+    pub request_json: String,
     pub initial_readings: Option<TuneRunInitialReadings>,
     /// Whether this run permitted `Quality::Uncertain` OPC readings via
     /// `--allow-uncertain-quality` (finding 5 of the live-plant safety review;
@@ -510,6 +526,12 @@ pub struct TuneRunFilter {
     pub controller_type: Option<ControllerType>,
     pub outcome: Option<TuneOutcome>,
     pub driver: Option<TuneDriver>,
+    /// Exact match against the stored `opc_server` column. See
+    /// [`TuneRunRow::record_connection`].
+    pub opc_server: Option<String>,
+    /// Exact match against the stored `bridge_host` column. See
+    /// [`TuneRunRow::record_connection`].
+    pub bridge_host: Option<String>,
     /// Matches runs with `started_at >= started_after` (inclusive).
     pub started_after: Option<DateTime<Utc>>,
     /// Matches runs with `started_at <= started_before` (inclusive).
@@ -541,6 +563,16 @@ impl TuneRunFilter {
 
     pub fn with_driver(mut self, driver: TuneDriver) -> TuneRunFilter {
         self.driver = Some(driver);
+        self
+    }
+
+    pub fn with_opc_server(mut self, opc_server: impl Into<String>) -> TuneRunFilter {
+        self.opc_server = Some(opc_server.into());
+        self
+    }
+
+    pub fn with_bridge_host(mut self, bridge_host: impl Into<String>) -> TuneRunFilter {
+        self.bridge_host = Some(bridge_host.into());
         self
     }
 
@@ -653,6 +685,47 @@ impl TuneRunRow {
         .bind(template_snapshot_json)
         .bind(tags_json)
         .bind(now)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Records this run's connection provenance and the exact request it was started with
+    /// (`db-run-request-snapshot`): the OPC DA server ProgID and opcda-bridge gateway host
+    /// actually used (`None`/`None` for a non-opcda run), and a JSON snapshot of the complete
+    /// submitted request (CLI flags or the HTTP `POST /api/runs` body), captured *before* any
+    /// config-driven defaulting so it reflects what the caller actually asked for.
+    ///
+    /// A separate post-`start()` update rather than three more `start()` parameters, matching
+    /// [`Self::record_allow_uncertain_quality`]'s precedent -- `start()` already has 8
+    /// positional parameters across dozens of call sites in this workspace's test suites
+    /// alone, and three more would make every one of them noisier for no benefit, since none
+    /// of those tests care about connection provenance. Unlike that method, this data *is*
+    /// normally known the instant a run begins; the one production caller (`bhtune-cli`'s
+    /// `prepare()`) calls this immediately after `start()` succeeds, before any driver I/O.
+    /// `opc_server`/`bridge_host` default to `NULL` and `request_json` defaults to `"{}"`
+    /// (see the migration), so every existing `start()` call site keeps compiling and
+    /// behaving exactly as before.
+    pub async fn record_connection(
+        pool: &SqlitePool,
+        run_id: i64,
+        opc_server: Option<&str>,
+        bridge_host: Option<&str>,
+        request_json: &str,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs SET opc_server = ?, bridge_host = ?, request_json = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(opc_server)
+        .bind(bridge_host)
+        .bind(request_json)
+        .bind(run_id)
         .fetch_one(pool)
         .await
         .map_err(DbError::Query)?;
@@ -946,6 +1019,16 @@ fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) {
             .push(" AND driver = ")
             .push_bind(enum_to_text(&driver));
     }
+    if let Some(opc_server) = &filter.opc_server {
+        builder
+            .push(" AND opc_server = ")
+            .push_bind(opc_server.clone());
+    }
+    if let Some(bridge_host) = &filter.bridge_host {
+        builder
+            .push(" AND bridge_host = ")
+            .push_bind(bridge_host.clone());
+    }
     if let Some(started_after) = filter.started_after {
         builder.push(" AND started_at >= ").push_bind(started_after);
     }
@@ -1017,6 +1100,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         .try_get("template_snapshot_json")
         .map_err(DbError::Query)?;
     let tags_json: String = row.try_get("tags_json").map_err(DbError::Query)?;
+    let request_json: String = row.try_get("request_json").map_err(DbError::Query)?;
     let template: DcsTemplate =
         serde_json::from_str(&template_snapshot_json).map_err(|source| {
             DbError::InvalidJsonShape {
@@ -1035,6 +1119,8 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         loop_id: row.try_get("loop_id").map_err(DbError::Query)?,
         loop_name: row.try_get("loop_name").map_err(DbError::Query)?,
         driver: text_to_enum("driver", &driver)?,
+        opc_server: row.try_get("opc_server").map_err(DbError::Query)?,
+        bridge_host: row.try_get("bridge_host").map_err(DbError::Query)?,
         started_at: row.try_get("started_at").map_err(DbError::Query)?,
         completed_at: row.try_get("completed_at").map_err(DbError::Query)?,
         outcome: text_to_enum("outcome", &outcome)?,
@@ -1043,6 +1129,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         template_origin: text_to_enum("template_origin", &template_origin)?,
         template,
         tags,
+        request_json,
         initial_readings,
         allow_uncertain_quality: row
             .try_get("allow_uncertain_quality")

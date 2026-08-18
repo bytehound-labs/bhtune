@@ -171,6 +171,15 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
     assert!(started.completed_at.is_none());
     assert_eq!(started.started_at, now);
     assert_eq!(started.created_at, now);
+    assert_eq!(
+        started.opc_server, None,
+        "opc_server defaults to NULL until record_connection is called"
+    );
+    assert_eq!(started.bridge_host, None);
+    assert_eq!(
+        started.request_json, "{}",
+        "request_json defaults to an empty JSON object until record_connection is called"
+    );
 
     let readings = sample_initial_readings();
     let with_readings = TuneRunRow::record_initial_readings(&pool, started.id, readings.clone())
@@ -308,6 +317,78 @@ async fn lifecycle_transition_on_missing_run_id_is_an_error_not_a_silent_noop() 
         result.is_err(),
         "completing a run that doesn't exist must error, not silently succeed with nothing updated"
     );
+}
+
+#[tokio::test]
+async fn record_connection_persists_opc_server_bridge_host_and_request_json() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let started = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC105",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+
+    let request_json = r#"{"tagname":"LIC105","process_type":"flow"}"#;
+    let with_connection = TuneRunRow::record_connection(
+        &pool,
+        started.id,
+        Some("Kepware.KEPServerEX.V6"),
+        Some("localhost:7600"),
+        request_json,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        with_connection.opc_server.as_deref(),
+        Some("Kepware.KEPServerEX.V6")
+    );
+    assert_eq!(
+        with_connection.bridge_host.as_deref(),
+        Some("localhost:7600")
+    );
+    assert_eq!(with_connection.request_json, request_json);
+    assert_eq!(
+        with_connection.outcome,
+        TuneOutcome::Running,
+        "recording connection provenance must not itself change the outcome"
+    );
+
+    let fetched = TuneRunRow::get(&pool, started.id).await.unwrap().unwrap();
+    assert_eq!(fetched, with_connection);
+}
+
+#[tokio::test]
+async fn record_connection_allows_none_for_a_non_opcda_run() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let started = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC106",
+        TuneDriver::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+
+    let with_connection = TuneRunRow::record_connection(&pool, started.id, None, None, "{}")
+        .await
+        .unwrap();
+    assert_eq!(with_connection.opc_server, None);
+    assert_eq!(with_connection.bridge_host, None);
 }
 // }}}1
 
@@ -506,6 +587,100 @@ async fn list_filters_by_template_name_and_template_origin() {
     .unwrap();
     assert_eq!(combined.len(), 1);
     assert_eq!(combined[0].id, yokogawa_user.id);
+}
+
+/// Mirrors the two tests above but for `opc_server`/`bridge_host` -- the columns
+/// `db-run-request-snapshot` added, populated via [`TuneRunRow::record_connection`] rather
+/// than at `start()` time.
+#[tokio::test]
+async fn list_filters_by_opc_server_and_bridge_host() {
+    let pool = connect_in_memory().await.unwrap();
+    let t0 = Utc::now();
+
+    let plant_a = seed_run(
+        &pool,
+        None,
+        TuneDriver::Opcda,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0,
+    )
+    .await;
+    TuneRunRow::record_connection(
+        &pool,
+        plant_a.id,
+        Some("Kepware.KEPServerEX.V6"),
+        Some("plant-a-gateway:7600"),
+        "{}",
+    )
+    .await
+    .unwrap();
+
+    let plant_b = seed_run(
+        &pool,
+        None,
+        TuneDriver::Opcda,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0 + Duration::seconds(1),
+    )
+    .await;
+    TuneRunRow::record_connection(
+        &pool,
+        plant_b.id,
+        Some("Matrikon.OPC.Simulation.1"),
+        Some("plant-b-gateway:7600"),
+        "{}",
+    )
+    .await
+    .unwrap();
+
+    let simulator_run = seed_run(
+        &pool,
+        None,
+        TuneDriver::Simulator,
+        sample_config(),
+        TuneOutcome::Completed,
+        t0 + Duration::seconds(2),
+    )
+    .await;
+    assert_eq!(
+        (
+            simulator_run.opc_server.clone(),
+            simulator_run.bridge_host.clone()
+        ),
+        (None, None),
+        "a simulator run never gets record_connection called, so both stay NULL"
+    );
+
+    let plant_a_only = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_opc_server("Kepware.KEPServerEX.V6"),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(plant_a_only.len(), 1);
+    assert_eq!(plant_a_only[0].id, plant_a.id);
+
+    let plant_b_only = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_bridge_host("plant-b-gateway:7600"),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(plant_b_only.len(), 1);
+    assert_eq!(plant_b_only[0].id, plant_b.id);
+
+    let no_match = TuneRunRow::list(
+        &pool,
+        &TuneRunFilter::default().with_opc_server("nonexistent"),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert!(no_match.is_empty());
 }
 
 #[tokio::test]

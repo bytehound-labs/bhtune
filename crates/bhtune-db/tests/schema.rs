@@ -509,6 +509,74 @@ async fn tune_runs_reject_invalid_template_origin_and_invalid_json() {
     );
 }
 
+/// Covers `db-run-request-snapshot`'s `request_json` `CHECK (json_valid(request_json))`
+/// constraint, and confirms the column's `DEFAULT '{}'` lets a plain `INSERT` that omits it
+/// (exactly what `TuneRunRow::start`'s own `INSERT` does) succeed unchanged.
+#[tokio::test]
+async fn tune_runs_default_and_reject_invalid_request_json() {
+    let pool = connect_in_memory().await.unwrap();
+    let loop_id = seed_loop(&pool).await;
+
+    let omitted = sqlx::query(
+        r#"
+        INSERT INTO tune_runs (
+            loop_id, loop_name, driver, started_at, outcome,
+            process_type, controller_type, relay_amp_percent, num_cycles_skip,
+            num_cycles_count, noise_protection_secs, mrft_delay_secs,
+            template_name, template_origin, template_snapshot_json, tags_json, created_at
+        ) VALUES (?, 'LIC101', 'opcda', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
+                  'Test Template', 'builtin', '{}', '{}', ?)
+        RETURNING request_json
+        "#,
+    )
+    .bind(loop_id)
+    .bind(Utc::now())
+    .bind(Utc::now())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let default_request_json: String = omitted.try_get("request_json").unwrap();
+    assert_eq!(
+        default_request_json, "{}",
+        "an INSERT that never mentions request_json must default to an empty JSON object"
+    );
+
+    let insert_with_request_json = |request_json: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                r#"
+                INSERT INTO tune_runs (
+                    loop_id, loop_name, driver, started_at, outcome,
+                    process_type, controller_type, relay_amp_percent, num_cycles_skip,
+                    num_cycles_count, noise_protection_secs, mrft_delay_secs,
+                    template_name, template_origin, template_snapshot_json, tags_json,
+                    request_json, created_at
+                ) VALUES (?, 'LIC101', 'opcda', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
+                          'Test Template', 'builtin', '{}', '{}', ?, ?)
+                "#,
+            )
+            .bind(loop_id)
+            .bind(Utc::now())
+            .bind(request_json)
+            .bind(Utc::now())
+            .execute(&pool)
+            .await
+        }
+    };
+
+    assert!(
+        insert_with_request_json("not valid json").await.is_err(),
+        "invalid JSON in request_json must be rejected"
+    );
+    assert!(
+        insert_with_request_json(r#"{"tagname":"LIC101"}"#)
+            .await
+            .is_ok(),
+        "a well-formed JSON object must be accepted"
+    );
+}
+
 /// Covers the `CHECK` constraints `safety-quality` added: `tune_runs.allow_uncertain_quality`
 /// must be `0` or `1`, and `tune_samples.pv_quality` must be one of `good`/`uncertain`/`bad`.
 #[tokio::test]

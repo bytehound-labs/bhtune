@@ -47,6 +47,11 @@ pub struct RunListQuery {
     pub started_before: Option<DateTime<Utc>>,
     pub template_name: Option<String>,
     pub template_origin: Option<TemplateOrigin>,
+    /// Filters on the run's recorded, *resolved* OPC server (`db-run-request-snapshot`) --
+    /// always absent for a simulator/replay run, so this filter alone never matches one.
+    pub opc_server: Option<String>,
+    /// Filters on the run's recorded, resolved bridge host, matching `opc_server` above.
+    pub bridge_host: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -79,6 +84,12 @@ fn filter_from_query(query: &RunListQuery) -> TuneRunFilter {
     }
     if let Some(v) = query.template_origin {
         filter = filter.with_template_origin(v);
+    }
+    if let Some(v) = &query.opc_server {
+        filter = filter.with_opc_server(v.clone());
+    }
+    if let Some(v) = &query.bridge_host {
+        filter = filter.with_bridge_host(v.clone());
     }
     filter
 }
@@ -290,6 +301,12 @@ pub struct RunDetailResponse {
     pub template_name: String,
     pub template_origin: TemplateOrigin,
     pub config: LoopConfig,
+    /// The resolved OPC DA server ProgID this run actually used, or `None` for a
+    /// simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
+    /// trusts over any `--server` flag -- see `bhtune-cli::commands::history`.
+    pub opc_server: Option<String>,
+    /// The resolved bridge host this run actually used, matching `opc_server` above.
+    pub bridge_host: Option<String>,
     pub initial_readings: Option<InitialReadingsResponse>,
     pub samples: Vec<SampleResponse>,
     pub results: Vec<ResultResponse>,
@@ -325,6 +342,8 @@ pub(crate) async fn build_run_detail(
         template_name: run.template.name,
         template_origin: run.template_origin,
         config: run.config,
+        opc_server: run.opc_server,
+        bridge_host: run.bridge_host,
         initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
         samples: samples.iter().map(SampleResponse::from).collect(),
         results: results.iter().map(ResultResponse::from).collect(),
@@ -788,6 +807,11 @@ mod tests {
         assert_eq!(body["id"], run_id);
         assert_eq!(body["outcome"], "completed");
         assert!(body["completed_at"].is_string());
+        // seed_full_run uses the simulator driver and never calls `record_connection`, so
+        // both connection fields are null -- see `list_runs_filters_by_opc_server_and_bridge_host`
+        // below for the opcda-with-a-recorded-connection case.
+        assert!(body["opc_server"].is_null());
+        assert!(body["bridge_host"].is_null());
 
         let initial_readings = &body["initial_readings"];
         assert_eq!(initial_readings["pv_ini"], 50.0);
@@ -866,6 +890,56 @@ mod tests {
         let body = body_json(response).await;
         assert_eq!(body["total"], 1);
         assert_eq!(body["runs"][0]["id"], run_id);
+    }
+
+    #[tokio::test]
+    async fn list_runs_filters_by_opc_server_and_bridge_host() {
+        let state = crate::test_support::in_memory_state().await;
+        // A run whose recorded connection this test filters for.
+        let (run_id, _loop_id) = seed_full_run(&state).await;
+        TuneRunRow::record_connection(
+            &state.pool,
+            run_id,
+            Some("Kepware.KEPServerEX.V6"),
+            Some("gateway-a:7600"),
+            "{}",
+        )
+        .await
+        .unwrap();
+        // A second run with no recorded connection at all (mirrors a real simulator run),
+        // proving the filter actually narrows rather than matching everything.
+        seed_one_run(&state).await;
+        let app = router().with_state(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(
+                    "/api/runs?opc_server=Kepware.KEPServerEX.V6&bridge_host=gateway-a:7600",
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["total"], 1);
+        assert_eq!(body["runs"][0]["id"], run_id);
+
+        // The full detail view surfaces both fields too.
+        let detail_response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail_response.status(), StatusCode::OK);
+        let detail_body = body_json(detail_response).await;
+        assert_eq!(detail_body["opc_server"], "Kepware.KEPServerEX.V6");
+        assert_eq!(detail_body["bridge_host"], "gateway-a:7600");
     }
 
     #[tokio::test]

@@ -201,6 +201,57 @@ impl PreparedTune {
     }
 }
 
+/// The shape persisted into `tune_runs.request_json` (`db-run-request-snapshot`).
+/// Deliberately mirrors `bhtune-server`'s `StartRunRequest` DTO field-for-field -- core
+/// types, not this crate's clap-facing `*Arg` wrapper enums -- so a CLI-originated and an
+/// HTTP-originated run produce byte-identical JSON snapshots with no duplicated
+/// construction logic between the two crates (`bhtune-server` can't reuse this struct
+/// directly, since `bhtune-cli` doesn't depend on it, but the two shapes are kept in sync by
+/// convention the same way `StartRunRequest::into_tune_args` already keeps its own field
+/// list in sync with [`TuneArgs`]).
+///
+/// Built from `args` *before* [`prepare`]'s own `bridge_host`/`server` resolution mutates
+/// them, so a field left unset by the caller stays absent here rather than silently baking
+/// in a resolved default -- this is what lets `ui-prefill-last-run` show blanks where the
+/// user relied on a default, instead of freezing yesterday's resolved values into today's
+/// form. `output` is deliberately excluded: it's a CLI/HTTP-transport concern with no
+/// meaning as a "setting" to remember or duplicate.
+#[derive(serde::Serialize)]
+struct RequestSnapshot<'a> {
+    tagname: &'a str,
+    template: &'a str,
+    process_type: ProcessType,
+    controller_type: ControllerType,
+    relay_amp: f32,
+    cycles_skip: Option<u32>,
+    cycles_count: Option<u32>,
+    noise_protection_secs: Option<u32>,
+    mrft_delay: u32,
+    driver: TuneDriver,
+    bridge_host: Option<&'a str>,
+    server: Option<&'a str>,
+    sim_gain: f32,
+    sim_tau: f32,
+    sim_dead_time: f32,
+    sim_noise: f32,
+    sim_seed: u64,
+    sim_initial_pv: f32,
+    sim_initial_mv: f32,
+    pv_range_high: Option<f32>,
+    pv_range_low: Option<f32>,
+    mv_range_high: Option<f32>,
+    mv_range_low: Option<f32>,
+    direction: Option<ControllerDirection>,
+    poll_interval_ms: u64,
+    timeout_secs: u64,
+    name: Option<&'a str>,
+    yes: bool,
+    write_pid: Option<ResponseLevel>,
+    allow_uncertain_quality: bool,
+    op_timeout_secs: u64,
+    restore_timeout_secs: u64,
+}
+
 /// The fast setup phase shared by [`run_with_ctrl_c`] (the CLI's entry point) and [`drive`]
 /// (the entry point for a caller -- `bhtune-server` -- that needs to start a run and return
 /// control to its own caller before the run finishes). See [`PreparedTune`]'s doc comment
@@ -226,6 +277,55 @@ pub async fn prepare(
         );
     }
 
+    let db_driver = match args.driver {
+        DriverKindArg::Opcda => TuneDriver::Opcda,
+        DriverKindArg::Simulator => TuneDriver::Simulator,
+    };
+
+    // Snapshotted before `bridge_host`/`server` are resolved to their effective values just
+    // below, so a field the caller left unset stays absent here instead of silently baking
+    // in a resolved default (`db-run-request-snapshot`) -- see `RequestSnapshot`'s doc
+    // comment.
+    let request_json = serde_json::to_string(&RequestSnapshot {
+        tagname: &args.tagname,
+        template: &args.template,
+        process_type: args.process_type.into(),
+        controller_type: args.controller_type.into(),
+        relay_amp: args.relay_amp,
+        cycles_skip: args.cycles_skip,
+        cycles_count: args.cycles_count,
+        noise_protection_secs: args.noise_protection_secs,
+        mrft_delay: args.mrft_delay,
+        driver: db_driver,
+        bridge_host: args.bridge_host.as_deref(),
+        server: args.server.as_deref(),
+        sim_gain: args.sim_gain,
+        sim_tau: args.sim_tau,
+        sim_dead_time: args.sim_dead_time,
+        sim_noise: args.sim_noise,
+        sim_seed: args.sim_seed,
+        sim_initial_pv: args.sim_initial_pv,
+        sim_initial_mv: args.sim_initial_mv,
+        pv_range_high: args.pv_range_high,
+        pv_range_low: args.pv_range_low,
+        mv_range_high: args.mv_range_high,
+        mv_range_low: args.mv_range_low,
+        direction: args.direction.map(Into::into),
+        poll_interval_ms: args.poll_interval_ms,
+        timeout_secs: args.timeout_secs,
+        name: args.name.as_deref(),
+        yes: args.yes,
+        write_pid: args.write_pid.map(Into::into),
+        allow_uncertain_quality: args.allow_uncertain_quality,
+        op_timeout_secs: args.op_timeout_secs,
+        restore_timeout_secs: args.restore_timeout_secs,
+    })
+    .expect(
+        "RequestSnapshot serialization is infallible: plain enum/scalar fields, no maps and \
+         no floats that JSON can't represent (every f32 here is validated finite before \
+         reaching this call, per safety-validation)",
+    );
+
     args.bridge_host = Some(crate::config::resolve_bridge_host(
         args.bridge_host.take(),
         app_config,
@@ -248,10 +348,6 @@ pub async fn prepare(
     let driver = crate::driver::build(&args).await?;
 
     let run_name = args.name.clone().unwrap_or_else(|| args.tagname.clone());
-    let db_driver = match args.driver {
-        DriverKindArg::Opcda => TuneDriver::Opcda,
-        DriverKindArg::Simulator => TuneDriver::Simulator,
-    };
     let started_at = Utc::now();
     let run = TuneRunRow::start(
         pool,
@@ -266,6 +362,20 @@ pub async fn prepare(
     )
     .await?;
     TuneRunRow::record_allow_uncertain_quality(pool, run.id, args.allow_uncertain_quality).await?;
+
+    // The *resolved, effective* connection this run actually used -- `None`/`None` for a
+    // non-opcda run even though `args.bridge_host` was just unconditionally resolved to a
+    // default above (a pre-existing, harmless quirk of that resolution call). Forcing both
+    // to `None` here is what makes a simulator/replay run correctly show "no connection"
+    // rather than an OPC DA gateway it never actually touched -- load-bearing for
+    // `history revert`'s connection safety fix.
+    let (opc_server, bridge_host) = if db_driver == TuneDriver::Opcda {
+        (args.server.as_deref(), args.bridge_host.as_deref())
+    } else {
+        (None, None)
+    };
+    TuneRunRow::record_connection(pool, run.id, opc_server, bridge_host, &request_json).await?;
+
     tracing::info!(
         run_id = run.id,
         template = %args.template,
@@ -2243,6 +2353,22 @@ mod tests {
         assert_eq!(runs[0].loop_name, "test-loop");
         assert!(runs[0].initial_readings.is_some());
 
+        // A simulator run has no OPC DA connection at all -- `db-run-request-snapshot`
+        // requires both to be `None` here regardless of whatever `--bridge-host` default
+        // `prepare` resolved internally, since the driver never actually contacted a
+        // gateway.
+        assert_eq!(runs[0].opc_server, None);
+        assert_eq!(runs[0].bridge_host, None);
+
+        // The submitted request is snapshotted verbatim (pre-resolution), so a field the
+        // test left unset (`server`) stays absent/null rather than showing a resolved
+        // default.
+        let request: serde_json::Value = serde_json::from_str(&runs[0].request_json).unwrap();
+        assert_eq!(request["tagname"], "ignored-for-simulator");
+        assert_eq!(request["driver"], "simulator");
+        assert_eq!(request["server"], serde_json::Value::Null);
+        assert_eq!(request["name"], "test-loop");
+
         let results = TuneResultRow::list_for_run(&pool, runs[0].id)
             .await
             .unwrap();
@@ -2264,7 +2390,10 @@ mod tests {
     /// and (for the Yokogawa template) has no mode/mode-attribute tags to read either. Fails
     /// starting at the 5th `read` RPC call — comfortably past every possible setup read —
     /// so the failure always lands on the first polling tick's PV read, deep inside
-    /// `run_polling_loop`, not during setup.
+    /// `run_polling_loop`, not during setup. Also covers `db-run-request-snapshot`'s opcda
+    /// path: `prepare` records the resolved connection and the request snapshot before the
+    /// polling loop ever runs, so both must already be persisted on the row even though this
+    /// run goes on to fail.
     #[tokio::test]
     async fn run_with_opcda_driver_fails_mid_poll_and_marks_the_run_failed() {
         use crate::test_support::{MockBridgeService, start_mock_server};
@@ -2295,7 +2424,7 @@ mod tests {
         let mut args = fast_simulator_args();
         args.driver = DriverKindArg::Opcda;
         args.tagname = "Unit1.LIC101.PV".to_string();
-        args.bridge_host = Some(host);
+        args.bridge_host = Some(host.clone());
         args.server = Some("MockServer".to_string());
 
         let err = run(&pool, args, &test_config()).await.unwrap_err();
@@ -2318,6 +2447,16 @@ mod tests {
                 .unwrap()
                 .contains("driver operation failed")
         );
+
+        // `record_connection` runs inside `prepare`, before the polling loop that goes on
+        // to fail -- so the resolved connection and the submitted request must already be
+        // persisted even though the run itself never completes (`db-run-request-snapshot`).
+        assert_eq!(runs[0].opc_server.as_deref(), Some("MockServer"));
+        assert_eq!(runs[0].bridge_host.as_deref(), Some(host.as_str()));
+        let request: serde_json::Value = serde_json::from_str(&runs[0].request_json).unwrap();
+        assert_eq!(request["tagname"], "Unit1.LIC101.PV");
+        assert_eq!(request["driver"], "opcda");
+        assert_eq!(request["server"], "MockServer");
 
         server.shutdown().await;
     }

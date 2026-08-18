@@ -29,7 +29,7 @@ pub async fn run(
             server,
             yes,
             output,
-        } => revert(pool, config, run_id, bridge_host, server, yes, output).await,
+        } => revert(pool, run_id, bridge_host, server, yes, output).await,
         HistoryCommand::Prune {
             older_than_days,
             dry_run,
@@ -193,6 +193,12 @@ struct RunDetailJson {
     template_name: String,
     template_origin: bhtune_db::models::TemplateOrigin,
     config: bhtune_core::LoopConfig,
+    /// The resolved OPC DA server ProgID this run actually used, or `None` for a
+    /// simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
+    /// trusts over any `--server` flag, rather than re-resolving one.
+    opc_server: Option<String>,
+    /// The resolved bridge host this run actually used, matching `opc_server` above.
+    bridge_host: Option<String>,
     initial_readings: Option<InitialReadingsJson>,
     samples_recorded: usize,
     results: Vec<ResultJson>,
@@ -381,6 +387,13 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 "  Template:         {} ({:?})",
                 run.template.name, run.template_origin
             );
+            if run.opc_server.is_some() || run.bridge_host.is_some() {
+                println!(
+                    "  Connection:       server={} bridge_host={}",
+                    run.opc_server.as_deref().unwrap_or("-"),
+                    run.bridge_host.as_deref().unwrap_or("-"),
+                );
+            }
             println!(
                 "  Process/controller: {:?} / {:?}",
                 run.config.process_type, run.config.controller_type
@@ -490,6 +503,8 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 template_name: run.template.name.clone(),
                 template_origin: run.template_origin,
                 config: run.config,
+                opc_server: run.opc_server.clone(),
+                bridge_host: run.bridge_host.clone(),
                 initial_readings: run.initial_readings.map(InitialReadingsJson::from),
                 samples_recorded: samples.len(),
                 results: results.iter().map(ResultJson::from).collect(),
@@ -525,6 +540,59 @@ struct RevertedTargetJson {
     derivative: f32,
 }
 
+/// Resolves the OPC DA connection a revert should use for `run` -- always its own recorded
+/// `opc_server`/`bridge_host` (`db-run-request-snapshot`), never a value re-resolved from
+/// `--server`/`--bridge-host`/config at revert time. Re-resolving at revert time is exactly
+/// the bug this closes: running `history revert` from a shell whose flags/config point at a
+/// *different* gateway would otherwise confidently write the wrong plant's old PID constants
+/// under tag names that may happen to exist on both. An explicit `--server`/`--bridge-host`
+/// flag is still accepted, but purely as a cross-check against the recorded value -- a
+/// contradicting flag is a hard error, never a silent override, and there is no fallback to
+/// config when a flag is omitted (unlike every other command's connection resolution).
+fn resolve_revert_connection(
+    run: &TuneRunRow,
+    bridge_host_flag: Option<&str>,
+    server_flag: Option<&str>,
+) -> anyhow::Result<(String, String)> {
+    let stored_server = run.opc_server.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "run {}'s recorded OPC server is missing; refusing to guess which server to \
+             revert against",
+            run.id
+        )
+    })?;
+    let stored_bridge_host = run.bridge_host.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "run {}'s recorded bridge host is missing; refusing to guess which gateway to \
+             revert against",
+            run.id
+        )
+    })?;
+
+    if let Some(server_flag) = server_flag
+        && server_flag != stored_server
+    {
+        anyhow::bail!(
+            "--server {server_flag:?} contradicts run {}'s recorded OPC server \
+             {stored_server:?}; refusing to revert against a different server than the run \
+             actually used -- omit --server to use the recorded value",
+            run.id
+        );
+    }
+    if let Some(bridge_host_flag) = bridge_host_flag
+        && bridge_host_flag != stored_bridge_host
+    {
+        anyhow::bail!(
+            "--bridge-host {bridge_host_flag:?} contradicts run {}'s recorded bridge host \
+             {stored_bridge_host:?}; refusing to revert through a different gateway than the \
+             run actually used -- omit --bridge-host to use the recorded value",
+            run.id
+        );
+    }
+
+    Ok((stored_bridge_host.to_string(), stored_server.to_string()))
+}
+
 /// `bhtune history revert <run-id>`: writes a run's recorded pre-write-back PID values back
 /// to the live loop, undoing whichever [`WriteKind::Write`] write-back that run last
 /// recorded (`safety-writeback-rollback`, finding 6's revert companion command). Reuses
@@ -535,18 +603,22 @@ struct RevertedTargetJson {
 /// one difference being that a revert never attempts a nested rollback of itself if it
 /// fails partway through (see [`WriteKind`]'s doc comment for why).
 ///
+/// The OPC DA connection is never re-resolved from `--server`/`--bridge-host`/config the way
+/// every other command resolves it -- see [`resolve_revert_connection`] for why that would
+/// be a live-plant safety bug, not just an inconsistency.
+///
 /// Every rejection that happens *before* anything is attempted (no such run, wrong driver,
 /// no write-back recorded, its pre-read failed so there is nothing to revert to, missing
-/// `--yes`, no PID constant tags, or a failed connection) is a plain `Err`, which
-/// `lib.rs`'s existing `fail()` reports through `--output json`'s own error contract --
-/// exactly the same path `history show`'s "no such run" error already takes. Only the
-/// outcome of an *attempted* revert is reported here, and only ever as prose gated on
-/// `output == OutputFormat::Table` (never unconditionally, unlike `tune`'s own write-back
-/// step -- see finding 8) or as the one `RevertJson` object printed on success.
+/// `--yes`, no PID constant tags, a contradicting/missing recorded connection, or a failed
+/// connection) is a plain `Err`, which `lib.rs`'s existing `fail()` reports through
+/// `--output json`'s own error contract -- exactly the same path `history show`'s "no such
+/// run" error already takes. Only the outcome of an *attempted* revert is reported here, and
+/// only ever as prose gated on `output == OutputFormat::Table` (never unconditionally,
+/// unlike `tune`'s own write-back step -- see finding 8) or as the one `RevertJson` object
+/// printed on success.
 #[allow(clippy::too_many_arguments)]
 async fn revert(
     pool: &SqlitePool,
-    config: &crate::config::BhtuneConfig,
     run_id: i64,
     bridge_host: Option<String>,
     server: Option<String>,
@@ -591,8 +663,8 @@ async fn revert(
         anyhow::bail!("run {run_id}'s snapshotted tags have no PID constant tags configured");
     };
 
-    let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
-    let server = crate::config::resolve_server(server, config)?;
+    let (bridge_host, server) =
+        resolve_revert_connection(&run, bridge_host.as_deref(), server.as_deref())?;
     let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
 
     if output == OutputFormat::Table {
@@ -845,6 +917,18 @@ mod tests {
         )
         .await
         .unwrap();
+        // Records a real connection so `show`'s "Connection:" table line and its JSON
+        // `opc_server`/`bridge_host` fields both get exercised here, rather than only ever
+        // seeing the `None`/`None` simulator case elsewhere in this file.
+        TuneRunRow::record_connection(
+            &pool,
+            run.id,
+            Some("Kepware.KEPServerEX.V6"),
+            Some("127.0.0.1:7600"),
+            "{}",
+        )
+        .await
+        .unwrap();
         TuneRunRow::complete(&pool, run.id, now).await.unwrap();
 
         TuneResultRow::insert(
@@ -983,15 +1067,18 @@ mod tests {
         // No live gateway is running, so `revert` fails while connecting -- but this still
         // proves `run` actually dispatches `HistoryCommand::Revert` to the `revert` function
         // rather than, say, silently no-op'ing. `revert`'s own success/failure/validation
-        // behavior is covered directly by the `revert_*` tests below.
+        // behavior is covered directly by the `revert_*` tests below. Flags are omitted
+        // (`None`/`None`) so the connection resolves from the run's own recorded values
+        // (`run_with_results_and_writes` now records one) rather than being rejected earlier
+        // by `resolve_revert_connection`'s contradiction check.
         let (pool, run_id) = run_with_results_and_writes().await;
         let config = crate::config::BhtuneConfig::default();
         let err = run(
             &pool,
             HistoryCommand::Revert {
                 run_id,
-                bridge_host: Some("127.0.0.1:1".to_string()),
-                server: Some("Sim.Server".to_string()),
+                bridge_host: None,
+                server: None,
                 yes: true,
                 output: OutputFormat::Table,
             },
@@ -1003,10 +1090,13 @@ mod tests {
     }
 
     /// Starts an `Opcda`-driver run (using the sample template/tags, which have PID
-    /// constant tags configured) and returns it alongside the `BhtuneConfig` `revert`'s
-    /// tests dispatch against, without recording any write-back yet -- each `revert_*` test
-    /// below inserts whatever `TuneWriteRow` fixture its scenario needs.
-    async fn opcda_run_with_no_writes() -> (SqlitePool, crate::config::BhtuneConfig, i64) {
+    /// constant tags configured) with `record_connection` already called for it -- exactly
+    /// what `prepare` does for a real run (`db-run-request-snapshot`) -- so `revert`'s own
+    /// connection-resolution logic has a stored value to resolve against, matching
+    /// production shape rather than the pre-`db-run-request-snapshot` gap where a run had no
+    /// recorded connection at all. Returns it without recording any write-back yet -- each
+    /// `revert_*` test below inserts whatever `TuneWriteRow` fixture its scenario needs.
+    async fn opcda_run_with_no_writes(bridge_host: &str, server: &str) -> (SqlitePool, i64) {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
         let now = chrono::Utc::now();
         let run = TuneRunRow::start(
@@ -1022,15 +1112,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let config = crate::config::BhtuneConfig::default();
-        (pool, config, run.id)
+        TuneRunRow::record_connection(&pool, run.id, Some(server), Some(bridge_host), "{}")
+            .await
+            .unwrap();
+        (pool, run.id)
     }
 
     #[tokio::test]
     async fn revert_errors_when_no_such_run_exists() {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
-        let config = crate::config::BhtuneConfig::default();
-        let err = revert(&pool, &config, 999, None, None, true, OutputFormat::Table)
+        let err = revert(&pool, 999, None, None, true, OutputFormat::Table)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no run with id 999"));
@@ -1053,41 +1144,24 @@ mod tests {
         )
         .await
         .unwrap();
-        let config = crate::config::BhtuneConfig::default();
-        let err = revert(
-            &pool,
-            &config,
-            run.id,
-            None,
-            None,
-            true,
-            OutputFormat::Table,
-        )
-        .await
-        .unwrap_err();
+        let err = revert(&pool, run.id, None, None, true, OutputFormat::Table)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("Simulator"));
     }
 
     #[tokio::test]
     async fn revert_errors_when_no_write_back_is_recorded() {
-        let (pool, config, run_id) = opcda_run_with_no_writes().await;
-        let err = revert(
-            &pool,
-            &config,
-            run_id,
-            None,
-            None,
-            true,
-            OutputFormat::Table,
-        )
-        .await
-        .unwrap_err();
+        let (pool, run_id) = opcda_run_with_no_writes("bridge:1", "Sim.Server").await;
+        let err = revert(&pool, run_id, None, None, true, OutputFormat::Table)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no recorded PID write-back"));
     }
 
     #[tokio::test]
     async fn revert_errors_when_the_original_writes_pre_read_failed() {
-        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let (pool, run_id) = opcda_run_with_no_writes("bridge:1", "Sim.Server").await;
         let now = chrono::Utc::now();
         let mut failed_pre_read =
             bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
@@ -1096,23 +1170,15 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(
-            &pool,
-            &config,
-            run_id,
-            None,
-            None,
-            true,
-            OutputFormat::Table,
-        )
-        .await
-        .unwrap_err();
+        let err = revert(&pool, run_id, None, None, true, OutputFormat::Table)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("nothing to revert to"));
     }
 
     #[tokio::test]
     async fn revert_errors_when_yes_is_not_set() {
-        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let (pool, run_id) = opcda_run_with_no_writes("bridge:1", "Sim.Server").await;
         let now = chrono::Utc::now();
         let mut successful =
             bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
@@ -1126,17 +1192,9 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(
-            &pool,
-            &config,
-            run_id,
-            None,
-            None,
-            false,
-            OutputFormat::Table,
-        )
-        .await
-        .unwrap_err();
+        let err = revert(&pool, run_id, None, None, false, OutputFormat::Table)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("--yes"));
     }
 
@@ -1159,6 +1217,9 @@ mod tests {
         )
         .await
         .unwrap();
+        TuneRunRow::record_connection(&pool, run.id, Some("Sim.Server"), Some("bridge:1"), "{}")
+            .await
+            .unwrap();
         let mut successful =
             bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
         successful.previous = Some(bhtune_db::models::WriteReadback {
@@ -1171,24 +1232,19 @@ mod tests {
             .await
             .unwrap();
 
-        let config = crate::config::BhtuneConfig::default();
-        let err = revert(
-            &pool,
-            &config,
-            run.id,
-            None,
-            None,
-            true,
-            OutputFormat::Table,
-        )
-        .await
-        .unwrap_err();
+        let err = revert(&pool, run.id, None, None, true, OutputFormat::Table)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no PID constant tags"));
     }
 
     #[tokio::test]
     async fn revert_errors_when_the_driver_connection_fails() {
-        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        // Port 1 is a privileged/unlikely-bound port; connecting should fail promptly,
+        // proving every validation step above passed and `revert` genuinely reached the
+        // connect step, resolving the connection from the run's own recorded values (no
+        // explicit `--bridge-host`/`--server` flags passed at all here).
+        let (pool, run_id) = opcda_run_with_no_writes("127.0.0.1:1", "Sim.Server").await;
         let now = chrono::Utc::now();
         let mut successful =
             bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
@@ -1202,21 +1258,111 @@ mod tests {
             .await
             .unwrap();
 
-        // Port 1 is a privileged/unlikely-bound port; connecting should fail promptly,
-        // proving every validation step above passed and `revert` genuinely reached the
-        // connect step.
+        let err = revert(&pool, run_id, None, None, true, OutputFormat::Table)
+            .await
+            .unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_the_run_has_no_recorded_connection() {
+        // A run created directly via `TuneRunRow::start` without ever calling
+        // `record_connection` -- shouldn't happen for a real run created through
+        // `prepare`/the HTTP API, but `revert` must still refuse loudly rather than guess
+        // which OPC server/gateway to target (`db-run-request-snapshot`).
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "Unit1.LIC101.PV",
+            TuneDriver::Opcda,
+            sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &sample_tags(),
+            now,
+        )
+        .await
+        .unwrap();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 2.0,
+            derivative: 0.5,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run.id, successful)
+            .await
+            .unwrap();
+
+        let err = revert(&pool, run.id, None, None, true, OutputFormat::Table)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("recorded OPC server is missing"));
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_an_explicit_server_flag_contradicts_the_recorded_one() {
+        let (pool, run_id) = opcda_run_with_no_writes("bridge:1", "Sim.Server").await;
+        let now = chrono::Utc::now();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 2.0,
+            derivative: 0.5,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run_id, successful)
+            .await
+            .unwrap();
+
         let err = revert(
             &pool,
-            &config,
             run_id,
-            Some("127.0.0.1:1".to_string()),
-            Some("Sim.Server".to_string()),
+            None,
+            Some("Different.Server".to_string()),
             true,
             OutputFormat::Table,
         )
         .await
         .unwrap_err();
-        assert!(!err.to_string().is_empty());
+        let message = err.to_string();
+        assert!(message.contains("contradicts"));
+        assert!(message.contains("Sim.Server"));
+    }
+
+    #[tokio::test]
+    async fn revert_errors_when_an_explicit_bridge_host_flag_contradicts_the_recorded_one() {
+        let (pool, run_id) = opcda_run_with_no_writes("bridge:1", "Sim.Server").await;
+        let now = chrono::Utc::now();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 2.0,
+            derivative: 0.5,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run_id, successful)
+            .await
+            .unwrap();
+
+        let err = revert(
+            &pool,
+            run_id,
+            Some("different-bridge:2".to_string()),
+            None,
+            true,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("contradicts"));
+        assert!(message.contains("bridge:1"));
     }
 
     #[tokio::test]
@@ -1247,7 +1393,7 @@ mod tests {
         })
         .await;
 
-        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let (pool, run_id) = opcda_run_with_no_writes(&host, "Sim.Server").await;
         let now = chrono::Utc::now();
         let mut successful =
             bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
@@ -1261,9 +1407,12 @@ mod tests {
             .await
             .unwrap();
 
+        // Explicit `--bridge-host`/`--server` flags are passed here too (matching the
+        // recorded connection exactly), deliberately exercising the cross-check-passes path
+        // rather than the "omit both, use the recorded value" path already covered by
+        // `revert_errors_when_the_driver_connection_fails` above.
         revert(
             &pool,
-            &config,
             run_id,
             Some(host),
             Some("Sim.Server".to_string()),
@@ -1328,7 +1477,7 @@ mod tests {
         )
         .await;
 
-        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let (pool, run_id) = opcda_run_with_no_writes(&host, "Sim.Server").await;
         let now = chrono::Utc::now();
         let mut successful =
             bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
@@ -1342,17 +1491,9 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(
-            &pool,
-            &config,
-            run_id,
-            Some(host),
-            Some("Sim.Server".to_string()),
-            true,
-            OutputFormat::Table,
-        )
-        .await
-        .unwrap_err();
+        let err = revert(&pool, run_id, None, None, true, OutputFormat::Table)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("revert failed partway through"));
 
         let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
@@ -1405,7 +1546,7 @@ mod tests {
         })
         .await;
 
-        let (pool, config, run_id) = opcda_run_with_no_writes().await;
+        let (pool, run_id) = opcda_run_with_no_writes(&host, "Sim.Server").await;
         let now = chrono::Utc::now();
         let mut successful =
             bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
@@ -1419,17 +1560,9 @@ mod tests {
             .await
             .unwrap();
 
-        revert(
-            &pool,
-            &config,
-            run_id,
-            Some(host),
-            Some("Sim.Server".to_string()),
-            true,
-            OutputFormat::Json,
-        )
-        .await
-        .unwrap();
+        revert(&pool, run_id, None, None, true, OutputFormat::Json)
+            .await
+            .unwrap();
 
         server.shutdown().await;
     }

@@ -374,6 +374,36 @@ invisible to local runs because the local test directory always happened to pre-
 including a `-p` flag that is a path for one tool and a crate name for the other despite
 identical `--help` wording, and why winget stays out of scope for now.
 
+Phase 7.5 (pre-v1 UX and terminology hardening) is under way. `rename-driver` is done: the
+`backend` → `driver` rename landed across the entire workspace (crate, trait, error types,
+every concrete driver, the `--driver` CLI flag, the HTTP/OpenAPI `driver` field, and the
+frontend), with migration `0001` edited in place — the crate map and every other section
+below already use `driver`/`bhtune-driver` terminology throughout as a result. Its second
+todo, `db-run-request-snapshot`, is now also done. `tune_runs` gained
+`opc_server`/`bridge_host` (flat, nullable columns — `NULL`/`NULL` for a non-opcda run) and
+`request_json` (the complete run request exactly as submitted, before any config-driven
+defaulting), added to the same in-place `0001` migration `rename-driver` had just edited.
+`TuneRunRow::record_connection` populates all three via a follow-up `UPDATE` right after
+`start()`, matching `record_initial_readings`/`record_allow_uncertain_quality`'s existing
+precedent, and `bhtune-cli`'s `prepare()` calls it immediately, before any driver I/O. This
+closes a real latent safety bug in `bhtune history revert`, which used to re-resolve the OPC
+server/bridge host from `--server`/`--bridge-host`/config _at revert time_ — silently able
+to write a run's old PID constants into a different plant's controller than the one it
+actually tuned. `resolve_revert_connection` now always trusts the run's own recorded
+connection, treating an explicit flag as a cross-check (a hard error on contradiction) rather
+than an override — see the `bhtune history revert <run-id>` entry under "Live-plant safety
+hardening" below for the full design and the three new tests
+(`revert_errors_when_the_run_has_no_recorded_connection`,
+`revert_errors_when_an_explicit_server_flag_contradicts_the_recorded_one`,
+`revert_errors_when_an_explicit_bridge_host_flag_contradicts_the_recorded_one`).
+`bhtune-server`'s `/api/runs` list gained matching `opc_server`/`bridge_host` query filters,
+and the run-detail response gained the same two fields (deliberately _not_ the list/summary
+rows, matching `history list`'s table having no connection column either); `bhtune-cli`'s
+`history show` gained a "Connection:" line in `Table` mode and the same two fields in its
+`RunDetailJson`, so the CLI and HTTP API stay in JSON-shape parity. Unblocks
+`api-post-run-write` and `ui-prefill-last-run`, both of which need a stored, trustworthy
+connection/request to act on.
+
 ## Design philosophy and scope discipline
 
 Most PID auto-tuning tools for industrial DCS/PLC systems are Windows-only desktop applications
@@ -1807,10 +1837,24 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
     row's `previous` is `Some` (a write whose own pre-read failed has nothing recorded to
     revert to); `--yes` was passed (reverting writes to a live loop, same confirmation gate
     as the original write-back); the run's snapshotted tags have all three PID constant tags
-    configured. Only after all six checks pass does it resolve `--bridge-host`/`--server`
-    and call `OpcDaDriver::connect` — so four of these checks are exercised in tests with no
-    mock driver running at all, and even the connection-failure path itself is a genuine
-    test (an unreachable host, proving every earlier check passed).
+    configured. Only after all six checks pass does it call `OpcDaDriver::connect` — so five
+    of these checks are exercised in tests with no mock driver running at all, and even the
+    connection-failure path itself is a genuine test (an unreachable host, proving every
+    earlier check passed).
+  - **Uses the run's own recorded connection — never re-resolves one** (`db-run-request-snapshot`,
+    `resolve_revert_connection`). This closes a real latent safety bug: reverting used to
+    resolve `--bridge-host`/`--server` from the flag/config precedence chain _at revert
+    time_, so a tune run against `Kepware.KEPServerEX.V6` on gateway A could be reverted
+    from a shell whose config pointed at gateway B — silently writing the first loop's old
+    PID constants into a _different plant's_ controller, using tag names that may well exist
+    on both. Now `resolve_revert_connection` always trusts `run.opc_server`/`run.bridge_host`
+    (populated by `TuneRunRow::record_connection` when the original run started, and a hard
+    error if either is missing — an old run predating this feature, or a `Simulator`/`Replay`
+    run that never recorded one); an explicit `--server`/`--bridge-host` flag is only a
+    cross-check, and a hard error if it contradicts the stored value rather than silently
+    overriding it. `--bridge-host` deliberately has no `BHTUNE_BRIDGE_HOST` env fallback the
+    way every other command's `--bridge-host` does, precisely so an unrelated ambient env var
+    can never itself trigger a false "contradicts the recorded one" error.
   - **Reuses `commands::tune`'s own pre-read/write-and-verify helpers directly**
     (`read_previous_pid_values`, `write_and_verify_pid_value`, promoted from private to
     `pub(crate)` for this purpose) rather than re-implementing them, so a revert's pre-read,
@@ -1830,12 +1874,18 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
     target P/I/D values, success, and an error message) on `--output json`, with no prose
     printed ahead of it.
 
-  **Testing approach.** Eleven dedicated tests. Six need no mock driver at all, since
-  `revert`'s validation runs before it ever connects: no such run; the run used a
-  non-`Opcda` driver; no `Write`-kind row recorded; the recorded write's `previous` is
-  `None`; `--yes` not passed; the run's tags have no PID constant tags configured; and a
-  genuine connection failure (an unreachable host, proving every check above passed). Two
-  use the shared mock gRPC `Bridge` service from `crate::test_support`: a full success
+  **Testing approach.** Thirteen dedicated tests (`db-run-request-snapshot` added three:
+  `revert_errors_when_the_run_has_no_recorded_connection`,
+  `revert_errors_when_an_explicit_server_flag_contradicts_the_recorded_one`, and
+  `revert_errors_when_an_explicit_bridge_host_flag_contradicts_the_recorded_one`). Ten need
+  no mock driver at all, since `revert`'s validation runs before it ever connects: no such
+  run; the run used a non-`Opcda` driver; no `Write`-kind row recorded; the recorded write's
+  `previous` is `None`; `--yes` not passed; the run's tags have no PID constant tags
+  configured; the run has no recorded connection at all; an explicit `--server`/
+  `--bridge-host` that contradicts the recorded one (one test each); and a genuine connection
+  failure using the run's own recorded (but unreachable) connection, proving every check
+  above passed. Two use the shared mock gRPC `Bridge` service from `crate::test_support`: a
+  full success
   (asserting the resulting row's `kind = Revert`, all three written/readback values, and
   `rollback_state = None`), and a partial failure using the mock's existing
   `failing_read_from_call(n)` builder to fail exactly Integral's post-write verification

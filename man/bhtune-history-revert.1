@@ -10,10 +10,10 @@ Undo a run\*(Aqs PID write\-back, writing its recorded pre\-write P/I/D values b
 .SH OPTIONS
 .TP
 \fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
-(default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file\*(Aqs `bridge_host` key.)
+Cross\-checked against the run\*(Aqs own recorded bridge host \-\- never used to resolve a default, and deliberately has no `BHTUNE_BRIDGE_HOST`/config fallback the way every other command\*(Aqs `\-\-bridge\-host` does, so an unrelated ambient env var can never silently affect which gateway a revert targets. Omit this to use the recorded value; a value that contradicts it is refused rather than preferred, so a revert can never target a different gateway than the run it is undoing actually used (`db\-run\-request\-snapshot`)
 .TP
 \fB\-\-server\fR \fI<SERVER>\fR
-(default: the config file\*(Aqs `server` key; errors if neither is set.)
+Cross\-checked against the run\*(Aqs own recorded OPC server \-\- never used to resolve a default. Omit this to use the recorded value; a value that contradicts it is refused rather than preferred, so a revert can never target a different server than the run it is undoing actually used (`db\-run\-request\-snapshot`)
 .TP
 \fB\-\-yes\fR
 Confirm writing to a live loop. Required \-\- there is no interactive prompt for reverting, since there is no calculated result to choose between as there is for `tune`\*(Aqs own write\-back step

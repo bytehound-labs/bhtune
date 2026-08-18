@@ -329,8 +329,8 @@ json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled
 ;;
 (revert)
 _arguments "${_arguments_options[@]}" : \
-'--bridge-host=[(default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via \`BHTUNE_BRIDGE_HOST\` or the config file'\''s \`bridge_host\` key.)]:BRIDGE_HOST:_default' \
-'--server=[(default\: the config file'\''s \`server\` key; errors if neither is set.)]:SERVER:_default' \
+'--bridge-host=[Cross-checked against the run'\''s own recorded bridge host -- never used to resolve a default, and deliberately has no \`BHTUNE_BRIDGE_HOST\`/config fallback the way every other command'\''s \`--bridge-host\` does, so an unrelated ambient env var can never silently affect which gateway a revert targets. Omit this to use the recorded value; a value that contradicts it is refused rather than preferred, so a revert can never target a different gateway than the run it is undoing actually used (\`db-run-request-snapshot\`)]:BRIDGE_HOST:_default' \
+'--server=[Cross-checked against the run'\''s own recorded OPC server -- never used to resolve a default. Omit this to use the recorded value; a value that contradicts it is refused rather than preferred, so a revert can never target a different server than the run it is undoing actually used (\`db-run-request-snapshot\`)]:SERVER:_default' \
 '--output=[How to print the revert outcome]:OUTPUT:((table\:"Human-readable text (default)"
 json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
 '--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \

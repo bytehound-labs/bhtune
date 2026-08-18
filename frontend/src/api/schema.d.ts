@@ -463,6 +463,8 @@ export interface components {
      */
     RollbackState: "succeeded" | "failed";
     RunDetailResponse: {
+      /** @description The resolved bridge host this run actually used, matching `opc_server` above. */
+      bridge_host?: string | null;
       /** Format: date-time */
       completed_at?: string | null;
       config: components["schemas"]["LoopConfig"];
@@ -473,6 +475,12 @@ export interface components {
       initial_readings?:
         null | components["schemas"]["InitialReadingsResponse"];
       loop_name: string;
+      /**
+       * @description The resolved OPC DA server ProgID this run actually used, or `None` for a
+       *     simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
+       *     trusts over any `--server` flag -- see `bhtune-cli::commands::history`.
+       */
+      opc_server?: string | null;
       outcome: components["schemas"]["TuneOutcome"];
       restore_detail?: string | null;
       restore_status?: null | components["schemas"]["RestoreStatus"];
@@ -850,6 +858,13 @@ export interface operations {
         started_before?: string;
         template_name?: string;
         template_origin?: components["schemas"]["TemplateOrigin"];
+        /**
+         * @description Filters on the run's recorded, *resolved* OPC server (`db-run-request-snapshot`) --
+         *     always absent for a simulator/replay run, so this filter alone never matches one.
+         */
+        opc_server?: string;
+        /** @description Filters on the run's recorded, resolved bridge host, matching `opc_server` above. */
+        bridge_host?: string;
         limit?: number;
         offset?: number;
       };

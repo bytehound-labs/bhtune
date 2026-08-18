@@ -165,6 +165,27 @@ CREATE TABLE tune_runs (
 
     test_type               TEXT NOT NULL DEFAULT 'mrft' CHECK (test_type IN ('mrft')),
     driver                  TEXT NOT NULL CHECK (driver IN ('opcda', 'simulator', 'replay')),
+    -- The OPC DA server ProgID and opcda-bridge gateway host this run actually used --
+    -- `NULL`/`NULL` for a non-opcda run, which has neither. Flat and filterable rather than
+    -- folded into `request_json` below, because `bhtune history revert` must know exactly
+    -- which plant a past run touched: re-resolving the server/host from the *current*
+    -- `--server`/`--bridge-host`/config at revert time (as it did before this column
+    -- existed) can silently revert a loop against a different DCS than the run actually
+    -- wrote to, using tag names that may well exist on both. Set via a follow-up
+    -- `record_connection` call rather than a `start()` parameter -- see that method's doc
+    -- comment -- matching `allow_uncertain_quality`'s precedent below.
+    opc_server               TEXT,
+    bridge_host              TEXT,
+    -- The complete run request exactly as submitted (CLI flags or the HTTP `POST /api/runs`
+    -- body), before any config-driven defaulting -- e.g. `cycles_skip`/`cycles_count`/
+    -- `noise_protection_secs` stay absent here even when `process_type` supplies a default
+    -- for them. Powers `ui-prefill-last-run` (seed the New Run form from the newest run)
+    -- and "duplicate this run"; the flat columns above remain the source of truth for
+    -- safety-critical connection facts, never this blob. Defaults to `'{}'` so `start()`'s
+    -- INSERT (which predates this column) keeps compiling and succeeding unchanged; the one
+    -- production caller (`bhtune-cli`'s `prepare()`) overwrites it via `record_connection`
+    -- immediately afterwards, before any driver I/O.
+    request_json             TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(request_json)),
     -- Whether this run permitted `Quality::Uncertain` OPC readings via
     -- `--allow-uncertain-quality` (`Quality::Bad` is never accepted, flag or
     -- no flag). Defaults to 0/false, set via a follow-up

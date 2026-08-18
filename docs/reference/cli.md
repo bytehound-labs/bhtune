@@ -401,8 +401,8 @@ Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to
 
 ###### **Options:**
 
-* `--bridge-host <BRIDGE_HOST>` — (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file's `bridge_host` key.)
-* `--server <SERVER>` — (default: the config file's `server` key; errors if neither is set.)
+* `--bridge-host <BRIDGE_HOST>` — Cross-checked against the run's own recorded bridge host -- never used to resolve a default, and deliberately has no `BHTUNE_BRIDGE_HOST`/config fallback the way every other command's `--bridge-host` does, so an unrelated ambient env var can never silently affect which gateway a revert targets. Omit this to use the recorded value; a value that contradicts it is refused rather than preferred, so a revert can never target a different gateway than the run it is undoing actually used (`db-run-request-snapshot`)
+* `--server <SERVER>` — Cross-checked against the run's own recorded OPC server -- never used to resolve a default. Omit this to use the recorded value; a value that contradicts it is refused rather than preferred, so a revert can never target a different server than the run it is undoing actually used (`db-run-request-snapshot`)
 * `--yes` — Confirm writing to a live loop. Required -- there is no interactive prompt for reverting, since there is no calculated result to choose between as there is for `tune`'s own write-back step
 * `--output <OUTPUT>` — How to print the revert outcome
 
