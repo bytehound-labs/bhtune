@@ -455,6 +455,21 @@ field's `<dt>`) once both rendered the identical string — resolved with a shar
 helper that scopes the locator to `<dd>` (value) elements only, since that field's own `<dd>`
 holds a formatted timestamp, never the literal word "Completed".
 
+Phase 7.5's next todo, `ui-tune-nav`, is also done. `layout/AppLayout.tsx` gained a "Tune"
+header nav item pointing at `/runs/new`, placed first (ahead of Templates and History), and
+`App.tsx`'s index route now redirects to `/runs/new` instead of `/templates` — starting a
+tune is the app's default landing page. Adding a nav item for a route that is a path
+segment of History's own route (`/runs/new` under `/runs`) surfaced a real, if minor, nav
+bug: `NavLink`'s default active-matching is prefix-based, so History's `to="/runs"` would
+have highlighted alongside Tune on `/runs/new` with no way to tell the two apart. Fixed with
+an explicit `isHistoryActive` override computed from `useLocation()` (active for `/runs` and
+any `/runs/:id` detail page, deliberately excluding `/runs/new`), verified with a throwaway
+browser-automation script confirming exactly one nav item is ever highlighted, across
+`/runs/new`, `/templates`, `/runs`, and a real `/runs/:id` detail page. Updated
+`e2e/smoke.spec.ts`'s landing-page assertion and split its combined
+landing/templates-list test into two, since the seeded-templates list is no longer visible
+on first load.
+
 ## Design philosophy and scope discipline
 
 Most PID auto-tuning tools for industrial DCS/PLC systems are Windows-only desktop applications

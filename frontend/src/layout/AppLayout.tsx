@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from "react-router";
+import { NavLink, Outlet, useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
 import { toApiError } from "../api/errors";
@@ -47,6 +47,16 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
 
 /** App-wide chrome: header nav + the health badge, wrapping every route via `<Outlet/>`. */
 export function AppLayout() {
+  // `/runs/new` (the "Tune" nav item) is a descendant of `/runs`, so NavLink's default
+  // prefix-based active matching would highlight "History" too whenever the user is
+  // starting a new tune. Override History's active state to explicitly exclude that one
+  // path, so exactly one nav item is ever highlighted at a time.
+  const location = useLocation();
+  const isHistoryActive =
+    location.pathname === "/runs" ||
+    (location.pathname.startsWith("/runs/") &&
+      !location.pathname.startsWith("/runs/new"));
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/40">
@@ -54,10 +64,16 @@ export function AppLayout() {
           <div className="flex items-center gap-8">
             <span className="text-lg font-semibold tracking-tight">BHTune</span>
             <nav className="flex gap-2">
+              <NavLink to="/runs/new" className={navLinkClass}>
+                Tune
+              </NavLink>
               <NavLink to="/templates" className={navLinkClass}>
                 Templates
               </NavLink>
-              <NavLink to="/runs" className={navLinkClass}>
+              <NavLink
+                to="/runs"
+                className={() => navLinkClass({ isActive: isHistoryActive })}
+              >
                 History
               </NavLink>
             </nav>

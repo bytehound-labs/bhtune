@@ -15,7 +15,7 @@ function App() {
   return (
     <Routes>
       <Route element={<AppLayout />}>
-        <Route index element={<Navigate to="/templates" replace />} />
+        <Route index element={<Navigate to="/runs/new" replace />} />
         <Route path="templates" element={<TemplateListPage />} />
         <Route path="templates/new" element={<TemplateCreatePage />} />
         <Route path="templates/:name" element={<TemplateDetailPage />} />
