@@ -24,14 +24,14 @@
 #   Windows:     %APPDATA%\bhtune\bhtune.db
 db = "/var/lib/bhtune/bhtune.db"
 
-# opcda-bridge gateway address `tune --backend opcda` and the `opc`
+# opcda-bridge gateway address `tune --driver opcda` and the `opc`
 # subcommands connect to, used when --bridge-host is omitted.
 # CLI flag: --bridge-host
 # Env var: BHTUNE_BRIDGE_HOST
 # Default: localhost:7600
 bridge_host = "localhost:7600"
 
-# Default OPC DA server ProgID for `tune --backend opcda` and the `opc`
+# Default OPC DA server ProgID for `tune --driver opcda` and the `opc`
 # subcommands, used when --server is omitted. Unlike the other keys, there
 # is no built-in default — if this is unset and --server is omitted, the
 # command errors.
@@ -69,4 +69,3 @@ format = "pretty"
 # CLI flag: --log-rotation
 # Default: daily
 rotation = "daily"
-

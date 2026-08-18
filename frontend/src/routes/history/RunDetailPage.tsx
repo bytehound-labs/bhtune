@@ -173,7 +173,7 @@ export function RunDetailPage() {
                 </Badge>
               }
             />
-            <Field label="Backend" value={run.data.backend} />
+            <Field label="Driver" value={run.data.driver} />
             <Field
               label="Template"
               value={

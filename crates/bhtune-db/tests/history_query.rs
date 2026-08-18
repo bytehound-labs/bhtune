@@ -13,7 +13,7 @@ use bhtune_db::{
     connect_in_memory,
     models::{
         DcsTemplateRow, NewTuneWrite, Pagination, RollbackState, SampleQuality, TemplateOrigin,
-        TuneBackend, TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunInitialReadings, TuneRunRow,
+        TuneDriver, TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunInitialReadings, TuneRunRow,
         TuneSampleRow, TuneWriteRow, WriteReadback,
     },
 };
@@ -104,7 +104,7 @@ fn sample_initial_readings() -> TuneRunInitialReadings {
 async fn seed_run(
     pool: &sqlx::SqlitePool,
     loop_id: Option<i64>,
-    backend: TuneBackend,
+    driver: TuneDriver,
     config: LoopConfig,
     outcome: TuneOutcome,
     started_at: DateTime<Utc>,
@@ -113,7 +113,7 @@ async fn seed_run(
         pool,
         loop_id,
         "LIC-X",
-        backend,
+        driver,
         config,
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -150,7 +150,7 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
         &pool,
         Some(loop_id),
         "LIC101",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -208,7 +208,7 @@ async fn run_can_fail_before_initial_readings_are_ever_recorded() {
         &pool,
         None,
         "LIC102",
-        TuneBackend::Opcda,
+        TuneDriver::Opcda,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -246,7 +246,7 @@ async fn run_can_fail_after_initial_readings_were_recorded() {
         &pool,
         None,
         "LIC103",
-        TuneBackend::Opcda,
+        TuneDriver::Opcda,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -259,7 +259,7 @@ async fn run_can_fail_after_initial_readings_were_recorded() {
         .await
         .unwrap();
 
-    let failed = TuneRunRow::fail(&pool, started.id, now, "backend disconnected mid-test")
+    let failed = TuneRunRow::fail(&pool, started.id, now, "driver disconnected mid-test")
         .await
         .unwrap();
     assert_eq!(failed.outcome, TuneOutcome::Failed);
@@ -277,7 +277,7 @@ async fn run_can_be_aborted() {
         &pool,
         None,
         "LIC104",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -314,14 +314,14 @@ async fn lifecycle_transition_on_missing_run_id_is_an_error_not_a_silent_noop() 
 // Filtering {{{1
 
 #[tokio::test]
-async fn list_filters_by_process_type_controller_type_outcome_and_backend() {
+async fn list_filters_by_process_type_controller_type_outcome_and_driver() {
     let pool = connect_in_memory().await.unwrap();
     let t0 = Utc::now();
 
     let flow_pi_completed_opcda = seed_run(
         &pool,
         None,
-        TuneBackend::Opcda,
+        TuneDriver::Opcda,
         LoopConfig {
             process_type: ProcessType::Flow,
             controller_type: ControllerType::Pi,
@@ -334,7 +334,7 @@ async fn list_filters_by_process_type_controller_type_outcome_and_backend() {
     let level_p_failed_simulator = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         LoopConfig {
             process_type: ProcessType::Level,
             controller_type: ControllerType::P,
@@ -347,7 +347,7 @@ async fn list_filters_by_process_type_controller_type_outcome_and_backend() {
     let flow_pid_running_replay = seed_run(
         &pool,
         None,
-        TuneBackend::Replay,
+        TuneDriver::Replay,
         LoopConfig {
             process_type: ProcessType::Flow,
             controller_type: ControllerType::Pid,
@@ -393,7 +393,7 @@ async fn list_filters_by_process_type_controller_type_outcome_and_backend() {
 
     let simulator_only = TuneRunRow::list(
         &pool,
-        &TuneRunFilter::default().with_backend(TuneBackend::Simulator),
+        &TuneRunFilter::default().with_driver(TuneDriver::Simulator),
         Pagination::default(),
     )
     .await
@@ -433,7 +433,7 @@ async fn list_filters_by_template_name_and_template_origin() {
         &pool,
         None,
         "LIC201",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &yokogawa,
@@ -446,7 +446,7 @@ async fn list_filters_by_template_name_and_template_origin() {
         &pool,
         None,
         "LIC202",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &honeywell,
@@ -459,7 +459,7 @@ async fn list_filters_by_template_name_and_template_origin() {
         &pool,
         None,
         "LIC203",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::User,
         &yokogawa,
@@ -519,7 +519,7 @@ async fn list_filters_by_loop_id() {
     let run_a = seed_run(
         &pool,
         Some(loop_a),
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         t0,
@@ -528,7 +528,7 @@ async fn list_filters_by_loop_id() {
     seed_run(
         &pool,
         Some(loop_b),
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         t0 + Duration::seconds(1),
@@ -537,7 +537,7 @@ async fn list_filters_by_loop_id() {
     seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         t0 + Duration::seconds(2),
@@ -562,7 +562,7 @@ async fn list_filters_by_started_at_range() {
     let early = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         t0 - Duration::days(2),
@@ -571,7 +571,7 @@ async fn list_filters_by_started_at_range() {
     let middle = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         t0 - Duration::days(1),
@@ -580,7 +580,7 @@ async fn list_filters_by_started_at_range() {
     let late = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         t0,
@@ -630,7 +630,7 @@ async fn list_and_count_with_no_matches_returns_empty() {
     seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         Utc::now(),
@@ -659,7 +659,7 @@ async fn list_paginates_and_count_matches_total_regardless_of_page_size() {
         let run = seed_run(
             &pool,
             None,
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             sample_config(),
             TuneOutcome::Completed,
             t0 + Duration::seconds(i),
@@ -724,7 +724,7 @@ async fn tune_sample_insert_and_list_for_run_orders_by_tick() {
         &pool,
         None,
         "LIC105",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -771,7 +771,7 @@ async fn tune_sample_list_for_run_is_empty_for_a_run_with_no_samples() {
         &pool,
         None,
         "LIC106",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -796,7 +796,7 @@ async fn tune_sample_rejects_duplicate_tick_for_the_same_run() {
         &pool,
         None,
         "LIC107",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -832,7 +832,7 @@ async fn tune_sample_list_for_run_since_only_returns_ticks_after_the_given_one()
         &pool,
         None,
         "LIC108",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -901,7 +901,7 @@ async fn tune_sample_list_for_run_since_is_scoped_to_the_given_run() {
         &pool,
         None,
         "LIC109A",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -914,7 +914,7 @@ async fn tune_sample_list_for_run_since_is_scoped_to_the_given_run() {
         &pool,
         None,
         "LIC109B",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -978,7 +978,7 @@ async fn tune_result_insert_and_list_for_run_orders_by_response_level() {
         &pool,
         None,
         "LIC108",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1023,7 +1023,7 @@ async fn tune_result_rejects_duplicate_response_level_for_the_same_run() {
         &pool,
         None,
         "LIC109",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1052,7 +1052,7 @@ async fn tune_result_list_for_run_is_empty_for_an_incomplete_run() {
         &pool,
         None,
         "LIC110",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1079,7 +1079,7 @@ async fn tune_write_insert_records_full_success_with_previous_and_no_rollback() 
         &pool,
         None,
         "LIC111",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1131,7 +1131,7 @@ async fn tune_write_insert_records_pre_read_failure_with_nothing_attempted() {
         &pool,
         None,
         "LIC112",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1168,7 +1168,7 @@ async fn tune_write_insert_records_partial_write_with_successful_rollback() {
         &pool,
         None,
         "LIC113",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1213,7 +1213,7 @@ async fn tune_write_insert_records_partial_write_with_failed_rollback() {
         &pool,
         None,
         "LIC114",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1251,7 +1251,7 @@ async fn tune_write_list_for_run_orders_oldest_first() {
         &pool,
         None,
         "LIC115",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1288,7 +1288,7 @@ async fn tune_write_list_for_run_is_empty_when_nothing_was_written() {
         &pool,
         None,
         "LIC116",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1315,7 +1315,7 @@ async fn delete_matching_deletes_only_runs_matching_the_filter_and_returns_the_c
     let old = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         t0 - Duration::days(100),
@@ -1324,7 +1324,7 @@ async fn delete_matching_deletes_only_runs_matching_the_filter_and_returns_the_c
     let recent = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         t0,
@@ -1348,7 +1348,7 @@ async fn delete_matching_with_no_matches_deletes_nothing_and_returns_zero() {
     let run = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         Utc::now(),
@@ -1373,7 +1373,7 @@ async fn delete_matching_cascades_to_samples_results_and_writes() {
         &pool,
         None,
         "LIC117",
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TemplateOrigin::Builtin,
         &sample_template(),
@@ -1445,7 +1445,7 @@ async fn delete_matching_with_an_empty_filter_deletes_every_run() {
     seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         Utc::now(),
@@ -1454,7 +1454,7 @@ async fn delete_matching_with_an_empty_filter_deletes_every_run() {
     seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         Utc::now(),
@@ -1482,7 +1482,7 @@ async fn delete_removes_exactly_the_run_with_that_id_and_returns_true() {
     let kept = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         Utc::now(),
@@ -1491,7 +1491,7 @@ async fn delete_removes_exactly_the_run_with_that_id_and_returns_true() {
     let doomed = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         Utc::now(),
@@ -1510,7 +1510,7 @@ async fn delete_with_an_unknown_id_returns_false_and_deletes_nothing() {
     seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         Utc::now(),
@@ -1533,7 +1533,7 @@ async fn delete_cascades_to_samples_results_and_writes() {
     let run = seed_run(
         &pool,
         None,
-        TuneBackend::Simulator,
+        TuneDriver::Simulator,
         sample_config(),
         TuneOutcome::Completed,
         Utc::now(),

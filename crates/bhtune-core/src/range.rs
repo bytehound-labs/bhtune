@@ -10,7 +10,7 @@
 //! (test fixtures, values reloaded from `bhtune-db` that were already validated once before
 //! being stored) are constructed elsewhere in the codebase. [`PvRange::new`]/[`MvRange::new`]
 //! are the *validating* constructors: the ones any caller reading a number from a live
-//! backend or an external CLI flag/config value must go through.
+//! driver or an external CLI flag/config value must go through.
 
 use serde::{Deserialize, Serialize};
 

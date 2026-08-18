@@ -51,7 +51,7 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
             "2",
             "--noise-protection-secs",
             "0",
-            "--backend",
+            "--driver",
             "simulator",
             "--sim-gain",
             "1.0",

@@ -14,8 +14,8 @@ GUI's run detail screen, which triggers the same code path) is always safe:
 
 - **First Ctrl+C** stops polling immediately and starts the restore (see
   [Restoration](#restoration) below). It works no matter when it's pressed — including mid-read
-  or mid-write to a stalled backend, not just while idle between poll ticks. Every in-flight
-  backend call is bounded by `--op-timeout-secs` (default 30s), so a stalled OPC DA read or
+  or mid-write to a stalled driver, not just while idle between poll ticks. Every in-flight
+  driver call is bounded by `--op-timeout-secs` (default 30s), so a stalled OPC DA read or
   write is abandoned rather than waited on forever, which is what makes cancellation reliable
   even against a wedged gateway or a black-holed network.
 - **Second Ctrl+C**, pressed while the restore itself is still running, forces an immediate hard
@@ -42,7 +42,7 @@ amplitude, cycle counts (a zero cycle count is rejected outright rather than rea
 and panicking mid-test, which is what the earliest builds did), PV/MV ranges (must be finite and
 correctly ordered — a `NaN` or an inverted range is rejected, not silently propagated into a PID
 write), and the initial MV must fall inside the validated MV range. Command-line flags reject
-non-finite/out-of-range input immediately with a clear message; anything read from the backend
+non-finite/out-of-range input immediately with a clear message; anything read from the driver
 (a real DCS/PLC's current ranges, for instance) is validated again right after being read, before
 the loop is ever switched to manual.
 
@@ -120,15 +120,15 @@ abort, timeout, poor quality, restore-incomplete, or write-back failure — so a
 has to guard against stray prose interleaved with the object it's trying to parse. Exit codes
 are equally specific:
 
-| Code | Meaning                                                                                   |
-| ---- | ----------------------------------------------------------------------------------------- |
-| `0`  | Completed successfully                                                                    |
-| `1`  | Setup error (unknown template, bad flag combination, database/backend connection failure) |
-| `2`  | Aborted by Ctrl+C, restore confirmed                                                      |
-| `3`  | Test completed, but the requested PID write-back failed                                   |
-| `4`  | `--timeout-secs` elapsed before the test finished                                         |
-| `5`  | A non-`Good` OPC sample aborted the run                                                   |
-| `6`  | The post-run restore could not be confirmed — check the loop by hand                      |
+| Code | Meaning                                                                                  |
+| ---- | ---------------------------------------------------------------------------------------- |
+| `0`  | Completed successfully                                                                   |
+| `1`  | Setup error (unknown template, bad flag combination, database/driver connection failure) |
+| `2`  | Aborted by Ctrl+C, restore confirmed                                                     |
+| `3`  | Test completed, but the requested PID write-back failed                                  |
+| `4`  | `--timeout-secs` elapsed before the test finished                                        |
+| `5`  | A non-`Good` OPC sample aborted the run                                                  |
+| `6`  | The post-run restore could not be confirmed — check the loop by hand                     |
 
 ## Next steps
 

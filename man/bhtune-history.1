@@ -20,7 +20,7 @@ bhtune\-history\-show(1)
 Show one run\*(Aqs full detail: config, initial readings, calculated results, and any PID write\-back audit rows
 .TP
 bhtune\-history\-revert(1)
-Undo a run\*(Aqs PID write\-back, writing its recorded pre\-write P/I/D values back to the live loop. Reverts whichever `write`\-kind write\-back that run last recorded; refuses if the run has none, if that write\-back\*(Aqs pre\-read itself failed (nothing to revert to), or if the run did not use the `opcda` backend (nothing live to revert against)
+Undo a run\*(Aqs PID write\-back, writing its recorded pre\-write P/I/D values back to the live loop. Reverts whichever `write`\-kind write\-back that run last recorded; refuses if the run has none, if that write\-back\*(Aqs pre\-read itself failed (nothing to revert to), or if the run did not use the `opcda` driver (nothing live to revert against)
 .TP
 bhtune\-history\-prune(1)
 Delete runs older than the configured retention policy (`history\-retention`), without waiting for the next automatic startup sweep

@@ -21,11 +21,11 @@ MRFT test against a synthetic Flow-type loop, using a fixed internal PV/MV tag p
 real OPC DA tag. A run typically takes under a minute:
 
 ```text
-No PID constant tags configured for this run's backend/template; skipping write-back.
+No PID constant tags configured for this run's driver/template; skipping write-back.
 Tune completed successfully (run id 1).
 ```
 
-("No PID constant tags configured" is expected and correct here — the simulator backend has no
+("No PID constant tags configured" is expected and correct here — the simulator driver has no
 PID constant tags to write to at all, so write-back is always skipped for `simulate` regardless
 of `--write-pid`. See [`bhtune tune`](../reference/cli.md#bhtune-tune) for writing PID constants
 back to a real controller.)
@@ -42,7 +42,7 @@ bhtune history show 1
 
 ```text
 Run #1: Sim.Loop1.PV
-  Backend:          Simulator
+  Driver:          Simulator
   Outcome:          Completed
   Started at:       2026-08-16T06:51:28.165183623+00:00
   Completed at:     2026-08-16T06:52:18.574446068+00:00
@@ -105,7 +105,7 @@ test against a real OPC DA tag instead of the simulator:
 
 ```sh
 bhtune tune \
-  --backend opcda --server Matrikon.OPC.Simulation.1 --bridge-host gateway.plant.local:7600 \
+  --driver opcda --server Matrikon.OPC.Simulation.1 --bridge-host gateway.plant.local:7600 \
   --tagname FIC101 --template "Yokogawa CentumVP" \
   --process-type flow --controller-type pi --relay-amp 5
 ```

@@ -4,9 +4,9 @@
 //!
 //! Before this finding was fixed, `maybe_write_back` (`commands::tune`) unconditionally
 //! `println!`ed its status/prompt lines regardless of `--output`, so a JSON-mode run of
-//! exactly the shape this test drives -- a simulator backend, which never has PID constant
-//! tags configured (see `build_tags`'s `BackendKindArg::Simulator` arm) -- printed "No PID
-//! constant tags configured for this run's backend/template; skipping write-back." on stdout
+//! exactly the shape this test drives -- a simulator driver, which never has PID constant
+//! tags configured (see `build_tags`'s `DriverKindArg::Simulator` arm) -- printed "No PID
+//! constant tags configured for this run's driver/template; skipping write-back." on stdout
 //! *before* the run's final JSON object, breaking `serde_json::from_str` for every
 //! scripted/scheduled caller. This has to be a real subprocess rather than an in-process
 //! `Command`-level check: capturing whether *any* prose reaches real stdout ahead of the
@@ -55,7 +55,7 @@ fn run_fast_simulator_tune(extra_args: &[&str]) -> (Option<i32>, String, String)
             "2",
             "--noise-protection-secs",
             "0",
-            "--backend",
+            "--driver",
             "simulator",
             "--sim-gain",
             "1.0",
@@ -111,7 +111,7 @@ async fn tune_output_json_emits_exactly_one_parseable_json_value_on_stdout() {
         exit_code,
         Some(bhtune_cli::EXIT_SUCCESS as i32),
         "expected a clean completion (write-back is always skipped for the simulator \
-         backend, which is still `Completed`, not a failure); stderr: {stderr}"
+         driver, which is still `Completed`, not a failure); stderr: {stderr}"
     );
 
     // The load-bearing assertion: `serde_json::from_str` on the *entire, trimmed* stdout
@@ -139,7 +139,7 @@ async fn tune_output_json_emits_exactly_one_parseable_json_value_on_stdout() {
     // before `write_pid` is even inspected), but assert the negative anyway as a direct
     // regression guard on the bug this finding fixes.
     assert!(
-        !stdout.contains("PID constant tags configured for this run's backend/template;"),
+        !stdout.contains("PID constant tags configured for this run's driver/template;"),
         "the 'no PID constant tags configured' prose must not be printed in JSON mode, only \
          folded into write_back_detail; got stdout: {stdout:?}"
     );

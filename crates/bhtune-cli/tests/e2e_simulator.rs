@@ -1,5 +1,5 @@
 //! Fully automated, Linux-CI-friendly end-to-end coverage for a real `bhtune tune` run
-//! against the in-process simulator backend (`e2e-simulator`): spawns the actual compiled
+//! against the in-process simulator driver (`e2e-simulator`): spawns the actual compiled
 //! `bhtune` binary (not an in-process call), lets it complete a full MRFT test, then opens
 //! the resulting SQLite database directly and asserts the *calculated tuning results* are
 //! sane -- not just that rows exist.
@@ -25,7 +25,7 @@
 //!
 //! All three matrix cases use `direction=reverse`: empirically confirmed (by hand, before
 //! writing this test) to be the only direction that produces a valid relay oscillation
-//! against this backend's fixed `sim_gain=1.0`/`sim_tau=0.01`/`sim_dead_time=0.025`
+//! against this driver's fixed `sim_gain=1.0`/`sim_tau=0.01`/`sim_dead_time=0.025`
 //! parameters -- `direction=direct` rails the simulated process out instead of oscillating,
 //! which is a genuine control-theory sign-mismatch (relay pushes the same way the process is
 //! already moving), not a bug. `process_type`/`controller_type` are varied freely across the
@@ -76,7 +76,7 @@ fn run_fast_simulator_tune(
             "2",
             "--noise-protection-secs",
             "0",
-            "--backend",
+            "--driver",
             "simulator",
             "--sim-gain",
             "1.0",

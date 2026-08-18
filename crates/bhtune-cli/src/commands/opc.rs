@@ -1,8 +1,8 @@
 //! `bhtune opc read/write/browse`: thin passthrough diagnostics directly over
-//! [`bhtune_backend::OpcDaBackend`], independent of running a full tune. Useful for checking
+//! [`bhtune_driver::OpcDaDriver`], independent of running a full tune. Useful for checking
 //! gateway connectivity and confirming tag names before starting a real test.
 
-use bhtune_backend::{Backend, OpcDaBackend, TagWrite};
+use bhtune_driver::{Driver, OpcDaDriver, TagWrite};
 
 use crate::args::OpcCommand;
 
@@ -43,8 +43,8 @@ async fn read(bridge_host: &str, server: &str, tags: &[String]) -> anyhow::Resul
     if tags.is_empty() {
         anyhow::bail!("at least one tag is required");
     }
-    let backend = OpcDaBackend::connect(bridge_host, server).await?;
-    let values = backend.read(tags).await?;
+    let driver = OpcDaDriver::connect(bridge_host, server).await?;
+    let values = driver.read(tags).await?;
     println!(
         "{:<40} {:<15} {:<10} {:<20}",
         "TAG", "VALUE", "QUALITY", "TIMESTAMP"
@@ -64,20 +64,20 @@ async fn read(bridge_host: &str, server: &str, tags: &[String]) -> anyhow::Resul
 }
 
 async fn write(bridge_host: &str, server: &str, tag: &str, value: &str) -> anyhow::Result<()> {
-    let backend = OpcDaBackend::connect(bridge_host, server).await?;
+    let driver = OpcDaDriver::connect(bridge_host, server).await?;
     // Numeric-looking values are written as floats (matching a live process value or PID
     // constant write); anything else is written raw (e.g. a mode code like "MAN").
     let write_value = match value.parse::<f32>() {
         Ok(f) => TagWrite::Float(f),
         Err(_) => TagWrite::Raw(value.to_string()),
     };
-    let outcome = backend.write(&tag.to_string(), write_value).await?;
+    let outcome = driver.write(&tag.to_string(), write_value).await?;
     if outcome.success {
         println!("Wrote '{value}' to '{tag}'.");
         Ok(())
     } else {
         anyhow::bail!(
-            "backend rejected the write: {}",
+            "driver rejected the write: {}",
             outcome
                 .error_message
                 .unwrap_or_else(|| "unknown reason".to_string())
@@ -86,8 +86,8 @@ async fn write(bridge_host: &str, server: &str, tag: &str, value: &str) -> anyho
 }
 
 async fn browse(bridge_host: &str, server: &str, path: &str) -> anyhow::Result<()> {
-    let backend = OpcDaBackend::connect(bridge_host, server).await?;
-    let nodes = backend.browse(path).await?;
+    let driver = OpcDaDriver::connect(bridge_host, server).await?;
+    let nodes = driver.browse(path).await?;
     if nodes.is_empty() {
         println!("No tags found under '{path}'.");
         return Ok(());

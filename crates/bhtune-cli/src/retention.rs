@@ -72,7 +72,7 @@ mod tests {
     use super::*;
     use bhtune_core::{ControllerType, LoopConfig, ProcessType, built_in_templates};
     use bhtune_db::connect_in_memory;
-    use bhtune_db::models::{TemplateOrigin, TuneBackend};
+    use bhtune_db::models::{TemplateOrigin, TuneDriver};
 
     fn sample_config() -> LoopConfig {
         LoopConfig {
@@ -93,7 +93,7 @@ mod tests {
             pool,
             None,
             "LIC-X",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             sample_config(),
             TemplateOrigin::Builtin,
             &template,

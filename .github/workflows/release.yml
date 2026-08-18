@@ -75,7 +75,7 @@ jobs:
         with:
           shared-key: release-${{ matrix.target }}
 
-      # bhtune-backend depends on opcda-bridge, whose opcda-bridge-proto crate compiles
+      # bhtune-driver depends on opcda-bridge, whose opcda-bridge-proto crate compiles
       # bridge.proto via tonic-prost-build at build time -- protoc is a real, non-dev build
       # requirement here, not just a test-only one. Matches checks.yml's `check`/`windows`/
       # `package`/`msrv` jobs, which install it for the same reason.
@@ -141,7 +141,7 @@ jobs:
         with:
           shared-key: release-deb-rpm
 
-      # Same protoc/frontend-embed requirements as `build` above -- bhtune-backend's
+      # Same protoc/frontend-embed requirements as `build` above -- bhtune-driver's
       # opcda-bridge-proto dependency and bhtune-server's rust-embed both need them present
       # before `cargo build --release` runs.
       - uses: taiki-e/install-action@v2

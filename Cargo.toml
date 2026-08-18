@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
   "crates/bhtune-core",
-  "crates/bhtune-backend",
+  "crates/bhtune-driver",
   "crates/bhtune-db",
   "crates/bhtune-cli",
   "crates/bhtune-server",
@@ -31,7 +31,7 @@ homepage = "https://github.com/bytehound-labs/bhtune"
 # every crate depending on another workspace member unpublishable. `bhtune-server` has no
 # entry here since nothing in the workspace depends on it.
 bhtune-core = { path = "crates/bhtune-core", version = "0.1.0" }
-bhtune-backend = { path = "crates/bhtune-backend", version = "0.1.0" }
+bhtune-driver = { path = "crates/bhtune-driver", version = "0.1.0" }
 bhtune-db = { path = "crates/bhtune-db", version = "0.1.0" }
 bhtune-cli = { path = "crates/bhtune-cli", version = "0.1.0" }
 # Deliberately does NOT enable the "clock"/"now" features: bhtune-core must never be able
@@ -44,7 +44,7 @@ chrono = { version = "0.4", default-features = false, features = [
   "alloc",
   "serde",
 ] }
-# A single pin so `bhtune-db` and `bhtune-backend` (and any future crate needing fallible
+# A single pin so `bhtune-db` and `bhtune-driver` (and any future crate needing fallible
 # I/O) always agree on the same version — library-appropriate error handling (typed,
 # matchable variants) as opposed to `anyhow`, which is reserved for binary crates that only
 # need to propagate/print errors, never match on them.

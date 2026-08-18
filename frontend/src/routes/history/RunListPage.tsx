@@ -20,7 +20,7 @@ const PROCESS_TYPES = [
   "temperature_heat_exchange",
 ] as const;
 const OUTCOMES = ["running", "completed", "failed", "aborted"] as const;
-const BACKENDS = ["opcda", "simulator", "replay"] as const;
+const DRIVERS = ["opcda", "simulator", "replay"] as const;
 
 const outcomeTone = {
   running: "neutral",
@@ -34,7 +34,7 @@ const PAGE_SIZE = 50;
 export function RunListPage() {
   const [processType, setProcessType] = useState("");
   const [outcome, setOutcome] = useState("");
-  const [backend, setBackend] = useState("");
+  const [driver, setDriver] = useState("");
   const [offset, setOffset] = useState(0);
 
   const filter: RunListFilter = {
@@ -44,7 +44,7 @@ export function RunListPage() {
       process_type: processType as (typeof PROCESS_TYPES)[number],
     }),
     ...(outcome && { outcome: outcome as (typeof OUTCOMES)[number] }),
-    ...(backend && { backend: backend as (typeof BACKENDS)[number] }),
+    ...(driver && { driver: driver as (typeof DRIVERS)[number] }),
   };
   const runs = useRuns(filter);
 
@@ -93,12 +93,12 @@ export function RunListPage() {
           ))}
         </select>
         <select
-          value={backend}
-          onChange={(e) => resetPageAnd(setBackend)(e.target.value)}
+          value={driver}
+          onChange={(e) => resetPageAnd(setDriver)(e.target.value)}
           className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
         >
-          <option value="">All backends</option>
-          {BACKENDS.map((b) => (
+          <option value="">All drivers</option>
+          {DRIVERS.map((b) => (
             <option key={b} value={b}>
               {b}
             </option>
@@ -122,7 +122,7 @@ export function RunListPage() {
                   <th className="px-4 py-2 font-medium">Loop</th>
                   <th className="px-4 py-2 font-medium">Process type</th>
                   <th className="px-4 py-2 font-medium">Outcome</th>
-                  <th className="px-4 py-2 font-medium">Backend</th>
+                  <th className="px-4 py-2 font-medium">Driver</th>
                   <th className="px-4 py-2 font-medium">Started</th>
                 </tr>
               </thead>
@@ -147,7 +147,7 @@ export function RunListPage() {
                         {run.outcome}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 text-slate-400">{run.backend}</td>
+                    <td className="px-4 py-3 text-slate-400">{run.driver}</td>
                     <td className="px-4 py-3 text-slate-400">
                       {new Date(run.started_at).toLocaleString()}
                     </td>

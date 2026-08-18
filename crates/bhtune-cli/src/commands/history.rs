@@ -1,11 +1,11 @@
 //! `bhtune history list/show/revert`.
 
-use bhtune_backend::OpcDaBackend;
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    NewTuneWrite, Pagination, TuneBackend, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow,
+    NewTuneWrite, Pagination, TuneDriver, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow,
     TuneWriteRow, WriteKind,
 };
+use bhtune_driver::OpcDaDriver;
 
 use crate::args::HistoryCommand;
 use crate::output::OutputFormat;
@@ -45,7 +45,7 @@ pub async fn run(
 struct RunSummaryJson {
     id: i64,
     loop_name: String,
-    backend: bhtune_db::models::TuneBackend,
+    driver: bhtune_db::models::TuneDriver,
     outcome: bhtune_db::models::TuneOutcome,
     process_type: bhtune_core::ProcessType,
     started_at: chrono::DateTime<chrono::Utc>,
@@ -132,7 +132,7 @@ struct WriteJson {
     kind: WriteKind,
     response_level: bhtune_core::ResponseLevel,
     written_at: chrono::DateTime<chrono::Utc>,
-    /// The P/I/D values read from the backend before any write was attempted. `None` only
+    /// The P/I/D values read from the driver before any write was attempted. `None` only
     /// when the pre-read itself failed, in which case every field below is also `None`.
     proportional_previous: Option<f32>,
     integral_previous: Option<f32>,
@@ -182,7 +182,7 @@ impl From<&TuneWriteRow> for WriteJson {
 struct RunDetailJson {
     id: i64,
     loop_name: String,
-    backend: bhtune_db::models::TuneBackend,
+    driver: bhtune_db::models::TuneDriver,
     outcome: bhtune_db::models::TuneOutcome,
     failure_reason: Option<String>,
     started_at: chrono::DateTime<chrono::Utc>,
@@ -227,14 +227,14 @@ async fn list(
 
             println!(
                 "{:<5} {:<30} {:<10} {:<10} {:<10} {:<25}",
-                "ID", "LOOP", "BACKEND", "OUTCOME", "PROCESS", "STARTED"
+                "ID", "LOOP", "DRIVER", "OUTCOME", "PROCESS", "STARTED"
             );
             for run in &runs {
                 println!(
                     "{:<5} {:<30} {:<10} {:<10} {:<10} {:<25}",
                     run.id,
                     run.loop_name,
-                    format!("{:?}", run.backend),
+                    format!("{:?}", run.driver),
                     format!("{:?}", run.outcome),
                     format!("{:?}", run.config.process_type),
                     run.started_at.to_rfc3339(),
@@ -251,7 +251,7 @@ async fn list(
                     .map(|run| RunSummaryJson {
                         id: run.id,
                         loop_name: run.loop_name.clone(),
-                        backend: run.backend,
+                        driver: run.driver,
                         outcome: run.outcome,
                         process_type: run.config.process_type,
                         started_at: run.started_at,
@@ -368,7 +368,7 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
     match output {
         OutputFormat::Table => {
             println!("Run #{}: {}", run.id, run.loop_name);
-            println!("  Backend:          {:?}", run.backend);
+            println!("  Driver:          {:?}", run.driver);
             println!("  Outcome:          {:?}", run.outcome);
             if let Some(reason) = &run.failure_reason {
                 println!("  Failure reason:   {reason}");
@@ -482,7 +482,7 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
             let json = RunDetailJson {
                 id: run.id,
                 loop_name: run.loop_name.clone(),
-                backend: run.backend,
+                driver: run.driver,
                 outcome: run.outcome,
                 failure_reason: run.failure_reason.clone(),
                 started_at: run.started_at,
@@ -535,7 +535,7 @@ struct RevertedTargetJson {
 /// one difference being that a revert never attempts a nested rollback of itself if it
 /// fails partway through (see [`WriteKind`]'s doc comment for why).
 ///
-/// Every rejection that happens *before* anything is attempted (no such run, wrong backend,
+/// Every rejection that happens *before* anything is attempted (no such run, wrong driver,
 /// no write-back recorded, its pre-read failed so there is nothing to revert to, missing
 /// `--yes`, no PID constant tags, or a failed connection) is a plain `Err`, which
 /// `lib.rs`'s existing `fail()` reports through `--output json`'s own error contract --
@@ -557,11 +557,11 @@ async fn revert(
         .await?
         .ok_or_else(|| anyhow::anyhow!("no run with id {run_id}"))?;
 
-    if run.backend != TuneBackend::Opcda {
+    if run.driver != TuneDriver::Opcda {
         anyhow::bail!(
-            "run {run_id} used the {:?} backend, which has no live loop to revert a write \
+            "run {run_id} used the {:?} driver, which has no live loop to revert a write \
              against",
-            run.backend
+            run.driver
         );
     }
 
@@ -593,7 +593,7 @@ async fn revert(
 
     let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
     let server = crate::config::resolve_server(server, config)?;
-    let backend = OpcDaBackend::connect(&bridge_host, &server).await?;
+    let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
 
     if output == OutputFormat::Table {
         println!(
@@ -611,7 +611,7 @@ async fn revert(
     // write-back: whatever is live right now becomes this revert row's `previous`, so a
     // second `history revert` could undo this one too if it ever turned out to be wrong.
     let live_previous = match crate::commands::tune::read_previous_pid_values(
-        &backend,
+        &driver,
         p_tag,
         i_tag,
         d_tag,
@@ -641,7 +641,7 @@ async fn revert(
     for (i, (label, tag, value)) in steps.into_iter().enumerate() {
         written_vals[i] = Some(value);
         match crate::commands::tune::write_and_verify_pid_value(
-            &backend,
+            &driver,
             label,
             tag,
             value,
@@ -709,7 +709,7 @@ async fn revert(
 mod tests {
     use super::*;
     use bhtune_core::{ControllerType, DcsTemplate, LoopConfig, LoopTags, ProcessType};
-    use bhtune_db::models::{TemplateOrigin, TuneBackend, TuneRunInitialReadings};
+    use bhtune_db::models::{TemplateOrigin, TuneDriver, TuneRunInitialReadings};
 
     fn sample_config() -> LoopConfig {
         LoopConfig {
@@ -746,7 +746,7 @@ mod tests {
             &pool,
             None,
             "Unit1.LIC101.PV",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             sample_config(),
             TemplateOrigin::Builtin,
             &sample_template(),
@@ -809,7 +809,7 @@ mod tests {
             &pool,
             None,
             "Unit1.LIC101.PV",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             sample_config(),
             TemplateOrigin::Builtin,
             &sample_template(),
@@ -836,7 +836,7 @@ mod tests {
             &pool,
             None,
             "Unit1.LIC101.PV",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             sample_config(),
             TemplateOrigin::Builtin,
             &sample_template(),
@@ -1002,7 +1002,7 @@ mod tests {
         assert!(!err.to_string().is_empty());
     }
 
-    /// Starts an `Opcda`-backend run (using the sample template/tags, which have PID
+    /// Starts an `Opcda`-driver run (using the sample template/tags, which have PID
     /// constant tags configured) and returns it alongside the `BhtuneConfig` `revert`'s
     /// tests dispatch against, without recording any write-back yet -- each `revert_*` test
     /// below inserts whatever `TuneWriteRow` fixture its scenario needs.
@@ -1013,7 +1013,7 @@ mod tests {
             &pool,
             None,
             "Unit1.LIC101.PV",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             sample_config(),
             TemplateOrigin::Builtin,
             &sample_template(),
@@ -1037,14 +1037,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revert_errors_when_the_run_did_not_use_the_opcda_backend() {
+    async fn revert_errors_when_the_run_did_not_use_the_opcda_driver() {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
         let now = chrono::Utc::now();
         let run = TuneRunRow::start(
             &pool,
             None,
             "Unit1.LIC101.PV",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             sample_config(),
             TemplateOrigin::Builtin,
             &sample_template(),
@@ -1150,7 +1150,7 @@ mod tests {
             &pool,
             None,
             "Unit1.LIC101.PV",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             sample_config(),
             TemplateOrigin::Builtin,
             &sample_template(),
@@ -1187,7 +1187,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revert_errors_when_the_backend_connection_fails() {
+    async fn revert_errors_when_the_driver_connection_fails() {
         let (pool, config, run_id) = opcda_run_with_no_writes().await;
         let now = chrono::Utc::now();
         let mut successful =
@@ -1442,7 +1442,7 @@ mod tests {
             pool,
             None,
             "Unit1.LIC101.PV",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             sample_config(),
             TemplateOrigin::Builtin,
             &sample_template(),

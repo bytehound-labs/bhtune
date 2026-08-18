@@ -24,10 +24,10 @@ body:
     validations:
       required: false
   - type: dropdown
-    id: backend
+    id: driver
     attributes:
-      label: Backend
-      description: Which `Backend` implementation was in use?
+      label: Driver
+      description: Which `Driver` implementation was in use?
       options:
         - OPC DA (via opcda-bridge)
         - Simulator

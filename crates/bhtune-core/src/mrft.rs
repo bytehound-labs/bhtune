@@ -3,7 +3,7 @@
 //! this must never read a clock, perform network I/O, or touch a UI.
 //!
 //! Scope is deliberately narrow: this module decides *when to switch the MV and when the
-//! test is complete*. It does not read or write OPC tags (`bhtune-backend`'s job) and it does
+//! test is complete*. It does not read or write OPC tags (`bhtune-driver`'s job) and it does
 //! not calculate PID constants from the collected peaks/troughs (`core-tuning-math`'s job) —
 //! it only hands them off via [`Action::Complete`].
 

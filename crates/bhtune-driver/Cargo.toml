@@ -1,6 +1,6 @@
 [package]
-name = "bhtune-backend"
-description = "The Backend trait (tag read/write/browse) and its implementations: OPC DA (via opcda-bridge), an in-process FOPDT simulator, and a golden-trace replay backend for testing."
+name = "bhtune-driver"
+description = "The Driver trait (tag read/write/browse) and its implementations: OPC DA (via opcda-bridge), an in-process FOPDT simulator, and a golden-trace replay driver for testing."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,25 +9,25 @@ repository.workspace = true
 [dependencies]
 chrono.workspace = true
 thiserror.workspace = true
-# Only this crate needs async-trait so far (the `Backend` trait's methods must be async and
-# object-safe -- `Box<dyn Backend>`/`Arc<dyn Backend>` -- so a `bhtune-cli`/`bhtune-server`
+# Only this crate needs async-trait so far (the `Driver` trait's methods must be async and
+# object-safe -- `Box<dyn Driver>`/`Arc<dyn Driver>` -- so a `bhtune-cli`/`bhtune-server`
 # session can pick an implementation at runtime from config; native `async fn` in traits is
 # not yet dyn-compatible), so it stays local rather than promoted to `[workspace.dependencies]`.
 async-trait = "0.1"
-# `OpcDaBackend` is the only thing that talks to the bridge directly -- everything else goes
-# through the `Backend` trait instead -- so this stays local rather than promoted to
+# `OpcDaDriver` is the only thing that talks to the bridge directly -- everything else goes
+# through the `Driver` trait instead -- so this stays local rather than promoted to
 # `[workspace.dependencies]`, matching the single-consumer convention already used for
 # `async-trait` above.
 opcda-bridge = "0.2"
 # Needed for `tokio::sync::Mutex`: `opcda_bridge::Client`'s methods take `&mut self` (it
-# buffers per-call gRPC codec state), but `Backend`'s methods take `&self` (required so a
-# backend can be shared behind `Arc<dyn Backend>`), so `OpcDaBackend` serializes access to
+# buffers per-call gRPC codec state), but `Driver`'s methods take `&self` (required so a
+# driver can be shared behind `Arc<dyn Driver>`), so `OpcDaDriver` serializes access to
 # its one `Client` through an async-aware mutex. Unlike `std::sync::MutexGuard`,
 # `tokio::sync::MutexGuard` is `Send`, so it can be held across the `.await` points inside
 # each trait method without breaking `#[async_trait]`'s default requirement that its
 # generated futures be `Send`.
 tokio = { version = "1", features = ["sync"] }
-# Only `SimulatorBackend`'s measurement-noise model needs randomness, so this stays local
+# Only `SimulatorDriver`'s measurement-noise model needs randomness, so this stays local
 # rather than promoted to `[workspace.dependencies]`, matching the single-consumer
 # convention already used for `async-trait`/`opcda-bridge` above. `default-features = false`
 # drops `thread_rng`/`sys_rng`/OS-entropy machinery this crate never uses -- every RNG here
@@ -36,7 +36,7 @@ rand = { version = "0.10", default-features = false, features = [
   "std",
   "std_rng",
 ] }
-# Only `ReplayBackend::from_fixture_json` needs to parse a golden-master trace's JSON, so
+# Only `ReplayDriver::from_fixture_json` needs to parse a golden-master trace's JSON, so
 # these stay local rather than promoted to `[workspace.dependencies]`, matching the
 # single-consumer convention already used for `async-trait`/`opcda-bridge`/`rand` above.
 # Same version pins `bhtune-core`/`bhtune-db` already use.
@@ -52,11 +52,11 @@ tokio = { version = "1", features = [
   "time",
 ] }
 # Only for `simulator`'s end-to-end test proving a real `MrftEngine` completes a relay test
-# against `SimulatorBackend` through the actual `Backend` trait -- everywhere else in this
-# crate stays `bhtune-core`-free (see `backend-trait`'s design notes in `AGENTS.md`).
+# against `SimulatorDriver` through the actual `Driver` trait -- everywhere else in this
+# crate stays `bhtune-core`-free (see `driver-trait`'s design notes in `AGENTS.md`).
 bhtune-core.workspace = true
 # Pinned to the same versions `opcda-bridge` itself declares in its own `Cargo.toml`: this
-# crate's tests stand up a mock `Bridge` gRPC service to test `OpcDaBackend` end-to-end
+# crate's tests stand up a mock `Bridge` gRPC service to test `OpcDaDriver` end-to-end
 # against, and the generated `tonic`/`prost` types on both sides of that connection (the mock
 # service here, `opcda_bridge::Client`'s generated stub on the other) must agree on the exact
 # wire types or they won't type-check against each other.

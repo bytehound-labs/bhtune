@@ -1,18 +1,17 @@
 //! `bhtune tune`/`bhtune simulate`: runs a full MRFT test end-to-end — resolving a template,
-//! deriving tags, transitioning the loop to Manual, polling the backend and driving a real
+//! deriving tags, transitioning the loop to Manual, polling the driver and driving a real
 //! [`bhtune_core::MrftEngine`], persisting every tick and the final calculated results, then
 //! restoring the loop and optionally writing back the chosen PID constants.
 //!
 //! Mirrors the legacy `MRFTstart`/`ReadInitialOPCvalues`/`ChangeControllerModeToMan`/
 //! `ResetOPC` sequence from `OPCClass.cs`. The mode-transition and write-back steps
-//! automatically no-op for the simulator backend, since its [`bhtune_core::LoopTags`] has no
+//! automatically no-op for the simulator driver, since its [`bhtune_core::LoopTags`] has no
 //! setpoint/mode/mode-attribute/PID-constant tags at all (see `build_loop_tags` below) — no
 //! separate "is this the simulator?" branching is needed in that logic.
 
 use std::future::Future;
 use std::time::Duration;
 
-use bhtune_backend::{Backend, TagWrite};
 use bhtune_core::{
     Action, ControllerDirection, ControllerType, DcsTemplate, InitialReadings, LoopConfig,
     LoopTags, MrftCompat, MrftEngine, MvRange, PidParameters, ProcessType, PvRange, ResponseLevel,
@@ -20,14 +19,15 @@ use bhtune_core::{
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TuneBackend, TuneResultRow,
+    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TuneDriver, TuneResultRow,
     TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
 };
+use bhtune_driver::{Driver, TagWrite};
 use chrono::{DateTime, Utc};
 
-use crate::args::{BackendKindArg, TuneArgs};
-use crate::backend::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
+use crate::args::{DriverKindArg, TuneArgs};
 use crate::cancel::CtrlC;
+use crate::driver::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
 use crate::output::OutputFormat;
 
 /// The final disposition of a `tune`/`simulate` run -- drives the printed summary (see
@@ -46,7 +46,7 @@ pub enum TuneOutcome {
     /// but distinguished so a scheduler's alerting can tell "this run had to be killed for
     /// running too long" apart from "an operator stopped it on purpose".
     TimedOut,
-    /// A backend reported a non-`Good` OPC quality for a tuning-critical reading -- an
+    /// A driver reported a non-`Good` OPC quality for a tuning-critical reading -- an
     /// initial reading (including the setpoint capture, when the loop starts in Auto) or an
     /// in-flight PV poll sample without `--allow-uncertain-quality` (or with it, but the
     /// quality was `Bad` rather than merely `Uncertain`) -- and the run was aborted and the
@@ -103,13 +103,13 @@ pub async fn run(
     run_with_ctrl_c(pool, args, app_config, &mut CtrlC::never()).await
 }
 
-/// Resolves `args.bridge_host` (always) and `args.server` (only for the `opcda` backend,
-/// since the simulator backend has no OPC server concept at all) through `app_config`'s
+/// Resolves `args.bridge_host` (always) and `args.server` (only for the `opcda` driver,
+/// since the simulator driver has no OPC server concept at all) through `app_config`'s
 /// `CLI > env > config file > default` precedence before anything else runs, so every
-/// downstream consumer (`crate::backend::build`, mainly) can keep reading the plain
+/// downstream consumer (`crate::driver::build`, mainly) can keep reading the plain
 /// `TuneArgs` fields it always has.
 ///
-/// `ctrl_c` is threaded through to [`execute`] (and, from there, to every backend await in
+/// `ctrl_c` is threaded through to [`execute`] (and, from there, to every driver await in
 /// [`run_polling_loop`] and the final restore), so a Ctrl+C delivered at any point during
 /// the run -- not just while idle between polls -- is observed. See `safety-cancellation`
 /// in AGENTS.md.
@@ -125,7 +125,7 @@ pub(crate) async fn run_with_ctrl_c(
         args,
         template,
         tags,
-        backend,
+        driver,
         config,
         started_at,
         write_pid,
@@ -137,7 +137,7 @@ pub(crate) async fn run_with_ctrl_c(
         &args,
         &template,
         &tags,
-        backend.as_ref(),
+        driver.as_ref(),
         config,
         started_at,
         write_pid,
@@ -165,28 +165,28 @@ pub(crate) async fn run_with_ctrl_c(
 
 /// Everything [`prepare`] resolves before a tune's long-running polling phase can start:
 /// the already-validated/defaulted [`TuneArgs`], the resolved template and derived tags, a
-/// connected backend, the built [`LoopConfig`], the run's start time, and the response level
+/// connected driver, the built [`LoopConfig`], the run's start time, and the response level
 /// (if any) to write back at the end -- plus the `tune_runs` row's assigned id.
 ///
 /// Exists to split [`run_with_ctrl_c`]'s single monolithic body into a fast, synchronous-ish
-/// setup phase (this struct's construction: template lookup, tag derivation, backend
+/// setup phase (this struct's construction: template lookup, tag derivation, driver
 /// connect, and the `tune_runs` insert that assigns [`PreparedTune::run_id`]) and a
 /// long-running phase ([`drive`]/[`execute`]'s actual polling loop, potentially minutes
 /// long) -- so an HTTP caller (`bhtune-server`'s `POST /api/runs`) can run the first phase
 /// inline in its request handler (fast enough to await directly, and any failure here -- bad
-/// template name, unreachable backend -- is exactly the kind of problem an HTTP client
+/// template name, unreachable driver -- is exactly the kind of problem an HTTP client
 /// expects a synchronous error response for) and `tokio::spawn` the second, returning the
 /// assigned `run_id` immediately rather than blocking the HTTP response for the whole test.
 ///
 /// Every field but `run_id` is private: a caller that isn't this module has no legitimate
-/// reason to inspect a template/tags/backend/config mid-flight, only to hand the whole
+/// reason to inspect a template/tags/driver/config mid-flight, only to hand the whole
 /// prepared bundle to [`drive`] (or, internally, [`run_with_ctrl_c`]) unchanged.
 pub struct PreparedTune {
     run_id: i64,
     args: TuneArgs,
     template: DcsTemplate,
     tags: LoopTags,
-    backend: Box<dyn Backend>,
+    driver: Box<dyn Driver>,
     config: LoopConfig,
     started_at: DateTime<Utc>,
     write_pid: Option<ResponseLevel>,
@@ -208,7 +208,7 @@ impl PreparedTune {
 ///
 /// Identical in behavior to what `run_with_ctrl_c` did inline before this split: the
 /// `--write-pid`-without-`--yes` guard, `bridge_host`/`server` resolution, template lookup,
-/// `LoopConfig`/`LoopTags` construction, backend connection, and the `tune_runs` insert all
+/// `LoopConfig`/`LoopTags` construction, driver connection, and the `tune_runs` insert all
 /// run in exactly the same order against exactly the same inputs. Extracting this into its
 /// own function changes nothing about what runs or when -- only who else can call it.
 pub async fn prepare(
@@ -216,7 +216,7 @@ pub async fn prepare(
     mut args: TuneArgs,
     app_config: &crate::config::BhtuneConfig,
 ) -> anyhow::Result<PreparedTune> {
-    // Fails before any backend/database I/O at all: an unattended write-back must be an
+    // Fails before any driver/database I/O at all: an unattended write-back must be an
     // explicit, deliberate choice, not something a stray `--write-pid` without `--yes` can
     // trigger by accident.
     if args.write_pid.is_some() && !args.yes {
@@ -230,7 +230,7 @@ pub async fn prepare(
         args.bridge_host.take(),
         app_config,
     ));
-    if matches!(args.backend, BackendKindArg::Opcda) {
+    if matches!(args.driver, DriverKindArg::Opcda) {
         args.server = Some(crate::config::resolve_server(
             args.server.take(),
             app_config,
@@ -245,19 +245,19 @@ pub async fn prepare(
 
     let config = build_loop_config(&args)?;
     let tags = build_loop_tags(&args, &template)?;
-    let backend = crate::backend::build(&args).await?;
+    let driver = crate::driver::build(&args).await?;
 
     let run_name = args.name.clone().unwrap_or_else(|| args.tagname.clone());
-    let db_backend = match args.backend {
-        BackendKindArg::Opcda => TuneBackend::Opcda,
-        BackendKindArg::Simulator => TuneBackend::Simulator,
+    let db_driver = match args.driver {
+        DriverKindArg::Opcda => TuneDriver::Opcda,
+        DriverKindArg::Simulator => TuneDriver::Simulator,
     };
     let started_at = Utc::now();
     let run = TuneRunRow::start(
         pool,
         None,
         &run_name,
-        db_backend,
+        db_driver,
         config,
         template_origin,
         &template,
@@ -271,7 +271,7 @@ pub async fn prepare(
         template = %args.template,
         process_type = ?config.process_type,
         controller_type = ?config.controller_type,
-        backend = ?db_backend,
+        driver = ?db_driver,
         allow_uncertain_quality = args.allow_uncertain_quality,
         "starting tune run"
     );
@@ -283,7 +283,7 @@ pub async fn prepare(
         args,
         template,
         tags,
-        backend,
+        driver,
         config,
         started_at,
         write_pid,
@@ -328,7 +328,7 @@ pub async fn drive(
         args,
         template,
         tags,
-        backend,
+        driver,
         config,
         started_at,
         write_pid,
@@ -340,7 +340,7 @@ pub async fn drive(
         &args,
         &template,
         &tags,
-        backend.as_ref(),
+        driver.as_ref(),
         config,
         started_at,
         write_pid,
@@ -398,7 +398,7 @@ enum AbortReason {
     /// `--timeout-secs` elapsed before the engine reported completion. Carries the
     /// configured limit that was hit, for the printed/JSON summary.
     Timeout { timeout_secs: u64 },
-    /// A single backend read/write during a poll tick did not resolve within
+    /// A single driver read/write during a poll tick did not resolve within
     /// `--op-timeout-secs` -- distinct from [`AbortReason::Timeout`], which bounds the whole
     /// run rather than one operation. Carries the tag that stalled and the configured limit,
     /// for the printed/JSON summary. Maps to the same [`TuneOutcome::TimedOut`] as
@@ -417,13 +417,13 @@ enum AbortReason {
     /// enum. Carries `tag`/`quality` for the printed/JSON summary.
     PoorQuality {
         tag: String,
-        quality: bhtune_backend::Quality,
+        quality: bhtune_driver::Quality,
     },
 }
 
 /// The result of `maybe_write_back`'s attempt (or non-attempt) to write calculated PID
 /// parameters back to the DCS. A real write (`Written`/`Failed`) is always fully recorded in
-/// `tune_writes`; `Skipped` never touches the backend at all, so it leaves no row there. This
+/// `tune_writes`; `Skipped` never touches the driver at all, so it leaves no row there. This
 /// enum exists purely to drive the printed summary and the process exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WriteBackOutcome {
@@ -433,7 +433,7 @@ enum WriteBackOutcome {
     /// The write succeeded and was confirmed by a readback.
     Written { response_level: ResponseLevel },
     /// A write was attempted (interactively selected, or requested via `--write-pid`) but
-    /// failed -- the backend rejected it, the confirmation readback failed, or (defensively)
+    /// failed -- the driver rejected it, the confirmation readback failed, or (defensively)
     /// `--write-pid` named a response level with no recorded calculated result.
     Failed,
 }
@@ -608,21 +608,21 @@ fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
     };
     // Real range validation at the model level (see `LoopConfig::validate`), not just this
     // flag parse -- catches an out-of-range `--relay-amp` (including the legacy predecessor's
-    // "not blank" bug of a stray debug shortcut reaching this field) before any backend
+    // "not blank" bug of a stray debug shortcut reaching this field) before any driver
     // connection or database write.
     config.validate()?;
     Ok(config)
 }
 
-/// Builds the loop's full tag set. For `--backend opcda`, derives from `--tagname` and the
+/// Builds the loop's full tag set. For `--driver opcda`, derives from `--tagname` and the
 /// template, then layers any explicit `--pv-range-*`/`--mv-range-*`/`--direction` overrides
-/// on top. For `--backend simulator`, `SimulatorBackend`'s fixed two-tag contract means the
+/// on top. For `--driver simulator`, `SimulatorDriver`'s fixed two-tag contract means the
 /// range/direction overrides are mandatory (normally supplied by
-/// `SimulateArgs::into_tune_args`); a direct `bhtune tune --backend simulator` invocation
+/// `SimulateArgs::into_tune_args`); a direct `bhtune tune --driver simulator` invocation
 /// missing any of them is a clear usage error rather than a confusing runtime failure.
 fn build_loop_tags(args: &TuneArgs, template: &DcsTemplate) -> anyhow::Result<LoopTags> {
-    match args.backend {
-        BackendKindArg::Opcda => {
+    match args.driver {
+        DriverKindArg::Opcda => {
             let mut tags = LoopTags::derive_from_pv_tag(&args.tagname, template);
             if let Some(v) = args.pv_range_high {
                 tags.upper_pv_range = TagOrValue::Value(v);
@@ -641,30 +641,30 @@ fn build_loop_tags(args: &TuneArgs, template: &DcsTemplate) -> anyhow::Result<Lo
             }
             Ok(tags)
         }
-        BackendKindArg::Simulator => {
+        DriverKindArg::Simulator => {
             let pv_range_high = args.pv_range_high.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "--pv-range-high is required with --backend simulator (or use `bhtune simulate`)"
+                    "--pv-range-high is required with --driver simulator (or use `bhtune simulate`)"
                 )
             })?;
             let pv_range_low = args.pv_range_low.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "--pv-range-low is required with --backend simulator (or use `bhtune simulate`)"
+                    "--pv-range-low is required with --driver simulator (or use `bhtune simulate`)"
                 )
             })?;
             let mv_range_high = args.mv_range_high.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "--mv-range-high is required with --backend simulator (or use `bhtune simulate`)"
+                    "--mv-range-high is required with --driver simulator (or use `bhtune simulate`)"
                 )
             })?;
             let mv_range_low = args.mv_range_low.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "--mv-range-low is required with --backend simulator (or use `bhtune simulate`)"
+                    "--mv-range-low is required with --driver simulator (or use `bhtune simulate`)"
                 )
             })?;
             let direction = args.direction.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "--direction is required with --backend simulator (or use `bhtune simulate`)"
+                    "--direction is required with --driver simulator (or use `bhtune simulate`)"
                 )
             })?;
 
@@ -687,7 +687,7 @@ fn build_loop_tags(args: &TuneArgs, template: &DcsTemplate) -> anyhow::Result<Lo
     }
 }
 
-/// Everything read from the backend before any mode transition is attempted — mirrors
+/// Everything read from the driver before any mode transition is attempted — mirrors
 /// `ReadInitialOPCvalues`.
 #[derive(Debug)]
 struct InitialState {
@@ -776,7 +776,7 @@ async fn execute<R: std::io::BufRead>(
     args: &TuneArgs,
     template: &DcsTemplate,
     tags: &LoopTags,
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     config: LoopConfig,
     started_at: DateTime<Utc>,
     write_pid: Option<ResponseLevel>,
@@ -784,7 +784,7 @@ async fn execute<R: std::io::BufRead>(
     reader: &mut R,
 ) -> anyhow::Result<RunOutcome> {
     let allow_uncertain = args.allow_uncertain_quality;
-    let initial = read_initial_values(backend, tags, template, allow_uncertain).await?;
+    let initial = read_initial_values(driver, tags, template, allow_uncertain).await?;
     validate_initial_state(&initial)?;
 
     // Persisted before any mutation is attempted (`safety-restore-guard`): a crash between
@@ -810,11 +810,11 @@ async fn execute<R: std::io::BufRead>(
     .await?;
 
     let mut guard = MutationGuard::default();
-    if let Err(e) = transition_to_manual(backend, tags, template, &initial, &mut guard).await {
+    if let Err(e) = transition_to_manual(driver, tags, template, &initial, &mut guard).await {
         return Err(restore_best_effort_then_propagate(
             pool,
             run_id,
-            backend,
+            driver,
             tags,
             template,
             &initial,
@@ -852,7 +852,7 @@ async fn execute<R: std::io::BufRead>(
         run_id,
         args,
         tags,
-        backend,
+        driver,
         &mut engine,
         started_at,
         ctrl_c,
@@ -880,7 +880,7 @@ async fn execute<R: std::io::BufRead>(
                 return Err(restore_best_effort_then_propagate(
                     pool,
                     run_id,
-                    backend,
+                    driver,
                     tags,
                     template,
                     &initial,
@@ -893,7 +893,7 @@ async fn execute<R: std::io::BufRead>(
             }
 
             let restore_attempt = attempt_restore(
-                backend,
+                driver,
                 tags,
                 template,
                 &initial,
@@ -910,7 +910,7 @@ async fn execute<R: std::io::BufRead>(
                         run_id,
                         tags,
                         template,
-                        backend,
+                        driver,
                         config,
                         write_pid,
                         args.output,
@@ -930,7 +930,7 @@ async fn execute<R: std::io::BufRead>(
         }
         Ok(PollOutcome::Aborted(reason)) => {
             let restore_attempt = attempt_restore(
-                backend,
+                driver,
                 tags,
                 template,
                 &initial,
@@ -958,7 +958,7 @@ async fn execute<R: std::io::BufRead>(
             Err(restore_best_effort_then_propagate(
                 pool,
                 run_id,
-                backend,
+                driver,
                 tags,
                 template,
                 &initial,
@@ -980,26 +980,26 @@ async fn execute<R: std::io::BufRead>(
 /// indistinguishable from a normal one; `Quality::Good` always passes.
 fn check_quality(
     tag: &str,
-    quality: bhtune_backend::Quality,
+    quality: bhtune_driver::Quality,
     allow_uncertain: bool,
 ) -> anyhow::Result<()> {
     match quality {
-        bhtune_backend::Quality::Good => Ok(()),
-        bhtune_backend::Quality::Uncertain if allow_uncertain => {
+        bhtune_driver::Quality::Good => Ok(()),
+        bhtune_driver::Quality::Uncertain if allow_uncertain => {
             tracing::warn!(
                 tag,
                 "accepting Uncertain-quality reading because --allow-uncertain-quality is set"
             );
             Ok(())
         }
-        bhtune_backend::Quality::Uncertain => {
+        bhtune_driver::Quality::Uncertain => {
             anyhow::bail!(
                 "tag '{tag}' reported OPC quality Uncertain; refusing to trust it for a \
                  tuning-critical reading (pass --allow-uncertain-quality to accept Uncertain \
                  readings; Bad is never accepted)"
             )
         }
-        bhtune_backend::Quality::Bad => {
+        bhtune_driver::Quality::Bad => {
             anyhow::bail!(
                 "tag '{tag}' reported OPC quality Bad; refusing to trust it for a \
                  tuning-critical reading"
@@ -1008,35 +1008,31 @@ fn check_quality(
     }
 }
 
-/// Maps the backend's live [`bhtune_backend::Quality`] to the database's persisted
+/// Maps the driver's live [`bhtune_driver::Quality`] to the database's persisted
 /// [`SampleQuality`] -- two separate enums (rather than one shared type) because
-/// `bhtune-backend` and `bhtune-db` are sibling crates that each depend only on
+/// `bhtune-driver` and `bhtune-db` are sibling crates that each depend only on
 /// `bhtune-core`, not on each other; only `bhtune-cli`, which depends on both, needs this
 /// mapping, so it lives here rather than forcing a new cross-dependency onto either crate.
-fn sample_quality_from_backend(quality: bhtune_backend::Quality) -> SampleQuality {
+fn sample_quality_from_driver(quality: bhtune_driver::Quality) -> SampleQuality {
     match quality {
-        bhtune_backend::Quality::Good => SampleQuality::Good,
-        bhtune_backend::Quality::Uncertain => SampleQuality::Uncertain,
-        bhtune_backend::Quality::Bad => SampleQuality::Bad,
+        bhtune_driver::Quality::Good => SampleQuality::Good,
+        bhtune_driver::Quality::Uncertain => SampleQuality::Uncertain,
+        bhtune_driver::Quality::Bad => SampleQuality::Bad,
     }
 }
 
-async fn read_raw(
-    backend: &dyn Backend,
-    tag: &str,
-    allow_uncertain: bool,
-) -> anyhow::Result<String> {
-    let values = backend.read(&[tag.to_string()]).await?;
+async fn read_raw(driver: &dyn Driver, tag: &str, allow_uncertain: bool) -> anyhow::Result<String> {
+    let values = driver.read(&[tag.to_string()]).await?;
     let value = values
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow::anyhow!("backend returned no value for tag '{tag}'"))?;
+        .ok_or_else(|| anyhow::anyhow!("driver returned no value for tag '{tag}'"))?;
     check_quality(tag, value.quality, allow_uncertain)?;
     Ok(value.value)
 }
 
-async fn read_f32(backend: &dyn Backend, tag: &str, allow_uncertain: bool) -> anyhow::Result<f32> {
-    let raw = read_raw(backend, tag, allow_uncertain).await?;
+async fn read_f32(driver: &dyn Driver, tag: &str, allow_uncertain: bool) -> anyhow::Result<f32> {
+    let raw = read_raw(driver, tag, allow_uncertain).await?;
     let value: f32 = raw
         .trim()
         .parse::<f32>()
@@ -1048,7 +1044,7 @@ async fn read_f32(backend: &dyn Backend, tag: &str, allow_uncertain: bool) -> an
 }
 
 async fn resolve_f32(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     tag_or_value: &TagOrValue<f32>,
     allow_uncertain: bool,
 ) -> anyhow::Result<f32> {
@@ -1059,12 +1055,12 @@ async fn resolve_f32(
             }
             Ok(*v)
         }
-        TagOrValue::Tag(tag) => read_f32(backend, tag, allow_uncertain).await,
+        TagOrValue::Tag(tag) => read_f32(driver, tag, allow_uncertain).await,
     }
 }
 
 async fn resolve_direction(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     tag_or_value: &TagOrValue<ControllerDirection>,
     template: &DcsTemplate,
     allow_uncertain: bool,
@@ -1072,7 +1068,7 @@ async fn resolve_direction(
     match tag_or_value {
         TagOrValue::Value(d) => Ok(*d),
         TagOrValue::Tag(tag) => {
-            let raw = read_raw(backend, tag, allow_uncertain).await?;
+            let raw = read_raw(driver, tag, allow_uncertain).await?;
             Ok(ControllerDirection::from_raw_tag_value(
                 &raw,
                 &template.controller_action_direct_value,
@@ -1082,21 +1078,21 @@ async fn resolve_direction(
 }
 
 /// Reads the PV tag for one in-flight MRFT poll tick, without hard-failing on its
-/// [`bhtune_backend::Quality`] the way [`read_f32`] does. `run_polling_loop` needs the raw
+/// [`bhtune_driver::Quality`] the way [`read_f32`] does. `run_polling_loop` needs the raw
 /// quality alongside the value so it can record the sample (with its quality) *before*
 /// deciding whether to abort -- finding 5 requires "the sample that triggered it is
 /// recorded", which a propagated `anyhow::Error` from a `check_quality`-enforcing read would
 /// lose. Still hard-fails on a non-numeric/non-finite value regardless of quality, exactly
 /// like [`read_f32`], since that's a data-shape problem no quality flag can excuse.
 async fn read_pv_sample(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     tag: &str,
-) -> anyhow::Result<(f32, bhtune_backend::Quality)> {
-    let values = backend.read(&[tag.to_string()]).await?;
+) -> anyhow::Result<(f32, bhtune_driver::Quality)> {
+    let values = driver.read(&[tag.to_string()]).await?;
     let value = values
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow::anyhow!("backend returned no value for tag '{tag}'"))?;
+        .ok_or_else(|| anyhow::anyhow!("driver returned no value for tag '{tag}'"))?;
     let pv: f32 = value
         .value
         .trim()
@@ -1108,10 +1104,8 @@ async fn read_pv_sample(
     Ok((pv, value.quality))
 }
 
-async fn write_raw(backend: &dyn Backend, tag: &str, value: String) -> anyhow::Result<()> {
-    let outcome = backend
-        .write(&tag.to_string(), TagWrite::Raw(value))
-        .await?;
+async fn write_raw(driver: &dyn Driver, tag: &str, value: String) -> anyhow::Result<()> {
+    let outcome = driver.write(&tag.to_string(), TagWrite::Raw(value)).await?;
     if outcome.success {
         Ok(())
     } else {
@@ -1124,8 +1118,8 @@ async fn write_raw(backend: &dyn Backend, tag: &str, value: String) -> anyhow::R
     }
 }
 
-async fn write_value(backend: &dyn Backend, tag: &str, value: f32) -> anyhow::Result<()> {
-    let outcome = backend
+async fn write_value(driver: &dyn Driver, tag: &str, value: f32) -> anyhow::Result<()> {
+    let outcome = driver
         .write(&tag.to_string(), TagWrite::Float(value))
         .await?;
     if outcome.success {
@@ -1142,20 +1136,20 @@ async fn write_value(backend: &dyn Backend, tag: &str, value: f32) -> anyhow::Re
 
 /// Pure port of `ReadInitialOPCvalues`: everything read before any mode transition.
 async fn read_initial_values(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
     allow_uncertain: bool,
 ) -> anyhow::Result<InitialState> {
-    let pv_ini = read_f32(backend, &tags.process_variable, allow_uncertain).await?;
-    let mv_ini = read_f32(backend, &tags.manipulated_variable, allow_uncertain).await?;
+    let pv_ini = read_f32(driver, &tags.process_variable, allow_uncertain).await?;
+    let mv_ini = read_f32(driver, &tags.manipulated_variable, allow_uncertain).await?;
 
     let mode_raw = match &tags.controller_mode {
-        Some(tag) => Some(read_raw(backend, tag, allow_uncertain).await?),
+        Some(tag) => Some(read_raw(driver, tag, allow_uncertain).await?),
         None => None,
     };
     let mode_attribute_raw = match &tags.mode_attribute {
-        Some(tag) => Some(read_raw(backend, tag, allow_uncertain).await?),
+        Some(tag) => Some(read_raw(driver, tag, allow_uncertain).await?),
         None => None,
     };
 
@@ -1164,22 +1158,22 @@ async fn read_initial_values(
     // `transition_to_manual`, where the legacy app captures the analogous `SvValueIni`.
     let setpoint_ini = match (&tags.setpoint_variable, &mode_raw) {
         (Some(sv_tag), Some(mode_raw)) if mode_raw == &template.mode_auto_value => {
-            Some(read_f32(backend, sv_tag, allow_uncertain).await?)
+            Some(read_f32(driver, sv_tag, allow_uncertain).await?)
         }
         _ => None,
     };
 
     let direction = resolve_direction(
-        backend,
+        driver,
         &tags.controller_direction,
         template,
         allow_uncertain,
     )
     .await?;
-    let pv_range_high = resolve_f32(backend, &tags.upper_pv_range, allow_uncertain).await?;
-    let pv_range_low = resolve_f32(backend, &tags.lower_pv_range, allow_uncertain).await?;
-    let mv_range_high = resolve_f32(backend, &tags.upper_mv_range, allow_uncertain).await?;
-    let mv_range_low = resolve_f32(backend, &tags.lower_mv_range, allow_uncertain).await?;
+    let pv_range_high = resolve_f32(driver, &tags.upper_pv_range, allow_uncertain).await?;
+    let pv_range_low = resolve_f32(driver, &tags.lower_pv_range, allow_uncertain).await?;
+    let mv_range_high = resolve_f32(driver, &tags.upper_mv_range, allow_uncertain).await?;
+    let mv_range_low = resolve_f32(driver, &tags.lower_mv_range, allow_uncertain).await?;
 
     Ok(InitialState {
         pv_ini,
@@ -1195,7 +1189,7 @@ async fn read_initial_values(
     })
 }
 
-/// The single choke point validating an `InitialState` -- from live backend tags and/or CLI
+/// The single choke point validating an `InitialState` -- from live driver tags and/or CLI
 /// flag overrides alike -- before any mutation of the loop happens (i.e. called between
 /// `read_initial_values` and `transition_to_manual` in `execute`, never after). `read_f32`/
 /// `resolve_f32` already reject a non-finite individual value as it's read; this additionally
@@ -1224,7 +1218,7 @@ fn validate_initial_state(initial: &InitialState) -> anyhow::Result<()> {
 /// [`MutationGuard`]'s doc comment for why that ordering matters -- so a caller still knows
 /// exactly what was attempted even if this function returns partway through with an error.
 async fn transition_to_manual(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
@@ -1234,7 +1228,7 @@ async fn transition_to_manual(
         (&tags.mode_attribute, &template.mode_attribute_program_value)
     {
         guard.mode_attribute_written = true;
-        write_raw(backend, attr_tag, program_value.clone()).await?;
+        write_raw(driver, attr_tag, program_value.clone()).await?;
         tokio::time::sleep(Duration::from_millis(1000)).await;
     }
 
@@ -1242,7 +1236,7 @@ async fn transition_to_manual(
         let mode_raw = initial.mode_raw.as_deref().unwrap_or_default();
         if mode_raw != template.mode_manual_value {
             guard.mode_written = true;
-            write_raw(backend, mode_tag, template.mode_manual_value.clone()).await?;
+            write_raw(driver, mode_tag, template.mode_manual_value.clone()).await?;
         }
     }
 
@@ -1318,13 +1312,13 @@ impl RestoreReport {
 /// condition (as before) *and* the matching `guard` flag, so nothing is "restored" that was
 /// never actually mutated in the first place.
 async fn restore(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
     guard: &MutationGuard,
 ) -> RestoreReport {
-    let mv = match write_value(backend, &tags.manipulated_variable, initial.mv_ini).await {
+    let mv = match write_value(driver, &tags.manipulated_variable, initial.mv_ini).await {
         Ok(()) => RestoreStepOutcome::Succeeded,
         Err(e) => RestoreStepOutcome::Failed(e.to_string()),
     };
@@ -1334,7 +1328,7 @@ async fn restore(
     if let Some(mode_tag) = &tags.controller_mode {
         let mode_raw = initial.mode_raw.as_deref().unwrap_or_default();
         if guard.mode_written && template.revert_mode && mode_raw != template.mode_manual_value {
-            mode = match write_raw(backend, mode_tag, mode_raw.to_string()).await {
+            mode = match write_raw(driver, mode_tag, mode_raw.to_string()).await {
                 Ok(()) => RestoreStepOutcome::Succeeded,
                 Err(e) => RestoreStepOutcome::Failed(e.to_string()),
             };
@@ -1347,7 +1341,7 @@ async fn restore(
         && let (Some(sv_tag), Some(sv_ini)) = (&tags.setpoint_variable, initial.setpoint_ini)
     {
         tokio::time::sleep(Duration::from_millis(1000)).await;
-        setpoint = match write_value(backend, sv_tag, sv_ini).await {
+        setpoint = match write_value(driver, sv_tag, sv_ini).await {
             Ok(()) => RestoreStepOutcome::Succeeded,
             Err(e) => RestoreStepOutcome::Failed(e.to_string()),
         };
@@ -1361,7 +1355,7 @@ async fn restore(
             .as_deref()
             .unwrap_or_default();
         if guard.mode_attribute_written && attr_raw != program_value {
-            mode_attribute = match write_raw(backend, attr_tag, attr_raw.to_string()).await {
+            mode_attribute = match write_raw(driver, attr_tag, attr_raw.to_string()).await {
                 Ok(()) => RestoreStepOutcome::Succeeded,
                 Err(e) => RestoreStepOutcome::Failed(e.to_string()),
             };
@@ -1376,10 +1370,10 @@ async fn restore(
     }
 }
 
-/// The outcome of racing one backend call ([`read_pv_sample`]/[`write_value`], during a poll
-/// tick) against Ctrl+C and `--op-timeout-secs` -- see [`bounded_backend_call`]. Distinct
+/// The outcome of racing one driver call ([`read_pv_sample`]/[`write_value`], during a poll
+/// tick) against Ctrl+C and `--op-timeout-secs` -- see [`bounded_driver_call`]. Distinct
 /// from a genuine `Err` from the call itself (a rejected write, a malformed value, a
-/// transport error), which [`bounded_backend_call`] still propagates via `?` rather than
+/// transport error), which [`bounded_driver_call`] still propagates via `?` rather than
 /// wrapping here, since those are real failures, not "gave up waiting".
 #[derive(Debug)]
 enum TickOperation<T> {
@@ -1391,17 +1385,17 @@ enum TickOperation<T> {
     TimedOut,
 }
 
-/// Races one backend call against `ctrl_c` and a fresh `op_timeout_secs` sleep, so a single
+/// Races one driver call against `ctrl_c` and a fresh `op_timeout_secs` sleep, so a single
 /// stalled read/write (gateway down, DCOM wedged, network black-holed) can never make the
 /// polling loop -- or the restore, via [`attempt_restore`] -- uninterruptible. This is what
 /// fixes finding 2 of the live-plant safety review: previously, `run_polling_loop`'s Ctrl+C
 /// and `--timeout-secs` listeners only ran *between* tick-body awaits, so a hung call inside
 /// one was invisible to both. `fut` is taken by value (not `&mut`) and is simply dropped,
 /// abandoning the in-flight operation, on the losing branches -- there is no cancellation
-/// signal sent to the backend itself, only to this call's own wait for it. A genuine `Err`
+/// signal sent to the driver itself, only to this call's own wait for it. A genuine `Err`
 /// from `fut` resolving still propagates through the `?` here, distinct from either
 /// [`TickOperation`] interrupt case.
-async fn bounded_backend_call<T>(
+async fn bounded_driver_call<T>(
     op_timeout_secs: u64,
     ctrl_c: &mut CtrlC,
     fut: impl Future<Output = anyhow::Result<T>>,
@@ -1432,9 +1426,9 @@ enum RestoreAttempt {
 }
 
 /// Restores the loop, bounded by `restore_timeout_secs` and a second Ctrl+C, so a restore
-/// that itself hangs (the same class of stalled-backend-call risk `bounded_backend_call`
+/// that itself hangs (the same class of stalled-driver-call risk `bounded_driver_call`
 /// guards the polling loop against) can never block the process indefinitely. Unlike
-/// [`bounded_backend_call`], this takes `restore`'s exact parameters directly rather than a
+/// [`bounded_driver_call`], this takes `restore`'s exact parameters directly rather than a
 /// generic `impl Future` -- there is only one real call shape (one `restore(...)` call per
 /// run), so a generic signature would add no value. Infallible: [`restore`] itself no longer
 /// returns a `Result` (every step is now attempted independently and reported via
@@ -1447,7 +1441,7 @@ enum RestoreAttempt {
 /// only need to fold the returned `reason` into their own context (e.g. the original
 /// [`AbortReason`], if any) for the final [`RunOutcome`].
 async fn attempt_restore(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
@@ -1456,7 +1450,7 @@ async fn attempt_restore(
     ctrl_c: &mut CtrlC,
 ) -> RestoreAttempt {
     tokio::select! {
-        report = restore(backend, tags, template, initial, guard) => {
+        report = restore(driver, tags, template, initial, guard) => {
             if report.all_succeeded() {
                 RestoreAttempt::Confirmed
             } else {
@@ -1536,7 +1530,7 @@ async fn record_restore_status_best_effort(
 async fn restore_best_effort_then_propagate(
     pool: &SqlitePool,
     run_id: i64,
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
@@ -1546,7 +1540,7 @@ async fn restore_best_effort_then_propagate(
     err: anyhow::Error,
 ) -> anyhow::Error {
     let attempt = attempt_restore(
-        backend,
+        driver,
         tags,
         template,
         initial,
@@ -1570,16 +1564,16 @@ enum PollOutcome {
     Aborted(AbortReason),
 }
 
-/// Polls the backend on `args.poll_interval_ms`, driving `engine` once the pre-test
+/// Polls the driver on `args.poll_interval_ms`, driving `engine` once the pre-test
 /// `--mrft-delay` padding period has elapsed, and continuing to record (but not evaluate)
 /// samples for the same padding period after completion. Returns `Ok(PollOutcome::Completed`
 /// on a normal finish, `Ok(PollOutcome::Aborted)` if interrupted by Ctrl+C, by
-/// `args.timeout_secs` elapsing, or by a single backend call exceeding
-/// `args.op_timeout_secs` -- the last of these via [`bounded_backend_call`], which wraps
-/// every backend read/write in the tick body so a stalled call is abandoned rather than
+/// `args.timeout_secs` elapsing, or by a single driver call exceeding
+/// `args.op_timeout_secs` -- the last of these via [`bounded_driver_call`], which wraps
+/// every driver read/write in the tick body so a stalled call is abandoned rather than
 /// awaited forever, keeping Ctrl+C and both timeouts effective even mid-hung-read/write. The
 /// outer `tokio::select!` below still separately covers the *idle* wait between ticks (via
-/// `ctrl_c`, shared with every `bounded_backend_call` inside the winning tick body -- see
+/// `ctrl_c`, shared with every `bounded_driver_call` inside the winning tick body -- see
 /// that function's doc comment for why reusing it across nested `select!`s is safe) and the
 /// whole-run `--timeout-secs` deadline.
 #[allow(clippy::too_many_arguments)]
@@ -1588,7 +1582,7 @@ async fn run_polling_loop(
     run_id: i64,
     args: &TuneArgs,
     tags: &LoopTags,
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     engine: &mut MrftEngine,
     start_time: DateTime<Utc>,
     ctrl_c: &mut CtrlC,
@@ -1604,7 +1598,7 @@ async fn run_polling_loop(
 
     // A mandatory safety net for unattended operation: an unattended run must never be able
     // to perturb a live process indefinitely (a stuck relay, a misconfigured tag mapping that
-    // never crosses hysteresis, a stalled backend read). Created once and raced via
+    // never crosses hysteresis, a stalled driver read). Created once and raced via
     // `tokio::select!` on every iteration below, rather than checked only after each
     // completed tick, so it fires even if a single `read_f32` call itself hangs.
     let timeout = tokio::time::sleep(Duration::from_secs(args.timeout_secs));
@@ -1614,10 +1608,10 @@ async fn run_polling_loop(
         tokio::select! {
             _ = interval.tick() => {
                 let now = Utc::now();
-                let (pv, quality) = match bounded_backend_call(
+                let (pv, quality) = match bounded_driver_call(
                     args.op_timeout_secs,
                     ctrl_c,
-                    read_pv_sample(backend, &tags.process_variable),
+                    read_pv_sample(driver, &tags.process_variable),
                 )
                 .await?
                 {
@@ -1641,7 +1635,7 @@ async fn run_polling_loop(
                     }
                 };
                 let tick = Tick { time: now, pv };
-                let sample_quality = sample_quality_from_backend(quality);
+                let sample_quality = sample_quality_from_driver(quality);
 
                 if let Err(e) = check_quality(&tags.process_variable, quality, args.allow_uncertain_quality) {
                     tracing::warn!(
@@ -1671,10 +1665,10 @@ async fn run_polling_loop(
                     match action {
                         Action::WriteMv(v) => {
                             guard.mv_written = true;
-                            match bounded_backend_call(
+                            match bounded_driver_call(
                                 args.op_timeout_secs,
                                 ctrl_c,
-                                write_value(backend, &tags.manipulated_variable, v),
+                                write_value(driver, &tags.manipulated_variable, v),
                             )
                             .await?
                             {
@@ -1797,19 +1791,19 @@ async fn persist_results(
 /// `commands::history::revert`, which needs the identical pre-read step before writing a
 /// past run's recorded values back.
 pub(crate) async fn read_previous_pid_values(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     p_tag: &str,
     i_tag: &str,
     d_tag: &str,
     allow_uncertain: bool,
 ) -> anyhow::Result<WriteReadback> {
-    let proportional = read_f32(backend, p_tag, allow_uncertain)
+    let proportional = read_f32(driver, p_tag, allow_uncertain)
         .await
         .map_err(|e| anyhow::anyhow!("pre-read of Proportional tag '{p_tag}' failed: {e}"))?;
-    let integral = read_f32(backend, i_tag, allow_uncertain)
+    let integral = read_f32(driver, i_tag, allow_uncertain)
         .await
         .map_err(|e| anyhow::anyhow!("pre-read of Integral tag '{i_tag}' failed: {e}"))?;
-    let derivative = read_f32(backend, d_tag, allow_uncertain)
+    let derivative = read_f32(driver, d_tag, allow_uncertain)
         .await
         .map_err(|e| anyhow::anyhow!("pre-read of Derivative tag '{d_tag}' failed: {e}"))?;
     Ok(WriteReadback {
@@ -1838,16 +1832,16 @@ fn pid_value_within_tolerance(requested: f32, actual: f32) -> bool {
 /// failed. `pub(crate)`: also reused by `commands::history::revert` for the identical
 /// write-and-verify step against a run's recorded previous values.
 pub(crate) async fn write_and_verify_pid_value(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     label: &str,
     tag: &str,
     value: f32,
     allow_uncertain: bool,
 ) -> Result<f32, String> {
-    write_value(backend, tag, value)
+    write_value(driver, tag, value)
         .await
         .map_err(|e| format!("{label} write to '{tag}' failed: {e}"))?;
-    let readback = read_f32(backend, tag, allow_uncertain)
+    let readback = read_f32(driver, tag, allow_uncertain)
         .await
         .map_err(|e| format!("{label} readback from '{tag}' failed: {e}"))?;
     if pid_value_within_tolerance(value, readback) {
@@ -1865,12 +1859,12 @@ pub(crate) async fn write_and_verify_pid_value(
 /// previous_value)` triples, in any order. Returns `Ok(())` only if every rollback write
 /// succeeded; otherwise `Err` describing every one that did not.
 async fn rollback_pid_writes(
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     targets: &[(&str, &str, f32)],
 ) -> Result<(), String> {
     let mut failures = Vec::new();
     for (label, tag, previous_value) in targets {
-        if let Err(e) = write_value(backend, tag, *previous_value).await {
+        if let Err(e) = write_value(driver, tag, *previous_value).await {
             failures.push(format!("{label} rollback write to '{tag}' failed: {e}"));
         }
     }
@@ -1886,7 +1880,7 @@ async fn rollback_pid_writes(
 /// (`--write-pid`; the caller has already validated `--yes` was also given before the tune
 /// even started). Skips with an informational message (rather than prompting/writing)
 /// whenever any of the three PID constant tags is unconfigured — true for the simulator
-/// backend, and also a sane guard for any real template missing one — or when no results
+/// driver, and also a sane guard for any real template missing one — or when no results
 /// were recorded at all. `reader` is injected (rather than reading `std::io::stdin()`
 /// directly) so tests can supply a fixed `Cursor` in place of the process's real stdin; it
 /// is never read from at all when `write_pid` is `Some`, or when `output` is
@@ -1920,7 +1914,7 @@ async fn maybe_write_back(
     run_id: i64,
     tags: &LoopTags,
     template: &DcsTemplate,
-    backend: &dyn Backend,
+    driver: &dyn Driver,
     config: LoopConfig,
     write_pid: Option<ResponseLevel>,
     output: OutputFormat,
@@ -1932,10 +1926,10 @@ async fn maybe_write_back(
         &tags.integral_constant,
         &tags.derivative_constant,
     ) else {
-        let detail = "no PID constant tags configured for this run's backend/template";
+        let detail = "no PID constant tags configured for this run's driver/template";
         if output == OutputFormat::Table {
             println!(
-                "No PID constant tags configured for this run's backend/template; skipping write-back."
+                "No PID constant tags configured for this run's driver/template; skipping write-back."
             );
         }
         return Ok((WriteBackOutcome::Skipped, Some(detail.to_string())));
@@ -2033,7 +2027,7 @@ async fn maybe_write_back(
     let mut new_write = NewTuneWrite::new(response_level, written_at);
 
     let previous =
-        match read_previous_pid_values(backend, p_tag, i_tag, d_tag, allow_uncertain).await {
+        match read_previous_pid_values(driver, p_tag, i_tag, d_tag, allow_uncertain).await {
             Ok(previous) => previous,
             Err(e) => {
                 let message = e.to_string();
@@ -2081,7 +2075,7 @@ async fn maybe_write_back(
 
     for (i, (label, tag, value, previous_value)) in steps.into_iter().enumerate() {
         written_vals[i] = Some(value);
-        match write_and_verify_pid_value(backend, label, tag, value, allow_uncertain).await {
+        match write_and_verify_pid_value(driver, label, tag, value, allow_uncertain).await {
             Ok(readback) => {
                 readback_vals[i] = Some(readback);
                 rollback_targets.push((label, tag, previous_value));
@@ -2125,7 +2119,7 @@ async fn maybe_write_back(
             }
 
             let detail;
-            match rollback_pid_writes(backend, &rollback_targets).await {
+            match rollback_pid_writes(driver, &rollback_targets).await {
                 Ok(()) => {
                     new_write.rollback_state = Some(RollbackState::Succeeded);
                     TuneWriteRow::insert(pool, run_id, new_write).await?;
@@ -2180,7 +2174,7 @@ mod tests {
     }
 
     /// `run()`'s tests all pass explicit `TuneArgs.bridge_host`/`server` values (or the
-    /// simulator backend, which ignores both), so an all-default `BhtuneConfig` never
+    /// simulator driver, which ignores both), so an all-default `BhtuneConfig` never
     /// actually supplies anything here -- it's only present because `run()`'s signature
     /// requires it.
     fn test_config() -> crate::config::BhtuneConfig {
@@ -2188,7 +2182,7 @@ mod tests {
     }
 
     /// A fast-converging simulator tune: proportionally scaled down from
-    /// `bhtune-backend`'s own proven `FopdtConfig::new(1.0, 2.0, 5.0, 1.0)` E2E fixture (2
+    /// `bhtune-driver`'s own proven `FopdtConfig::new(1.0, 2.0, 5.0, 1.0)` E2E fixture (2
     /// ticks of lag, 5 ticks of dead time) so the whole test — which polls on a real
     /// `tokio::time::interval`, unlike that lower-level test's manually driven ticks —
     /// finishes in well under a second of real wall-clock time.
@@ -2203,7 +2197,7 @@ mod tests {
             cycles_count: Some(2),
             noise_protection_secs: Some(0),
             mrft_delay: 0,
-            backend: BackendKindArg::Simulator,
+            driver: DriverKindArg::Simulator,
             bridge_host: None,
             server: None,
             sim_gain: 1.0,
@@ -2259,20 +2253,20 @@ mod tests {
             .unwrap();
         assert!(!samples.is_empty());
 
-        // The simulator backend has no PID constant tags, so write-back must have been
+        // The simulator driver has no PID constant tags, so write-back must have been
         // skipped entirely rather than hanging on stdin.
         let writes = TuneWriteRow::list_for_run(&pool, runs[0].id).await.unwrap();
         assert!(writes.is_empty());
     }
 
     /// Every range/direction override is CLI-supplied below, so `read_initial_values` never
-    /// reads them from the backend; the mock only ever needs to answer for `pv_ini`/`mv_ini`
+    /// reads them from the driver; the mock only ever needs to answer for `pv_ini`/`mv_ini`
     /// and (for the Yokogawa template) has no mode/mode-attribute tags to read either. Fails
     /// starting at the 5th `read` RPC call — comfortably past every possible setup read —
     /// so the failure always lands on the first polling tick's PV read, deep inside
     /// `run_polling_loop`, not during setup.
     #[tokio::test]
-    async fn run_with_opcda_backend_fails_mid_poll_and_marks_the_run_failed() {
+    async fn run_with_opcda_driver_fails_mid_poll_and_marks_the_run_failed() {
         use crate::test_support::{MockBridgeService, start_mock_server};
         use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue, WriteResponse};
 
@@ -2299,13 +2293,13 @@ mod tests {
 
         let pool = seeded_pool().await;
         let mut args = fast_simulator_args();
-        args.backend = BackendKindArg::Opcda;
+        args.driver = DriverKindArg::Opcda;
         args.tagname = "Unit1.LIC101.PV".to_string();
         args.bridge_host = Some(host);
         args.server = Some("MockServer".to_string());
 
         let err = run(&pool, args, &test_config()).await.unwrap_err();
-        assert!(err.to_string().contains("backend operation failed"));
+        assert!(err.to_string().contains("driver operation failed"));
 
         let runs = TuneRunRow::list(
             &pool,
@@ -2316,13 +2310,13 @@ mod tests {
         .unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].outcome, bhtune_db::models::TuneOutcome::Failed);
-        assert_eq!(runs[0].backend, bhtune_db::models::TuneBackend::Opcda);
+        assert_eq!(runs[0].driver, bhtune_db::models::TuneDriver::Opcda);
         assert!(
             runs[0]
                 .failure_reason
                 .as_deref()
                 .unwrap()
-                .contains("backend operation failed")
+                .contains("driver operation failed")
         );
 
         server.shutdown().await;
@@ -2330,7 +2324,7 @@ mod tests {
 
     /// Proves `run()` actually resolves `bridge_host`/`server` from `app_config` (not just
     /// from `TuneArgs`) by leaving both CLI-facing fields unset and supplying them only via
-    /// the config -- if resolution didn't happen, `backend::build` would either fail fast
+    /// the config -- if resolution didn't happen, `driver::build` would either fail fast
     /// with "no OPC server specified" (server never resolved) or try to dial
     /// `DEFAULT_BRIDGE_HOST` instead of the mock (bridge_host never resolved), producing a
     /// different failure than the one asserted below. The mock is configured to fail
@@ -2362,7 +2356,7 @@ mod tests {
 
         let pool = seeded_pool().await;
         let mut args = fast_simulator_args();
-        args.backend = BackendKindArg::Opcda;
+        args.driver = DriverKindArg::Opcda;
         args.tagname = "Unit1.LIC101.PV".to_string();
         args.bridge_host = None;
         args.server = None;
@@ -2373,11 +2367,11 @@ mod tests {
             ..Default::default()
         };
 
-        // A "backend operation failed" error (rather than "no OPC server specified" or a
+        // A "driver operation failed" error (rather than "no OPC server specified" or a
         // connection error against the unresolved default host) proves setup got as far as
         // issuing a real RPC against the config-resolved mock server.
         let err = run(&pool, args, &app_config).await.unwrap_err();
-        assert!(err.to_string().contains("backend operation failed"));
+        assert!(err.to_string().contains("driver operation failed"));
 
         server.shutdown().await;
     }
@@ -2386,7 +2380,7 @@ mod tests {
     async fn run_errors_when_opcda_server_is_unset_in_both_cli_and_config() {
         let pool = seeded_pool().await;
         let mut args = fast_simulator_args();
-        args.backend = BackendKindArg::Opcda;
+        args.driver = DriverKindArg::Opcda;
         args.server = None;
 
         let err = run(&pool, args, &test_config()).await.unwrap_err();
@@ -2465,11 +2459,11 @@ mod tests {
     }
 
     #[test]
-    fn build_loop_config_rejects_an_out_of_range_relay_amp_before_any_backend_or_db_io() {
+    fn build_loop_config_rejects_an_out_of_range_relay_amp_before_any_driver_or_db_io() {
         // Mirrors the `--write-pid`-requires-`--yes` fail-fast precedent: a bad
         // `--relay-amp` (including a leftover legacy debug-code magic number like 2014) must
         // be caught by `LoopConfig::validate` here, at construction time, not discovered
-        // later against a live backend.
+        // later against a live driver.
         let mut args = fast_simulator_args();
         args.relay_amp = 2014.0;
         let err = build_loop_config(&args).unwrap_err();
@@ -2488,12 +2482,12 @@ mod tests {
     /// The reproduced panic: `--cycles-count 0` used to reach
     /// `bhtune_core::measure_oscillation`'s internal `assert!` and panic mid-run, after the
     /// loop had already been switched to manual and stroked. `LoopConfig::validate` (called
-    /// from `build_loop_config`, before any backend or DB I/O) must reject it cleanly
+    /// from `build_loop_config`, before any driver or DB I/O) must reject it cleanly
     /// instead. The clap-level `positive_u32` parser (see `args.rs`) also rejects `0` for
     /// this flag before it ever reaches here, but this test exercises the model-level
     /// guarantee directly, independent of how the value arrived.
     #[test]
-    fn build_loop_config_rejects_zero_cycles_count_before_any_backend_or_db_io() {
+    fn build_loop_config_rejects_zero_cycles_count_before_any_driver_or_db_io() {
         let mut args = fast_simulator_args();
         args.cycles_count = Some(0);
         let err = build_loop_config(&args).unwrap_err();
@@ -2548,7 +2542,7 @@ mod tests {
     fn build_loop_tags_opcda_derives_and_applies_overrides() {
         let template = bhtune_core::built_in_templates().remove(0);
         let mut args = fast_simulator_args();
-        args.backend = BackendKindArg::Opcda;
+        args.driver = DriverKindArg::Opcda;
         args.tagname = "Unit1.LIC101.PV".to_string();
         args.direction = Some(DirectionArg::Direct);
         let tags = build_loop_tags(&args, &template).unwrap();
@@ -2575,14 +2569,14 @@ mod tests {
         let args = fast_simulator_args();
         let config = build_loop_config(&args).unwrap();
         let tags = build_loop_tags(&args, &template).unwrap();
-        let backend = crate::backend::build(&args).await.unwrap();
+        let driver = crate::driver::build(&args).await.unwrap();
 
         let started_at = Utc::now();
         let run = TuneRunRow::start(
             &pool,
             None,
             "abort-test",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -2592,14 +2586,14 @@ mod tests {
         .await
         .unwrap();
 
-        let initial = read_initial_values(backend.as_ref(), &tags, &template, false)
+        let initial = read_initial_values(driver.as_ref(), &tags, &template, false)
             .await
             .unwrap();
         let mut guard = MutationGuard::default();
-        transition_to_manual(backend.as_ref(), &tags, &template, &initial, &mut guard)
+        transition_to_manual(driver.as_ref(), &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
-        let report = restore(backend.as_ref(), &tags, &template, &initial, &guard).await;
+        let report = restore(driver.as_ref(), &tags, &template, &initial, &guard).await;
         assert!(report.all_succeeded());
         TuneRunRow::abort(&pool, run.id, Utc::now()).await.unwrap();
 
@@ -2609,7 +2603,7 @@ mod tests {
 
     /// Unlike Ctrl+C/timeout (which need a real signal or elapsed wall-clock time and so are
     /// only exercised indirectly, see the test above), finding 5's `PoorQuality` abort is
-    /// purely data-driven -- the backend just has to report a non-`Good` reading -- so this
+    /// purely data-driven -- the driver just has to report a non-`Good` reading -- so this
     /// test drives `run_polling_loop` for real and checks its returned `PollOutcome`
     /// directly, then confirms `restore` leaves the loop in the same consistent state
     /// `execute`'s `Aborted` branch would.
@@ -2618,8 +2612,8 @@ mod tests {
         let pool = seeded_pool().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto()
-            .with_quality(&tags.process_variable, bhtune_backend::Quality::Bad);
+        let driver = honeywell_driver_auto()
+            .with_quality(&tags.process_variable, bhtune_driver::Quality::Bad);
         let args = fast_simulator_args();
         let config = build_loop_config(&args).unwrap();
 
@@ -2628,7 +2622,7 @@ mod tests {
             &pool,
             None,
             "poor-quality-poll",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -2638,7 +2632,7 @@ mod tests {
         .await
         .unwrap();
 
-        // Built directly (bypassing `read_initial_values`) using `honeywell_backend_auto()`'s
+        // Built directly (bypassing `read_initial_values`) using `honeywell_driver_auto()`'s
         // own fixture values (see `sample_initial_state`, defined below), because
         // `read_initial_values` itself enforces finding 5 on this very same PV tag and would
         // hard-fail before ever reaching the polling loop this test targets.
@@ -2668,7 +2662,7 @@ mod tests {
             run.id,
             &args,
             &tags,
-            &backend,
+            &driver,
             &mut engine,
             started_at,
             &mut CtrlC::never(),
@@ -2680,7 +2674,7 @@ mod tests {
         match outcome {
             PollOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => {
                 assert_eq!(tag, tags.process_variable);
-                assert_eq!(quality, bhtune_backend::Quality::Bad);
+                assert_eq!(quality, bhtune_driver::Quality::Bad);
             }
             _ => panic!("expected PollOutcome::Aborted(AbortReason::PoorQuality)"),
         }
@@ -2700,7 +2694,7 @@ mod tests {
         // `guard.mv_written` is `false`, while the guard-gated mode/setpoint/mode-attribute
         // steps correctly report `NotNeeded` since nothing was ever attempted for them.
         let guard = MutationGuard::default();
-        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        let report = restore(&driver, &tags, &template, &initial, &guard).await;
         assert_eq!(report.mv, RestoreStepOutcome::Succeeded);
         assert_eq!(report.mode, RestoreStepOutcome::NotNeeded);
         assert_eq!(report.setpoint, RestoreStepOutcome::NotNeeded);
@@ -2712,16 +2706,16 @@ mod tests {
 
         // The MV was actually written back to its initial value during restore.
         assert!(
-            backend
+            driver
                 .write_log()
                 .iter()
                 .any(|(tag, value)| tag == &tags.manipulated_variable && value == "45")
         );
     }
 
-    // --- safety-cancellation: `--op-timeout-secs` / mid-tick Ctrl+C via `bounded_backend_call`
+    // --- safety-cancellation: `--op-timeout-secs` / mid-tick Ctrl+C via `bounded_driver_call`
 
-    /// Proves the wiring, not just the mechanism (see the dedicated `bounded_backend_call`
+    /// Proves the wiring, not just the mechanism (see the dedicated `bounded_driver_call`
     /// unit tests below for that): a PV read that never resolves at all -- the gateway is
     /// down, DCOM is wedged, the network is black-holed -- must abort the run via
     /// `--op-timeout-secs` rather than hang the poll loop forever, exactly the scenario
@@ -2736,7 +2730,7 @@ mod tests {
         let pool = seeded_pool().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto().hanging_read(&tags.process_variable);
+        let driver = honeywell_driver_auto().hanging_read(&tags.process_variable);
         let mut args = fast_simulator_args();
         args.op_timeout_secs = 1;
         let config = build_loop_config(&args).unwrap();
@@ -2746,7 +2740,7 @@ mod tests {
             &pool,
             None,
             "stalled-pv-read",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -2782,7 +2776,7 @@ mod tests {
             run.id,
             &args,
             &tags,
-            &backend,
+            &driver,
             &mut engine,
             started_at,
             &mut CtrlC::never(),
@@ -2826,7 +2820,7 @@ mod tests {
         let pool = seeded_pool().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto().hanging_write(&tags.manipulated_variable);
+        let driver = honeywell_driver_auto().hanging_write(&tags.manipulated_variable);
         let mut args = fast_simulator_args();
         // Large enough that the op-timeout branch never wins the race against the
         // background task's much shorter real delay below.
@@ -2838,7 +2832,7 @@ mod tests {
             &pool,
             None,
             "stalled-mv-write",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -2880,7 +2874,7 @@ mod tests {
             run.id,
             &args,
             &tags,
-            &backend,
+            &driver,
             &mut engine,
             started_at,
             &mut ctrl_c,
@@ -2902,24 +2896,24 @@ mod tests {
         // The hung write never actually completed -- the loop was left at its relay-test MV,
         // matching `warn_restore_incomplete`'s premise for why the operator warning names
         // the MV specifically.
-        assert!(backend.write_log().is_empty());
+        assert!(driver.write_log().is_empty());
     }
 
     // --- opcda-style mode-transition/restore/write-back coverage ---------------------------
     //
-    // The tests above all use the simulator backend, whose `LoopTags` has no
+    // The tests above all use the simulator driver, whose `LoopTags` has no
     // setpoint/mode/mode-attribute/PID-constant tags at all (see `build_loop_tags`), so they
     // never exercise `transition_to_manual`/`restore`/`maybe_write_back`'s real opcda-style
-    // logic. `MockBackend` below is a minimal in-memory `Backend` double with a configurable
+    // logic. `MockDriver` below is a minimal in-memory `Driver` double with a configurable
     // tag/value map, used together with the real "Honeywell Experion" built-in template
     // (which has every optional tag suffix configured) to drive that logic directly.
 
-    /// A minimal, fully in-memory [`Backend`] test double with a fixed tag-value map, plus
+    /// A minimal, fully in-memory [`Driver`] test double with a fixed tag-value map, plus
     /// the ability to inject specific-tag read/write failures. `std::sync::Mutex`, not
-    /// `tokio::sync::Mutex` — matching `SimulatorBackend`'s own precedent — since no
+    /// `tokio::sync::Mutex` — matching `SimulatorDriver`'s own precedent — since no
     /// `.await` point is ever held across the lock.
     #[derive(Default)]
-    struct MockBackend {
+    struct MockDriver {
         values: std::sync::Mutex<std::collections::HashMap<String, String>>,
         writes: std::sync::Mutex<Vec<(String, String)>>,
         reject_writes: std::collections::HashSet<String>,
@@ -2934,18 +2928,18 @@ mod tests {
         hang_reads: std::collections::HashSet<String>,
         hang_writes: std::collections::HashSet<String>,
         /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
-        /// listed -- matching a healthy real backend and letting most tests ignore quality
+        /// listed -- matching a healthy real driver and letting most tests ignore quality
         /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
-        qualities: std::sync::Mutex<std::collections::HashMap<String, bhtune_backend::Quality>>,
+        qualities: std::sync::Mutex<std::collections::HashMap<String, bhtune_driver::Quality>>,
         /// Per-tag: reports the tag's ordinarily-configured quality (from `qualities`,
         /// defaulting to `Good`) for the tag's first `usize` reads, then switches to the
-        /// paired [`bhtune_backend::Quality`] for every read after that. Lets a test put a
+        /// paired [`bhtune_driver::Quality`] for every read after that. Lets a test put a
         /// tag's *initial* read (before any mutation is attempted, subject to finding 5 the
         /// same as every other read) in good standing while still forcing quality to
         /// degrade partway through polling -- deterministically, with no reliance on real
         /// elapsed time or a Ctrl+C race, unlike `--timeout-secs`/`--op-timeout-secs`-driven
         /// aborts.
-        degrade_quality_after: std::collections::HashMap<String, (usize, bhtune_backend::Quality)>,
+        degrade_quality_after: std::collections::HashMap<String, (usize, bhtune_driver::Quality)>,
         /// Tracks how many times each tag has been read so far, for
         /// `degrade_quality_after`/`erroring_read_after`.
         read_counts: std::sync::Mutex<std::collections::HashMap<String, usize>>,
@@ -2972,9 +2966,9 @@ mod tests {
         write_counts: std::sync::Mutex<std::collections::HashMap<String, usize>>,
     }
 
-    impl MockBackend {
-        fn new(values: &[(&str, &str)]) -> MockBackend {
-            MockBackend {
+    impl MockDriver {
+        fn new(values: &[(&str, &str)]) -> MockDriver {
+            MockDriver {
                 values: std::sync::Mutex::new(
                     values
                         .iter()
@@ -2985,41 +2979,41 @@ mod tests {
             }
         }
 
-        fn rejecting_write(mut self, tag: &str) -> MockBackend {
+        fn rejecting_write(mut self, tag: &str) -> MockDriver {
             self.reject_writes.insert(tag.to_string());
             self
         }
 
-        fn erroring_read(mut self, tag: &str) -> MockBackend {
+        fn erroring_read(mut self, tag: &str) -> MockDriver {
             self.error_reads.insert(tag.to_string());
             self
         }
 
-        fn erroring_write(mut self, tag: &str) -> MockBackend {
+        fn erroring_write(mut self, tag: &str) -> MockDriver {
             self.error_writes.insert(tag.to_string());
             self
         }
 
-        fn empty_read(mut self, tag: &str) -> MockBackend {
+        fn empty_read(mut self, tag: &str) -> MockDriver {
             self.empty_reads.insert(tag.to_string());
             self
         }
 
         /// Makes reading `tag` hang forever -- see the `hang_reads` field doc comment.
-        fn hanging_read(mut self, tag: &str) -> MockBackend {
+        fn hanging_read(mut self, tag: &str) -> MockDriver {
             self.hang_reads.insert(tag.to_string());
             self
         }
 
         /// Makes writing `tag` hang forever -- see the `hang_writes` field doc comment.
-        fn hanging_write(mut self, tag: &str) -> MockBackend {
+        fn hanging_write(mut self, tag: &str) -> MockDriver {
             self.hang_writes.insert(tag.to_string());
             self
         }
 
         /// Overrides a single tag's fixture value -- e.g. to make an otherwise-valid
-        /// baseline backend (like `honeywell_backend_auto()`) report one bad reading.
-        fn with_value(self, tag: &str, value: &str) -> MockBackend {
+        /// baseline driver (like `honeywell_driver_auto()`) report one bad reading.
+        fn with_value(self, tag: &str, value: &str) -> MockDriver {
             self.values
                 .lock()
                 .unwrap()
@@ -3027,9 +3021,9 @@ mod tests {
             self
         }
 
-        /// Overrides a single tag's reported [`bhtune_backend::Quality`] -- every other tag
-        /// keeps reporting `Quality::Good`, matching a healthy real backend.
-        fn with_quality(self, tag: &str, quality: bhtune_backend::Quality) -> MockBackend {
+        /// Overrides a single tag's reported [`bhtune_driver::Quality`] -- every other tag
+        /// keeps reporting `Quality::Good`, matching a healthy real driver.
+        fn with_quality(self, tag: &str, quality: bhtune_driver::Quality) -> MockDriver {
             self.qualities
                 .lock()
                 .unwrap()
@@ -3044,8 +3038,8 @@ mod tests {
             mut self,
             tag: &str,
             good_reads: usize,
-            degraded: bhtune_backend::Quality,
-        ) -> MockBackend {
+            degraded: bhtune_driver::Quality,
+        ) -> MockDriver {
             self.degrade_quality_after
                 .insert(tag.to_string(), (good_reads, degraded));
             self
@@ -3053,7 +3047,7 @@ mod tests {
 
         /// See the `error_reads_after` field doc comment: `tag`'s first `good_reads` reads
         /// succeed normally, then every read after that returns a transport-level error.
-        fn erroring_read_after(mut self, tag: &str, good_reads: usize) -> MockBackend {
+        fn erroring_read_after(mut self, tag: &str, good_reads: usize) -> MockDriver {
             self.error_reads_after.insert(tag.to_string(), good_reads);
             self
         }
@@ -3061,14 +3055,14 @@ mod tests {
         /// See the `write_offsets` field doc comment: writing a float to `tag` silently
         /// stores `value + offset` instead of `value`, so a subsequent readback observes a
         /// value that differs from what was requested.
-        fn distorting_write(mut self, tag: &str, offset: f32) -> MockBackend {
+        fn distorting_write(mut self, tag: &str, offset: f32) -> MockDriver {
             self.write_offsets.insert(tag.to_string(), offset);
             self
         }
 
         /// See the `reject_writes_after` field doc comment: `tag`'s first `good_writes`
         /// writes are accepted normally, then every write after that is rejected.
-        fn rejecting_write_after(mut self, tag: &str, good_writes: usize) -> MockBackend {
+        fn rejecting_write_after(mut self, tag: &str, good_writes: usize) -> MockDriver {
             self.reject_writes_after
                 .insert(tag.to_string(), good_writes);
             self
@@ -3084,11 +3078,11 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl Backend for MockBackend {
+    impl Driver for MockDriver {
         async fn read(
             &self,
             tags: &[String],
-        ) -> bhtune_backend::BackendResult<Vec<bhtune_backend::TagValue>> {
+        ) -> bhtune_driver::DriverResult<Vec<bhtune_driver::TagValue>> {
             if tags.iter().any(|tag| self.hang_reads.contains(tag)) {
                 std::future::pending::<()>().await;
             }
@@ -3096,7 +3090,7 @@ mod tests {
             let mut out = Vec::new();
             for tag in tags {
                 if self.error_reads.contains(tag) {
-                    return Err(bhtune_backend::BackendError::Operation(Box::new(
+                    return Err(bhtune_driver::DriverError::Operation(Box::new(
                         std::io::Error::other("mock read error"),
                     )));
                 }
@@ -3115,7 +3109,7 @@ mod tests {
                 if let Some(good_reads) = self.error_reads_after.get(tag)
                     && count > *good_reads
                 {
-                    return Err(bhtune_backend::BackendError::Operation(Box::new(
+                    return Err(bhtune_driver::DriverError::Operation(Box::new(
                         std::io::Error::other("mock read error after good reads"),
                     )));
                 }
@@ -3125,7 +3119,7 @@ mod tests {
                     .unwrap()
                     .get(tag)
                     .copied()
-                    .unwrap_or(bhtune_backend::Quality::Good);
+                    .unwrap_or(bhtune_driver::Quality::Good);
                 let quality = match self.degrade_quality_after.get(tag) {
                     Some((good_reads, degraded)) => {
                         if count > *good_reads {
@@ -3136,7 +3130,7 @@ mod tests {
                     }
                     None => baseline_quality,
                 };
-                out.push(bhtune_backend::TagValue {
+                out.push(bhtune_driver::TagValue {
                     tag: tag.clone(),
                     value: store.get(tag).cloned().unwrap_or_default(),
                     quality,
@@ -3150,12 +3144,12 @@ mod tests {
             &self,
             tag: &String,
             value: TagWrite,
-        ) -> bhtune_backend::BackendResult<bhtune_backend::WriteOutcome> {
+        ) -> bhtune_driver::DriverResult<bhtune_driver::WriteOutcome> {
             if self.hang_writes.contains(tag) {
                 std::future::pending::<()>().await;
             }
             if self.error_writes.contains(tag) {
-                return Err(bhtune_backend::BackendError::Operation(Box::new(
+                return Err(bhtune_driver::DriverError::Operation(Box::new(
                     std::io::Error::other("mock write error"),
                 )));
             }
@@ -3168,14 +3162,14 @@ mod tests {
                 .unwrap()
                 .push((tag.clone(), text.clone()));
             if self.reject_writes.contains(tag) {
-                return Ok(bhtune_backend::WriteOutcome::failure("mock rejected write"));
+                return Ok(bhtune_driver::WriteOutcome::failure("mock rejected write"));
             }
             if let Some(good_writes) = self.reject_writes_after.get(tag) {
                 let mut counts = self.write_counts.lock().unwrap();
                 let count = counts.entry(tag.clone()).or_insert(0);
                 *count += 1;
                 if *count > *good_writes {
-                    return Ok(bhtune_backend::WriteOutcome::failure(
+                    return Ok(bhtune_driver::WriteOutcome::failure(
                         "mock rejected write after good writes",
                     ));
                 }
@@ -3189,28 +3183,28 @@ mod tests {
                 text
             };
             self.values.lock().unwrap().insert(tag.clone(), stored);
-            Ok(bhtune_backend::WriteOutcome::success())
+            Ok(bhtune_driver::WriteOutcome::success())
         }
 
         async fn browse(
             &self,
             _path: &str,
-        ) -> bhtune_backend::BackendResult<Vec<bhtune_backend::TagNode>> {
-            Err(bhtune_backend::BackendError::Unsupported {
+        ) -> bhtune_driver::DriverResult<Vec<bhtune_driver::TagNode>> {
+            Err(bhtune_driver::DriverError::Unsupported {
                 operation: "browse",
             })
         }
     }
 
     #[tokio::test]
-    async fn mock_backend_browse_is_unsupported() {
-        // `tune`'s own logic never calls `Backend::browse` -- this only exists so
-        // `MockBackend` satisfies the trait -- but it should still honor the same
-        // "unsupported, not a panic" convention real backends document for it.
-        let err = MockBackend::new(&[]).browse("").await.unwrap_err();
+    async fn mock_driver_browse_is_unsupported() {
+        // `tune`'s own logic never calls `Driver::browse` -- this only exists so
+        // `MockDriver` satisfies the trait -- but it should still honor the same
+        // "unsupported, not a panic" convention real drivers document for it.
+        let err = MockDriver::new(&[]).browse("").await.unwrap_err();
         assert!(matches!(
             err,
-            bhtune_backend::BackendError::Unsupported {
+            bhtune_driver::DriverError::Unsupported {
                 operation: "browse"
             }
         ));
@@ -3220,26 +3214,26 @@ mod tests {
 
     #[test]
     fn check_quality_accepts_good_regardless_of_the_allow_uncertain_flag() {
-        assert!(check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Good, false).is_ok());
-        assert!(check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Good, true).is_ok());
+        assert!(check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Good, false).is_ok());
+        assert!(check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Good, true).is_ok());
     }
 
     #[test]
     fn check_quality_rejects_uncertain_unless_the_flag_is_set() {
-        let err = check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Uncertain, false)
-            .unwrap_err();
+        let err =
+            check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Uncertain, false).unwrap_err();
         assert!(err.to_string().contains("Uncertain"));
         assert!(err.to_string().contains("Unit1.LIC101.PV"));
-        assert!(check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Uncertain, true).is_ok());
+        assert!(check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Uncertain, true).is_ok());
     }
 
     #[test]
     fn check_quality_never_accepts_bad_regardless_of_the_flag() {
         let err_without_flag =
-            check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Bad, false).unwrap_err();
+            check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Bad, false).unwrap_err();
         assert!(err_without_flag.to_string().contains("Bad"));
         let err_with_flag =
-            check_quality("Unit1.LIC101.PV", bhtune_backend::Quality::Bad, true).unwrap_err();
+            check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Bad, true).unwrap_err();
         assert!(err_with_flag.to_string().contains("Bad"));
     }
 
@@ -3292,12 +3286,12 @@ mod tests {
         LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &honeywell_template())
     }
 
-    /// A `MockBackend` pre-populated with every tag `honeywell_tags()` derives, using values
+    /// A `MockDriver` pre-populated with every tag `honeywell_tags()` derives, using values
     /// that make the loop initially Auto (`MODE=1`) with its Mode Attribute not yet at the
     /// Program value (`MODEATTR=1`, program value is `"2"`) — the common starting point most
     /// of the tests below share before diverging.
-    fn honeywell_backend_auto() -> MockBackend {
-        MockBackend::new(&[
+    fn honeywell_driver_auto() -> MockDriver {
+        MockDriver::new(&[
             ("Unit1.LIC101.PV", "50.0"),
             ("Unit1.LIC101.OP", "45.0"),
             ("Unit1.LIC101.MODE", "1"),
@@ -3318,9 +3312,9 @@ mod tests {
     async fn read_initial_values_reads_the_full_opcda_tag_set() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
+        let driver = honeywell_driver_auto();
 
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         assert_eq!(initial.pv_ini, 50.0);
@@ -3338,15 +3332,15 @@ mod tests {
     async fn read_initial_values_errors_when_a_tag_returns_no_value() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto().empty_read("Unit1.LIC101.PV");
+        let driver = honeywell_driver_auto().empty_read("Unit1.LIC101.PV");
 
-        let err = read_initial_values(&backend, &tags, &template, false)
+        let err = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no value"));
     }
 
-    /// Matches `honeywell_backend_auto()`'s values -- a valid baseline for
+    /// Matches `honeywell_driver_auto()`'s values -- a valid baseline for
     /// `validate_initial_state` tests to mutate one field at a time from. `setpoint_ini` is
     /// `Some(55.0)`, matching the fixture's `SP` tag, since `mode_raw` ("1") equals the
     /// template's `mode_auto_value` -- exactly the condition `read_initial_values` itself
@@ -3420,14 +3414,14 @@ mod tests {
         let pool = seeded_pool().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto()
-            .with_quality(&tags.process_variable, bhtune_backend::Quality::Bad);
+        let driver = honeywell_driver_auto()
+            .with_quality(&tags.process_variable, bhtune_driver::Quality::Bad);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
         let run = TuneRunRow::start(
             &pool,
             None,
             "bad-quality-initial",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -3443,7 +3437,7 @@ mod tests {
             &fast_simulator_args(),
             &template,
             &tags,
-            &backend,
+            &driver,
             config,
             Utc::now(),
             None,
@@ -3457,7 +3451,7 @@ mod tests {
         assert!(err.to_string().contains("Bad"));
         // Nothing was mutated -- the mode transition never ran, matching the invalid-range
         // test's own safety assertion below.
-        assert!(backend.write_log().is_empty());
+        assert!(driver.write_log().is_empty());
     }
 
     #[tokio::test]
@@ -3465,14 +3459,14 @@ mod tests {
         let pool = seeded_pool().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto()
-            .with_quality(&tags.process_variable, bhtune_backend::Quality::Uncertain);
+        let driver = honeywell_driver_auto()
+            .with_quality(&tags.process_variable, bhtune_driver::Quality::Uncertain);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
         let run = TuneRunRow::start(
             &pool,
             None,
             "uncertain-quality-initial",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -3488,7 +3482,7 @@ mod tests {
             &fast_simulator_args(),
             &template,
             &tags,
-            &backend,
+            &driver,
             config,
             Utc::now(),
             None,
@@ -3500,30 +3494,30 @@ mod tests {
 
         assert!(err.to_string().contains(&tags.process_variable));
         assert!(err.to_string().contains("Uncertain"));
-        assert!(backend.write_log().is_empty());
+        assert!(driver.write_log().is_empty());
     }
 
     #[tokio::test]
     async fn read_initial_values_and_transition_accept_uncertain_pv_quality_when_the_flag_is_set() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto()
-            .with_quality(&tags.process_variable, bhtune_backend::Quality::Uncertain);
+        let driver = honeywell_driver_auto()
+            .with_quality(&tags.process_variable, bhtune_driver::Quality::Uncertain);
 
-        let initial = read_initial_values(&backend, &tags, &template, true)
+        let initial = read_initial_values(&driver, &tags, &template, true)
             .await
             .unwrap();
         assert_eq!(initial.pv_ini, 50.0);
 
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
         // Proves the run actually proceeded to mutate the loop (the mode/mode-attribute
         // writes `transition_to_manual` performs), not just that `read_initial_values`
         // alone returned `Ok` -- the real proof `--allow-uncertain-quality` has an effect,
         // not just that this specific error string disappeared.
-        assert!(!backend.write_log().is_empty());
+        assert!(!driver.write_log().is_empty());
     }
 
     #[tokio::test]
@@ -3537,9 +3531,9 @@ mod tests {
         let template = honeywell_template();
         let tags = honeywell_tags();
         let sp_tag = tags.setpoint_variable.clone().unwrap();
-        let backend = honeywell_backend_auto().with_quality(&sp_tag, bhtune_backend::Quality::Bad);
+        let driver = honeywell_driver_auto().with_quality(&sp_tag, bhtune_driver::Quality::Bad);
 
-        let err = read_initial_values(&backend, &tags, &template, false)
+        let err = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains(&sp_tag));
@@ -3547,7 +3541,7 @@ mod tests {
     }
 
     /// The end-to-end proof that finding 4's fix closes the actual safety gap, not just the
-    /// isolated unit: a backend reporting an MV range with `low >= high` must fail `execute`
+    /// isolated unit: a driver reporting an MV range with `low >= high` must fail `execute`
     /// before `transition_to_manual`'s first write -- i.e. before the loop is touched at
     /// all, not merely before the tuning math runs.
     #[tokio::test]
@@ -3557,7 +3551,7 @@ mod tests {
         let tags = honeywell_tags();
         // Swaps CVEUHI/CVEULO so mv_range_high (0.0) < mv_range_low (100.0), violating
         // MvRange::new's low-strictly-below-high requirement.
-        let backend = honeywell_backend_auto()
+        let driver = honeywell_driver_auto()
             .with_value("Unit1.LIC101.CVEUHI", "0.0")
             .with_value("Unit1.LIC101.CVEULO", "100.0");
         let config = build_loop_config(&fast_simulator_args()).unwrap();
@@ -3565,7 +3559,7 @@ mod tests {
             &pool,
             None,
             "invalid-mv-range",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -3581,7 +3575,7 @@ mod tests {
             &fast_simulator_args(),
             &template,
             &tags,
-            &backend,
+            &driver,
             config,
             Utc::now(),
             None,
@@ -3592,15 +3586,15 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("MV range"));
-        // The real safety property: no write ever reached the backend -- not the mode
+        // The real safety property: no write ever reached the driver -- not the mode
         // attribute, not the mode, not the MV. `transition_to_manual` never ran.
-        assert!(backend.write_log().is_empty());
+        assert!(driver.write_log().is_empty());
     }
 
     /// Covers `execute`'s first `restore_best_effort_then_propagate` call site: a failure
     /// from `transition_to_manual` itself, partway through (the mode-attribute write, the
     /// very first write it attempts) must still trigger a best-effort restore rather than
-    /// propagating the error with the loop left half-mutated. `honeywell_backend_auto()`
+    /// propagating the error with the loop left half-mutated. `honeywell_driver_auto()`
     /// starts in Auto with `MODEATTR` not yet at the Program value, so `transition_to_manual`
     /// always attempts the mode-attribute write first.
     #[tokio::test]
@@ -3608,13 +3602,13 @@ mod tests {
         let pool = seeded_pool().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto().erroring_write("Unit1.LIC101.MODEATTR");
+        let driver = honeywell_driver_auto().erroring_write("Unit1.LIC101.MODEATTR");
         let config = build_loop_config(&fast_simulator_args()).unwrap();
         let run = TuneRunRow::start(
             &pool,
             None,
             "transition-to-manual-fails",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -3630,7 +3624,7 @@ mod tests {
             &fast_simulator_args(),
             &template,
             &tags,
-            &backend,
+            &driver,
             config,
             Utc::now(),
             None,
@@ -3643,13 +3637,13 @@ mod tests {
         // `restore_best_effort_then_propagate` always returns the *original* error
         // unchanged -- this is that original `transition_to_manual` failure, not some
         // restore-side error masking it.
-        assert!(err.to_string().contains("backend operation failed"));
+        assert!(err.to_string().contains("driver operation failed"));
 
         // `restore()`'s MV step is unconditional (never gated by the guard), so it still ran
         // despite `transition_to_manual` never getting anywhere near the MV -- proving the
         // restore was genuinely attempted, not skipped because "nothing was mutated yet".
         assert!(
-            backend
+            driver
                 .write_log()
                 .iter()
                 .any(|(tag, _)| tag == "Unit1.LIC101.OP")
@@ -3658,7 +3652,7 @@ mod tests {
         // the mode-attribute write, before it ever reached the mode write, so `restore()`
         // must not attempt to revert a mode change that was never made.
         assert!(
-            backend
+            driver
                 .write_log()
                 .iter()
                 .all(|(tag, _)| tag != "Unit1.LIC101.MODE")
@@ -3684,9 +3678,9 @@ mod tests {
     /// Covers `execute`'s second `restore_best_effort_then_propagate` call site: a failure in
     /// `finish_completed_run` (here, `persist_results` colliding with the
     /// `UNIQUE (run_id, response_level)` constraint) *after* a real, successful MRFT
-    /// completion must still trigger a best-effort restore. Uses the real `SimulatorBackend`
-    /// (via `crate::backend::build`, exactly like `a_ctrl_c_style_abort_restores_and_records_aborted`
-    /// above) rather than a scripted `MockBackend`, since this needs an actual engine
+    /// completion must still trigger a best-effort restore. Uses the real `SimulatorDriver`
+    /// (via `crate::driver::build`, exactly like `a_ctrl_c_style_abort_restores_and_records_aborted`
+    /// above) rather than a scripted `MockDriver`, since this needs an actual engine
     /// completion, not just a mocked one -- the simulator's `LoopTags` has no mode/setpoint/
     /// mode-attribute tags at all, so its restore only ever has the MV step to confirm.
     #[tokio::test]
@@ -3696,12 +3690,12 @@ mod tests {
         let args = fast_simulator_args();
         let config = build_loop_config(&args).unwrap();
         let tags = build_loop_tags(&args, &template).unwrap();
-        let backend = crate::backend::build(&args).await.unwrap();
+        let driver = crate::driver::build(&args).await.unwrap();
         let run = TuneRunRow::start(
             &pool,
             None,
             "finish-completed-run-fails",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -3739,7 +3733,7 @@ mod tests {
             &args,
             &template,
             &tags,
-            backend.as_ref(),
+            driver.as_ref(),
             config,
             Utc::now(),
             None,
@@ -3754,7 +3748,7 @@ mod tests {
         // test's contract.
         assert!(result.is_err());
 
-        // The simulator backend has no mode/setpoint/mode-attribute tags, so the only
+        // The simulator driver has no mode/setpoint/mode-attribute tags, so the only
         // applicable restore step is the always-succeeding MV write -- confirming the
         // restore ran to completion despite the DB-level failure that follows it.
         let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
@@ -3781,15 +3775,15 @@ mod tests {
         let pool = seeded_pool().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto()
+        let driver = honeywell_driver_auto()
             .erroring_write("Unit1.LIC101.OP")
-            .degrade_quality_after(&tags.process_variable, 1, bhtune_backend::Quality::Bad);
+            .degrade_quality_after(&tags.process_variable, 1, bhtune_driver::Quality::Bad);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
         let run = TuneRunRow::start(
             &pool,
             None,
             "poor-quality-abort-restore-incomplete",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -3805,7 +3799,7 @@ mod tests {
             &fast_simulator_args(),
             &template,
             &tags,
-            &backend,
+            &driver,
             config,
             Utc::now(),
             None,
@@ -3831,8 +3825,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_f32_errors_on_a_non_numeric_value() {
-        let backend = MockBackend::new(&[("Unit1.LIC101.PV", "not-a-number")]);
-        let err = read_f32(&backend, "Unit1.LIC101.PV", false)
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "not-a-number")]);
+        let err = read_f32(&driver, "Unit1.LIC101.PV", false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not a number"));
@@ -3840,12 +3834,12 @@ mod tests {
 
     /// Rust's `f32::from_str` happily parses the literal strings `"nan"`/`"inf"` --
     /// confirming this gap is what motivated hardening `read_f32` (finding 4 of the
-    /// live-plant safety review): a backend tag returning either string used to flow
+    /// live-plant safety review): a driver tag returning either string used to flow
     /// unchecked into the engine.
     #[tokio::test]
     async fn read_f32_rejects_nan() {
-        let backend = MockBackend::new(&[("Unit1.LIC101.PV", "nan")]);
-        let err = read_f32(&backend, "Unit1.LIC101.PV", false)
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "nan")]);
+        let err = read_f32(&driver, "Unit1.LIC101.PV", false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("finite"));
@@ -3853,8 +3847,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_f32_rejects_infinity() {
-        let backend = MockBackend::new(&[("Unit1.LIC101.PV", "inf")]);
-        let err = read_f32(&backend, "Unit1.LIC101.PV", false)
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "inf")]);
+        let err = read_f32(&driver, "Unit1.LIC101.PV", false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("finite"));
@@ -3862,8 +3856,8 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_f32_accepts_a_finite_tag_or_value() {
-        let backend = MockBackend::new(&[]);
-        let value = resolve_f32(&backend, &TagOrValue::Value(42.0), false)
+        let driver = MockDriver::new(&[]);
+        let value = resolve_f32(&driver, &TagOrValue::Value(42.0), false)
             .await
             .unwrap();
         assert_eq!(value, 42.0);
@@ -3874,39 +3868,39 @@ mod tests {
     /// `finite_f32` parser at all -- see `args::finite_f32`.
     #[tokio::test]
     async fn resolve_f32_rejects_a_non_finite_direct_value() {
-        let backend = MockBackend::new(&[]);
-        let err = resolve_f32(&backend, &TagOrValue::Value(f32::NAN), false)
+        let driver = MockDriver::new(&[]);
+        let err = resolve_f32(&driver, &TagOrValue::Value(f32::NAN), false)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("finite"));
     }
 
     #[tokio::test]
-    async fn read_raw_and_write_raw_propagate_a_hard_backend_error() {
+    async fn read_raw_and_write_raw_propagate_a_hard_driver_error() {
         // Distinct from a *rejected* write (`WriteOutcome::success == false`, handled by
-        // `write_raw`/`write_value`'s own "was rejected" message): this is the backend call
-        // itself failing (`BackendError::Operation`), which `?` should propagate as-is.
-        let backend = MockBackend::new(&[("Unit1.LIC101.PV", "50.0")])
+        // `write_raw`/`write_value`'s own "was rejected" message): this is the driver call
+        // itself failing (`DriverError::Operation`), which `?` should propagate as-is.
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "50.0")])
             .erroring_read("Unit1.LIC101.PV")
             .erroring_write("Unit1.LIC101.OP");
 
-        let read_err = read_raw(&backend, "Unit1.LIC101.PV", false)
+        let read_err = read_raw(&driver, "Unit1.LIC101.PV", false)
             .await
             .unwrap_err();
-        assert!(read_err.to_string().contains("backend operation failed"));
+        assert!(read_err.to_string().contains("driver operation failed"));
 
-        let write_err = write_value(&backend, "Unit1.LIC101.OP", 45.0)
+        let write_err = write_value(&driver, "Unit1.LIC101.OP", 45.0)
             .await
             .unwrap_err();
-        assert!(write_err.to_string().contains("backend operation failed"));
+        assert!(write_err.to_string().contains("driver operation failed"));
     }
 
     #[tokio::test(start_paused = true)]
     async fn transition_to_manual_writes_program_value_and_mode_when_starting_in_auto() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let driver = honeywell_driver_auto();
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         // The setpoint is captured here, in `read_initial_values`, before any mutation of
@@ -3915,20 +3909,20 @@ mod tests {
         assert_eq!(initial.setpoint_ini, Some(55.0));
 
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
         assert_eq!(
-            backend.value_of("Unit1.LIC101.MODEATTR").as_deref(),
+            driver.value_of("Unit1.LIC101.MODEATTR").as_deref(),
             Some("2")
         );
-        assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("0"));
+        assert_eq!(driver.value_of("Unit1.LIC101.MODE").as_deref(), Some("0"));
         assert!(guard.mode_attribute_written);
         assert!(guard.mode_written);
         // Order matters (mode attribute unlocked before the mode itself is switched), per
         // `ChangeControllerModeToMan`.
-        let log = backend.write_log();
+        let log = driver.write_log();
         let attr_index = log
             .iter()
             .position(|(t, _)| t == "Unit1.LIC101.MODEATTR")
@@ -3945,7 +3939,7 @@ mod tests {
         let template = honeywell_template();
         let tags = honeywell_tags();
         // "2" is neither the manual ("0") nor auto ("1") raw value — e.g. Cascade.
-        let backend = MockBackend::new(&[
+        let driver = MockDriver::new(&[
             ("Unit1.LIC101.PV", "50.0"),
             ("Unit1.LIC101.OP", "45.0"),
             ("Unit1.LIC101.MODE", "2"),
@@ -3957,25 +3951,25 @@ mod tests {
             ("Unit1.LIC101.CVEULO", "0.0"),
             ("Unit1.LIC101.SP", "55.0"),
         ]);
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
 
         assert_eq!(initial.setpoint_ini, None);
 
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
-        assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("0"));
+        assert_eq!(driver.value_of("Unit1.LIC101.MODE").as_deref(), Some("0"));
     }
 
     #[tokio::test(start_paused = true)]
     async fn transition_to_manual_does_not_rewrite_mode_when_already_manual() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = MockBackend::new(&[
+        let driver = MockDriver::new(&[
             ("Unit1.LIC101.PV", "50.0"),
             ("Unit1.LIC101.OP", "45.0"),
             ("Unit1.LIC101.MODE", "0"),
@@ -3987,20 +3981,20 @@ mod tests {
             ("Unit1.LIC101.CVEULO", "0.0"),
             ("Unit1.LIC101.SP", "55.0"),
         ]);
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         assert_eq!(initial.setpoint_ini, None);
 
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
         // The Mode Attribute write always fires unconditionally (there's no "already at the
         // program value" guard on it), but Mode itself is already Manual, so its own
         // conditional `write_raw` must not fire a second time.
-        let log = backend.write_log();
+        let log = driver.write_log();
         assert_eq!(
             log,
             vec![("Unit1.LIC101.MODEATTR".to_string(), "2".to_string())]
@@ -4013,23 +4007,23 @@ mod tests {
     async fn restore_reverts_mode_setpoint_and_mode_attribute() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let driver = honeywell_driver_auto();
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
-        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        let report = restore(&driver, &tags, &template, &initial, &guard).await;
         assert!(report.all_succeeded());
 
-        assert_eq!(backend.value_of("Unit1.LIC101.OP").as_deref(), Some("45")); // mv_ini
-        assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("1")); // original raw
-        assert_eq!(backend.value_of("Unit1.LIC101.SP").as_deref(), Some("55")); // setpoint restored
+        assert_eq!(driver.value_of("Unit1.LIC101.OP").as_deref(), Some("45")); // mv_ini
+        assert_eq!(driver.value_of("Unit1.LIC101.MODE").as_deref(), Some("1")); // original raw
+        assert_eq!(driver.value_of("Unit1.LIC101.SP").as_deref(), Some("55")); // setpoint restored
         assert_eq!(
-            backend.value_of("Unit1.LIC101.MODEATTR").as_deref(),
+            driver.value_of("Unit1.LIC101.MODEATTR").as_deref(),
             Some("1")
         ); // reverted off the Program value
     }
@@ -4039,23 +4033,23 @@ mod tests {
         let mut template = honeywell_template();
         template.revert_mode = false;
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let driver = honeywell_driver_auto();
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
-        let writes_before_restore = backend.write_log().len();
+        let writes_before_restore = driver.write_log().len();
 
-        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        let report = restore(&driver, &tags, &template, &initial, &guard).await;
         assert!(report.all_succeeded());
 
         // MV is always written back regardless of `revert_mode`; Mode/Setpoint are not.
-        assert_eq!(backend.value_of("Unit1.LIC101.OP").as_deref(), Some("45"));
-        assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("0")); // untouched
-        let new_writes = &backend.write_log()[writes_before_restore..];
+        assert_eq!(driver.value_of("Unit1.LIC101.OP").as_deref(), Some("45"));
+        assert_eq!(driver.value_of("Unit1.LIC101.MODE").as_deref(), Some("0")); // untouched
+        let new_writes = &driver.write_log()[writes_before_restore..];
         assert!(new_writes.iter().all(|(t, _)| t != "Unit1.LIC101.MODE"));
         assert!(new_writes.iter().all(|(t, _)| t != "Unit1.LIC101.SP"));
     }
@@ -4064,7 +4058,7 @@ mod tests {
     async fn restore_skips_setpoint_revert_when_original_mode_was_not_auto() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = MockBackend::new(&[
+        let driver = MockDriver::new(&[
             ("Unit1.LIC101.PV", "50.0"),
             ("Unit1.LIC101.OP", "45.0"),
             ("Unit1.LIC101.MODE", "2"),
@@ -4076,20 +4070,20 @@ mod tests {
             ("Unit1.LIC101.CVEULO", "0.0"),
             ("Unit1.LIC101.SP", "55.0"),
         ]);
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
-        let writes_before_restore = backend.write_log().len();
+        let writes_before_restore = driver.write_log().len();
 
-        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        let report = restore(&driver, &tags, &template, &initial, &guard).await;
         assert!(report.all_succeeded());
 
-        assert_eq!(backend.value_of("Unit1.LIC101.MODE").as_deref(), Some("2")); // reverted
-        let new_writes = &backend.write_log()[writes_before_restore..];
+        assert_eq!(driver.value_of("Unit1.LIC101.MODE").as_deref(), Some("2")); // reverted
+        let new_writes = &driver.write_log()[writes_before_restore..];
         assert!(new_writes.iter().all(|(t, _)| t != "Unit1.LIC101.SP"));
     }
 
@@ -4097,7 +4091,7 @@ mod tests {
     async fn restore_skips_mode_attribute_revert_when_already_at_program_value() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = MockBackend::new(&[
+        let driver = MockDriver::new(&[
             ("Unit1.LIC101.PV", "50.0"),
             ("Unit1.LIC101.OP", "45.0"),
             ("Unit1.LIC101.MODE", "1"),
@@ -4109,19 +4103,19 @@ mod tests {
             ("Unit1.LIC101.CVEULO", "0.0"),
             ("Unit1.LIC101.SP", "55.0"),
         ]);
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
-        let writes_before_restore = backend.write_log().len();
+        let writes_before_restore = driver.write_log().len();
 
-        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        let report = restore(&driver, &tags, &template, &initial, &guard).await;
         assert!(report.all_succeeded());
 
-        let new_writes = &backend.write_log()[writes_before_restore..];
+        let new_writes = &driver.write_log()[writes_before_restore..];
         assert!(new_writes.iter().all(|(t, _)| t != "Unit1.LIC101.MODEATTR"));
     }
 
@@ -4136,12 +4130,12 @@ mod tests {
     async fn restore_reports_each_step_failed_independently_without_short_circuiting() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto()
+        let driver = honeywell_driver_auto()
             .erroring_write("Unit1.LIC101.OP")
             .erroring_write("Unit1.LIC101.MODE")
             .erroring_write("Unit1.LIC101.SP")
             .erroring_write("Unit1.LIC101.MODEATTR");
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         let guard = MutationGuard {
@@ -4150,7 +4144,7 @@ mod tests {
             mv_written: true,
         };
 
-        let report = restore(&backend, &tags, &template, &initial, &guard).await;
+        let report = restore(&driver, &tags, &template, &initial, &guard).await;
 
         assert!(!report.all_succeeded());
         assert!(matches!(report.mv, RestoreStepOutcome::Failed(_)));
@@ -4181,17 +4175,17 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn write_raw_and_write_value_error_when_the_backend_rejects_the_write() {
-        let backend = MockBackend::new(&[("Unit1.LIC101.MODE", "1")])
+    async fn write_raw_and_write_value_error_when_the_driver_rejects_the_write() {
+        let driver = MockDriver::new(&[("Unit1.LIC101.MODE", "1")])
             .rejecting_write("Unit1.LIC101.MODE")
             .rejecting_write("Unit1.LIC101.OP");
 
-        let raw_err = write_raw(&backend, "Unit1.LIC101.MODE", "0".to_string())
+        let raw_err = write_raw(&driver, "Unit1.LIC101.MODE", "0".to_string())
             .await
             .unwrap_err();
         assert!(raw_err.to_string().contains("rejected"));
 
-        let value_err = write_value(&backend, "Unit1.LIC101.OP", 45.0)
+        let value_err = write_value(&driver, "Unit1.LIC101.OP", 45.0)
             .await
             .unwrap_err();
         assert!(value_err.to_string().contains("rejected"));
@@ -4228,7 +4222,7 @@ mod tests {
             &pool,
             None,
             "write-back-test",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &honeywell_template(),
@@ -4268,14 +4262,14 @@ mod tests {
         let template = honeywell_template();
         let mut tags = honeywell_tags();
         tags.proportional_constant = None;
-        let backend = honeywell_backend_auto();
+        let driver = honeywell_driver_auto();
 
         let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4288,7 +4282,7 @@ mod tests {
         assert_eq!(outcome, WriteBackOutcome::Skipped);
         assert_eq!(
             write_back_detail.as_deref(),
-            Some("no PID constant tags configured for this run's backend/template")
+            Some("no PID constant tags configured for this run's driver/template")
         );
         assert!(
             TuneWriteRow::list_for_run(&pool, run_id)
@@ -4308,7 +4302,7 @@ mod tests {
             &pool,
             None,
             "no-results",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -4317,14 +4311,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let backend = honeywell_backend_auto();
+        let driver = honeywell_driver_auto();
 
         let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run.id,
             &tags,
             &template,
-            &backend,
+            &driver,
             config,
             None,
             OutputFormat::Table,
@@ -4356,14 +4350,14 @@ mod tests {
         let (pool, run_id) = run_with_recorded_results().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
+        let driver = honeywell_driver_auto();
 
         let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4448,14 +4442,14 @@ mod tests {
         let tags = honeywell_tags();
         // Every read of the P tag fails, including the very first (pre-read) one -- nothing
         // is ever written.
-        let backend = honeywell_backend_auto().erroring_read("Unit1.LIC101.K");
+        let driver = honeywell_driver_auto().erroring_read("Unit1.LIC101.K");
 
         let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4490,9 +4484,9 @@ mod tests {
                 .starts_with("pre-read of Proportional")
         );
         assert_eq!(write.rollback_state, None);
-        // Nothing was written to the backend at all -- confirms the pre-read is a genuine
+        // Nothing was written to the driver at all -- confirms the pre-read is a genuine
         // hard stop, not just a reported failure alongside attempted writes.
-        assert!(backend.write_log().is_empty());
+        assert!(driver.write_log().is_empty());
     }
 
     #[tokio::test]
@@ -4502,14 +4496,14 @@ mod tests {
         let tags = honeywell_tags();
         // P writes and verifies successfully; I's write is then rejected. P was already
         // confirmed, so it must be rolled back to its pre-read value.
-        let backend = honeywell_backend_auto().rejecting_write("Unit1.LIC101.T1");
+        let driver = honeywell_driver_auto().rejecting_write("Unit1.LIC101.T1");
 
         let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4541,11 +4535,11 @@ mod tests {
         assert!(write.derivative_readback.is_none());
         assert_eq!(write.rollback_state, Some(RollbackState::Succeeded));
         assert!(write.rollback_error.is_none());
-        // The rollback actually put P's original value back on the backend, not just in the
+        // The rollback actually put P's original value back on the driver, not just in the
         // audit row.
         let p_previous = write.previous.as_ref().unwrap().proportional;
         assert_eq!(
-            backend
+            driver
                 .value_of("Unit1.LIC101.K")
                 .and_then(|v| v.parse::<f32>().ok()),
             Some(p_previous)
@@ -4560,7 +4554,7 @@ mod tests {
         // P's forward write succeeds (1st write to the tag), but its rollback write (2nd
         // write to the same tag, once I fails) is rejected -- "wrote some and could not put
         // it back" must be a distinguishable, clearly reported outcome.
-        let backend = honeywell_backend_auto()
+        let driver = honeywell_driver_auto()
             .rejecting_write("Unit1.LIC101.T1")
             .rejecting_write_after("Unit1.LIC101.K", 1);
 
@@ -4569,7 +4563,7 @@ mod tests {
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4601,14 +4595,14 @@ mod tests {
         // The write itself succeeds and the readback parses fine at Good quality, but the
         // DCS silently stored a value far outside tolerance of what was requested -- a
         // distinct failure mode from an erroring or poor-quality readback.
-        let backend = honeywell_backend_auto().distorting_write("Unit1.LIC101.K", 5.0);
+        let driver = honeywell_driver_auto().distorting_write("Unit1.LIC101.K", 5.0);
 
         let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4636,14 +4630,14 @@ mod tests {
         let (pool, run_id) = run_with_recorded_results().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto().rejecting_write("Unit1.LIC101.K");
+        let driver = honeywell_driver_auto().rejecting_write("Unit1.LIC101.K");
 
         let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4667,14 +4661,14 @@ mod tests {
         let tags = honeywell_tags();
         // The pre-read of P succeeds (the tag's 1st read), the write itself succeeds, but
         // the confirmation re-read of the P tag (its 2nd read) then errors.
-        let backend = honeywell_backend_auto().erroring_read_after("Unit1.LIC101.K", 1);
+        let driver = honeywell_driver_auto().erroring_read_after("Unit1.LIC101.K", 1);
 
         let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4708,10 +4702,10 @@ mod tests {
         // finding 5's rule applies to this readback exactly as it does to any other
         // tuning-critical read, so a stale/clamped value must not be mistaken for proof the
         // write actually landed.
-        let backend = honeywell_backend_auto().degrade_quality_after(
+        let driver = honeywell_driver_auto().degrade_quality_after(
             "Unit1.LIC101.K",
             1,
-            bhtune_backend::Quality::Bad,
+            bhtune_driver::Quality::Bad,
         );
 
         let (outcome, _write_back_detail) = maybe_write_back(
@@ -4719,7 +4713,7 @@ mod tests {
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4751,15 +4745,15 @@ mod tests {
         let (pool, run_id) = run_with_recorded_results().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto()
-            .with_quality("Unit1.LIC101.K", bhtune_backend::Quality::Uncertain);
+        let driver = honeywell_driver_auto()
+            .with_quality("Unit1.LIC101.K", bhtune_driver::Quality::Uncertain);
 
         let (outcome, _write_back_detail) = maybe_write_back(
             &pool,
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Table,
@@ -4780,7 +4774,7 @@ mod tests {
         let (pool, run_id) = run_with_recorded_results().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
+        let driver = honeywell_driver_auto();
 
         // An empty reader would make the *interactive* path treat this as EOF-and-skip; a
         // `write_pid` request must never even try to read it.
@@ -4789,7 +4783,7 @@ mod tests {
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             Some(ResponseLevel::Aggressive),
             OutputFormat::Table,
@@ -4821,7 +4815,7 @@ mod tests {
             &pool,
             None,
             "partial-results",
-            TuneBackend::Opcda,
+            TuneDriver::Opcda,
             config,
             TemplateOrigin::Builtin,
             &template,
@@ -4855,14 +4849,14 @@ mod tests {
             .await
             .unwrap();
         }
-        let backend = honeywell_backend_auto();
+        let driver = honeywell_driver_auto();
 
         let (outcome, write_back_detail) = maybe_write_back(
             &pool,
             run.id,
             &tags,
             &template,
-            &backend,
+            &driver,
             config,
             Some(ResponseLevel::Sluggish),
             OutputFormat::Table,
@@ -4877,7 +4871,7 @@ mod tests {
             write_back_detail.as_deref(),
             Some("no calculated result recorded for response level Sluggish")
         );
-        // Nothing was attempted at the backend at all, so no audit row exists either.
+        // Nothing was attempted at the driver at all, so no audit row exists either.
         assert!(
             TuneWriteRow::list_for_run(&pool, run.id)
                 .await
@@ -4901,7 +4895,7 @@ mod tests {
         let (pool, run_id) = run_with_recorded_results().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
+        let driver = honeywell_driver_auto();
         let mut reader = std::io::Cursor::new(b"1\n".as_slice());
 
         let (outcome, write_back_detail) = maybe_write_back(
@@ -4909,7 +4903,7 @@ mod tests {
             run_id,
             &tags,
             &template,
-            &backend,
+            &driver,
             build_loop_config(&fast_simulator_args()).unwrap(),
             None,
             OutputFormat::Json,
@@ -4970,7 +4964,7 @@ mod tests {
         assert_eq!(
             tune_outcome_for_run(&RunOutcome::Aborted(AbortReason::PoorQuality {
                 tag: "Unit1.LIC101.PV".to_string(),
-                quality: bhtune_backend::Quality::Bad,
+                quality: bhtune_driver::Quality::Bad,
             })),
             TuneOutcome::PoorQuality
         );
@@ -5112,7 +5106,7 @@ mod tests {
                 1,
                 &RunOutcome::Aborted(AbortReason::PoorQuality {
                     tag: "Unit1.LIC101.PV".to_string(),
-                    quality: bhtune_backend::Quality::Uncertain,
+                    quality: bhtune_driver::Quality::Uncertain,
                 }),
                 OutputFormat::Table
             ),
@@ -5123,7 +5117,7 @@ mod tests {
                 1,
                 &RunOutcome::Aborted(AbortReason::PoorQuality {
                     tag: "Unit1.LIC101.PV".to_string(),
-                    quality: bhtune_backend::Quality::Uncertain,
+                    quality: bhtune_driver::Quality::Uncertain,
                 }),
                 OutputFormat::Json
             ),
@@ -5165,7 +5159,7 @@ mod tests {
         let err = run(&pool, args, &test_config()).await.unwrap_err();
         assert!(err.to_string().contains("--write-pid requires --yes"));
 
-        // The check happens before any backend/database I/O, so no run row should exist.
+        // The check happens before any driver/database I/O, so no run row should exist.
         let runs = TuneRunRow::list(
             &pool,
             &bhtune_db::models::TuneRunFilter::default(),
@@ -5178,7 +5172,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_full_simulator_tune_with_write_pid_and_yes_still_skips_write_back() {
-        // The built-in simulator backend has no PID constant tags at all (see
+        // The built-in simulator driver has no PID constant tags at all (see
         // `build_loop_tags`), so `--write-pid`/`--yes` must be accepted but remain a no-op
         // -- not an error, and not `TuneOutcome::WriteBackFailed`.
         let pool = seeded_pool().await;
@@ -5233,25 +5227,25 @@ mod tests {
         assert!(!samples.is_empty());
     }
 
-    // --- `bounded_backend_call` / `TickOperation`: the four possible race outcomes, tested --
+    // --- `bounded_driver_call` / `TickOperation`: the four possible race outcomes, tested --
     // --- directly and in isolation from the polling loop that's the only real caller --------
 
     #[tokio::test]
-    async fn bounded_backend_call_returns_completed_when_the_call_finishes_first() {
+    async fn bounded_driver_call_returns_completed_when_the_call_finishes_first() {
         let mut ctrl_c = CtrlC::never();
-        let result = bounded_backend_call(30, &mut ctrl_c, async { Ok::<_, anyhow::Error>(42) })
+        let result = bounded_driver_call(30, &mut ctrl_c, async { Ok::<_, anyhow::Error>(42) })
             .await
             .unwrap();
         assert!(matches!(result, TickOperation::Completed(42)));
     }
 
     #[tokio::test]
-    async fn bounded_backend_call_propagates_a_genuine_error_from_the_call() {
+    async fn bounded_driver_call_propagates_a_genuine_error_from_the_call() {
         // A real failure from the call itself (a rejected write, a malformed value, a
         // transport error) must still propagate through `?` at the call site -- it is not
         // "gave up waiting", so it has no `TickOperation` variant of its own.
         let mut ctrl_c = CtrlC::never();
-        let err = bounded_backend_call(30, &mut ctrl_c, async {
+        let err = bounded_driver_call(30, &mut ctrl_c, async {
             Err::<(), _>(anyhow::anyhow!("boom"))
         })
         .await
@@ -5260,10 +5254,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bounded_backend_call_returns_cancelled_when_ctrl_c_fires_first() {
+    async fn bounded_driver_call_returns_cancelled_when_ctrl_c_fires_first() {
         let (mut ctrl_c, tx) = CtrlC::test_pair();
         tx.send(1).unwrap();
-        let result = bounded_backend_call(30, &mut ctrl_c, async {
+        let result = bounded_driver_call(30, &mut ctrl_c, async {
             std::future::pending::<anyhow::Result<()>>().await
         })
         .await
@@ -5272,11 +5266,11 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn bounded_backend_call_returns_timed_out_when_the_backend_call_stalls() {
+    async fn bounded_driver_call_returns_timed_out_when_the_driver_call_stalls() {
         // No `SqlitePool` involved here (unlike the `run_polling_loop`-level tests), so
         // `start_paused` is safe -- see the precedent/caveat noted on the timeout test above.
         let mut ctrl_c = CtrlC::never();
-        let result = bounded_backend_call(1, &mut ctrl_c, async {
+        let result = bounded_driver_call(1, &mut ctrl_c, async {
             std::future::pending::<anyhow::Result<()>>().await
         })
         .await
@@ -5291,17 +5285,17 @@ mod tests {
     async fn attempt_restore_confirms_a_normal_restore() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto();
-        let initial = read_initial_values(&backend, &tags, &template, false)
+        let driver = honeywell_driver_auto();
+        let initial = read_initial_values(&driver, &tags, &template, false)
             .await
             .unwrap();
         let mut guard = MutationGuard::default();
-        transition_to_manual(&backend, &tags, &template, &initial, &mut guard)
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
             .await
             .unwrap();
 
         let outcome = attempt_restore(
-            &backend,
+            &driver,
             &tags,
             &template,
             &initial,
@@ -5313,7 +5307,7 @@ mod tests {
 
         assert!(matches!(outcome, RestoreAttempt::Confirmed));
         assert_eq!(
-            backend.value_of(&tags.manipulated_variable).as_deref(),
+            driver.value_of(&tags.manipulated_variable).as_deref(),
             Some("45")
         );
     }
@@ -5324,12 +5318,12 @@ mod tests {
         let tags = honeywell_tags();
         // `restore`'s very first step writes the MV -- hanging it means `restore()` itself
         // can never resolve on its own, so only the timeout branch can win this race.
-        let backend = honeywell_backend_auto().hanging_write(&tags.manipulated_variable);
+        let driver = honeywell_driver_auto().hanging_write(&tags.manipulated_variable);
         let initial = sample_initial_state();
         let guard = MutationGuard::default();
 
         let outcome = attempt_restore(
-            &backend,
+            &driver,
             &tags,
             &template,
             &initial,
@@ -5351,22 +5345,14 @@ mod tests {
     async fn attempt_restore_reports_incomplete_on_a_second_ctrl_c() {
         let template = honeywell_template();
         let tags = honeywell_tags();
-        let backend = honeywell_backend_auto().hanging_write(&tags.manipulated_variable);
+        let driver = honeywell_driver_auto().hanging_write(&tags.manipulated_variable);
         let initial = sample_initial_state();
         let guard = MutationGuard::default();
         let (mut ctrl_c, tx) = CtrlC::test_pair();
         tx.send(1).unwrap();
 
-        let outcome = attempt_restore(
-            &backend,
-            &tags,
-            &template,
-            &initial,
-            &guard,
-            30,
-            &mut ctrl_c,
-        )
-        .await;
+        let outcome =
+            attempt_restore(&driver, &tags, &template, &initial, &guard, 30, &mut ctrl_c).await;
 
         match outcome {
             RestoreAttempt::Incomplete { reason } => {

@@ -22,7 +22,7 @@ use bhtune_core::{
     ControllerDirection, ControllerType, LoopConfig, ProcessType, ResponseLevel, Tick,
 };
 use bhtune_db::models::{
-    Pagination, RestoreStatus, RollbackState, SampleQuality, TemplateOrigin, TuneBackend,
+    Pagination, RestoreStatus, RollbackState, SampleQuality, TemplateOrigin, TuneDriver,
     TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
 };
 use chrono::{DateTime, Utc};
@@ -42,7 +42,7 @@ pub struct RunListQuery {
     pub process_type: Option<ProcessType>,
     pub controller_type: Option<ControllerType>,
     pub outcome: Option<TuneOutcome>,
-    pub backend: Option<TuneBackend>,
+    pub driver: Option<TuneDriver>,
     pub started_after: Option<DateTime<Utc>>,
     pub started_before: Option<DateTime<Utc>>,
     pub template_name: Option<String>,
@@ -65,8 +65,8 @@ fn filter_from_query(query: &RunListQuery) -> TuneRunFilter {
     if let Some(v) = query.outcome {
         filter = filter.with_outcome(v);
     }
-    if let Some(v) = query.backend {
-        filter = filter.with_backend(v);
+    if let Some(v) = query.driver {
+        filter = filter.with_driver(v);
     }
     if let Some(v) = query.started_after {
         filter = filter.with_started_after(v);
@@ -90,7 +90,7 @@ fn filter_from_query(query: &RunListQuery) -> TuneRunFilter {
 pub struct RunSummaryResponse {
     pub id: i64,
     pub loop_name: String,
-    pub backend: TuneBackend,
+    pub driver: TuneDriver,
     pub outcome: TuneOutcome,
     pub process_type: ProcessType,
     pub started_at: DateTime<Utc>,
@@ -101,7 +101,7 @@ impl From<&TuneRunRow> for RunSummaryResponse {
         RunSummaryResponse {
             id: run.id,
             loop_name: run.loop_name.clone(),
-            backend: run.backend,
+            driver: run.driver,
             outcome: run.outcome,
             process_type: run.config.process_type,
             started_at: run.started_at,
@@ -183,7 +183,7 @@ impl From<bhtune_db::models::TuneRunInitialReadings> for InitialReadingsResponse
     }
 }
 
-/// One recorded tick: the [`Tick`] input and resulting engine state, plus the backend-
+/// One recorded tick: the [`Tick`] input and resulting engine state, plus the driver-
 /// reported PV quality at read time. `Tick`/`MrftState` already derive `Serialize` in
 /// `bhtune-core` (they round-trip through golden-trace fixtures too), so they're embedded
 /// directly rather than re-projected field-by-field like the other DTOs here.
@@ -280,7 +280,7 @@ impl From<&TuneWriteRow> for WriteResponse {
 pub struct RunDetailResponse {
     pub id: i64,
     pub loop_name: String,
-    pub backend: TuneBackend,
+    pub driver: TuneDriver,
     pub outcome: TuneOutcome,
     pub failure_reason: Option<String>,
     pub started_at: DateTime<Utc>,
@@ -317,7 +317,7 @@ pub(crate) async fn build_run_detail(
     Ok(Some(RunDetailResponse {
         id: run.id,
         loop_name: run.loop_name,
-        backend: run.backend,
+        driver: run.driver,
         outcome: run.outcome,
         failure_reason: run.failure_reason,
         started_at: run.started_at,
@@ -528,7 +528,7 @@ mod tests {
             &state.pool,
             None,
             "Loop1",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             config,
             template_row.origin,
             &template,
@@ -586,7 +586,7 @@ mod tests {
             &state.pool,
             Some(loop_id),
             "Loop2",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             config,
             template_row.origin,
             &template,
@@ -853,7 +853,7 @@ mod tests {
             .replace('+', "%2B");
         let uri = format!(
             "/api/runs?loop_id={loop_id}&process_type=flow&controller_type=pi\
-             &outcome=completed&backend=simulator&started_after={started_after}\
+             &outcome=completed&driver=simulator&started_after={started_after}\
              &started_before={started_before}&template_name=Yokogawa+CentumVP\
              &template_origin=builtin"
         );

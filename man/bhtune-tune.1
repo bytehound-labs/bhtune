@@ -4,13 +4,13 @@
 .SH NAME
 bhtune\-tune \- Run an MRFT tune against a real OPC DA loop or the in\-process simulator
 .SH SYNOPSIS
-\fBbhtune\-tune\fR [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-pv\-range\-high\fR] [\fB\-\-pv\-range\-low\fR] [\fB\-\-mv\-range\-high\fR] [\fB\-\-mv\-range\-low\fR] [\fB\-\-direction\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-name\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-allow\-uncertain\-quality\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-t\fR|\fB\-\-tagname\fR> <\fB\-\-template\fR> <\fB\-\-process\-type\fR> <\fB\-\-controller\-type\fR> <\fB\-\-relay\-amp\fR> <\fB\-\-backend\fR> 
+\fBbhtune\-tune\fR [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-pv\-range\-high\fR] [\fB\-\-pv\-range\-low\fR] [\fB\-\-mv\-range\-high\fR] [\fB\-\-mv\-range\-low\fR] [\fB\-\-direction\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-name\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-allow\-uncertain\-quality\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-t\fR|\fB\-\-tagname\fR> <\fB\-\-template\fR> <\fB\-\-process\-type\fR> <\fB\-\-controller\-type\fR> <\fB\-\-relay\-amp\fR> <\fB\-\-driver\fR> 
 .SH DESCRIPTION
 Run an MRFT tune against a real OPC DA loop or the in\-process simulator
 .SH OPTIONS
 .TP
 \fB\-t\fR, \fB\-\-tagname\fR \fI<TAGNAME>\fR
-PV tag prefix; the rest of the tag set is derived from it using `\-\-template`\*(Aqs suffix convention. Ignored for `\-\-backend simulator`, which uses two fixed internal tag names instead
+PV tag prefix; the rest of the tag set is derived from it using `\-\-template`\*(Aqs suffix convention. Ignored for `\-\-driver simulator`, which uses two fixed internal tag names instead
 .TP
 \fB\-\-template\fR \fI<TEMPLATE>\fR
 DCS/PLC template name (see `bhtune template list`)
@@ -62,8 +62,8 @@ Seconds a switch must persist before it\*(Aqs accepted (default: looked up per `
 \fB\-\-mrft\-delay\fR \fI<MRFT_DELAY>\fR [default: 0]
 Pre/post\-test recording padding, in seconds (legacy: `\-\-mrftDelayTime`)
 .TP
-\fB\-\-backend\fR \fI<BACKEND>\fR
-Which backend drives this tune
+\fB\-\-driver\fR \fI<DRIVER>\fR
+Which driver drives this tune
 .br
 
 .br
@@ -76,34 +76,34 @@ simulator: The in\-process FOPDT simulator — no external dependency at all
 .RE
 .TP
 \fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
-opcda\-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md\*(Aqs OPC DA integration notes. Only meaningful with `\-\-backend opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file\*(Aqs `bridge_host` key)
+opcda\-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md\*(Aqs OPC DA integration notes. Only meaningful with `\-\-driver opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file\*(Aqs `bridge_host` key)
 .TP
 \fB\-\-server\fR \fI<SERVER>\fR
-OPC DA server ProgID (legacy: `\-s`/`\-\-opcServerID`). Required with `\-\-backend opcda`
+OPC DA server ProgID (legacy: `\-s`/`\-\-opcServerID`). Required with `\-\-driver opcda`
 .TP
 \fB\-\-sim\-gain\fR \fI<SIM_GAIN>\fR [default: 1]
-Simulator process gain (`\-\-backend simulator` only)
+Simulator process gain (`\-\-driver simulator` only)
 .TP
 \fB\-\-sim\-tau\fR \fI<SIM_TAU>\fR [default: 2]
-Simulator process time constant, in seconds (`\-\-backend simulator` only)
+Simulator process time constant, in seconds (`\-\-driver simulator` only)
 .TP
 \fB\-\-sim\-dead\-time\fR \fI<SIM_DEAD_TIME>\fR [default: 5]
-Simulator dead time, in seconds (`\-\-backend simulator` only)
+Simulator dead time, in seconds (`\-\-driver simulator` only)
 .TP
 \fB\-\-sim\-noise\fR \fI<SIM_NOISE>\fR [default: 0]
-Simulator measurement noise amplitude (`\-\-backend simulator` only)
+Simulator measurement noise amplitude (`\-\-driver simulator` only)
 .TP
 \fB\-\-sim\-seed\fR \fI<SIM_SEED>\fR [default: 0]
-Simulator RNG seed, for reproducible noise (`\-\-backend simulator` only)
+Simulator RNG seed, for reproducible noise (`\-\-driver simulator` only)
 .TP
 \fB\-\-sim\-initial\-pv\fR \fI<SIM_INITIAL_PV>\fR [default: 50]
-Simulator initial PV (`\-\-backend simulator` only)
+Simulator initial PV (`\-\-driver simulator` only)
 .TP
 \fB\-\-sim\-initial\-mv\fR \fI<SIM_INITIAL_MV>\fR [default: 50]
-Simulator initial MV (`\-\-backend simulator` only)
+Simulator initial MV (`\-\-driver simulator` only)
 .TP
 \fB\-\-pv\-range\-high\fR \fI<PV_RANGE_HIGH>\fR
-Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle tag/value" button). Required (defaults to 100.0) for `\-\-backend simulator`, which has no range tags at all
+Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle tag/value" button). Required (defaults to 100.0) for `\-\-driver simulator`, which has no range tags at all
 .TP
 \fB\-\-pv\-range\-low\fR \fI<PV_RANGE_LOW>\fR
 Fixed PV range low, overriding a live tag read
@@ -128,7 +128,7 @@ reverse
 .RE
 .TP
 \fB\-\-poll\-interval\-ms\fR \fI<POLL_INTERVAL_MS>\fR [default: 800]
-How often to poll the backend, in milliseconds (legacy: the 800 ms WinForms timer)
+How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer)
 .TP
 \fB\-\-timeout\-secs\fR \fI<TIMEOUT_SECS>\fR [default: 3600]
 Hard wall\-clock cap on this run\*(Aqs total duration (including any `\-\-mrft\-delay` padding), in seconds. If the engine hasn\*(Aqt reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C \-\- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop\*(Aqs expected test duration \-\- temperature loops in particular can need much longer than the default
@@ -158,7 +158,7 @@ sluggish
 Accept `Quality::Uncertain` OPC readings instead of hard\-failing on them. Off by default: a stale/held value is indistinguishable from a live one to the MRFT engine, so tolerating it can silently corrupt the switch\-period measurement the whole test depends on. Only for sites whose gateway reports `Uncertain` as a matter of course \-\- `Quality::Bad` is never accepted, with or without this flag. Logged loudly when used and recorded on the run (`tune_runs.allow_uncertain_quality`), so history shows a run executed under relaxed rules
 .TP
 \fB\-\-op\-timeout\-secs\fR \fI<OP_TIMEOUT_SECS>\fR [default: 30]
-Cap on any single backend read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black\-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `\-\-timeout\-secs` both stay effective even mid\-hung\-read/write \-\- see AGENTS.md\*(Aqs `safety\-cancellation` section. Distinct from `\-\-timeout\-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration
+Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black\-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `\-\-timeout\-secs` both stay effective even mid\-hung\-read/write \-\- see AGENTS.md\*(Aqs `safety\-cancellation` section. Distinct from `\-\-timeout\-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration
 .TP
 \fB\-\-restore\-timeout\-secs\fR \fI<RESTORE_TIMEOUT_SECS>\fR [default: 30]
 Cap on restoring the loop to its pre\-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of `\-\-timeout\-secs`, since a restore triggered *by* a timeout would otherwise inherit an already\-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits `EXIT_RESTORE_INCOMPLETE` with a warning naming the loop and its last\-written value, instead of hanging indefinitely

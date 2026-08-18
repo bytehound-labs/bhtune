@@ -1,7 +1,7 @@
-//! Test-only mock gRPC `Bridge` service, shared by [`crate::backend`] and the
+//! Test-only mock gRPC `Bridge` service, shared by [`crate::driver`] and the
 //! [`crate::commands::tune`]/[`crate::commands::opc`] tests that need a real (mock) OPC DA
-//! bridge for [`bhtune_backend::OpcDaBackend`] to connect to — proving the CLI's own OPC DA
-//! wiring (connect success path, backend-kind bookkeeping, mid-poll error propagation, the
+//! bridge for [`bhtune_driver::OpcDaDriver`] to connect to — proving the CLI's own OPC DA
+//! wiring (connect success path, driver-kind bookkeeping, mid-poll error propagation, the
 //! `opc` passthrough commands) actually composes, without re-exercising `opcda-bridge`'s own
 //! already-tested RPC error-path matrix.
 

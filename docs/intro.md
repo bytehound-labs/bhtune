@@ -31,8 +31,8 @@ DCS/PLC family.
 - **Stores everything in a plain, open SQLite database.** No encryption, no usage gating, no
   license dongle — just a single database file anyone can inspect with any SQLite tool.
 - **Is built to be extended.** OPC DA is the primary, supported driver for v1. The tag I/O
-  interface (the `Backend` trait) is deliberately protocol-agnostic, so OPC UA and Modbus
-  backends can be added later without touching the tuning engine itself.
+  interface (the `Driver` trait) is deliberately protocol-agnostic, so OPC UA and Modbus
+  drivers can be added later without touching the tuning engine itself.
 
 ## What is MRFT?
 

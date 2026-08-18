@@ -15,7 +15,7 @@
 //! - [`retention`] — turns `history-retention`'s "N days" policy into a cutoff and a
 //!   logged deletion sweep, shared by [`db::open`]'s startup call, `bhtune-server`'s
 //!   periodic timer, and `bhtune history prune`.
-//! - [`backend`] — constructs the selected `Backend` implementation.
+//! - [`driver`] — constructs the selected `Driver` implementation.
 //! - [`commands`] — one module per subcommand family: `tune`/`simulate`, `template`,
 //!   `history`, `export`, `opc`.
 //! - [`output`] — the `--output table|json` format shared by `history list`/`history show`
@@ -42,11 +42,11 @@
 //! all" apart without parsing stdout. See AGENTS.md's `cli-automation`/`cli-safety` sections.
 
 pub mod args;
-pub mod backend;
 pub mod cancel;
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod driver;
 pub mod logging;
 pub mod output;
 pub mod retention;
@@ -64,7 +64,7 @@ use output::OutputFormat;
 /// succeeded or was cleanly skipped. Equal to [`ExitCode::SUCCESS`].
 pub const EXIT_SUCCESS: u8 = 0;
 /// A setup problem (bad flags, an unreadable config file, a database error, an unexpected
-/// backend error) prevented the command from running to completion at all. Equal to
+/// driver error) prevented the command from running to completion at all. Equal to
 /// [`ExitCode::FAILURE`].
 pub const EXIT_FAILURE: u8 = 1;
 /// A `tune`/`simulate` run was aborted (Ctrl+C) before it finished; the loop was restored to
@@ -83,11 +83,11 @@ pub const EXIT_WRITE_BACK_FAILED: u8 = 3;
 /// reported completion; the loop was restored to its pre-test mode, exactly like
 /// [`EXIT_ABORTED`]. Distinct from it so a scheduler's alerting can tell "this run had to be
 /// killed for running too long" (possibly a stuck relay, a misconfigured tag mapping, or a
-/// stalled backend read -- worth investigating) apart from "an operator stopped it on
+/// stalled driver read -- worth investigating) apart from "an operator stopped it on
 /// purpose" (routine). See `commands::tune::TuneOutcome::TimedOut` and AGENTS.md's
 /// `cli-safety` section.
 pub const EXIT_TIMED_OUT: u8 = 4;
-/// A `tune`/`simulate` run was aborted because a backend reported a non-`Good` OPC quality
+/// A `tune`/`simulate` run was aborted because a driver reported a non-`Good` OPC quality
 /// for a tuning-critical reading (finding 5 of the live-plant safety review): an initial
 /// reading, the transition-to-manual setpoint capture, or an in-flight PV poll sample, and
 /// (for the in-flight case) `--allow-uncertain-quality` either wasn't set or the quality was
@@ -263,7 +263,7 @@ fn fail(err: &anyhow::Error, format: OutputFormat) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::args::{BackendKindArg, Command, ControllerTypeArg, ProcessTypeArg, TuneArgs};
+    use crate::args::{Command, ControllerTypeArg, DriverKindArg, ProcessTypeArg, TuneArgs};
     use std::path::PathBuf;
 
     fn temp_db_path() -> (tempfile::TempDir, PathBuf) {
@@ -390,7 +390,7 @@ mod tests {
                 cycles_count: None,
                 noise_protection_secs: None,
                 mrft_delay: 0,
-                backend: BackendKindArg::Simulator,
+                driver: DriverKindArg::Simulator,
                 bridge_host: None,
                 server: None,
                 sim_gain: 1.0,

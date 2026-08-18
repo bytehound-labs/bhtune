@@ -243,7 +243,7 @@ mod tests {
     #[tokio::test]
     async fn retention_tick_deletes_runs_past_the_cutoff_and_logs_nothing_fatal() {
         use bhtune_core::{ControllerType, LoopConfig, LoopTags, ProcessType, built_in_templates};
-        use bhtune_db::models::{TemplateOrigin, TuneBackend, TuneRunRow};
+        use bhtune_db::models::{TemplateOrigin, TuneDriver, TuneRunRow};
 
         let pool = connect_in_memory().await.unwrap();
         let template = built_in_templates().remove(0);
@@ -262,7 +262,7 @@ mod tests {
             &pool,
             None,
             "LIC-X",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             config,
             TemplateOrigin::Builtin,
             &template,

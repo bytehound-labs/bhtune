@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// `value_parser` for every `f32` CLI flag that can reach `bhtune-core` unvalidated. A
-/// backend tag read is checked for finiteness in `commands::tune::read_f32`, but a CLI flag
+/// driver tag read is checked for finiteness in `commands::tune::read_f32`, but a CLI flag
 /// value bypasses that check entirely (see `build_loop_tags`'s `TagOrValue::Value` path) --
 /// without this, `--relay-amp nan` or `--sim-gain inf` would flow straight into the tuning
 /// math. See AGENTS.md's "Live-plant safety hardening" section.
@@ -257,53 +257,53 @@ impl From<bhtune_core::ControllerDirection> for DirectionArg {
     }
 }
 
-/// Which [`bhtune_backend::Backend`] implementation a `tune` run should use.
+/// Which [`bhtune_driver::Driver`] implementation a `tune` run should use.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendKindArg {
+pub enum DriverKindArg {
     /// A real OPC DA server, reached through an opcda-bridge gateway.
     Opcda,
     /// The in-process FOPDT simulator — no external dependency at all.
     Simulator,
 }
 
-/// The reverse of `BackendKindArg -> TuneBackend` conversions elsewhere in this crate, for
+/// The reverse of `DriverKindArg -> TuneDriver` conversions elsewhere in this crate, for
 /// `bhtune-server`'s `POST /api/runs`, whose request body accepts
-/// [`bhtune_db::models::TuneBackend`] directly (already `Deserialize`/`ToSchema`, and the one
+/// [`bhtune_db::models::TuneDriver`] directly (already `Deserialize`/`ToSchema`, and the one
 /// enum every other run-history route already uses on the wire -- see `routes/history.rs` in
 /// `bhtune-server`) rather than this CLI-only wrapper.
 ///
-/// `TryFrom`, not `From`: [`bhtune_db::models::TuneBackend::Replay`] has no [`BackendKindArg`]
-/// counterpart at all yet (`backend-replay` in AGENTS.md is still unimplemented, so there is
-/// no `crate::backend::build` case that could ever construct one), so a request naming it
+/// `TryFrom`, not `From`: [`bhtune_db::models::TuneDriver::Replay`] has no [`DriverKindArg`]
+/// counterpart at all yet (`driver-replay` in AGENTS.md is still unimplemented, so there is
+/// no `crate::driver::build` case that could ever construct one), so a request naming it
 /// must be rejected explicitly rather than silently mapped to something else.
-impl TryFrom<bhtune_db::models::TuneBackend> for BackendKindArg {
-    type Error = ReplayBackendUnsupported;
+impl TryFrom<bhtune_db::models::TuneDriver> for DriverKindArg {
+    type Error = ReplayDriverUnsupported;
 
-    fn try_from(value: bhtune_db::models::TuneBackend) -> Result<Self, Self::Error> {
+    fn try_from(value: bhtune_db::models::TuneDriver) -> Result<Self, Self::Error> {
         match value {
-            bhtune_db::models::TuneBackend::Opcda => Ok(BackendKindArg::Opcda),
-            bhtune_db::models::TuneBackend::Simulator => Ok(BackendKindArg::Simulator),
-            bhtune_db::models::TuneBackend::Replay => Err(ReplayBackendUnsupported),
+            bhtune_db::models::TuneDriver::Opcda => Ok(DriverKindArg::Opcda),
+            bhtune_db::models::TuneDriver::Simulator => Ok(DriverKindArg::Simulator),
+            bhtune_db::models::TuneDriver::Replay => Err(ReplayDriverUnsupported),
         }
     }
 }
 
-/// The error [`BackendKindArg::try_from`] returns for
-/// [`bhtune_db::models::TuneBackend::Replay`] -- see that impl's doc comment.
+/// The error [`DriverKindArg::try_from`] returns for
+/// [`bhtune_db::models::TuneDriver::Replay`] -- see that impl's doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReplayBackendUnsupported;
+pub struct ReplayDriverUnsupported;
 
-impl std::fmt::Display for ReplayBackendUnsupported {
+impl std::fmt::Display for ReplayDriverUnsupported {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "the replay backend cannot be used to start a new tune run (it exists only for \
+            "the replay driver cannot be used to start a new tune run (it exists only for \
              offline golden-trace validation, not live/simulated tuning)"
         )
     }
 }
 
-impl std::error::Error for ReplayBackendUnsupported {}
+impl std::error::Error for ReplayDriverUnsupported {}
 
 /// A [`bhtune_core::ResponseLevel`] value, as a CLI flag (`--write-pid
 /// <aggressive|moderate|sluggish>`).
@@ -340,7 +340,7 @@ impl From<bhtune_core::ResponseLevel> for ResponseLevelArg {
 #[derive(Parser, Debug, Clone)]
 pub struct TuneArgs {
     /// PV tag prefix; the rest of the tag set is derived from it using `--template`'s
-    /// suffix convention. Ignored for `--backend simulator`, which uses two fixed internal
+    /// suffix convention. Ignored for `--driver simulator`, which uses two fixed internal
     /// tag names instead.
     #[arg(short = 't', long)]
     pub tagname: String,
@@ -377,45 +377,45 @@ pub struct TuneArgs {
     #[arg(long, default_value_t = 0)]
     pub mrft_delay: u32,
 
-    /// Which backend drives this tune.
+    /// Which driver drives this tune.
     #[arg(long, value_enum)]
-    pub backend: BackendKindArg,
+    pub driver: DriverKindArg,
 
     /// opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a
     /// DCOM host directly — see AGENTS.md's OPC DA integration notes. Only meaningful with
-    /// `--backend opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the
+    /// `--driver opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the
     /// `BHTUNE_BRIDGE_HOST` env var or the config file's `bridge_host` key).
     #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
     pub bridge_host: Option<String>,
 
-    /// OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--backend opcda`.
+    /// OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--driver opcda`.
     #[arg(long)]
     pub server: Option<String>,
 
-    /// Simulator process gain (`--backend simulator` only).
+    /// Simulator process gain (`--driver simulator` only).
     #[arg(long, default_value_t = 1.0, value_parser = finite_f32)]
     pub sim_gain: f32,
-    /// Simulator process time constant, in seconds (`--backend simulator` only).
+    /// Simulator process time constant, in seconds (`--driver simulator` only).
     #[arg(long, default_value_t = 2.0, value_parser = finite_f32)]
     pub sim_tau: f32,
-    /// Simulator dead time, in seconds (`--backend simulator` only).
+    /// Simulator dead time, in seconds (`--driver simulator` only).
     #[arg(long, default_value_t = 5.0, value_parser = finite_f32)]
     pub sim_dead_time: f32,
-    /// Simulator measurement noise amplitude (`--backend simulator` only).
+    /// Simulator measurement noise amplitude (`--driver simulator` only).
     #[arg(long, default_value_t = 0.0, value_parser = finite_f32)]
     pub sim_noise: f32,
-    /// Simulator RNG seed, for reproducible noise (`--backend simulator` only).
+    /// Simulator RNG seed, for reproducible noise (`--driver simulator` only).
     #[arg(long, default_value_t = 0)]
     pub sim_seed: u64,
-    /// Simulator initial PV (`--backend simulator` only).
+    /// Simulator initial PV (`--driver simulator` only).
     #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
     pub sim_initial_pv: f32,
-    /// Simulator initial MV (`--backend simulator` only).
+    /// Simulator initial MV (`--driver simulator` only).
     #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
     pub sim_initial_mv: f32,
 
     /// Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle
-    /// tag/value" button). Required (defaults to 100.0) for `--backend simulator`, which has
+    /// tag/value" button). Required (defaults to 100.0) for `--driver simulator`, which has
     /// no range tags at all.
     #[arg(long, value_parser = finite_f32)]
     pub pv_range_high: Option<f32>,
@@ -432,7 +432,7 @@ pub struct TuneArgs {
     #[arg(long, value_enum)]
     pub direction: Option<DirectionArg>,
 
-    /// How often to poll the backend, in milliseconds (legacy: the 800 ms WinForms timer).
+    /// How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer).
     #[arg(long, default_value_t = 800, value_parser = positive_u64)]
     pub poll_interval_ms: u64,
 
@@ -472,7 +472,7 @@ pub struct TuneArgs {
     #[arg(long)]
     pub allow_uncertain_quality: bool,
 
-    /// Cap on any single backend read/write during the run, in seconds. A stalled call
+    /// Cap on any single driver read/write during the run, in seconds. A stalled call
     /// (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited
     /// forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even
     /// mid-hung-read/write -- see AGENTS.md's `safety-cancellation` section. Distinct from
@@ -578,7 +578,7 @@ pub struct SimulateArgs {
 
 impl SimulateArgs {
     /// Expands the defaulted `simulate` flags into a full [`TuneArgs`] with
-    /// `--backend simulator` implied, so `simulate` and `tune` share one execution path.
+    /// `--driver simulator` implied, so `simulate` and `tune` share one execution path.
     pub fn into_tune_args(self) -> TuneArgs {
         TuneArgs {
             tagname: self.tagname,
@@ -590,7 +590,7 @@ impl SimulateArgs {
             cycles_count: self.cycles_count,
             noise_protection_secs: self.noise_protection_secs,
             mrft_delay: self.mrft_delay,
-            backend: BackendKindArg::Simulator,
+            driver: DriverKindArg::Simulator,
             bridge_host: None,
             server: None,
             sim_gain: self.sim_gain,
@@ -600,10 +600,10 @@ impl SimulateArgs {
             sim_seed: self.sim_seed,
             sim_initial_pv: self.sim_initial_pv,
             sim_initial_mv: self.sim_initial_mv,
-            // The simulator has no range/direction tags at all (see `backend-simulator`'s
+            // The simulator has no range/direction tags at all (see `driver-simulator`'s
             // two-tag-only contract), so these must always be fixed values, defaulted to a
             // plain 0-100% span and the direction already proven to produce a completing
-            // relay test in `bhtune-backend`'s own end-to-end test.
+            // relay test in `bhtune-driver`'s own end-to-end test.
             pv_range_high: Some(100.0),
             pv_range_low: Some(0.0),
             mv_range_high: Some(100.0),
@@ -686,7 +686,7 @@ pub enum HistoryCommand {
     /// Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the
     /// live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses
     /// if the run has none, if that write-back's pre-read itself failed (nothing to revert
-    /// to), or if the run did not use the `opcda` backend (nothing live to revert against).
+    /// to), or if the run did not use the `opcda` driver (nothing live to revert against).
     Revert {
         run_id: i64,
         /// (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST`
@@ -948,21 +948,21 @@ mod tests {
     }
 
     #[test]
-    fn backend_kind_arg_try_from_tune_backend_covers_the_implemented_backends() {
+    fn driver_kind_arg_try_from_tune_driver_covers_the_implemented_drivers() {
         assert_eq!(
-            BackendKindArg::try_from(bhtune_db::models::TuneBackend::Opcda).unwrap(),
-            BackendKindArg::Opcda
+            DriverKindArg::try_from(bhtune_db::models::TuneDriver::Opcda).unwrap(),
+            DriverKindArg::Opcda
         );
         assert_eq!(
-            BackendKindArg::try_from(bhtune_db::models::TuneBackend::Simulator).unwrap(),
-            BackendKindArg::Simulator
+            DriverKindArg::try_from(bhtune_db::models::TuneDriver::Simulator).unwrap(),
+            DriverKindArg::Simulator
         );
     }
 
     #[test]
-    fn backend_kind_arg_try_from_tune_backend_rejects_replay() {
-        let err = BackendKindArg::try_from(bhtune_db::models::TuneBackend::Replay).unwrap_err();
-        assert_eq!(err, ReplayBackendUnsupported);
+    fn driver_kind_arg_try_from_tune_driver_rejects_replay() {
+        let err = DriverKindArg::try_from(bhtune_db::models::TuneDriver::Replay).unwrap_err();
+        assert_eq!(err, ReplayDriverUnsupported);
         assert!(err.to_string().contains("replay"));
     }
 
@@ -987,11 +987,11 @@ mod tests {
     }
 
     #[test]
-    fn simulate_args_expand_into_tune_args_with_simulator_backend() {
+    fn simulate_args_expand_into_tune_args_with_simulator_driver() {
         let cli = Cli::parse_from(["bhtune", "simulate"]);
         let simulate = expect_variant!(cli.command, Command::Simulate(s) => s, "Simulate");
         let tune = simulate.into_tune_args();
-        assert!(matches!(tune.backend, BackendKindArg::Simulator));
+        assert!(matches!(tune.driver, DriverKindArg::Simulator));
         assert_eq!(tune.tagname, "Sim.Loop1.PV");
         assert_eq!(tune.pv_range_low, Some(0.0));
         assert_eq!(tune.pv_range_high, Some(100.0));
@@ -1070,14 +1070,14 @@ mod tests {
             "pi",
             "--relay-amp",
             "5.0",
-            "--backend",
+            "--driver",
             "simulator",
         ]);
         let args = expect_variant!(cli.command, Command::Tune(a) => a, "Tune");
         assert_eq!(args.tagname, "Unit1.LIC101.PV");
         assert!(matches!(args.process_type, ProcessTypeArg::Flow));
         assert!(matches!(args.controller_type, ControllerTypeArg::Pi));
-        assert!(matches!(args.backend, BackendKindArg::Simulator));
+        assert!(matches!(args.driver, DriverKindArg::Simulator));
         assert_eq!(args.poll_interval_ms, 800);
         assert!(!args.yes);
         assert!(args.write_pid.is_none());
@@ -1101,7 +1101,7 @@ mod tests {
             "pi",
             "--relay-amp",
             "5.0",
-            "--backend",
+            "--driver",
             "simulator",
             "--op-timeout-secs",
             "15",
@@ -1128,7 +1128,7 @@ mod tests {
             "pi",
             "--relay-amp",
             "5.0",
-            "--backend",
+            "--driver",
             "simulator",
             "--op-timeout-secs",
             "0",
@@ -1151,7 +1151,7 @@ mod tests {
             "pi",
             "--relay-amp",
             "5.0",
-            "--backend",
+            "--driver",
             "simulator",
             "--restore-timeout-secs",
             "0",
@@ -1174,7 +1174,7 @@ mod tests {
             "pi",
             "--relay-amp",
             "5.0",
-            "--backend",
+            "--driver",
             "simulator",
             "--yes",
             "--write-pid",
@@ -1387,7 +1387,7 @@ mod tests {
             "pi",
             "--relay-amp",
             "5.0",
-            "--backend",
+            "--driver",
             "simulator",
         ]);
         let args = expect_variant!(cli.command, Command::Tune(a) => a, "Tune");

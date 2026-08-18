@@ -3,7 +3,7 @@
 //!
 //! Reuses `bhtune-cli`'s own [`bhtune_cli::commands::tune::prepare`]/[`bhtune_cli::commands::tune::drive`]
 //! split unchanged, so a run started over HTTP goes through exactly the same template
-//! lookup, tag derivation, backend connection, quality checks, restore-on-abort, and
+//! lookup, tag derivation, driver connection, quality checks, restore-on-abort, and
 //! write-back rollback as a run started by the CLI -- only the setup/reporting differs (see
 //! those functions' own doc comments for the full rationale). `crate::active_run` enforces
 //! the v1 constraint that only one run may be active at a time.
@@ -12,12 +12,12 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use bhtune_cli::args::{BackendKindArg, TuneArgs};
+use bhtune_cli::args::{DriverKindArg, TuneArgs};
 use bhtune_cli::cancel::CtrlC;
 use bhtune_cli::commands::tune::{drive, prepare};
 use bhtune_cli::output::OutputFormat;
 use bhtune_core::{ControllerDirection, ControllerType, ProcessType, ResponseLevel};
-use bhtune_db::models::{TuneBackend, TuneRunRow};
+use bhtune_db::models::{TuneDriver, TuneRunRow};
 use chrono::Utc;
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -58,7 +58,7 @@ fn default_op_or_restore_timeout_secs() -> u64 {
 /// `Option` field.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct StartRunRequest {
-    /// PV tag prefix; ignored for `backend: "simulator"`. See [`TuneArgs::tagname`].
+    /// PV tag prefix; ignored for `driver: "simulator"`. See [`TuneArgs::tagname`].
     pub tagname: String,
     /// DCS/PLC template name (see `GET /api/templates`).
     pub template: String,
@@ -77,37 +77,37 @@ pub struct StartRunRequest {
     /// Pre/post-test recording padding, in seconds.
     #[serde(default)]
     pub mrft_delay: u32,
-    /// Which backend drives this tune. `"replay"` is rejected -- that backend exists only
+    /// Which driver drives this tune. `"replay"` is rejected -- that driver exists only
     /// for offline golden-trace validation, not for starting a live/simulated run.
-    pub backend: TuneBackend,
-    /// opcda-bridge gateway address. Only meaningful with `backend: "opcda"` (default:
+    pub driver: TuneDriver,
+    /// opcda-bridge gateway address. Only meaningful with `driver: "opcda"` (default:
     /// resolved the same way the CLI resolves `--bridge-host`, via this process's own
     /// config/env).
     pub bridge_host: Option<String>,
-    /// OPC DA server ProgID. Required with `backend: "opcda"`.
+    /// OPC DA server ProgID. Required with `driver: "opcda"`.
     pub server: Option<String>,
-    /// Simulator process gain (`backend: "simulator"` only).
+    /// Simulator process gain (`driver: "simulator"` only).
     #[serde(default = "default_sim_gain")]
     pub sim_gain: f32,
-    /// Simulator process time constant, in seconds (`backend: "simulator"` only).
+    /// Simulator process time constant, in seconds (`driver: "simulator"` only).
     #[serde(default = "default_sim_tau")]
     pub sim_tau: f32,
-    /// Simulator dead time, in seconds (`backend: "simulator"` only).
+    /// Simulator dead time, in seconds (`driver: "simulator"` only).
     #[serde(default = "default_sim_dead_time")]
     pub sim_dead_time: f32,
-    /// Simulator measurement noise amplitude (`backend: "simulator"` only).
+    /// Simulator measurement noise amplitude (`driver: "simulator"` only).
     #[serde(default)]
     pub sim_noise: f32,
-    /// Simulator RNG seed, for reproducible noise (`backend: "simulator"` only).
+    /// Simulator RNG seed, for reproducible noise (`driver: "simulator"` only).
     #[serde(default)]
     pub sim_seed: u64,
-    /// Simulator initial PV (`backend: "simulator"` only).
+    /// Simulator initial PV (`driver: "simulator"` only).
     #[serde(default = "default_sim_initial_value")]
     pub sim_initial_pv: f32,
-    /// Simulator initial MV (`backend: "simulator"` only).
+    /// Simulator initial MV (`driver: "simulator"` only).
     #[serde(default = "default_sim_initial_value")]
     pub sim_initial_mv: f32,
-    /// Fixed PV range high, overriding a live tag read. Required for `backend: "simulator"`,
+    /// Fixed PV range high, overriding a live tag read. Required for `driver: "simulator"`,
     /// which has no range tags at all.
     pub pv_range_high: Option<f32>,
     /// Fixed PV range low, overriding a live tag read.
@@ -118,7 +118,7 @@ pub struct StartRunRequest {
     pub mv_range_low: Option<f32>,
     /// Fixed controller direction, overriding a live tag read.
     pub direction: Option<ControllerDirection>,
-    /// How often to poll the backend, in milliseconds.
+    /// How often to poll the driver, in milliseconds.
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
     /// Hard wall-clock cap on this run's total duration, in seconds. See
@@ -138,7 +138,7 @@ pub struct StartRunRequest {
     /// [`TuneArgs::allow_uncertain_quality`].
     #[serde(default)]
     pub allow_uncertain_quality: bool,
-    /// Cap on any single backend read/write during the run, in seconds.
+    /// Cap on any single driver read/write during the run, in seconds.
     #[serde(default = "default_op_or_restore_timeout_secs")]
     pub op_timeout_secs: u64,
     /// Cap on restoring the loop to its pre-test state after the run ends, in seconds.
@@ -211,7 +211,7 @@ impl StartRunRequest {
         require_positive("op_timeout_secs", self.op_timeout_secs)?;
         require_positive("restore_timeout_secs", self.restore_timeout_secs)?;
 
-        let backend = BackendKindArg::try_from(self.backend)
+        let driver = DriverKindArg::try_from(self.driver)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
         Ok(TuneArgs {
@@ -224,7 +224,7 @@ impl StartRunRequest {
             cycles_count: self.cycles_count,
             noise_protection_secs: self.noise_protection_secs,
             mrft_delay: self.mrft_delay,
-            backend,
+            driver,
             bridge_host: self.bridge_host,
             server: self.server,
             sim_gain: self.sim_gain,
@@ -258,7 +258,7 @@ impl StartRunRequest {
 
 /// Start a new tune run.
 ///
-/// `POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, backend connect,
+/// `POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, driver connect,
 /// and the `tune_runs` insert) inline and returns as soon as that succeeds, having already
 /// `tokio::spawn`ed the actual polling/tuning phase in the background. `201 Created` carries
 /// the same [`RunDetailResponse`] `GET /api/runs/{id}` would show for this run at this
@@ -274,7 +274,7 @@ impl StartRunRequest {
     request_body = StartRunRequest,
     responses(
         (status = 201, description = "The run was started; detail reflects its state right now.", body = RunDetailResponse),
-        (status = 400, description = "The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable backend).", body = ErrorBody),
+        (status = 400, description = "The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable driver).", body = ErrorBody),
         (status = 409, description = "Another tune run is already active.", body = ErrorBody),
     ),
 )]
@@ -283,7 +283,7 @@ pub(crate) async fn start_run(
     Json(request): Json<StartRunRequest>,
 ) -> Result<(StatusCode, Json<RunDetailResponse>), ApiError> {
     // Optimistic pre-check: avoids a wasted `prepare()` call (template lookup, a real
-    // backend connection attempt) in the common case where it's already obvious a run is
+    // driver connection attempt) in the common case where it's already obvious a run is
     // active. Not authoritative -- `state.active_run.start()` below is what actually decides,
     // since a run can start or finish between this check and that call.
     if let Some(active_id) = state.active_run.active_run_id().await {
@@ -295,7 +295,7 @@ pub(crate) async fn start_run(
     let args = request.into_tune_args()?;
 
     // `prepare()`'s own doc comment: its failures (bad template name, `--write-pid` without
-    // `--yes`, an unreachable backend) are "exactly the kind of problem an HTTP client
+    // `--yes`, an unreachable driver) are "exactly the kind of problem an HTTP client
     // expects a synchronous error response for" -- so they map to `400`, not the generic
     // `500` a bare `?`/`Internal` conversion would give.
     let prepared = prepare(&state.pool, args, &state.app_config)
@@ -323,7 +323,7 @@ pub(crate) async fn start_run(
         state.active_run.start(run_id, cancel_handle, task).await
     {
         let failure_reason = format!(
-            "run {existing} was already active when this run tried to start; no backend I/O was performed"
+            "run {existing} was already active when this run tried to start; no driver I/O was performed"
         );
         TuneRunRow::fail(&state.pool, run_id, Utc::now(), &failure_reason).await?;
         return Err(ApiError::Conflict(failure_reason));
@@ -394,7 +394,7 @@ mod tests {
             "cycles_skip": 1,
             "cycles_count": 2,
             "noise_protection_secs": 0,
-            "backend": "simulator",
+            "driver": "simulator",
             "sim_gain": 1.0,
             "sim_tau": 0.01,
             "sim_dead_time": 0.025,
@@ -539,7 +539,7 @@ mod tests {
         );
 
         // Exactly one of the two must win -- the other must lose, specifically via the
-        // authoritative check (identifiable by its distinct wording, "no backend I/O was
+        // authoritative check (identifiable by its distinct wording, "no driver I/O was
         // performed", versus the optimistic pre-check's "cancel it first via ..." message).
         let outcomes = [result_a, result_b];
         let winners = outcomes.iter().filter(|r| r.is_ok()).count();
@@ -550,7 +550,7 @@ mod tests {
             panic!("loser must be a 409 Conflict, got {:?}", losers[0]);
         };
         assert!(
-            message.contains("no backend I/O was performed"),
+            message.contains("no driver I/O was performed"),
             "loser should be rejected by the authoritative check specifically, got: {message}"
         );
 
@@ -626,7 +626,7 @@ mod tests {
     /// `pv_range_high` explicitly, so omitting it entirely (deserializing to `None`, since
     /// `Option<f32>` fields default to `None` when missing with no `#[serde(default)]`
     /// needed) is the only way to reach it. `prepare()` still rejects the request -- a fixed
-    /// PV range is mandatory for `backend: "simulator"` -- so this asserts `400`, just from a
+    /// PV range is mandatory for `driver: "simulator"` -- so this asserts `400`, just from a
     /// different validator further down the same handler.
     #[tokio::test]
     async fn an_omitted_optional_range_field_passes_validation_but_prepare_still_requires_it() {
@@ -687,10 +687,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_replay_backend_is_rejected() {
+    async fn the_replay_driver_is_rejected() {
         let app = crate::build_router(crate::test_support::in_memory_state().await);
         let mut request = fast_simulator_request_json();
-        request["backend"] = serde_json::json!("replay");
+        request["driver"] = serde_json::json!("replay");
 
         let response = post_json(app, "/api/runs", request).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);

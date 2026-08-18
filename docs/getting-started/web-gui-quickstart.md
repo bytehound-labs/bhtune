@@ -56,9 +56,9 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    launch (seeded automatically into the database). Open one to see its full tag-suffix
    mapping, or create a new one from the browser instead of hand-editing a TOML file.
 2. **New Run** (`/runs/new`) — one form covering everything `bhtune tune` takes as flags:
-   connection (which backend — OPC DA or the simulator), tag mapping, test parameters (process
+   connection (which driver — OPC DA or the simulator), tag mapping, test parameters (process
    type, controller type, relay amplitude, cycles), simulator parameters (gain/time constant/
-   dead time/noise, when the simulator backend is selected), and write-back. Submitting POSTs
+   dead time/noise, when the simulator driver is selected), and write-back. Submitting POSTs
    to the same `/api/runs` endpoint the CLI's `bhtune-server` mode exposes — there's exactly
    one API, used by both the browser and any script that wants to drive a run over HTTP
    directly.
@@ -87,7 +87,7 @@ curl http://127.0.0.1:8787/api/health
 
 Starting a tune over HTTP directly (no browser) needs the same fields the CLI's `tune`/
 `simulate` commands take — see `/api/docs` for the full request schema, including the extra
-range/direction fields the simulator backend requires that a real OPC DA backend would instead
+range/direction fields the simulator driver requires that a real OPC DA driver would instead
 read live from the DCS.
 
 ## Next steps

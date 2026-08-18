@@ -15,13 +15,13 @@ import {
   TextField,
 } from "../../components/ui";
 
-type TuneBackend = components["schemas"]["TuneBackend"];
+type TuneDriver = components["schemas"]["TuneDriver"];
 type ProcessType = components["schemas"]["ProcessType"];
 type ControllerType = components["schemas"]["ControllerType"];
 type ControllerDirection = components["schemas"]["ControllerDirection"];
 type ResponseLevel = components["schemas"]["ResponseLevel"];
 
-const BACKENDS: readonly TuneBackend[] = ["simulator", "opcda"];
+const DRIVERS: readonly TuneDriver[] = ["simulator", "opcda"];
 const PROCESS_TYPES: readonly ProcessType[] = [
   "flow",
   "pressure_line",
@@ -48,7 +48,7 @@ const TEMPERATURE_PROCESS_TYPES = new Set<ProcessType>([
 type NumOrBlank = number | "";
 
 type FormState = {
-  backend: TuneBackend;
+  driver: TuneDriver;
   template: string;
   name: string;
   tagname: string;
@@ -90,7 +90,7 @@ type FormState = {
  * matching CLI flag would produce.
  */
 const initialForm: FormState = {
-  backend: "simulator",
+  driver: "simulator",
   template: "",
   name: "",
   tagname: "Sim.Loop1.PV",
@@ -109,9 +109,9 @@ const initialForm: FormState = {
   restoreTimeoutSecs: 30,
   allowUncertainQuality: false,
   // The simulator has no range/direction tags at all, so these four are hard-required
-  // whenever `backend` is "simulator" (see `build_loop_tags` in `bhtune-cli`). Defaulted to
+  // whenever `driver` is "simulator" (see `build_loop_tags` in `bhtune-cli`). Defaulted to
   // exactly the same 0-100% span and direction `bhtune simulate`'s CLI convenience path
-  // uses, matching the default `backend: "simulator"` above so a first-time visitor can
+  // uses, matching the default `driver: "simulator"` above so a first-time visitor can
   // submit immediately.
   direction: "reverse",
   pvRangeHigh: 100,
@@ -139,29 +139,29 @@ function toOptional(value: NumOrBlank): number | undefined {
 function buildRequest(form: FormState): StartRunRequest | string {
   if (!form.template) return "Choose a template.";
   if (!form.tagname.trim()) return "Tag name is required.";
-  if (form.backend === "opcda" && !form.server.trim()) {
-    return "OPC DA server ProgID is required for the opcda backend.";
+  if (form.driver === "opcda" && !form.server.trim()) {
+    return "OPC DA server ProgID is required for the opcda driver.";
   }
   if (form.relayAmp === "") return "Relay amplitude is required.";
-  if (form.backend === "simulator") {
+  if (form.driver === "simulator") {
     // The simulator has no range/direction tags to read at all, so `bhtune-cli`'s
     // `build_loop_tags` hard-requires all four of these plus `direction` — mirrored here
     // verbatim so a missing field is caught before the round trip, not as a 400 from the
     // server after the run has already been attempted.
     if (form.pvRangeHigh === "") {
-      return "PV range high is required for the simulator backend (it has no range tags to read).";
+      return "PV range high is required for the simulator driver (it has no range tags to read).";
     }
     if (form.pvRangeLow === "") {
-      return "PV range low is required for the simulator backend (it has no range tags to read).";
+      return "PV range low is required for the simulator driver (it has no range tags to read).";
     }
     if (form.mvRangeHigh === "") {
-      return "MV range high is required for the simulator backend (it has no range tags to read).";
+      return "MV range high is required for the simulator driver (it has no range tags to read).";
     }
     if (form.mvRangeLow === "") {
-      return "MV range low is required for the simulator backend (it has no range tags to read).";
+      return "MV range low is required for the simulator driver (it has no range tags to read).";
     }
     if (!form.direction) {
-      return "Controller direction is required for the simulator backend (it has no direction tag to read).";
+      return "Controller direction is required for the simulator driver (it has no direction tag to read).";
     }
   }
   if (form.writePid && !form.yes) {
@@ -178,9 +178,9 @@ function buildRequest(form: FormState): StartRunRequest | string {
     cycles_count: toOptional(form.cyclesCount),
     noise_protection_secs: toOptional(form.noiseProtectionSecs),
     mrft_delay: toOptional(form.mrftDelay),
-    backend: form.backend,
+    driver: form.driver,
     bridge_host: form.bridgeHost.trim() || undefined,
-    server: form.backend === "opcda" ? form.server.trim() : undefined,
+    server: form.driver === "opcda" ? form.server.trim() : undefined,
     sim_gain: toOptional(form.simGain),
     sim_tau: toOptional(form.simTau),
     sim_dead_time: toOptional(form.simDeadTime),
@@ -223,16 +223,16 @@ export function NewRunPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function setBackend(value: TuneBackend) {
+  function setDriver(value: TuneDriver) {
     setForm((prev) => {
-      if (value !== "simulator") return { ...prev, backend: value };
-      // Switching to the simulator backend makes the range/direction fields hard-required
+      if (value !== "simulator") return { ...prev, driver: value };
+      // Switching to the simulator driver makes the range/direction fields hard-required
       // (see `buildRequest`); fill in any still left blank with the same defaults
       // `bhtune simulate`'s CLI convenience path uses, without touching a value the user
       // already set for a reason.
       return {
         ...prev,
-        backend: value,
+        driver: value,
         pvRangeHigh: prev.pvRangeHigh === "" ? 100 : prev.pvRangeHigh,
         pvRangeLow: prev.pvRangeLow === "" ? 0 : prev.pvRangeLow,
         mvRangeHigh: prev.mvRangeHigh === "" ? 100 : prev.mvRangeHigh,
@@ -277,7 +277,7 @@ export function NewRunPage() {
     <div>
       <PageHeading
         title="New run"
-        description="Starts a tune over HTTP — the same MRFT engine and backends the CLI uses, driven from the browser."
+        description="Starts a tune over HTTP — the same MRFT engine and drivers the CLI uses, driven from the browser."
         actions={
           <Link to="/runs">
             <Button>Cancel</Button>
@@ -306,10 +306,10 @@ export function NewRunPage() {
       <form onSubmit={handleSubmit}>
         <FormSection title="Connection">
           <SelectField
-            label="Backend"
-            value={form.backend}
-            onChange={(v) => setBackend(v)}
-            options={BACKENDS}
+            label="Driver"
+            value={form.driver}
+            onChange={(v) => setDriver(v)}
+            options={DRIVERS}
           />
           <SelectField
             label="Template"
@@ -333,12 +333,12 @@ export function NewRunPage() {
             value={form.tagname}
             onChange={(v) => set("tagname", v)}
             hint={
-              form.backend === "simulator"
-                ? "Ignored for the simulator backend, but still required."
+              form.driver === "simulator"
+                ? "Ignored for the simulator driver, but still required."
                 : "PV tag prefix; the rest of the tag set is derived from it via the template's suffixes."
             }
           />
-          {form.backend === "opcda" && (
+          {form.driver === "opcda" && (
             <>
               <TextField
                 label="OPC DA server ProgID"
@@ -435,7 +435,7 @@ export function NewRunPage() {
             onChange={(v) => set("opTimeoutSecs", v)}
             min={1}
             step={1}
-            hint="Cap on any single backend read/write."
+            hint="Cap on any single driver read/write."
           />
           <NumberField
             label="Restore timeout (s)"
@@ -460,9 +460,9 @@ export function NewRunPage() {
             onChange={(v) => set("direction", v)}
             options={DIRECTIONS}
             placeholder="Auto-detect (read live tag)"
-            required={form.backend === "simulator"}
+            required={form.driver === "simulator"}
             hint={
-              form.backend === "simulator"
+              form.driver === "simulator"
                 ? "Required — the simulator has no direction tag to read."
                 : undefined
             }
@@ -470,55 +470,55 @@ export function NewRunPage() {
           <div />
           <NumberField
             label="PV range high"
-            required={form.backend === "simulator"}
+            required={form.driver === "simulator"}
             value={form.pvRangeHigh}
             onChange={(v) => set("pvRangeHigh", v)}
             step="any"
             hint={
-              form.backend === "simulator"
+              form.driver === "simulator"
                 ? "Required — the simulator has no range tags to read."
                 : "Overrides a live tag read."
             }
           />
           <NumberField
             label="PV range low"
-            required={form.backend === "simulator"}
+            required={form.driver === "simulator"}
             value={form.pvRangeLow}
             onChange={(v) => set("pvRangeLow", v)}
             step="any"
             hint={
-              form.backend === "simulator"
+              form.driver === "simulator"
                 ? "Required — the simulator has no range tags to read."
                 : "Overrides a live tag read."
             }
           />
           <NumberField
             label="MV range high"
-            required={form.backend === "simulator"}
+            required={form.driver === "simulator"}
             value={form.mvRangeHigh}
             onChange={(v) => set("mvRangeHigh", v)}
             step="any"
             hint={
-              form.backend === "simulator"
+              form.driver === "simulator"
                 ? "Required — the simulator has no range tags to read."
                 : "Overrides a live tag read."
             }
           />
           <NumberField
             label="MV range low"
-            required={form.backend === "simulator"}
+            required={form.driver === "simulator"}
             value={form.mvRangeLow}
             onChange={(v) => set("mvRangeLow", v)}
             step="any"
             hint={
-              form.backend === "simulator"
+              form.driver === "simulator"
                 ? "Required — the simulator has no range tags to read."
                 : "Overrides a live tag read."
             }
           />
         </FormSection>
 
-        {form.backend === "simulator" && (
+        {form.driver === "simulator" && (
           <FormSection title="Simulator parameters">
             <NumberField
               label="Process gain"

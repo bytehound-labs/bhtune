@@ -16,13 +16,13 @@ layer (`history-query-api`) is done: full run lifecycle (start/record-initial-re
 complete/fail/abort), dynamic filtering and pagination over runs, and per-run sample/result/
 write queries, and whole-database backup/restore (`db-backup-restore`) is done: a single
 portable-file snapshot via `VACUUM INTO`, and a validated, safety-copied restore back into
-place. `bhtune-backend`'s `Backend` trait and error model (`backend-trait`) are
-defined and tested, its OPC DA implementation (`backend-opcda`, `OpcDaBackend`) is
+place. `bhtune-driver`'s `Driver` trait and error model (`driver-trait`) are
+defined and tested, its OPC DA implementation (`driver-opcda`, `OpcDaDriver`) is
 done — the primary v1 driver, over the published `opcda-bridge` crate — and its in-Rust
-FOPDT process simulator (`backend-simulator`, `SimulatorBackend`) is done, giving CI a
+FOPDT process simulator (`driver-simulator`, `SimulatorDriver`) is done, giving CI a
 fully synthetic, wall-clock-free way to drive a real `MrftEngine` end to end. `bhtune-cli`'s
 core subcommand set (`cli-commands`) is done: `tune`/`simulate` (drive a real MRFT run against
-either `OpcDaBackend` or `SimulatorBackend`, persisting the full lifecycle through
+either `OpcDaDriver` or `SimulatorDriver`, persisting the full lifecycle through
 `bhtune-db`), `template` (`list`/`show`/`import`/`export`/`delete` — see `template-cli`
 below for the multi-template TOML catalog import and TOML export), `history` (`list`/
 `show`), `export`
@@ -38,7 +38,7 @@ completion without parsing stdout (see "Automation" below). `cli-safety` is done
 range validation on `--relay-amp` at the `LoopConfig` model/construction level (not just a
 "not blank" check), a mandatory `--timeout-secs` wall-clock limit racing the poll loop
 (auto-abort-and-restore, its own distinguished `EXIT_TIMED_OUT` exit code) — later hardened
-by `safety-cancellation` below to actually reach an in-flight backend call rather than only
+by `safety-cancellation` below to actually reach an in-flight driver call rather than only
 the idle wait between ticks — and an unconditional `--write-pid`-requires-`--yes` gate (there
 is no way to write PID constants to a live loop, interactively or scripted, without
 confirming it) — see "Safety" below. `cli-logging` is done: `tracing`/`tracing-subscriber` structured logging to a rotating
@@ -109,7 +109,7 @@ completion in one form, since it all feeds one `POST /api/runs` body), run cance
 and a polling-based live-progress banner on the run detail screen (the deliberate interim
 substitute for the not-yet-built SSE stream) — manually verified against a real running
 server, which caught and fixed two real bugs (a `NumberField` `step`/`min` misalignment,
-and the simulator backend actually requiring five fields instead of the one originally
+and the simulator driver actually requiring five fields instead of the one originally
 assumed) that typechecking alone would have missed. `server-template-update-api` is now
 done: `PUT /api/templates/{name}` edits an existing `origin = "user"` template in place —
 400 if the body's `name` doesn't match the path (renames aren't supported; delete and
@@ -207,7 +207,7 @@ the real-time content was correct and matched Linux's own output exactly). This 
 fully closed out. Phase 8's
 `e2e-simulator` is now done: a genuine, real-subprocess end-to-end test
 (`crates/bhtune-cli/tests/e2e_simulator.rs`) that runs `bhtune tune` against the simulator
-backend across a small process/controller-type matrix and asserts the _calculated_ PID
+driver across a small process/controller-type matrix and asserts the _calculated_ PID
 results, not just row presence — a gap no earlier test closed (see "Correctness-critical
 design details" below, item 2, for the real `bhtune-core` bug this test caught and fixed
 in the process: the MRFT oscillation period silently lost sub-second precision by default,
@@ -215,9 +215,9 @@ zeroing `ti_minutes`/`td_minutes` even for PI/PID). `e2e-playwright` is also don
 Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
 off disk rather than needing a re-embed step — see `server-embed-spa`'s `rust-embed`
-feature gating) running the in-process simulator backend, with no mocked HTTP layer and no
+feature gating) running the in-process simulator driver, with no mocked HTTP layer and no
 Vite dev server involved. `smoke.spec.ts` covers the app shell, the health badge reaching a
-real backend, the seeded built-in template list, and header nav; `tune.spec.ts` drives
+real driver, the seeded built-in template list, and header nav; `tune.spec.ts` drives
 `/runs/new` with the same millisecond-scale simulator parameters `e2e_simulator.rs` uses and
 asserts the _rendered_ Kp/Ti/Td values are sane and correctly ordered (not just that the
 page didn't crash), plus a second test cancelling an in-flight run. This surfaced a genuine,
@@ -246,20 +246,20 @@ step captures real SPA assets, via `taiki-e/create-gh-release-action` +
 in place of the originally-planned `cargo-dist` once that sibling project's simpler setup
 was reviewed — see "`build-matrix`: the release binary matrix" below for the full design,
 including why this does not by itself mean `release-v1` should happen yet.
-`backend-replay` is now done too, completing Phase 4: `ReplayBackend`
-(`crates/bhtune-backend/src/replay.rs`) feeds a recorded `(time, pv)` trace through the real
-`Backend` trait — a validation-only construct, deliberately not wired into
-`bhtune tune --backend` (there is no CLI-selectable replay backend; see "Replay backend
+`driver-replay` is now done too, completing Phase 4: `ReplayDriver`
+(`crates/bhtune-driver/src/replay.rs`) feeds a recorded `(time, pv)` trace through the real
+`Driver` trait — a validation-only construct, deliberately not wired into
+`bhtune tune --driver` (there is no CLI-selectable replay driver; see "Replay driver
 reference" below), proving the trait abstraction itself introduces no bugs on top of the
 already-proven-correct `MrftEngine`. `from_fixture_json` parses the same golden-fixture JSON
 `core-replay-harness` consumes, tolerating every field it doesn't need via serde's
 default unknown-field-ignoring behavior rather than duplicating that fixture schema in this
 crate. Its end-to-end test replays the real `tests/golden/fixtures/flow_pi_direct.json`
-trace through a genuine `MrftEngine` via the `Backend` trait and reaches the same
+trace through a genuine `MrftEngine` via the `Driver` trait and reaches the same
 aggressive-response PB≈157.7088 result `core-replay-harness` already validates at the
-pure-engine level — see "Replay backend reference (`backend-replay`)" below for the full
+pure-engine level — see "Replay driver reference (`driver-replay`)" below for the full
 design, including why its `TagValue.timestamp` is the one deliberate, narrow exception to
-the rule that a backend's timestamp must never become the tuning engine's own tick time.
+the rule that a driver's timestamp must never become the tuning engine's own tick time.
 Phase 9's two front-loaded,
 run-now items are also done: `docs-contract` (see
 "Documentation contract" above) and `docs-copilot-hook` — a paired `sessionStart`/`sessionEnd`
@@ -408,23 +408,23 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
 - **Zero Windows/COM dependency in this application.** All OPC DA communication is delegated to
   the sibling project [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) over the
   network. bhtune itself builds and runs on Linux, macOS, and Windows identically.
-- **The OPC DA client is a crates.io dependency, local to `bhtune-backend` only.** The
-  `OpcDaBackend` implementation consumes the published `opcda-bridge` library with
-  `opcda-bridge = "0.2"` pinned directly in `crates/bhtune-backend/Cargo.toml` — not promoted
-  to `[workspace.dependencies]`, since `bhtune-backend` is the only crate that talks to the
-  bridge directly (everything else goes through the `Backend` trait), matching this project's
+- **The OPC DA client is a crates.io dependency, local to `bhtune-driver` only.** The
+  `OpcDaDriver` implementation consumes the published `opcda-bridge` library with
+  `opcda-bridge = "0.2"` pinned directly in `crates/bhtune-driver/Cargo.toml` — not promoted
+  to `[workspace.dependencies]`, since `bhtune-driver` is the only crate that talks to the
+  bridge directly (everything else goes through the `Driver` trait), matching this project's
   single-consumer-stays-local dependency convention. It must not use a Git dependency or a
   local path checkout. The Windows-side `opcda-bridge-gateway` remains a separate process.
-- **`Backend` trait is the extensibility seam, and deliberately has zero `bhtune-core`
-  dependency.** A single async trait in `bhtune-backend` abstracts all tag I/O so the tuning
+- **`Driver` trait is the extensibility seam, and deliberately has zero `bhtune-core`
+  dependency.** A single async trait in `bhtune-driver` abstracts all tag I/O so the tuning
   engine never knows what it's talking to:
 
   ```rust
   #[async_trait]
-  pub trait Backend: Send + Sync {
-      async fn read(&self, tags: &[TagId]) -> BackendResult<Vec<TagValue>>;
-      async fn write(&self, tag: &TagId, value: TagWrite) -> BackendResult<WriteOutcome>;
-      async fn browse(&self, path: &str) -> BackendResult<Vec<TagNode>>;
+  pub trait Driver: Send + Sync {
+      async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>>;
+      async fn write(&self, tag: &TagId, value: TagWrite) -> DriverResult<WriteOutcome>;
+      async fn browse(&self, path: &str) -> DriverResult<Vec<TagNode>>;
   }
   ```
 
@@ -434,23 +434,23 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   interprets directly), so parsing is the caller's job, not this trait's. `TagWrite` is
   `Float(f32) | Raw(String)` — bhtune only ever writes numeric process values or a raw mode
   code (reverting Auto/Manual after a test). `write` returns `Ok(WriteOutcome { success,
-error_message })` even when the backend _rejects_ the write (read-only tag, out of range) —
-  that's a normal outcome of the call reaching the backend, not a `BackendError`; the shape
+error_message })` even when the driver _rejects_ the write (read-only tag, out of range) —
+  that's a normal outcome of the call reaching the driver, not a `DriverError`; the shape
   matches `bhtune_db::models::TuneWriteRow`'s columns exactly so a caller can copy it straight
-  into an audit row with no translation. `BackendError` splits `Connect` (nothing was
-  attempted) from `Operation` (reached the backend, failed there) from `Unsupported` (this
-  backend has no such capability, e.g. `browse` on the simulator/replay backends) so callers
+  into an audit row with no translation. `DriverError` splits `Connect` (nothing was
+  attempted) from `Operation` (reached the driver, failed there) from `Unsupported` (this
+  driver has no such capability, e.g. `browse` on the simulator/replay drivers) so callers
   like the `cli-safety` guardrails can react differently to each. The trait never
   references a `bhtune-core` type: reading/writing named string tags has no domain meaning by
-  itself — gluing `Backend` to `LoopTags`/`ControllerDirection`/etc. is each concrete
-  backend's own job (`backend-opcda`, `backend-simulator`), not this trait's.
+  itself — gluing `Driver` to `LoopTags`/`ControllerDirection`/etc. is each concrete
+  driver's own job (`driver-opcda`, `driver-simulator`), not this trait's.
 
-  `OpcDaBackend` (via `opcda-bridge`) is the primary/only driver for v1, now implemented (see
-  `backend-opcda` below). `OpcUaBackend` and `ModbusBackend` are roadmap items that must slot in
-  without touching `bhtune-core`. Connecting/constructing a specific backend is deliberately
+  `OpcDaDriver` (via `opcda-bridge`) is the primary/only driver for v1, now implemented (see
+  `driver-opcda` below). `OpcUaDriver` and `ModbusDriver` are roadmap items that must slot in
+  without touching `bhtune-core`. Connecting/constructing a specific driver is deliberately
   _not_ part of the trait — each implementation's own inherent constructor takes whatever it
   individually needs (gateway host/port + OPC DA server name, a trace file path, simulator
-  parameters), since one uniform `connect()` signature across such different backends would
+  parameters), since one uniform `connect()` signature across such different drivers would
   leak one implementation's parameters into the trait every other implementation would have to
   ignore.
 
@@ -529,7 +529,7 @@ openapi.rs`'s `ApiDoc` (`#[derive(utoipa::OpenApi)]`) aggregates all of it into 
 openapi.json`) — the first use of this pattern in the repo, later reused by
   `docs-generated-cli` for the CLI reference/man pages/completions/config schema. There is
   exactly one transport — `fetch` over HTTP — so no `ApiClient`-style interface with swappable
-  backends is warranted; adding one would be pure ceremony with a single implementation.
+  drivers is warranted; adding one would be pure ceremony with a single implementation.
   Generating the TypeScript client itself (`openapi-typescript`) landed with `frontend-shell`
   once a `frontend/` package/`pnpm-workspace.yaml` existed for the generated client to live
   in — `openapi-contract`'s own scope stayed the Rust-side contract (annotations, aggregation,
@@ -576,7 +576,7 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
   edited as one comma-separated text field, split/trimmed/filtered to `string[]` on submit,
   since it's typically 0-3 short tokens like `"R5, R6"`). There is deliberately no Template
   edit screen, since `bhtune-server` has no update endpoint yet. The History screens
-  (`routes/history/`) are List (filterable by process type/outcome/backend, paginated via
+  (`routes/history/`) are List (filterable by process type/outcome/driver, paginated via
   `limit`/`offset`) and Detail (config/initial-readings/calculated-results/write-back-audit
   tables) — deliberately no trend chart yet, which is `history-explorer-ui`'s job in Phase
   10, not this slice's. `frontend/src/api/runs.ts` (`useRuns`/`useRun`) mirrors the existing
@@ -631,18 +631,18 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
      `validationMessage` non-empty) even though the values are perfectly correct. Fixed
      by using `step={1}` for both; a numeric field's default should never itself be
      off-step.
-  2. **The simulator backend actually requires five fields, not one.**
+  2. **The simulator driver actually requires five fields, not one.**
      `bhtune-cli`'s `build_loop_tags` (`commands/tune.rs`) hard-requires
      `pv_range_high`, `pv_range_low`, `mv_range_high`, `mv_range_low`, **and**
-     `direction` whenever `backend: "simulator"` — the frontend had only validated and
+     `direction` whenever `driver: "simulator"` — the frontend had only validated and
      defaulted `pv_range_high`, so a first-time visitor's default simulator run 400'd
      immediately on submit (only caught by actually clicking "Start tune" in a browser,
      not by reading the DTO's field list). Fixed by defaulting all five to exactly
      `bhtune simulate`'s own CLI-convenience values (`100`/`0`/`100`/`0`/`"reverse"`,
      read from `SimulateArgs::into_tune_args` in `bhtune-cli/src/args.rs`), extending
      `buildRequest()`'s validation to cover all five with the server's exact wording, and
-     adding a `setBackend` handler that back-fills these onto switching to the simulator
-     backend without ever overwriting a value the user already set.
+     adding a `setDriver` handler that back-fills these onto switching to the simulator
+     driver without ever overwriting a value the user already set.
 
 - **`frontend-screens`'s third slice — the Template Edit screen — is done, unblocked by
   `server-template-update-api`.** `routes/templates/TemplateEditPage.tsx` loads the
@@ -677,7 +677,7 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
   slice, from the original `frontend-screens` commit, and harmless — noted here as a minor
   future cleanup opportunity, not fixed as part of this slice).
 - **`frontend-live-stream` is done: SSE supersedes the interim polling banner with a real
-  live-updating trend chart.** Backend: `TuneSampleRow::list_for_run_since(pool, run_id,
+  live-updating trend chart.** Driver: `TuneSampleRow::list_for_run_since(pool, run_id,
 after_tick)` (`bhtune-db`) is a new query — `tick > after_tick`, with `-1` as the
   documented "everything" sentinel since `tick >= 0` always — polled by a new
   `GET /api/runs/{id}/stream` handler (`crates/bhtune-server/src/routes/stream.rs`) inside
@@ -880,13 +880,13 @@ IN (...))` constraint using the exact same literals, so an invalid value can nev
   querying.** `TuneRunRow` gained `start`/`record_initial_readings`/`complete`/`fail`/`abort`
   alongside `get`/`list`/`count` — a repository that could only read the rows it has no way to
   write would be an awkward half-feature, and building it now (rather than waiting on
-  `backend-opcda`'s future orchestration glue or `cli-commands`) matches the same "do the DB
+  `driver-opcda`'s future orchestration glue or `cli-commands`) matches the same "do the DB
   layer ahead of time" reasoning that drove `db-schema` itself. `LoopRow` deliberately still has
   no CRUD methods yet — loop management is a separate concern from run history and stays
   deferred to whichever future todo actually needs it.
 - **Dynamic run filtering uses `sqlx::QueryBuilder`, the only non-fixed SQL in `bhtune-db`.**
   `TuneRunFilter`'s seven fields (`loop_id`, `process_type`, `controller_type`, `outcome`,
-  `backend`, `started_after`, `started_before`) are all optional, and the active `WHERE`
+  `driver`, `started_after`, `started_before`) are all optional, and the active `WHERE`
   conditions vary per call — a plain `query!`/`query` string can't express that. The shared
   `push_filter` helper always starts with `builder.push(" WHERE 1=1")` and then unconditionally
   `AND`-appends each present filter, rather than tracking a `has_condition` flag to decide
@@ -897,7 +897,7 @@ IN (...))` constraint using the exact same literals, so an invalid value can nev
 - **Write-back readback values are a new `bhtune-db`-local `WriteReadback` type, not
   `bhtune_core::tuning_math::OpcWriteValues` reused a second time.** `OpcWriteValues` is
   documented as "the literal values to write" — a calculated, intended value, and it already
-  supplies `TuneWriteRow`'s `response_level`. What a backend reads back is a different kind
+  supplies `TuneWriteRow`'s `response_level`. What a driver reads back is a different kind
   of fact (a raw, unlabelled observation, not a calculation) with no natural home in
   `bhtune-core`, so both the _pre-write_ readback (`TuneWriteRow.previous`) and the
   _post-write_ confirmation readbacks reuse `WriteReadback { proportional, integral,
@@ -912,17 +912,17 @@ derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
   earlier `insert_success`/`insert_failure` two-function split once partial writes and
   rollback outcomes needed representing — two constructors can't express "wrote P, failed on
   I, rolled P back successfully" without one of them degenerating into the other's superset.
-- **`OpcDaBackend` serializes access to one `opcda_bridge::Client` behind a `tokio::sync::Mutex`,
-  never `std::sync::Mutex`.** The bridge client's methods take `&mut self`, but `Backend`'s
-  methods take `&self` (required for `Arc<dyn Backend>` sharing), so the mutex guard is held
+- **`OpcDaDriver` serializes access to one `opcda_bridge::Client` behind a `tokio::sync::Mutex`,
+  never `std::sync::Mutex`.** The bridge client's methods take `&mut self`, but `Driver`'s
+  methods take `&self` (required for `Arc<dyn Driver>` sharing), so the mutex guard is held
   across `.await` points — only `tokio::sync::Mutex`'s guard is `Send`, which `#[async_trait]`'s
   generated futures require by default. A single tuning session only ever has one read/write/
   browse in flight anyway, so serializing is not a real bottleneck.
-- **`SimulatorBackend` uses `std::sync::Mutex`, not `tokio::sync::Mutex` like `OpcDaBackend`.**
+- **`SimulatorDriver` uses `std::sync::Mutex`, not `tokio::sync::Mutex` like `OpcDaDriver`.**
   Its `read`/`write` bodies contain no `.await` points at all — they're `async fn` only because
-  the `Backend` trait requires it — so nothing ever holds the guard across a suspension point,
+  the `Driver` trait requires it — so nothing ever holds the guard across a suspension point,
   making the simpler std mutex both sufficient and correct. This is a genuine difference from
-  `OpcDaBackend`, not an inconsistency: the tokio mutex there is load-bearing because its guard
+  `OpcDaDriver`, not an inconsistency: the tokio mutex there is load-bearing because its guard
   really is held across `.await`.
 - **The FOPDT process model uses an exact closed-form discretization, not a ported ODE solver.**
   For the first-order lag `tau*dy/dt = -(y-y0) + Kp*(u-u0)` driven by a zero-order-hold input over
@@ -934,18 +934,18 @@ exp(-dt/tau)`) is the exact analytical solution, not an approximation — verifi
   Dead time is a `VecDeque<f32>` delay line seeded with `ceil(dead_time_s / tick_interval_s)`
   copies of the initial MV, push-then-pop each tick.
 - **`VirtualPid` (the standalone PID controller used to closed-loop-validate the simulator) is
-  deliberately not wired into `SimulatorBackend`/`Backend`.** `SimulatorBackend` exists so a real
-  `MrftEngine` can drive a synthetic process through the actual `Backend` trait; `VirtualPid` is a
+  deliberately not wired into `SimulatorDriver`/`Driver`.** `SimulatorDriver` exists so a real
+  `MrftEngine` can drive a synthetic process through the actual `Driver` trait; `VirtualPid` is a
   separate demo/validation utility proving the FOPDT model behaves like a real control loop under
   simple feedback (proportional-only exact-formula check, anti-windup, no derivative kick,
   full closed-loop convergence — the convergence gains were numerically pre-verified against a
   disposable Python script before being hardcoded, the same discipline used for `core-mrft`/
-  `core-tuning-math`'s expected values). Wiring it into `Backend` would give `Backend` two
+  `core-tuning-math`'s expected values). Wiring it into `Driver` would give `Driver` two
   unrelated jobs (being a `MrftEngine`'s tag I/O source, and running its own independent
   controller) for no real benefit.
 - **`rand` 0.10 is configured `default-features = false, features = ["std", "std_rng"]`, and
   `StdRng` is seeded explicitly rather than using a thread-local RNG.** Every RNG in
-  `bhtune-backend` is constructed via `StdRng::seed_from_u64`, so `thread_rng`/OS-entropy features
+  `bhtune-driver` is constructed via `StdRng::seed_from_u64`, so `thread_rng`/OS-entropy features
   are never used and stay disabled. `StdRng` was chosen over `SmallRng` specifically because
   `SmallRng`'s own documentation states its algorithm depends on the target's pointer size — a
   real cross-platform reproducibility risk for a Windows/macOS/Linux project — whereas `StdRng`'s
@@ -953,7 +953,7 @@ exp(-dt/tau)`) is the exact analytical solution, not an approximation — verifi
   runs on `ubuntu-latest` (see `.github/workflows/checks.yml`/`coverage.yml`). No test hardcodes
   an exact noise value for this reason; tests only assert bounds and same-seed/different-seed
   equality/inequality, so a future `rand` upgrade changing `StdRng`'s internals can't break them.
-- **`OpcDaBackend` always reports `TagValue::timestamp` as `None`, never a guessed value.**
+- **`OpcDaDriver` always reports `TagValue::timestamp` as `None`, never a guessed value.**
   `opc-da-client`'s documented contract (the Windows-only library the gateway wraps) reports
   each tag's last-change time as a _local_, offset-less `"YYYY-MM-DD HH:MM:SS"` string (or
   `"N/A"`/`"Invalid"` for tags with none) — there is no reliable way to convert that into a
@@ -970,7 +970,7 @@ exp(-dt/tau)`) is the exact analytical solution, not an approximation — verifi
   compile with `opcda-bridge` present in the workspace. The field is diagnostic only (e.g.
   detecting a frozen tag whose timestamp stops advancing); it is never the tick time the
   tuning engine itself runs on, which always comes from the caller's own polling clock.
-- **`OpcDaBackend`'s error-mapping and quality/write/browse translation is split into small,
+- **`OpcDaDriver`'s error-mapping and quality/write/browse translation is split into small,
   pure, synchronous functions** (`quality_from_raw`, `tag_value_from_raw`,
   `opc_value_from_write`, `write_outcome_from_result`, `tag_node_from_browse`,
   `map_bridge_error`), fully unit-tested with no I/O, separate from the thin async shell that
@@ -1009,22 +1009,22 @@ exp(-dt/tau)`) is the exact analytical solution, not an approximation — verifi
   backup predates are re-applied going forward — restoring an old backup transparently upgrades
   its schema, the same as opening an old database file normally would.
 
-## OPC DA integration reference (`backend-opcda`)
+## OPC DA integration reference (`driver-opcda`)
 
-`backend-opcda` is implemented: `OpcDaBackend` in `crates/bhtune-backend/src/opcda.rs`
+`driver-opcda` is implemented: `OpcDaDriver` in `crates/bhtune-driver/src/opcda.rs`
 consumes the published `opcda-bridge` facade crate from crates.io, pinned directly in
-`crates/bhtune-backend/Cargo.toml` (not `[workspace.dependencies]` — see "Key architectural
+`crates/bhtune-driver/Cargo.toml` (not `[workspace.dependencies]` — see "Key architectural
 decisions" above). It does not use a Git dependency, a local path dependency, or the CLI
 crate `opcda-bridge-client`:
 
 ```toml
-# crates/bhtune-backend/Cargo.toml
+# crates/bhtune-driver/Cargo.toml
 [dependencies]
 opcda-bridge = "0.2"
 ```
 
 The facade intentionally hides generated gRPC details and exposes the typed API
-`OpcDaBackend` wraps:
+`OpcDaDriver` wraps:
 
 ```rust
 use opcda_bridge::{Client, Value};
@@ -1046,34 +1046,34 @@ let result = client
     .await?;
 ```
 
-Integration rules, as implemented in `OpcDaBackend`:
+Integration rules, as implemented in `OpcDaDriver`:
 
-- `OpcDaBackend::connect(host, server)` passes `host:port` straight to `Client::connect`, which
+- `OpcDaDriver::connect(host, server)` passes `host:port` straight to `Client::connect`, which
   adds the plaintext `http://` scheme itself. The default gateway port is
   `opcda_bridge::DEFAULT_BRIDGE_PORT` (`7600`). `server` (the OPC DA ProgID) is stored alongside
-  the client and passed to every subsequent call — `Backend`'s own trait methods don't take a
-  server parameter, since that's OPC DA-specific plumbing, not something every backend has.
+  the client and passed to every subsequent call — `Driver`'s own trait methods don't take a
+  server parameter, since that's OPC DA-specific plumbing, not something every driver has.
 - One `Client` is held (behind a `tokio::sync::Mutex`, see "Key architectural decisions" above)
   and reused across every call; its methods require `&mut self` and the underlying channel is
   designed to be reused rather than reconnected per call.
 - `read` returns `TagValue` fields as strings (`value`, `quality`, and `timestamp`).
-  `OpcDaBackend` maps `quality` via an exact `"Good"`/`"Uncertain"` string match (anything else,
+  `OpcDaDriver` maps `quality` via an exact `"Good"`/`"Uncertain"` string match (anything else,
   including `opc-da-client`'s synthesized `"Unknown(0xNNNN)"`, becomes `Quality::Bad` — never
   silently trusted) and leaves `timestamp` as `None` always (see "Key architectural decisions"
-  above for why). `value` itself is passed through unparsed, per the `Backend` trait's own
+  above for why). `value` itself is passed through unparsed, per the `Driver` trait's own
   contract — parsing into `f32` and surfacing a parse failure as a real error is each specific
-  caller's job, not this backend's.
-- `write` accepts `Value::{String, Int, Float, Bool}`; `OpcDaBackend` only ever sends
+  caller's job, not this driver's.
+- `write` accepts `Value::{String, Int, Float, Bool}`; `OpcDaDriver` only ever sends
   `Value::Float` (via `f64::from(value)` for a `TagWrite::Float`) or `Value::String` (for a
   `TagWrite::Raw`, e.g. a mode-revert write) — never `Int`/`Bool`, since bhtune has no tags of
   those kinds. `WriteResult.success == false` maps to `Ok(WriteOutcome::failure(..))`, not an
   `Err` — a gateway-level rejected write (read-only tag, out of range) is a normal RPC result,
   never an RPC error.
 - `opcda_bridge::Error` is boxed and wrapped, preserving its source, via one exhaustive
-  `map_bridge_error` function: `Error::Connect` becomes `BackendError::Connect`, `Error::Rpc`
-  becomes `BackendError::Operation`. Exhaustive (no wildcard arm) so a future new variant in
+  `map_bridge_error` function: `Error::Connect` becomes `DriverError::Connect`, `Error::Rpc`
+  becomes `DriverError::Operation`. Exhaustive (no wildcard arm) so a future new variant in
   `opcda_bridge::Error` fails this crate's build rather than silently falling into one bucket.
-- `browse` hardcodes `flat: false` (one level, matching `Backend::browse`'s own contract) and a
+- `browse` hardcodes `flat: false` (one level, matching `Driver::browse`'s own contract) and a
   `max_tags` of `1000`, matching `opcda-bridge-client`'s own CLI default
   (`DEFAULT_MAX_TAGS` in that crate's `config.rs`) for consistency with the reference CLI.
   `BrowseNode.node_type` is mapped via an exact `"Branch"` string match (the gateway's own
@@ -1095,11 +1095,11 @@ only needs the unary calls, while subscription-driven Step Test remains deferred
 exposes a live push/subscription RPC (a different kind of stream than `Browse`'s bounded one-shot
 listing).
 
-## Simulator backend reference (`backend-simulator`)
+## Simulator driver reference (`driver-simulator`)
 
-`backend-simulator` is implemented in `crates/bhtune-backend/src/simulator.rs`: an in-process
+`driver-simulator` is implemented in `crates/bhtune-driver/src/simulator.rs`: an in-process
 FOPDT (first-order-plus-dead-time) process model plus a standalone virtual PID controller, served
-through the real `Backend` trait as `SimulatorBackend`. No external process, no Windows, no
+through the real `Driver` trait as `SimulatorDriver`. No external process, no Windows, no
 network I/O — every tick advances an internal virtual clock rather than sleeping on the wall
 clock, which is what makes it usable for fast CI E2E runs.
 
@@ -1111,16 +1111,16 @@ clock, which is what makes it usable for fast CI E2E runs.
 - **`VirtualPidConfig`/`VirtualPid`** — a standalone position-form PID controller (`Kc`, `Ti`,
   `Td`), derivative-on-measurement (matching the legacy Python reference, avoids derivative kick
   on a setpoint step), with anti-reset-windup (an integral increment is only committed if the
-  resulting output didn't need clamping). Not wired into `SimulatorBackend`/`Backend` — see "Key
+  resulting output didn't need clamping). Not wired into `SimulatorDriver`/`Driver` — see "Key
   architectural decisions" above for why it's kept as a separate demo/validation utility.
-- **`SimulatorBackend`** — the `Backend` impl. Constructed with a PV tag name, an MV tag name, a
+- **`SimulatorDriver`** — the `Driver` impl. Constructed with a PV tag name, an MV tag name, a
   `FopdtConfig`, initial PV/MV, and an RNG seed; wraps one `FopdtProcess` behind a
   `std::sync::Mutex` (see "Key architectural decisions" above for why not `tokio::sync::Mutex`).
   Reading the configured PV tag calls `FopdtProcess::step` (advances the simulated clock one
   tick); reading the MV tag returns `mv()` without advancing. Writing the MV tag accepts either a
   `TagWrite::Float` or a `TagWrite::Raw` that parses as `f32`; a non-numeric raw write is a
-  rejected `WriteOutcome`, not a `BackendError`. Any other tag name is `BackendError::
-InvalidTagValue` on both read and write. `browse` is always `BackendError::Unsupported` — a
+  rejected `WriteOutcome`, not a `DriverError`. Any other tag name is `DriverError::
+InvalidTagValue` on both read and write. `browse` is always `DriverError::Unsupported` — a
   synthetic two-tag process has no real tag tree to browse.
 
 The FOPDT physics were ported from the legacy `Model` repo's `ProcessModelOPC.py` (the script the
@@ -1128,76 +1128,76 @@ legacy C# app's hidden `OPCClass.Python` debug branch actually shells out to), n
 from a textbook formula — see "Key architectural decisions" above for the closed-form
 discretization and its numerical cross-check against that reference.
 
-## Replay backend reference (`backend-replay`)
+## Replay driver reference (`driver-replay`)
 
-`backend-replay` is implemented in `crates/bhtune-backend/src/replay.rs`: `ReplayBackend` feeds a
-recorded `(time, pv)` trace through the real `Backend` trait. Unlike `backend-opcda`/
-`backend-simulator`, it is **not a live backend and has no CLI-selectable backend kind** —
-`bhtune-cli`'s `BackendKindArg` enum deliberately has no `Replay` variant, and
-`TryFrom<bhtune_db::models::TuneBackend>` errors for `TuneBackend::Replay` on purpose. Its entire
-purpose is validation: proving the `Backend` trait abstraction itself introduces no bugs on top
+`driver-replay` is implemented in `crates/bhtune-driver/src/replay.rs`: `ReplayDriver` feeds a
+recorded `(time, pv)` trace through the real `Driver` trait. Unlike `driver-opcda`/
+`driver-simulator`, it is **not a live driver and has no CLI-selectable driver kind** —
+`bhtune-cli`'s `DriverKindArg` enum deliberately has no `Replay` variant, and
+`TryFrom<bhtune_db::models::TuneDriver>` errors for `TuneDriver::Replay` on purpose. Its entire
+purpose is validation: proving the `Driver` trait abstraction itself introduces no bugs on top
 of the already-proven-correct `MrftEngine`, by replaying a trace through the real trait rather
 than calling the engine directly (which is what `core-replay-harness` already does, at the
 pure-engine level).
 
-- **`ReplaySample { time, pv }`** — the minimal per-tick data the backend needs. Deliberately not
+- **`ReplaySample { time, pv }`** — the minimal per-tick data the driver needs. Deliberately not
   `bhtune-core`'s `Tick`, and not the full golden-fixture schema — keeps this crate's production
-  code free of a `bhtune-core` dependency, matching `backend-trait`/`backend-opcda`/
-  `backend-simulator`.
+  code free of a `bhtune-core` dependency, matching `driver-trait`/`driver-opcda`/
+  `driver-simulator`.
 - **`RecordedWrite { tag, value }`** — every MV write observed, in call order, exposed via
-  `ReplayBackend::writes()` so a validation test can inspect what the engine actually wrote
-  without needing its own mock/spy backend.
-- **`ReplayBackend`** — constructed either directly from a `Vec<ReplaySample>` (`new`, for
+  `ReplayDriver::writes()` so a validation test can inspect what the engine actually wrote
+  without needing its own mock/spy driver.
+- **`ReplayDriver`** — constructed either directly from a `Vec<ReplaySample>` (`new`, for
   synthetic tests) or by parsing a real golden-fixture JSON file (`from_fixture_json`, for the
   E2E test below). Reading the configured PV tag returns the next unconsumed sample and advances
   an internal cursor, with `timestamp: Some(sample.time)` — see the timestamp exception below.
   Reading the MV tag returns the last-written value (`timestamp: None`) without advancing the PV
-  cursor. Writing the MV tag mirrors `SimulatorBackend`'s numeric-parse/rejection convention
-  (a non-numeric raw write is a rejected `WriteOutcome`, not a `BackendError`) and records every
-  accepted write. Any other tag name is `BackendError::InvalidTagValue` on both read and write.
-  `browse` is always `BackendError::Unsupported`, same rationale as the simulator. Reading a PV
-  past the last recorded sample is `BackendError::Operation`, boxing a small `ReplayTraceExhausted
+  cursor. Writing the MV tag mirrors `SimulatorDriver`'s numeric-parse/rejection convention
+  (a non-numeric raw write is a rejected `WriteOutcome`, not a `DriverError`) and records every
+  accepted write. Any other tag name is `DriverError::InvalidTagValue` on both read and write.
+  `browse` is always `DriverError::Unsupported`, same rationale as the simulator. Reading a PV
+  past the last recorded sample is `DriverError::Operation`, boxing a small `ReplayTraceExhausted
 { recorded, attempted }` — a genuine "this trace doesn't cover what was asked of it" condition,
   not a panic.
 - **`from_fixture_json`** — parses the same golden-fixture JSON `core-replay-harness` consumes,
   via a private, deliberately minimal `FixtureFile { ticks: Vec<FixtureTick { time, pv }> }`
   `serde::Deserialize` subset. Serde's default unknown-field-ignoring behavior (no
-  `#[serde(deny_unknown_fields)]`) silently skips every field this backend doesn't need —
+  `#[serde(deny_unknown_fields)]`) silently skips every field this driver doesn't need —
   `config`, `direction`, `initial`, `pv_range`, `template_name`, per-tick `expected`,
   `expected_final` — so the full fixture schema is never duplicated in this crate. A malformed
-  document or a missing `ticks` field is `BackendError::Operation`, boxing the underlying
+  document or a missing `ticks` field is `DriverError::Operation`, boxing the underlying
   `serde_json::Error`.
 
-**The `TagValue.timestamp` exception.** `types.rs`'s doc comment states a live backend's
+**The `TagValue.timestamp` exception.** `types.rs`'s doc comment states a live driver's
 timestamp must never become "the tick time the tuning engine itself runs on" — true and
-load-bearing for `OpcDaBackend`/`SimulatorBackend`, whose timestamps are absent/untrustworthy by
-construction. `ReplayBackend` is not a live backend: replaying exact historical `(time, pv)`
+load-bearing for `OpcDaDriver`/`SimulatorDriver`, whose timestamps are absent/untrustworthy by
+construction. `ReplayDriver` is not a live driver: replaying exact historical `(time, pv)`
 pairs _is_ its entire purpose, so its E2E test legitimately reads `TagValue.timestamp` to
 reconstruct each `Tick.time` rather than maintaining a second, separately-synchronized time
 source. This is a deliberate, narrow exception to the general rule, not a violation of it.
 
 **End-to-end validation.** The crate's test suite drives a real `MrftEngine` through
-`ReplayBackend` fed from the actual `tests/golden/fixtures/flow_pi_direct.json` file (the same
+`ReplayDriver` fed from the actual `tests/golden/fixtures/flow_pi_direct.json` file (the same
 fixture `core-replay-harness` uses) and asserts it reaches the same final aggressive-response
 proportional band (`pid.proportional` ≈ 157.7088) `core-replay-harness` already validates at the
-pure-engine level — proof that going through the real `Backend` trait, rather than calling
+pure-engine level — proof that going through the real `Driver` trait, rather than calling
 `MrftEngine::step` directly, changes nothing. The golden trace has trailing padding ticks after
 MRFT completion (`core-replay-harness`'s own documented behavior: `MrftEngine::step` is a no-op
 once `Action::Complete` is returned, and the legacy app kept polling/logging during its
 `MrftDelayTimerStart`/`MrftDelayComplete` shutdown sequence), so the test asserts
-`backend.remaining() < total_samples` after the loop rather than full consumption — proving real
+`driver.remaining() < total_samples` after the loop rather than full consumption — proving real
 consumption happened without wrongly demanding the entire trace be drained.
 
 ## CLI reference (`cli-commands`)
 
 `bhtune-cli` (binary name `bhtune`) is a thin `clap`-derive orchestration layer over
-`bhtune-core`/`bhtune-db`/`bhtune-backend` — every subcommand opens the same SQLite database
+`bhtune-core`/`bhtune-db`/`bhtune-driver` — every subcommand opens the same SQLite database
 (`crate::db::open`, which also seeds the four built-in templates) and shares one dispatcher in
 `lib.rs::run_with_cli`.
 
 - **`bhtune tune`** — runs a full MRFT test against a named template: resolves the template,
-  derives the tag set (`build_loop_tags`, in `commands/tune.rs`), selects a backend
-  (`crate::backend::build`, `--backend opcda|simulator`), transitions the loop to Manual, polls
+  derives the tag set (`build_loop_tags`, in `commands/tune.rs`), selects a driver
+  (`crate::driver::build`, `--driver opcda|simulator`), transitions the loop to Manual, polls
   at `--poll-interval-ms` driving a real `MrftEngine`, persists every tick
   (`TuneSampleRow::insert`) and the final per-response-level results
   (`TuneResultRow::insert`), restores the loop's original mode, and optionally writes back one
@@ -1209,7 +1209,7 @@ consumption happened without wrongly demanding the entire trace be drained.
   `--timeout-secs`/`Failed` on any setup or mid-poll error) is always recorded in `tune_runs`
   before the process returns, even on failure.
 - **`bhtune simulate`** — a zero-configuration wrapper around `tune` that forces
-  `--backend simulator` against a synthetic FOPDT process (`SIMULATOR_PV_TAG`/
+  `--driver simulator` against a synthetic FOPDT process (`SIMULATOR_PV_TAG`/
   `SIMULATOR_MV_TAG`), for a demo/smoke-test run with no real DCS/PLC needed.
   `SimulateArgs::into_tune_args` converts to the same `TuneArgs` `tune` uses, so the two share
   every code path below template resolution.
@@ -1247,16 +1247,16 @@ Unattended-run safety guardrails (`--timeout-secs`/`LoopConfig::validate`) shipp
 separately as `cli-safety` — see "Safety" below. Platform-standard config file/data-directory
 precedence shipped separately as `cli-config` — see "Config precedence" below.
 
-**Testing approach.** `commands/tune.rs`'s tests use a `MockBackend` (an in-memory
-`Backend` impl with canned/erroring responses) for setup-and-validation-error paths, a real
-`SimulatorBackend` for full happy-path runs (including the `--mrft-delay` padding test, which
+**Testing approach.** `commands/tune.rs`'s tests use a `MockDriver` (an in-memory
+`Driver` impl with canned/erroring responses) for setup-and-validation-error paths, a real
+`SimulatorDriver` for full happy-path runs (including the `--mrft-delay` padding test, which
 necessarily costs a couple of real wall-clock seconds — `chrono::Utc::now()`, which
 `pre_delay_end`/`post_delay_end` are computed from, is unaffected by tokio's pausable test
 clock), and a shared test-only mock gRPC `Bridge` service (`crate::test_support`, used by
-`backend.rs`, `tune.rs`, and `commands/opc.rs`) to prove the OPC DA path — connect, initial
+`driver.rs`, `tune.rs`, and `commands/opc.rs`) to prove the OPC DA path — connect, initial
 reads, a mid-poll failure, and the `opc` passthrough commands — actually works end-to-end
 without a real gateway or OPC DA server. A single canned mock read response satisfies every
-setup read regardless of which tag was requested (see `OpcDaBackend::read`'s positional, not
+setup read regardless of which tag was requested (see `OpcDaDriver::read`'s positional, not
 tag-matched, mapping), which is what makes it possible to calibrate exactly which call number
 a mock failure should start on. `test_support::MockBridgeService` supports configurable
 streaming `browse` responses (a spawned per-request forwarder over an `mpsc` channel, mirroring
@@ -1317,7 +1317,7 @@ Auto-discovered config file location (first one found wins):
 | --------------------- | ------------------ | ----------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Database path         | `--db`             | `BHTUNE_DB`             | `db`             | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (falls back to `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db`                                                         |
 | opcda-bridge gateway  | `--bridge-host`    | `BHTUNE_BRIDGE_HOST`    | `bridge_host`    | `localhost:7600`                                                                                                                                                                                    |
-| Default OPC DA server | `--server`         | —                       | `server`         | none — must be set one way or another for `tune --backend opcda` and the `opc` subcommands                                                                                                          |
+| Default OPC DA server | `--server`         | —                       | `server`         | none — must be set one way or another for `tune --driver opcda` and the `opc` subcommands                                                                                                           |
 | User template catalog | `--templates`      | `BHTUNE_TEMPLATES`      | `templates`      | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (falls back to `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error at this tier only |
 | History retention     | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days` | none — retain forever (see "Status" above for the retention sweep design)                                                                                                                           |
 
@@ -1327,7 +1327,7 @@ CLI value already (via clap's `env` attribute on `Cli::db`/`TuneArgs::bridge_hos
 function itself only has two tiers left to arbitrate: the (already env-merged) CLI value
 versus the config file. `resolve_server` errors if
 neither the CLI nor the config file supplies a value — there's no sensible default OPC
-server to fall back to — and is applied only for the `Opcda` backend inside
+server to fall back to — and is applied only for the `Opcda` driver inside
 `commands::tune::run` (never for `simulate`, which has no OPC server concept at all; a
 config-file `server` key is simply not consulted for a simulator run rather than causing an
 unrelated error).
@@ -1360,7 +1360,7 @@ support machine-readable output for the same callers:
 - **`--write-pid <aggressive|moderate|sluggish>`** — writes that response level's calculated
   PID constants back to the DCS without the interactive stdin confirmation prompt
   `maybe_write_back` otherwise uses. Requires `--yes`; `run()` rejects the combination with a
-  hard `Err` as its very first statement, before any backend connection or database write —
+  hard `Err` as its very first statement, before any driver connection or database write —
   an unattended write-back must be an explicit, deliberate choice, not a stray flag. If the
   named response level has no recorded calculated result (defensive; not reachable through
   normal CLI validation), the write-back is reported as failed rather than attempted, exactly
@@ -1377,10 +1377,10 @@ support machine-readable output for the same callers:
   `InitialReadingsJson`/`ResultJson`/`WriteJson`/`RunDetailJson`/`RevertJson`/
   `RevertedTargetJson`/`PruneJson` in `commands/history.rs`) project the `bhtune-db` row types
   that don't themselves derive `Serialize` (DB row shape stays deliberately decoupled from any
-  API/CLI JSON shape); `bhtune-core` enums and `LoopConfig`/`TuneBackend`/`TuneOutcome` already
+  API/CLI JSON shape); `bhtune-core` enums and `LoopConfig`/`TuneDriver`/`TuneOutcome` already
   derive `Serialize` and are reused directly.
 - **Exit codes** — `lib.rs` defines `EXIT_SUCCESS = 0`, `EXIT_FAILURE = 1` (a setup error:
-  unknown template, invalid flag combination, database/backend connection failure — anything
+  unknown template, invalid flag combination, database/driver connection failure — anything
   `run()` returns as `Err`), `EXIT_ABORTED = 2` (Ctrl+C), `EXIT_WRITE_BACK_FAILED = 3`
   (the test itself completed, but the requested PID write-back failed — rejected write,
   failed confirmation readback, or the defensive missing-result case above), `EXIT_TIMED_OUT
@@ -1401,7 +1401,7 @@ support machine-readable output for the same callers:
   rewrites an already-`Completed` run's DB outcome to look like the whole test failed.
 - **`--write-pid`/`--yes` on `bhtune simulate`** are accepted (for a uniform flag surface with
   `tune`) but always a no-op: the built-in simulator has no PID constant tags configured at
-  all (`build_loop_tags` leaves them all `None` for `BackendKindArg::Simulator`), so write-back
+  all (`build_loop_tags` leaves them all `None` for `DriverKindArg::Simulator`), so write-back
   is unconditionally `WriteBackOutcome::Skipped` regardless of these flags.
 
 **Testing approach.** `tune_outcome_for_run`/`print_summary` are pure/near-pure functions
@@ -1410,7 +1410,7 @@ support machine-readable output for the same callers:
 end-to-end test of `run()` reaching a real `WriteBackOutcome::Written`/`Failed` through the
 actual polling loop is structurally impossible with current test infrastructure: the mock OPC
 DA bridge only ever returns static PV values (can never trigger a real relay switch), and
-`SimulatorBackend` structurally has no PID tags at all (see above) — so
+`SimulatorDriver` structurally has no PID tags at all (see above) — so
 `a_full_simulator_tune_with_write_pid_and_yes_still_skips_write_back` proves the flag
 combination is a harmless no-op against the simulator, while `maybe_write_back`'s own
 non-interactive `--write-pid` branch (including the "requested level has no recorded result"
@@ -1434,7 +1434,7 @@ removes that supervision while still stroking a live valve, so these are not opt
   `std::error::Error` enum (no `thiserror` — `bhtune-core` stays dependency-minimal) — the
   crate's first fallible-construction pattern (previously only `Option`-returning functions
   existed, e.g. `derive_tag`). `build_loop_config` (`commands/tune.rs`) calls `.validate()?`
-  immediately after constructing the `LoopConfig`, before any backend connection or database
+  immediately after constructing the `LoopConfig`, before any driver connection or database
   write, mirroring the `--write-pid`-requires-`--yes` fail-fast precedent below.
 - **`--timeout-secs <seconds>`** (default `3600`) — a mandatory wall-clock limit on the whole
   test, with no disable/unlimited option; a value of `0` just means an (essentially unusable)
@@ -1443,19 +1443,19 @@ removes that supervision while still stroking a live valve, so these are not opt
   `tokio::select!` arm alongside `interval.tick()` and a single process-wide `CtrlC` handle
   (see `safety-cancellation` below) — but that outer race only covers the _idle_ wait between
   ticks. The timeout (and Ctrl+C) also stay effective _during_ a tick — including a stalled
-  backend read or write, e.g. a wedged DCOM call or a black-holed network — because every
-  backend call inside the tick body is separately raced against the same `CtrlC` handle and a
-  `--op-timeout-secs` cap via `bounded_backend_call` (see `safety-cancellation` for why this
+  driver read or write, e.g. a wedged DCOM call or a black-holed network — because every
+  driver call inside the tick body is separately raced against the same `CtrlC` handle and a
+  `--op-timeout-secs` cap via `bounded_driver_call` (see `safety-cancellation` for why this
   two-layer design, rather than one that only checked after each completed tick, was needed).
   On firing, the loop is restored to its pre-test mode via the exact same path as a Ctrl+C
   abort (`restore` + `TuneRunRow::abort`, recording plain `Aborted` in `tune_runs.outcome` —
   no new DB state) and reported to the caller as the distinct `TuneOutcome::TimedOut` /
   `EXIT_TIMED_OUT = 4`, so a scheduler's alerting can tell "this run had to be forcibly killed
   for running too long" (possibly a stuck relay, a misconfigured tag mapping, or a stalled
-  backend read — worth investigating) apart from "an operator stopped it on purpose"
+  driver read — worth investigating) apart from "an operator stopped it on purpose"
   (`EXIT_ABORTED`, routine).
 - **`--write-pid <level>` unconditionally requires `--yes`** — in `run()`
-  (`args.write_pid.is_some() && !args.yes`), checked before any backend connection or
+  (`args.write_pid.is_some() && !args.yes`), checked before any driver connection or
   database write. There is no rehearsal mode that lifts this gate: a `--write-pid` run either
   has explicit confirmation or is rejected outright. (An earlier `--dry-run` flag did lift
   this gate, but it was removed since it did not actually avoid touching the live loop: it
@@ -1471,7 +1471,7 @@ pausing tokio's clock also fast-forwards the real `SqlitePool`'s own internal co
 acquire timeout, turning every query into a spurious `PoolTimedOut` error; `tests/
 ctrlc_abort.rs` already accepts a similar real-time cost for the same underlying reason (an
 actual signal/timeout has to actually elapse). `build_loop_config_rejects_an_out_of_range_
-relay_amp_before_any_backend_or_db_io` mirrors the same "no I/O before the fail-fast check"
+relay_amp_before_any_driver_or_db_io` mirrors the same "no I/O before the fail-fast check"
 pattern now also proven for `--write-pid`/`--yes` (`run_rejects_write_pid_without_yes_before_
 starting_the_tune`).
 
@@ -1479,7 +1479,7 @@ starting_the_tune`).
 
 A post-`cli-logging` review of the live-tuning path (`commands/tune.rs`) surfaced nine
 findings before the CLI's first real trial against live plant equipment: Ctrl+C/timeout
-cancellation not reaching an in-flight backend call, no guaranteed restore on every exit
+cancellation not reaching an in-flight driver call, no guaranteed restore on every exit
 path, missing input validation (e.g. `--cycles-count 0` panicked mid-run), OPC quality never
 checked, PID write-back with no pre-read/rollback, `bhtune-db`'s `restore_from` unsafe under
 an active WAL and wrong on Windows, `--output json` emitting prose ahead of the JSON object,
@@ -1501,7 +1501,7 @@ rationale for code that still exists (not a changelog of the review itself):
   `commands::tune::validate_initial_state`). Previously `--cycles-count 0` reached
   `tuning_math::measure_oscillation`'s internal `assert!` and panicked _after_ the loop had
   already been switched to manual and stroked through a full relay test, with no restore on
-  the panic path; ranges read from the backend or passed as flags were never checked for
+  the panic path; ranges read from the driver or passed as flags were never checked for
   finiteness or ordering, so a `NaN` parsed by `f32::from_str` (which silently accepts the
   literal strings `"nan"`/`"inf"`) could flow into the tuning math and, ultimately, a PID
   write. Closed in four layers:
@@ -1525,15 +1525,15 @@ rationale for code that still exists (not a changelog of the review itself):
   - `commands::tune::validate_initial_state` — a new checkpoint between
     `read_initial_values` and `transition_to_manual` (the single choke point before any
     mutation of the live loop) that validates the resolved `InitialState` uniformly,
-    regardless of whether each value came from a CLI flag or a backend tag: constructs
+    regardless of whether each value came from a CLI flag or a driver tag: constructs
     `PvRange`/`MvRange` from the read ranges and confirms the initial MV falls inside the
     validated MV range. `read_f32`/`resolve_f32` additionally reject non-finite parsed
     values directly, closing the `"nan"`/`"inf"` string-parsing gap before a value is even
     assembled into `InitialState`.
 
   An `execute()`-level integration test proves the actual safety property end-to-end: a
-  backend reporting an inverted MV range (`low >= high`) causes `execute` to fail with no
-  entries at all in the backend's write log — i.e. `transition_to_manual` never runs, not
+  driver reporting an inverted MV range (`low >= high`) causes `execute` to fail with no
+  entries at all in the driver's write log — i.e. `transition_to_manual` never runs, not
   merely "the tuning math never runs".
 
 - **Every run now snapshots the template it was configured against, not just its name** —
@@ -1557,7 +1557,7 @@ show` (not `list`, to keep the list view narrow) prints the snapshotted template
   table.
 - **OPC quality now enforced on every tuning-critical read** — done
   (`commands::tune::check_quality`, `bhtune_db::models::SampleQuality`). Previously
-  `bhtune_backend::Quality`/`is_trustworthy()` existed but nothing in the tune path ever
+  `bhtune_driver::Quality`/`is_trustworthy()` existed but nothing in the tune path ever
   called it — a tag reporting `Uncertain` (a stale held-last-value during a comms hiccup) or
   outright `Bad` quality flowed into the MRFT engine and a PID write-back exactly like a
   trustworthy `Good` reading. `check_quality` is now the single choke point: `Good` always
@@ -1580,15 +1580,15 @@ show` (not `list`, to keep the list view narrow) prints the snapshotted template
     readback also drives finding 6's rollback of whatever was already confirmed, below.
 
   `tune_samples` gained a `pv_quality` column (`SampleQuality`: `Good`/`Uncertain`/`Bad`, the
-  DB-side mirror of `bhtune_backend::Quality` — two separate enums since `bhtune-backend` and
+  DB-side mirror of `bhtune_driver::Quality` — two separate enums since `bhtune-driver` and
   `bhtune-db` are sibling crates, neither depending on the other) and `tune_runs` gained
   `allow_uncertain_quality`, so a run's quality posture is part of its permanent history.
   `bhtune tune --allow-uncertain-quality` is the CLI flag; a poor-quality abort exits with
   `EXIT_POOR_QUALITY` (5), distinct from a Ctrl+C/timeout abort, and `--output json` carries
   nullable `poor_quality_tag`/`poor_quality` fields alongside the existing `timeout_secs`.
 
-- **Ctrl+C and `--timeout-secs` now reach an in-flight backend call, and the restore itself
-  is bounded** — done (`bhtune-cli::cancel`, `commands::tune::{bounded_backend_call,
+- **Ctrl+C and `--timeout-secs` now reach an in-flight driver call, and the restore itself
+  is bounded** — done (`bhtune-cli::cancel`, `commands::tune::{bounded_driver_call,
 attempt_restore}`). Previously the signal listener and the timeout sleep were both
   reconstructed fresh on every polling-loop iteration, inline in a `tokio::select!` — so for
   the entire duration of a tick's body (the PV read, the relay MV write, the sample insert)
@@ -1596,7 +1596,7 @@ attempt_restore}`). Previously the signal listener and the timeout sleep were bo
   signal delivery per kind, and a `Signal` future created _after_ delivery never observes
   it), with no fallback to the OS's default terminate-on-SIGINT behavior either (tokio
   replaces it process-wide the first time `ctrl_c()` is ever polled, and never reverts it). A
-  hung backend read made the loop uninterruptible outright — exactly the scenario
+  hung driver read made the loop uninterruptible outright — exactly the scenario
   `--timeout-secs` was introduced to prevent, and the very claim ("fires even mid-hung-read")
   that this fix makes true rather than aspirational. Closed in three parts:
   - `bhtune_cli::cancel::CtrlC` — one process-wide Ctrl+C listener, installed exactly once at
@@ -1612,14 +1612,14 @@ attempt_restore}`). Previously the signal listener and the timeout sleep were bo
     `CtrlC::never()`/`CtrlC::test_pair()` back the test-only `run`/direct-call entry points,
     so the many unit tests never install a real process-wide signal handler (which would
     otherwise risk swallowing a developer's own Ctrl+C to a hung `cargo test`).
-  - `bounded_backend_call`/`TickOperation` — races one backend call (the tick's PV read, or
+  - `bounded_driver_call`/`TickOperation` — races one driver call (the tick's PV read, or
     its MV write) against `ctrl_c.signalled()` and a fresh `--op-timeout-secs` sleep (new
     flag, default 30s, capping a single operation rather than the whole run), returning
     `Completed(T)`/`Cancelled`/`TimedOut`; a genuine `Err` from the call itself still
     propagates via `?` rather than being folded into this enum, since a rejected write or a
     transport error is a real failure, not "gave up waiting". `run_polling_loop`'s outer
     `tokio::select!` (covering the _idle_ wait between ticks) reuses the exact same `&mut
-CtrlC` handle passed down into the tick body's `bounded_backend_call`s, which is safe
+CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is safe
     specifically because a tokio `watch::Receiver`'s "seen this value" state advances the
     moment either `select!` observes it — there is no way for the outer and an inner
     `select!` to each separately consume the same signal.
@@ -1637,14 +1637,14 @@ CtrlC` handle passed down into the tick body's `bounded_backend_call`s, which is
     restored" and "aborted, restore abandoned, go check the loop by hand" are very different
     outcomes for a scheduler to alert on.
 
-  **Testing approach.** A `MockBackend.hanging_read`/`hanging_write` (awaits
+  **Testing approach.** A `MockDriver.hanging_read`/`hanging_write` (awaits
   `std::future::pending::<()>()` before ever reaching its own bookkeeping, so a hung call is
   provably never recorded even though the abandoned future is only dropped, not signalled)
   backs two new `run_polling_loop` integration tests: a stalled PV read aborting via
   `--op-timeout-secs` with no sample recorded (no valid tick exists yet), and a stalled MV
   write being cancelled by a `CtrlC::test_pair()`-driven background task (standing in for a
   human pressing Ctrl+C mid-write) while still recording the sample from that tick's earlier,
-  already-completed PV read. `bounded_backend_call`/`attempt_restore` also each have direct
+  already-completed PV read. `bounded_driver_call`/`attempt_restore` also each have direct
   unit tests exercising all of their outcomes in isolation (completed/cancelled/timed-out/a
   genuine error propagating; confirmed/incomplete-via-timeout/incomplete-via-second-Ctrl+C),
   and one `run_with_ctrl_c` test exercises the real (non-test-only) entry point end-to-end
@@ -1702,7 +1702,7 @@ CtrlC` handle passed down into the tick body's `bounded_backend_call`s, which is
     share code once `restore-loop` is actually built, rather than assuming up front.
 
   **Testing approach.** A direct unit test on `restore()` (bypassing `execute()` entirely,
-  via a hand-constructed fully-armed `MutationGuard` and a backend where all four writes
+  via a hand-constructed fully-armed `MutationGuard` and a driver where all four writes
   fail) proves every step is attempted independently and the summary names all four. Three
   `execute()`-level integration tests cover the guard's actual exit paths:
   `transition_to_manual` failing on its very first write (before the mode-revert path is
@@ -1710,7 +1710,7 @@ CtrlC` handle passed down into the tick body's `bounded_backend_call`s, which is
   records `Incomplete` with a "mode attribute" detail; a `persist_results`/`complete`
   failure after a genuinely completed simulator test still attempts the restore and records
   `Confirmed`; and a poor-quality abort partway through polling (via a new
-  `MockBackend::degrade_quality_after` test-harness extension, returning a tag's quality as
+  `MockDriver::degrade_quality_after` test-harness extension, returning a tag's quality as
   `Good` for the first N reads and a chosen `Quality` after) still runs the restore end to
   end and records `Incomplete`.
 
@@ -1765,7 +1765,7 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
     forced to some placeholder value — added to the one pre-release migration in place,
     since nothing has shipped yet.
 
-  **Testing approach.** `MockBackend` gained three more builders alongside the existing
+  **Testing approach.** `MockDriver` gained three more builders alongside the existing
   `degrade_quality_after`: `erroring_read_after`/`rejecting_write_after` (a tag's first N
   reads/writes succeed normally, then every one after that fails — letting a test put a
   tag's _pre-read_ in good standing while still forcing its _post-write_ readback or a later
@@ -1776,10 +1776,10 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
   produce). Dedicated tests cover all nine `maybe_write_back` outcomes: a full success
   (asserting `previous`/all three `*_written`/`*_readback` fields and `rollback_state = None`
   together, not just the top-level `WriteBackOutcome`), a pre-read failure (`previous = None`,
-  nothing on the backend's write log at all), a rejected write, a readback that errors after
+  nothing on the driver's write log at all), a rejected write, a readback that errors after
   the pre-read has already succeeded, a poor-quality readback (distinguished by message
   prefix from both the read-error case and a pre-read failure), an out-of-tolerance readback,
-  a successful rollback (confirming the backend's live value was actually restored, not just
+  a successful rollback (confirming the driver's live value was actually restored, not just
   the audit row), a rollback that itself fails (`rollback_state = Failed` with
   `rollback_error` naming the constant), and an `Uncertain` readback accepted without
   incident under `--allow-uncertain-quality` (proving finding 5's escape hatch and finding
@@ -1801,15 +1801,15 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
     at the same response level. `history show`'s write-back audit listing now prints each
     row's kind alongside its response level (`Write (Moderate level)` /
     `Revert (Moderate level)`) so a revert is never mistaken for the original write.
-  - **Validates before ever connecting to the backend.** In order: the run exists; the run
-    used the `Opcda` backend (a `Simulator`/`Replay` run has no live loop to revert against);
+  - **Validates before ever connecting to the driver.** In order: the run exists; the run
+    used the `Opcda` driver (a `Simulator`/`Replay` run has no live loop to revert against);
     the run has at least one recorded `Write`-kind row (nothing to revert otherwise); that
     row's `previous` is `Some` (a write whose own pre-read failed has nothing recorded to
     revert to); `--yes` was passed (reverting writes to a live loop, same confirmation gate
     as the original write-back); the run's snapshotted tags have all three PID constant tags
     configured. Only after all six checks pass does it resolve `--bridge-host`/`--server`
-    and call `OpcDaBackend::connect` — so four of these checks are exercised in tests with no
-    mock backend running at all, and even the connection-failure path itself is a genuine
+    and call `OpcDaDriver::connect` — so four of these checks are exercised in tests with no
+    mock driver running at all, and even the connection-failure path itself is a genuine
     test (an unreachable host, proving every earlier check passed).
   - **Reuses `commands::tune`'s own pre-read/write-and-verify helpers directly**
     (`read_previous_pid_values`, `write_and_verify_pid_value`, promoted from private to
@@ -1830,9 +1830,9 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
     target P/I/D values, success, and an error message) on `--output json`, with no prose
     printed ahead of it.
 
-  **Testing approach.** Eleven dedicated tests. Six need no mock backend at all, since
+  **Testing approach.** Eleven dedicated tests. Six need no mock driver at all, since
   `revert`'s validation runs before it ever connects: no such run; the run used a
-  non-`Opcda` backend; no `Write`-kind row recorded; the recorded write's `previous` is
+  non-`Opcda` driver; no `Write`-kind row recorded; the recorded write's `previous` is
   `None`; `--yes` not passed; the run's tags have no PID constant tags configured; and a
   genuine connection failure (an unreachable host, proving every check above passed). Two
   use the shared mock gRPC `Bridge` service from `crate::test_support`: a full success
@@ -1909,8 +1909,8 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
   `write_back_detail` field). Previously `maybe_write_back` `println!`ed its interactive
   listing/prompt and every status/result line unconditionally, regardless of `--output` —
   confirmed by hand: a completed simulator run (which never has PID constant tags
-  configured, see `build_tags`'s `BackendKindArg::Simulator` arm) printed "No PID constant
-  tags configured for this run's backend/template; skipping write-back." on stdout _before_
+  configured, see `build_tags`'s `DriverKindArg::Simulator` arm) printed "No PID constant
+  tags configured for this run's driver/template; skipping write-back." on stdout _before_
   the run's final JSON object, so `serde_json::from_str`/`json.loads` on stdout failed for
   every scripted/scheduled caller using `--output json` — the exact audience that flag
   exists to serve. Closed as the design's Option B ("format-aware reporting"), chosen over
@@ -2012,7 +2012,7 @@ is_terminal()` — false for a `cron`/Task-Scheduler invocation), never to stdou
 bhtune's CLI does not, since `--output json` documents stdout as a single machine-readable
 object. Verified end-to-end, not just by inspection: `tests/ctrlc_abort.rs` asserts the real
 spawned subprocess's stderr never contains the product-output string, and a manual run of the
-compiled binary with `--log-level debug` against the simulator backend confirmed the log file
+compiled binary with `--log-level debug` against the simulator driver confirmed the log file
 captured every instrumented line while stderr stayed silent (no attached console).
 
 **Wired into `run()`, not `run_with_cli`.** `lib.rs::run()` loads the config, resolves
@@ -2026,8 +2026,8 @@ platform log directory. `init_tracing`'s result is soft-failed (`let _log_guard 
 result, a deliberate deviation from the gateway's hard-error approach.
 
 **Instrumentation added at meaningful points**, not exhaustively: database open and template
-seed count (`db.rs`), backend construction for both the OPC DA and simulator branches
-(`backend.rs`), and in `commands/tune.rs` — run start/finish, the `Err` path, both abort
+seed count (`db.rs`), driver construction for both the OPC DA and simulator branches
+(`driver.rs`), and in `commands/tune.rs` — run start/finish, the `Err` path, both abort
 branches (Ctrl+C and `--timeout-secs`), MRFT engine completion, a per-tick trace event, and
 write-back outcomes (success/readback-failure/rejected) in `maybe_write_back`. Bare
 `tracing::*!` calls are always safe to sprinkle through already-tested code with no dedicated
@@ -2341,7 +2341,7 @@ was read-only plus template CRUD-minus-update.
 
 **Reuses `bhtune-cli`'s orchestration; does not reimplement it.** `start_run` calls
 `bhtune_cli::commands::tune::prepare()` inline (template lookup, tag derivation, a real
-backend connect attempt, the `tune_runs` insert) and, once that succeeds, `tokio::spawn`s
+driver connect attempt, the `tune_runs` insert) and, once that succeeds, `tokio::spawn`s
 `bhtune_cli::commands::tune::drive()` (the polling/tuning phase itself) as a background task
 tracked by a new `crate::active_run::ActiveRun` (an `Arc<Mutex<Option<ActiveRunEntry>>>`
 shared via `AppState`). `POST /api/runs` returns `201 Created` with the same
@@ -2367,17 +2367,17 @@ deliberately _not_ re-checked here, to avoid two divergent copies of the same ru
 
 **Two-tier conflict detection, and why both tiers are real.** `start_run` first does an
 optimistic pre-check (`state.active_run.active_run_id().await`) purely to avoid a wasted
-`prepare()` call (a real backend connection attempt, a DB insert) in the common case where a
+`prepare()` call (a real driver connection attempt, a DB insert) in the common case where a
 run is obviously already active. This is _not_ authoritative: `prepare()` awaits real
 database I/O, which is exactly the kind of gap that lets two near-simultaneous
 `POST /api/runs` requests both pass the pre-check before either reaches the actual
 `state.active_run.start(...)` call — the real, authoritative check. Losing that second,
 deeper race is handled distinctly from losing the shallow one: since `prepare()` already
-succeeded (a `tune_runs` row exists, but no backend I/O beyond the connect attempt has
+succeeded (a `tune_runs` row exists, but no driver I/O beyond the connect attempt has
 happened), the just-inserted row is explicitly marked `failed` via `TuneRunRow::fail(...)`
 rather than left forever showing `outcome: "running"` for a run that will never actually
 progress. The two rejection messages are worded differently on purpose (the shallow one says
-"cancel it first via ..."; the deep one says "no backend I/O was performed") so a caller —
+"cancel it first via ..."; the deep one says "no driver I/O was performed") so a caller —
 and this phase's own tests — can tell which check actually fired.
 
 **The `Send` fix in `bhtune-cli` this required.** Spawning `drive()` as a `tokio::spawn`
@@ -2412,7 +2412,7 @@ should reach for "make the resource type generic" before reaching for `spawn_loc
 left uncovered — both defensive `panic!` message-format arguments on assertions that never
 fail in a passing suite (`wait_for_outcome`'s 10-second-timeout guard, and the race test's own
 `else` branch), matching this project's existing accepted-gap precedent
-(`core-tuning-math`/`backend-simulator`'s "passing-assert's message-format argument"). Of the
+(`core-tuning-math`/`driver-simulator`'s "passing-assert's message-format argument"). Of the
 four new tests, the most interesting is
 `a_genuine_race_between_two_starts_marks_the_losing_row_failed`: it calls the `start_run`
 handler function _directly_ (bypassing the router/tower/hyper stack entirely — `State(state)`
@@ -2742,7 +2742,7 @@ entry is pure overhead).
 docs site, alongside a hand-written index page at `docs/reference/api.md` (linked from the
 site navigation/footer and from `docs/reference/_category_.json`'s sidebar). Together these
 give contributors a real, browsable rustdoc reference for all six crate/binary targets
-(`bhtune`, `bhtune_backend`, `bhtune_cli`, `bhtune_core`, `bhtune_db`, `bhtune_server`)
+(`bhtune`, `bhtune_driver`, `bhtune_cli`, `bhtune_core`, `bhtune_db`, `bhtune_server`)
 without hand-authoring any of the content itself.
 
 **Rustdoc output has no root `index.html` for a multi-crate workspace**, and produces five
@@ -2893,7 +2893,7 @@ step order is: `pnpm/setup@v2` (which runs `pnpm install` itself) → `pnpm --fi
 bhtune-frontend run build` → the Rust binary build/package step.
 
 **`protoc` is a real build requirement here, not just a test-only one.** Unlike a pure
-Rust dependency, `bhtune-backend`'s (non-dev) `opcda-bridge` dependency pulls in
+Rust dependency, `bhtune-driver`'s (non-dev) `opcda-bridge` dependency pulls in
 `opcda-bridge-proto`, whose `build.rs` calls `tonic_prost_build::compile_protos` at
 compile time — so every platform in the matrix installs `protoc` via
 `taiki-e/install-action`, matching `checks.yml`'s `check`/`windows`/`package`/`msrv` jobs.
@@ -3198,11 +3198,11 @@ tolerances to make a test pass):
 
 Reference traces are captured two ways, neither of which requires Windows:
 
-1. **Synthetic runs against the in-Rust FOPDT simulator** (`backend-simulator`, done — see
-   "Simulator backend reference" above) across a coverage matrix of process types, controller
+1. **Synthetic runs against the in-Rust FOPDT simulator** (`driver-simulator`, done — see
+   "Simulator driver reference" above) across a coverage matrix of process types, controller
    types, action directions, and edge cases (non-zero MV range floor, varied skip/count cycles).
-   `bhtune-backend`'s own test suite already includes one such run (a full `MrftEngine` driven
-   through `SimulatorBackend` to completion).
+   `bhtune-driver`'s own test suite already includes one such run (a full `MrftEngine` driven
+   through `SimulatorDriver` to completion).
 2. **Real traces recorded from field use** (`capture-traces`, done) — one trace was captured and
    replayed (`flow_pi_direct`, Flow/PI/Reverse). Deliberately closed here rather than continuing
    through the other 5 process types, PID/temperature controllers, reverse action, and cascade:
@@ -3285,7 +3285,7 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    `MRFTperformSwitch`, `OPCClass.cs` ~line 430 (stores `DateTime.Now` instead of the tick's own
    `TimeCurrent`). Stronger than a default-off compat flag: `chrono`'s `clock`/`now` features are
    disabled workspace-wide, so `bhtune-core` cannot call `Utc::now()` even by accident — verified
-   by temporarily adding such a call and confirming it fails to compile (see `backend-opcda`'s
+   by temporarily adding such a call and confirming it fails to compile (see `driver-opcda`'s
    notes above for where this was re-verified after `opcda-bridge`/`tonic` entered the dependency
    graph).
 4. **`[structurally impossible]` Lookup tables must be sized to exactly the number of process
@@ -3343,16 +3343,16 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    explicit `--output <path>` (or write structured data to stdout for piping), and logging
    (`cli-logging`) resolves its directory through the normal config precedence, defaulting to a
    documented platform-standard data directory — never an implicit/hardcoded path.
-10. **`[fixed, no flag needed]` Test/demo mode must be a first-class, explicit backend choice**
-    (e.g. `--backend
+10. **`[fixed, no flag needed]` Test/demo mode must be a first-class, explicit driver choice**
+    (e.g. `--driver
 simulator`), never triggered implicitly by a magic tag name or hidden UI state — an implicit
     trigger is surprising and easy to leave enabled accidentally. Legacy: `OPCClass.Python` gated
     a hardcoded branch triggered by typing the magic tag name `Simulink.Device1.Python.PV`, which
     also **returned early from `ResetOPC`, skipping all DCS mode-revert logic**, and shelled out to
     a hardcoded `RunModel.bat` path while blocking the UI thread for 7 seconds. Fixed:
-    `backend-simulator`'s `SimulatorBackend` is selected explicitly (`--backend simulator`), is a
+    `driver-simulator`'s `SimulatorDriver` is selected explicitly (`--driver simulator`), is a
     real, in-process, non-blocking FOPDT model with no shell-out, and shares the exact same
-    restore/mode-revert path every other backend uses — there is no special-cased early return.
+    restore/mode-revert path every other driver uses — there is no special-cased early return.
 11. **`[fixed, no flag needed]` PID-type selection must be modeled as proper enums**
     (`ProportionalType`, `IntegralType`,
     `DerivativeType`, controller action direction, etc.), never as comparisons against magic
@@ -3513,7 +3513,7 @@ Pulled into `bhtune` from `opcda-bridge`'s example:
   (skipping the Linux-only doc/OpenAPI drift `git diff` checks, which are CRLF-sensitive);
   `package` runs `cargo package --workspace --locked`, which immediately surfaced a real bug —
   every workspace-internal path dependency lacked a `version` requirement, which `cargo
-package` refuses to package. Fixed by giving `bhtune-core`/`bhtune-backend`/`bhtune-db`/
+package` refuses to package. Fixed by giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
   `bhtune-cli` `{ path, version }` entries in `[workspace.dependencies]` and switching every
   consumer to `.workspace = true`, mirroring `opcda-bridge`'s own already-working pattern
   exactly.
@@ -3565,8 +3565,8 @@ than copy-pasted: `bhtune`'s PR template checklist includes the frontend lint/ty
 commands and the CLA-sign-off line from `CONTRIBUTING.md`; `opcda-bridge`'s omits both (no
 frontend, no CLA — MIT, no CLA required) and instead asks for hardware-in-the-loop manual
 verification notes, matching its own `CONTRIBUTING.md`'s "no live OPC DA server in CI" line.
-Both bug report forms ask for a version and platform; `bhtune`'s adds a `Backend` dropdown
-(OPC DA/simulator/replay) since that's a core `bhtune-backend` concept a maintainer would
+Both bug report forms ask for a version and platform; `bhtune`'s adds a `Driver` dropdown
+(OPC DA/simulator/replay) since that's a core `bhtune-driver` concept a maintainer would
 otherwise have to ask about, and `opcda-bridge`'s adds an OPC DA server vendor field instead,
 plus a note that the gateway crate is Windows-only. Neither repo has GitHub Discussions
 enabled (confirmed via `gh api repos/.../{repo}` before writing `config.yml`), so
@@ -3607,7 +3607,7 @@ that binary does something real and gains its own targeted tests.
 | Crate              | Phase                                                                                                                                                                           | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bhtune-core`      | `core-model`/`core-mrft`/`core-tuning-math`/`template-catalog`/`core-replay-harness`                                                                                            | All done. `core-model` + `core-mrft` + `core-tuning-math` + `template-catalog` (the four built-in DCS templates now parse from an embedded, contributable TOML catalog — see "Community DCS/PLC template catalog" below); `core-replay-harness` (`crates/bhtune-core/tests/golden_replay.rs`) replays the first real captured trace (`tests/golden/fixtures/flow_pi_direct.json`) tick-by-tick through a real `MrftEngine` plus `calculate_all`, and asserts exact behavioral parity with the legacy C# app — see "Validation strategy: golden-master replay" below for the fixture-reconstruction subtleties this surfaced (a whole-second timestamp precision ceiling in the legacy CSV logger, and the already-known period-truncation bug independently corroborating the fixture's own recorded values)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `bhtune-backend`   | `backend-trait`/`backend-opcda`/`backend-simulator`/`backend-replay`                                                                                                            | All four done (trait, error model, OPC DA implementation, FOPDT simulator, and trace-driven replay backend, all tested) — Phase 4 complete. `backend-replay`'s `ReplayBackend` (`replay.rs`) is validation-only: it feeds a recorded trace or the real golden-fixture JSON through the `Backend` trait, but has no CLI-selectable backend kind, since it exists to prove the trait abstraction itself is correct, not to drive a live tune — see "Replay backend reference (`backend-replay`)" below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `bhtune-driver`    | `driver-trait`/`driver-opcda`/`driver-simulator`/`driver-replay`                                                                                                                | All four done (trait, error model, OPC DA implementation, FOPDT simulator, and trace-driven replay driver, all tested) — Phase 4 complete. `driver-replay`'s `ReplayDriver` (`replay.rs`) is validation-only: it feeds a recorded trace or the real golden-fixture JSON through the `Driver` trait, but has no CLI-selectable driver kind, since it exists to prove the trait abstraction itself is correct, not to drive a live tune — see "Replay driver reference (`driver-replay`)" below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `bhtune-db`        | `db-schema`/`db-seed-templates`/`history-query-api`/`db-backup-restore`/`template-provenance`/`history-retention`                                                               | All done (7 tables, tested; 4 templates auto-seed on startup; run-history repository layer with lifecycle, filtering, and pagination, now also `TuneRunRow::delete_matching` for age-based retention sweeps; whole-database backup/restore via `VACUUM INTO`, hardened with an exclusive-access requirement by `safety-db-restore`; `dcs_templates` gained a real three-way `origin` column plus `versions_json`/`description`/`source` — see "Live-plant safety hardening" and "Community DCS/PLC template catalog" below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `bhtune-cli`       | `cli-commands`/`cli-config`/`cli-automation`/`cli-safety`/`cli-logging`/`template-user-catalog`/`template-cli`/`docs-generated-cli`/`history-retention`/`history-cli`           | All five sub-phases done (subcommands, see "CLI reference" above; `CLI > env > TOML > default` config precedence, see "Config precedence" above; `--yes`/`--write-pid`/`--output json` and distinguished exit codes, see "Automation" above; relay-amp validation and mandatory `--timeout-secs`, see "Safety" above; `tracing` file+stderr logging, see "Logging" above) — a fully headless, scriptable CLI, no server required. The Phase 6.5 live-plant safety hardening pass following a post-`cli-logging` review is also done; see "Live-plant safety hardening" below. `template-user-catalog` (Phase 6.6) is also done: auto-loads a user catalog file on startup via the same config precedence chain — see "Auto-loading a user template catalog" above. `template-cli` is also done: multi-template TOML import/export and `template delete` — see "Multi-template import, TOML export, and `template delete`" above. `docs-generated-cli` (Phase 9) is also done: `examples/gen_docs.rs` regenerates the CLI reference, man pages, shell completions, and the `bhtune.toml`/template-catalog JSON Schema from the same `clap`/`serde` definitions, drift-gated in CI — see "`docs-generated-cli`: generating the CLI reference, man pages, completions, and config schema" above. `history-retention` (Phase 10) is also done: a new `retention` module (`cutoff_for`/`sweep_retention`) shared by the startup sweep, `bhtune-server`'s periodic ticker, and `history-cli`'s `prune` below, resolved through `resolve_retention_days`'s usual config precedence. `history-cli` is also done: `bhtune history prune` (`--older-than-days`/`--dry-run`/`--output json`) completes the `history` subcommand surface alongside the already-shipped `list`/`show`/`revert`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `bhtune-server`    | `server-http-api`/`openapi-contract`/`server-start-tune-api`/`server-template-update-api`/`server-embed-spa`/`server-windows-service`/`history-retention`/`history-explorer-ui` | `server-http-api` + `openapi-contract` + `server-start-tune-api` + `server-template-update-api` + `server-embed-spa` + `history-retention` + `history-explorer-ui` done — real Axum binary (health/templates full CRUD/history/runs routes, graceful shutdown, shares the CLI's config/db/logging bootstrap), full OpenAPI 3.1 contract (`utoipa` annotations, `ApiDoc` aggregator, `/api/openapi.json`, Scalar UI at `/api/docs`, checked-in spec with a CI diff gate — see "Key architectural decisions" above), `POST /api/runs`/`POST /api/runs/{id}/cancel` starting and cancelling a real tune over HTTP by reusing `bhtune-cli`'s own `prepare()`/`drive()` orchestration — see "`server-start-tune-api`: starting and cancelling a tune over HTTP" below — `PUT /api/templates/{name}` editing an existing `user`-origin template in place (400 on a name mismatch, 404 if unknown, 409 if not user-owned), `GET /api/runs/{id}/export?format=csv\|json` and `DELETE /api/runs/{id}`completing the history explorer (the delete guard checks the run's own DB`outcome`rather than the in-memory`ActiveRun`slot, closing a real race window — see the Status section above), the built SPA embedded directly into the binary via`rust-embed` with an SPA-fallback route, correct MIME types, and long-lived cache headers on hashed assets — see "`server-embed-spa`: embedding the built SPA into the binary" below — and a `spawn_retention_sweeper`background task resweeping every 24 hours (env-var-only config,`BHTUNE_RETENTION_DAYS`, since this binary has no `clap`) that logs and continues on failure rather than crashing the server. `server-windows-service` is also done: a platform-neutral `ServiceDefinition`/`ServiceLifecycle` in `service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` crate for real SCM install/uninstall/start/stop/status, real (non-panicking) non-Windows stubs pointing at the systemd/launchd equivalents, `install`/`uninstall`/`start`/`stop`/`status` subcommands plus a `--config` flag in `cli.rs`, and `main.rs` rewritten as a platform-split dispatcher, with matching `packaging/systemd/`/`packaging/launchd/` unit files — see the Status section above for the full design and how the Windows-only code was verified without a local Windows toolchain. All eight `bhtune-server` sub-phases are now done |
@@ -3630,7 +3630,7 @@ that binary does something real and gains its own targeted tests.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
    `cargo-deny` open-source dependency gate.
 2. **`opcda-bridge` reusable client library** (published upstream) — consumed as a plain
-   crates.io dependency (`opcda-bridge = "0.2"`), local to `bhtune-backend`'s own `Cargo.toml`
+   crates.io dependency (`opcda-bridge = "0.2"`), local to `bhtune-driver`'s own `Cargo.toml`
    (see "Key architectural decisions" for why it stays out of `[workspace.dependencies]`).
 3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, tuning math, and the
    golden-master replay harness are all done, with the correctness-critical details above baked
@@ -3639,14 +3639,14 @@ that binary does something real and gains its own targeted tests.
    `core-bug-register` is also done: every legacy defect found during the migration has an
    explicit replicate-or-fix decision — see "Correctness-critical design details (also the legacy
    bug register, `core-bug-register`)" above, which doubles as that register.
-4. **Backends** — **all done.** The `Backend` trait (`backend-trait`: `read`/`write`/`browse`
-   plus `TagId`/`TagValue`/`TagWrite`/`WriteOutcome`/`TagNode`/`BackendError` in `crates/
-bhtune-backend`), its OPC DA implementation (`backend-opcda`: `OpcDaBackend` in
-   `crates/bhtune-backend/src/opcda.rs`, see "OPC DA integration reference" above), its
-   in-Rust FOPDT simulator (`backend-simulator`: `SimulatorBackend`/`FopdtProcess`/
-   `VirtualPid` in `crates/bhtune-backend/src/simulator.rs`, see "Simulator backend reference"
-   above), and its trace-driven replay backend (`backend-replay`: `ReplayBackend` in
-   `crates/bhtune-backend/src/replay.rs`, validation-only — see "Replay backend reference"
+4. **Drivers** — **all done.** The `Driver` trait (`driver-trait`: `read`/`write`/`browse`
+   plus `TagId`/`TagValue`/`TagWrite`/`WriteOutcome`/`TagNode`/`DriverError` in `crates/
+bhtune-driver`), its OPC DA implementation (`driver-opcda`: `OpcDaDriver` in
+   `crates/bhtune-driver/src/opcda.rs`, see "OPC DA integration reference" above), its
+   in-Rust FOPDT simulator (`driver-simulator`: `SimulatorDriver`/`FopdtProcess`/
+   `VirtualPid` in `crates/bhtune-driver/src/simulator.rs`, see "Simulator driver reference"
+   above), and its trace-driven replay driver (`driver-replay`: `ReplayDriver` in
+   `crates/bhtune-driver/src/replay.rs`, validation-only — see "Replay driver reference"
    below).
 5. **Persistence** — SQLite schema (`db-schema`, done: `dcs_templates`, `loops`, `tune_runs`,
    `tune_samples`, `tune_results`, `tune_writes`, `settings`, all migrated/tested in
@@ -3738,7 +3738,7 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    phase — see "Key architectural decisions" above for the reversal.
 8. **End-to-end testing and CI** — `e2e-simulator` is done: a genuine subprocess-level test
    (`crates/bhtune-cli/tests/e2e_simulator.rs`) spawns the real `bhtune tune` binary against the
-   simulator backend across a small process/controller-type matrix (all `direction=reverse`, the
+   simulator driver across a small process/controller-type matrix (all `direction=reverse`, the
    direction empirically confirmed to actually oscillate against this simulator's fixed FOPDT
    parameters), then opens the resulting SQLite database directly and asserts the _calculated_
    PID results are sane — positive, correctly-ordered `kp` across all three response levels,
@@ -3749,7 +3749,7 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    "Correctness-critical design details" above, item 2. `e2e-playwright` is also done: a
    Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
    served by a real `bhtune-server` binary (debug profile -- serves `frontend/dist/` live off
-   disk, no re-embed step needed between runs) over the in-process simulator backend --
+   disk, no re-embed step needed between runs) over the in-process simulator driver --
    `smoke.spec.ts` (app shell, health badge, seeded template list, header nav) and
    `tune.spec.ts` (a full tune through `/runs/new` with `e2e_simulator.rs`'s own
    millisecond-scale simulator parameters, asserting sane/ordered rendered Kp/Ti/Td values,
@@ -3784,7 +3784,7 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    that site is live at
    [bytehound-labs.github.io/bhtune](https://bytehound-labs.github.io/bhtune/), published by
    `docs-deploy.yml` via `actions/deploy-pages`. `docs-roadmap` is also done: `docs/roadmap.md`
-   covers OPC UA/Modbus backends, remote/multi-user access (Phase 11), the Step Test
+   covers OPC UA/Modbus drivers, remote/multi-user access (Phase 11), the Step Test
    subscription-RPC blocker, multi-loop/batch tuning, and the history explorer (including what's
    deliberately _not_ planned — continuous historization and, for now, cross-run comparison) —
    linked from the README's existing compact roadmap section rather than duplicating it.
@@ -3851,7 +3851,7 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
   real relay-amp range validation and a mandatory wall-clock timeout with automatic
   abort-and-restore; none of it is optional polish. A follow-up live-plant safety hardening pass
   (Phase 6.5, done — see "Live-plant safety hardening" above) closed nine more findings from a
-  further review, including making Ctrl+C/timeout cancellation reach an in-flight backend call,
+  further review, including making Ctrl+C/timeout cancellation reach an in-flight driver call,
   guaranteeing a restore on every exit path, and enforcing OPC quality.
 - **Chart library**: `uPlot` over `Recharts` for the frontend trend chart — handles high-rate
   streaming data (multiple updates/second) far better.

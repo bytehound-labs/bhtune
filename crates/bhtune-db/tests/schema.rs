@@ -363,14 +363,14 @@ async fn seed_loop(pool: &sqlx::SqlitePool) -> i64 {
     .unwrap()
 }
 
-/// Inserts a `tune_runs` row attempted-and-failed before any backend I/O happened (all
+/// Inserts a `tune_runs` row attempted-and-failed before any driver I/O happened (all
 /// initial-reading columns left `NULL`), proving the schema supports the "auditable failure"
 /// case that motivated making those columns nullable in the first place.
 async fn seed_failed_run(pool: &sqlx::SqlitePool, loop_id: Option<i64>) -> i64 {
     sqlx::query(
         r#"
         INSERT INTO tune_runs (
-            loop_id, loop_name, backend, started_at, outcome, failure_reason,
+            loop_id, loop_name, driver, started_at, outcome, failure_reason,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
             num_cycles_count, noise_protection_secs, mrft_delay_secs,
             template_name, template_origin, template_snapshot_json, tags_json, created_at
@@ -411,14 +411,14 @@ async fn tune_run_supports_failed_before_initial_read_with_all_readings_null() {
 }
 
 #[tokio::test]
-async fn tune_run_rejects_invalid_outcome_and_backend() {
+async fn tune_run_rejects_invalid_outcome_and_driver() {
     let pool = connect_in_memory().await.unwrap();
     let loop_id = seed_loop(&pool).await;
 
     let bad_outcome = sqlx::query(
         r#"
         INSERT INTO tune_runs (
-            loop_id, loop_name, backend, started_at, outcome,
+            loop_id, loop_name, driver, started_at, outcome,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
             num_cycles_count, noise_protection_secs, mrft_delay_secs,
             template_name, template_origin, template_snapshot_json, tags_json, created_at
@@ -433,10 +433,10 @@ async fn tune_run_rejects_invalid_outcome_and_backend() {
     .await;
     assert!(bad_outcome.is_err());
 
-    let bad_backend = sqlx::query(
+    let bad_driver = sqlx::query(
         r#"
         INSERT INTO tune_runs (
-            loop_id, loop_name, backend, started_at, outcome,
+            loop_id, loop_name, driver, started_at, outcome,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
             num_cycles_count, noise_protection_secs, mrft_delay_secs,
             template_name, template_origin, template_snapshot_json, tags_json, created_at
@@ -450,8 +450,8 @@ async fn tune_run_rejects_invalid_outcome_and_backend() {
     .execute(&pool)
     .await;
     assert!(
-        bad_backend.is_err(),
-        "backend outside the current roadmap must be rejected"
+        bad_driver.is_err(),
+        "driver outside the current roadmap must be rejected"
     );
 }
 
@@ -472,7 +472,7 @@ async fn tune_runs_reject_invalid_template_origin_and_invalid_json() {
             sqlx::query(
                 r#"
                 INSERT INTO tune_runs (
-                    loop_id, loop_name, backend, started_at, outcome,
+                    loop_id, loop_name, driver, started_at, outcome,
                     process_type, controller_type, relay_amp_percent, num_cycles_skip,
                     num_cycles_count, noise_protection_secs, mrft_delay_secs,
                     template_name, template_origin, template_snapshot_json, tags_json, created_at
@@ -522,7 +522,7 @@ async fn tune_runs_and_tune_samples_reject_invalid_quality_columns() {
             sqlx::query(
                 r#"
                 INSERT INTO tune_runs (
-                    loop_id, loop_name, backend, started_at, outcome,
+                    loop_id, loop_name, driver, started_at, outcome,
                     process_type, controller_type, relay_amp_percent, num_cycles_skip,
                     num_cycles_count, noise_protection_secs, mrft_delay_secs,
                     template_name, template_origin, template_snapshot_json, tags_json,

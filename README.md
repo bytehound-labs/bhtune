@@ -31,8 +31,8 @@ BHTune is designed around a few core principles:
 - **Stores everything in a plain, open SQLite database.** No encryption, no usage gating, no
   license dongle — just a single database anyone can inspect.
 - **Is built to be extended.** OPC DA is the primary, supported driver for v1. The tag-I/O
-  interface (`Backend` trait) is deliberately protocol-agnostic — see [Roadmap](#roadmap) for
-  planned OPC UA and Modbus backends.
+  interface (`Driver` trait) is deliberately protocol-agnostic — see [Roadmap](#roadmap) for
+  planned OPC UA and Modbus drivers.
 
 ## Status
 
@@ -65,13 +65,13 @@ drift from what's in this repo.
 
 A Cargo workspace of small, single-purpose crates:
 
-| Crate            | Role                                                                                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bhtune-core`    | Pure domain logic: the MRFT state machine, tuning math, and data model. No I/O, no async, no clock reads — this is what makes deterministic, replayable testing possible.                              |
-| `bhtune-backend` | The `Backend` trait (`read`/`write`/`browse`) and its implementations: OPC DA (via `opcda-bridge`), an in-process process simulator, and a golden-trace replay backend used for regression validation. |
-| `bhtune-db`      | SQLite persistence (`sqlx`, WAL mode): DCS/PLC templates, loops, tune runs, samples, and results.                                                                                                      |
-| `bhtune-cli`     | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                        |
-| `bhtune-server`  | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                             |
+| Crate           | Role                                                                                                                                                                                                 |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`   | Pure domain logic: the MRFT state machine, tuning math, and data model. No I/O, no async, no clock reads — this is what makes deterministic, replayable testing possible.                            |
+| `bhtune-driver` | The `Driver` trait (`read`/`write`/`browse`) and its implementations: OPC DA (via `opcda-bridge`), an in-process process simulator, and a golden-trace replay driver used for regression validation. |
+| `bhtune-db`     | SQLite persistence (`sqlx`, WAL mode): DCS/PLC templates, loops, tune runs, samples, and results.                                                                                                    |
+| `bhtune-cli`    | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                      |
+| `bhtune-server` | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                           |
 
 The frontend (`bhtune-frontend`: React + TypeScript + Vite + Tailwind CSS, for `bhtune-server`)
 lives under `frontend/` — a pnpm workspace package, kept separate from the Cargo workspace. See
@@ -87,7 +87,7 @@ the CLI — it's a separate static site build that renders [`docs/`](docs/). See
 
 ### OPC DA bridge
 
-The OPC DA backend uses the reusable [`opcda-bridge`](https://crates.io/crates/opcda-bridge)
+The OPC DA driver uses the reusable [`opcda-bridge`](https://crates.io/crates/opcda-bridge)
 library from crates.io:
 
 ```toml
@@ -97,7 +97,7 @@ opcda-bridge = "0.2"
 
 The library communicates with the separate Windows-side
 [`opcda-bridge-gateway`](https://crates.io/crates/opcda-bridge-gateway) process over the network.
-The dependency is added to `bhtune-backend` when its OPC DA implementation is introduced; the
+The dependency is added to `bhtune-driver` when its OPC DA implementation is introduced; the
 scaffolding workspace intentionally does not declare unused dependencies.
 
 ## Installation
@@ -283,7 +283,7 @@ Windows Task Scheduler, CI):
 
 - **`--write-pid <aggressive|moderate|sluggish>`** writes that response level's calculated PID
   constants back without the interactive confirmation prompt. It requires **`--yes`** — the
-  combination is rejected before any backend connection or database write, so an unattended
+  combination is rejected before any driver connection or database write, so an unattended
   write-back is always an explicit, deliberate choice.
 - **`--output json`** (also on `history list`/`show`/`revert`) prints exactly one
   machine-readable JSON value to stdout instead of the plain-text table, and nothing else —
@@ -293,7 +293,7 @@ Windows Task Scheduler, CI):
   the interactive write-back prompt entirely when `--write-pid` wasn't also given, since
   there's no human present in a scripted run to answer it.
 - **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
-  (bad flags, unreachable backend/database), `2` aborted (Ctrl+C or `--timeout-secs` elapsing),
+  (bad flags, unreachable driver/database), `2` aborted (Ctrl+C or `--timeout-secs` elapsing),
   `3` the test completed but the requested PID write-back failed, `4` the test was forcibly
   stopped for running past `--timeout-secs`, `5` a poor-quality OPC reading aborted the run, and
   `6` the post-run restore could not be confirmed (a second Ctrl+C, or `--restore-timeout-secs`
@@ -310,17 +310,17 @@ unattended runs against live plant equipment fail safe. This section is the tech
 language, including exactly what happens on the first and second Ctrl+C:
 
 - **Relay amplitude is range-checked**, not just required to be non-blank — an out-of-range value
-  is rejected before any backend connection or database write.
+  is rejected before any driver connection or database write.
 - **Every numeric input is validated before it can reach a live loop** — CLI flags reject
   non-finite (`NaN`/infinite), zero, or negative values at parse time with a clear error; loop
   configuration rejects an out-of-range cycle count or MRFT delay; and the PV/MV ranges plus the
-  initial MV, whether they came from a flag or a backend tag read, are checked for finiteness and
+  initial MV, whether they came from a flag or a driver tag read, are checked for finiteness and
   correct ordering immediately after the initial read and before the loop is switched to manual.
 - **`--timeout-secs <seconds>`** (default `3600`) is a mandatory wall-clock limit on the whole
   test — there is no way to disable it. If it elapses, the loop is automatically restored to its
   pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`). Both Ctrl+C
-  and the timeout stay effective even if a single backend read or write stalls mid-tick (a
-  wedged gateway, a black-holed network): every backend call is separately capped by
+  and the timeout stay effective even if a single driver read or write stalls mid-tick (a
+  wedged gateway, a black-holed network): every driver call is separately capped by
   **`--op-timeout-secs`** (default `30`), so a hung call is abandoned rather than blocking the
   whole run indefinitely.
 - **`--restore-timeout-secs <seconds>`** (default `30`) bounds putting the loop back afterwards,
@@ -383,7 +383,7 @@ deferred, and what's deliberately not planned — lives at
 
 ## Roadmap
 
-- OPC UA and Modbus `Backend` implementations, alongside OPC DA.
+- OPC UA and Modbus `Driver` implementations, alongside OPC DA.
 - Remote/multi-user access to the web GUI: authentication, TLS, and an audit log of who
   ran/wrote what.
 - Step Test, a simpler alternative manual tuning method. Blocked on adding a

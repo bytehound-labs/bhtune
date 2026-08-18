@@ -73,11 +73,11 @@
             }
           },
           {
-            "name": "backend",
+            "name": "driver",
             "in": "query",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/TuneBackend"
+              "$ref": "#/components/schemas/TuneDriver"
             }
           },
           {
@@ -151,7 +151,7 @@
           "runs"
         ],
         "summary": "Start a new tune run.",
-        "description": "`POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, backend connect,\nand the `tune_runs` insert) inline and returns as soon as that succeeds, having already\n`tokio::spawn`ed the actual polling/tuning phase in the background. `201 Created` carries\nthe same [`RunDetailResponse`] `GET /api/runs/{id}` would show for this run at this\ninstant (almost certainly still `outcome: \"running\"`) -- poll that endpoint, or use\n`POST /api/runs/{id}/cancel`, to follow the run to completion.\n\n`409 Conflict` if another run is already active: v1 allows only one at a time (see\n`crate::active_run`).",
+        "description": "`POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, driver connect,\nand the `tune_runs` insert) inline and returns as soon as that succeeds, having already\n`tokio::spawn`ed the actual polling/tuning phase in the background. `201 Created` carries\nthe same [`RunDetailResponse`] `GET /api/runs/{id}` would show for this run at this\ninstant (almost certainly still `outcome: \"running\"`) -- poll that endpoint, or use\n`POST /api/runs/{id}/cancel`, to follow the run to completion.\n\n`409 Conflict` if another run is already active: v1 allows only one at a time (see\n`crate::active_run`).",
         "operationId": "start_run",
         "requestBody": {
           "content": {
@@ -175,7 +175,7 @@
             }
           },
           "400": {
-            "description": "The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable backend).",
+            "description": "The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable driver).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1081,7 +1081,7 @@
         "required": [
           "id",
           "loop_name",
-          "backend",
+          "driver",
           "outcome",
           "started_at",
           "template_name",
@@ -1092,9 +1092,6 @@
           "writes"
         ],
         "properties": {
-          "backend": {
-            "$ref": "#/components/schemas/TuneBackend"
-          },
           "completed_at": {
             "type": [
               "string",
@@ -1104,6 +1101,9 @@
           },
           "config": {
             "$ref": "#/components/schemas/LoopConfig"
+          },
+          "driver": {
+            "$ref": "#/components/schemas/TuneDriver"
           },
           "failure_reason": {
             "type": [
@@ -1229,14 +1229,14 @@
         "required": [
           "id",
           "loop_name",
-          "backend",
+          "driver",
           "outcome",
           "process_type",
           "started_at"
         ],
         "properties": {
-          "backend": {
-            "$ref": "#/components/schemas/TuneBackend"
+          "driver": {
+            "$ref": "#/components/schemas/TuneDriver"
           },
           "id": {
             "type": "integer",
@@ -1259,7 +1259,7 @@
       },
       "SampleQuality": {
         "type": "string",
-        "description": "How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the\nmoment it was read (finding 5 of the live-plant safety review).\n\nA `bhtune-db`-local mirror of [`bhtune_backend::Quality`], not a reuse of it directly:\n`bhtune-db` deliberately doesn't depend on `bhtune-backend` (a leaf I/O-adapter crate with\na much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business\nin the persistence crate just to name one three-variant enum), so `bhtune-cli`, which\nalready depends on both, is the one place that converts between them. This mirrors\n[`TemplateOrigin`]'s own precedent: a small, persistence-local enum rather than a second\ndependency edge.",
+        "description": "How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the\nmoment it was read (finding 5 of the live-plant safety review).\n\nA `bhtune-db`-local mirror of [`bhtune_driver::Quality`], not a reuse of it directly:\n`bhtune-db` deliberately doesn't depend on `bhtune-driver` (a leaf I/O-adapter crate with\na much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business\nin the persistence crate just to name one three-variant enum), so `bhtune-cli`, which\nalready depends on both, is the one place that converts between them. This mirrors\n[`TemplateOrigin`]'s own precedent: a small, persistence-local enum rather than a second\ndependency edge.",
         "enum": [
           "good",
           "uncertain",
@@ -1268,7 +1268,7 @@
       },
       "SampleResponse": {
         "type": "object",
-        "description": "One recorded tick: the [`Tick`] input and resulting engine state, plus the backend-\nreported PV quality at read time. `Tick`/`MrftState` already derive `Serialize` in\n`bhtune-core` (they round-trip through golden-trace fixtures too), so they're embedded\ndirectly rather than re-projected field-by-field like the other DTOs here.",
+        "description": "One recorded tick: the [`Tick`] input and resulting engine state, plus the driver-\nreported PV quality at read time. `Tick`/`MrftState` already derive `Serialize` in\n`bhtune-core` (they round-trip through golden-trace fixtures too), so they're embedded\ndirectly rather than re-projected field-by-field like the other DTOs here.",
         "required": [
           "tick_index",
           "sample",
@@ -1300,23 +1300,19 @@
           "process_type",
           "controller_type",
           "relay_amp",
-          "backend"
+          "driver"
         ],
         "properties": {
           "allow_uncertain_quality": {
             "type": "boolean",
             "description": "Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. See\n[`TuneArgs::allow_uncertain_quality`]."
           },
-          "backend": {
-            "$ref": "#/components/schemas/TuneBackend",
-            "description": "Which backend drives this tune. `\"replay\"` is rejected -- that backend exists only\nfor offline golden-trace validation, not for starting a live/simulated run."
-          },
           "bridge_host": {
             "type": [
               "string",
               "null"
             ],
-            "description": "opcda-bridge gateway address. Only meaningful with `backend: \"opcda\"` (default:\nresolved the same way the CLI resolves `--bridge-host`, via this process's own\nconfig/env)."
+            "description": "opcda-bridge gateway address. Only meaningful with `driver: \"opcda\"` (default:\nresolved the same way the CLI resolves `--bridge-host`, via this process's own\nconfig/env)."
           },
           "controller_type": {
             "$ref": "#/components/schemas/ControllerType"
@@ -1349,6 +1345,10 @@
                 "description": "Fixed controller direction, overriding a live tag read."
               }
             ]
+          },
+          "driver": {
+            "$ref": "#/components/schemas/TuneDriver",
+            "description": "Which driver drives this tune. `\"replay\"` is rejected -- that driver exists only\nfor offline golden-trace validation, not for starting a live/simulated run."
           },
           "mrft_delay": {
             "type": "integer",
@@ -1391,13 +1391,13 @@
           "op_timeout_secs": {
             "type": "integer",
             "format": "int64",
-            "description": "Cap on any single backend read/write during the run, in seconds.",
+            "description": "Cap on any single driver read/write during the run, in seconds.",
             "minimum": 0
           },
           "poll_interval_ms": {
             "type": "integer",
             "format": "int64",
-            "description": "How often to poll the backend, in milliseconds.",
+            "description": "How often to poll the driver, in milliseconds.",
             "minimum": 0
           },
           "process_type": {
@@ -1409,7 +1409,7 @@
               "null"
             ],
             "format": "float",
-            "description": "Fixed PV range high, overriding a live tag read. Required for `backend: \"simulator\"`,\nwhich has no range tags at all."
+            "description": "Fixed PV range high, overriding a live tag read. Required for `driver: \"simulator\"`,\nwhich has no range tags at all."
           },
           "pv_range_low": {
             "type": [
@@ -1435,47 +1435,47 @@
               "string",
               "null"
             ],
-            "description": "OPC DA server ProgID. Required with `backend: \"opcda\"`."
+            "description": "OPC DA server ProgID. Required with `driver: \"opcda\"`."
           },
           "sim_dead_time": {
             "type": "number",
             "format": "float",
-            "description": "Simulator dead time, in seconds (`backend: \"simulator\"` only)."
+            "description": "Simulator dead time, in seconds (`driver: \"simulator\"` only)."
           },
           "sim_gain": {
             "type": "number",
             "format": "float",
-            "description": "Simulator process gain (`backend: \"simulator\"` only)."
+            "description": "Simulator process gain (`driver: \"simulator\"` only)."
           },
           "sim_initial_mv": {
             "type": "number",
             "format": "float",
-            "description": "Simulator initial MV (`backend: \"simulator\"` only)."
+            "description": "Simulator initial MV (`driver: \"simulator\"` only)."
           },
           "sim_initial_pv": {
             "type": "number",
             "format": "float",
-            "description": "Simulator initial PV (`backend: \"simulator\"` only)."
+            "description": "Simulator initial PV (`driver: \"simulator\"` only)."
           },
           "sim_noise": {
             "type": "number",
             "format": "float",
-            "description": "Simulator measurement noise amplitude (`backend: \"simulator\"` only)."
+            "description": "Simulator measurement noise amplitude (`driver: \"simulator\"` only)."
           },
           "sim_seed": {
             "type": "integer",
             "format": "int64",
-            "description": "Simulator RNG seed, for reproducible noise (`backend: \"simulator\"` only).",
+            "description": "Simulator RNG seed, for reproducible noise (`driver: \"simulator\"` only).",
             "minimum": 0
           },
           "sim_tau": {
             "type": "number",
             "format": "float",
-            "description": "Simulator process time constant, in seconds (`backend: \"simulator\"` only)."
+            "description": "Simulator process time constant, in seconds (`driver: \"simulator\"` only)."
           },
           "tagname": {
             "type": "string",
-            "description": "PV tag prefix; ignored for `backend: \"simulator\"`. See [`TuneArgs::tagname`]."
+            "description": "PV tag prefix; ignored for `driver: \"simulator\"`. See [`TuneArgs::tagname`]."
           },
           "template": {
             "type": "string",
@@ -1573,9 +1573,9 @@
           "minutes"
         ]
       },
-      "TuneBackend": {
+      "TuneDriver": {
         "type": "string",
-        "description": "Which [`crate`]-agnostic I/O backend a run used. Lives in `bhtune-db` rather than\n`bhtune-core` because it's a persistence/orchestration concept (which adapter drove this\nrun), not a domain concept the pure MRFT engine itself needs to know about.",
+        "description": "Which [`crate`]-agnostic I/O driver a run used. Lives in `bhtune-db` rather than\n`bhtune-core` because it's a persistence/orchestration concept (which adapter drove this\nrun), not a domain concept the pure MRFT engine itself needs to know about.",
         "enum": [
           "opcda",
           "simulator",

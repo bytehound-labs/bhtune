@@ -40,7 +40,7 @@ async function startTune(page: Page) {
 /**
  * Drives a full MRFT tune end-to-end through the real browser UI -- the scenario
  * `e2e-playwright` exists for. Fills in the New Run form, submits it against a real
- * `bhtune-server` running the in-process simulator backend, and asserts the *rendered*
+ * `bhtune-server` running the in-process simulator driver, and asserts the *rendered*
  * results are sane and correctly ordered, not just that the page didn't crash.
  *
  * Mirrors `crates/bhtune-cli/tests/e2e_simulator.rs`'s own "flow / PI / reverse" matrix
@@ -50,7 +50,7 @@ async function startTune(page: Page) {
  * would make this test take minutes. `direction=reverse` is likewise required -- confirmed
  * (see that Rust test's own comment) to be the only direction that produces a genuine relay
  * oscillation against this fixed simulator configuration; it's already the form's default
- * whenever `backend=simulator`, so it isn't set explicitly below.
+ * whenever `driver=simulator`, so it isn't set explicitly below.
  */
 test.describe("running a tune from the browser", () => {
   // `bhtune-server` allows exactly one active run at a time (`ActiveRun`, `server-start-

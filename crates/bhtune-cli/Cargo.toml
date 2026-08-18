@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 bhtune-core.workspace = true
-bhtune-backend.workspace = true
+bhtune-driver.workspace = true
 bhtune-db.workspace = true
 anyhow = "1"
 chrono.workspace = true
@@ -52,7 +52,7 @@ tokio = { version = "1", features = [
 # Structured logging (`cli-logging`), matching `opcda-bridge-gateway`'s own `tracing`
 # stack/versions/features exactly so both projects' logging conventions stay recognizable to
 # the same user -- see `crate::logging`. Single-consumer within this workspace so far
-# (`bhtune-core`/`-backend`/`-db`/`-server` have no `tracing` calls yet), so pinned directly
+# (`bhtune-core`/`-driver`/`-db`/`-server` have no `tracing` calls yet), so pinned directly
 # here rather than promoted to `[workspace.dependencies]`, matching this crate's existing
 # `clap`/`csv` convention; promote it if a second crate needs it.
 tracing = "0.1"
@@ -89,15 +89,15 @@ sqlx = { version = "0.9", default-features = false, features = [
   "runtime-tokio",
   "chrono",
 ] }
-# Pinned to the same versions `opcda-bridge` (and `bhtune-backend`'s own tests) use, so the
+# Pinned to the same versions `opcda-bridge` (and `bhtune-driver`'s own tests) use, so the
 # `opc` subcommand's tests can stand up a mock `Bridge` gRPC service and get wire-compatible
-# generated types to test `OpcDaBackend`-backed commands end-to-end.
+# generated types to test `OpcDaDriver`-backed commands end-to-end.
 opcda-bridge-proto = "0.2"
 tonic = "0.14"
 tokio-stream = "0.1"
-# Test-only: `tune.rs`'s tests implement `bhtune_backend::Backend` for a local in-memory mock
+# Test-only: `tune.rs`'s tests implement `bhtune_driver::Driver` for a local in-memory mock
 # to exercise the opcda-style mode-transition/restore/write-back logic (which the simulator
-# backend's tag-less design never exercises) without a real gRPC gateway.
+# driver's tag-less design never exercises) without a real gRPC gateway.
 async-trait = "0.1"
 # `test-util` (on top of the regular dependency's features, unified by Cargo for test
 # builds only) so mode-transition/restore tests can run under `#[tokio::test(start_paused =

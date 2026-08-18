@@ -146,7 +146,7 @@ mod tests {
     #[tokio::test]
     async fn open_sweeps_retention_on_startup_when_a_policy_is_configured() {
         use bhtune_core::{ControllerType, LoopConfig, LoopTags, ProcessType};
-        use bhtune_db::models::{TuneBackend, TuneRunRow};
+        use bhtune_db::models::{TuneDriver, TuneRunRow};
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bhtune.db");
@@ -169,7 +169,7 @@ mod tests {
             &pool,
             None,
             "LIC-X",
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             config,
             TemplateOrigin::Builtin,
             &template,

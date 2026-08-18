@@ -2,13 +2,13 @@ import { expect, test } from "@playwright/test";
 
 /**
  * Basic navigation/rendering smoke coverage: the app shell loads, the health badge reaches
- * a real backend, and the four built-in DCS/PLC templates that `bhtune-db`'s
+ * a real driver, and the four built-in DCS/PLC templates that `bhtune-db`'s
  * `seed_builtin_templates` seeds into every fresh database (see `db-seed-templates`) render
  * in the Templates list. Deliberately no interaction with tune/write-back flows here --
  * that's `tune.spec.ts`'s job.
  */
 test.describe("app shell", () => {
-  test("loads, reaches a healthy backend, and lists the seeded templates", async ({
+  test("loads, reaches a healthy driver, and lists the seeded templates", async ({
     page,
   }) => {
     await page.goto("/");

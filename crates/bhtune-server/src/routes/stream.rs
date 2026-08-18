@@ -170,7 +170,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use bhtune_core::{ControllerType, LoopConfig, LoopTags, MrftState, ProcessType, Tick};
-    use bhtune_db::models::{SampleQuality, TuneBackend};
+    use bhtune_db::models::{SampleQuality, TuneDriver};
     use chrono::Utc;
     use tower::ServiceExt;
 
@@ -195,7 +195,7 @@ mod tests {
             &state.pool,
             None,
             name,
-            TuneBackend::Simulator,
+            TuneDriver::Simulator,
             config,
             template_row.origin,
             &template,

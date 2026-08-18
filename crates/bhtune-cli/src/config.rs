@@ -26,7 +26,7 @@ pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 pub struct BhtuneConfig {
     /// Overrides the default SQLite database path (see [`default_db_path_from`]).
     pub db: Option<PathBuf>,
-    /// Overrides [`DEFAULT_BRIDGE_HOST`] for every `tune --backend opcda` and `opc`
+    /// Overrides [`DEFAULT_BRIDGE_HOST`] for every `tune --driver opcda` and `opc`
     /// subcommand invocation that doesn't pass `--bridge-host` explicitly.
     pub bridge_host: Option<String>,
     /// Default OPC DA server ProgID, used when `--server` is omitted. Unlike the other

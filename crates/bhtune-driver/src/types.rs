@@ -1,14 +1,14 @@
-//! Plain data types moved across the [`crate::Backend`] trait boundary.
+//! Plain data types moved across the [`crate::Driver`] trait boundary.
 
 use chrono::{DateTime, Utc};
 
-/// An identifier for one tag/item a [`crate::Backend`] knows how to read or write. For OPC
+/// An identifier for one tag/item a [`crate::Driver`] knows how to read or write. For OPC
 /// DA this is the fully-qualified item name (e.g. `"Area1.LIC101.PV"`, matching
-/// `bhtune_core::tags::LoopTags`'s tag fields exactly); other backends may use any string
-/// convention of their own, since only the implementing backend interprets it.
+/// `bhtune_core::tags::LoopTags`'s tag fields exactly); other drivers may use any string
+/// convention of their own, since only the implementing driver interprets it.
 ///
 /// A plain `String` alias rather than a newtype: there is no invariant here worth enforcing
-/// (a tag ID is valid or not only in the sense that the backend does or doesn't recognize
+/// (a tag ID is valid or not only in the sense that the driver does or doesn't recognize
 /// it, which no wrapper type can check ahead of time), so a newtype would only add ceremony.
 pub type TagId = String;
 
@@ -35,10 +35,10 @@ impl Quality {
     }
 }
 
-/// One tag's freshly read value, as returned by [`crate::Backend::read`].
+/// One tag's freshly read value, as returned by [`crate::Driver::read`].
 ///
 /// `value` is a raw string, not a parsed `f32` — deliberately, since not every tag a
-/// [`crate::Backend`] reads is numeric. Mode/direction/attribute tags hold small raw codes
+/// [`crate::Driver`] reads is numeric. Mode/direction/attribute tags hold small raw codes
 /// (e.g. `"MAN"`, `"0"`) that `bhtune_core`'s own parsing functions interpret directly (see
 /// `bhtune_core::ControllerDirection::from_raw_tag_value`), so this type must not assume
 /// every tag's value is a number. Parsing a numeric tag's `value` into `f32` — and treating a
@@ -46,11 +46,11 @@ impl Quality {
 /// caller that knows which of its requested tags are numeric, mirroring how
 /// `opcda-bridge`'s own `Client::read` returns every value as a string for the same reason.
 ///
-/// `timestamp` is `Option`, not a bare `DateTime<Utc>` — deliberately, since not every backend
+/// `timestamp` is `Option`, not a bare `DateTime<Utc>` — deliberately, since not every driver
 /// can honestly supply one. OPC DA over the bridge, in particular, reports the item's last-
 /// change time as a *local*, offset-less `"YYYY-MM-DD HH:MM:SS"` string, with `"N/A"`/
-/// `"Invalid"` sentinels for items that have none (see `backend-opcda`'s `parse_timestamp`).
-/// `None` when a backend cannot supply a trustworthy value, rather than a synthetic
+/// `"Invalid"` sentinels for items that have none (see `driver-opcda`'s `parse_timestamp`).
+/// `None` when a driver cannot supply a trustworthy value, rather than a synthetic
 /// stand-in — this field is diagnostic (e.g. detecting a frozen tag whose timestamp stops
 /// advancing while its value doesn't change), never the tick time the tuning engine itself
 /// runs on, which comes from the caller's own polling clock instead.
@@ -62,7 +62,7 @@ pub struct TagValue {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-/// A value to write to a tag via [`crate::Backend::write`].
+/// A value to write to a tag via [`crate::Driver::write`].
 ///
 /// Deliberately narrower than a full OPC VARIANT-style type space: bhtune only ever writes
 /// numeric process values (relay steps during MRFT, PID constants at write-back) or a raw
@@ -74,9 +74,9 @@ pub enum TagWrite {
     Raw(String),
 }
 
-/// The result of one [`crate::Backend::write`] call that reached the backend.
+/// The result of one [`crate::Driver::write`] call that reached the driver.
 ///
-/// Kept distinct from a [`crate::BackendError`]: a backend (or the DCS/PLC behind it)
+/// Kept distinct from a [`crate::DriverError`]: a driver (or the DCS/PLC behind it)
 /// rejecting a write — the tag is read-only, the value is out of range, permissions — is a
 /// normal, expected outcome of the call succeeding at the transport level, not a
 /// connection/operation failure. This shape mirrors `bhtune_db::models::TuneWriteRow`'s own
@@ -89,7 +89,7 @@ pub struct WriteOutcome {
 }
 
 impl WriteOutcome {
-    /// A write the backend accepted outright.
+    /// A write the driver accepted outright.
     pub fn success() -> WriteOutcome {
         WriteOutcome {
             success: true,
@@ -97,7 +97,7 @@ impl WriteOutcome {
         }
     }
 
-    /// A write the backend rejected, with its own explanation of why.
+    /// A write the driver rejected, with its own explanation of why.
     pub fn failure(error_message: impl Into<String>) -> WriteOutcome {
         WriteOutcome {
             success: false,
@@ -106,7 +106,7 @@ impl WriteOutcome {
     }
 }
 
-/// One node in a [`crate::Backend::browse`] result: either a leaf tag (readable/writable
+/// One node in a [`crate::Driver::browse`] result: either a leaf tag (readable/writable
 /// directly) or a branch (has further children to browse into).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagNode {

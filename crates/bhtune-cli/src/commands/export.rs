@@ -107,7 +107,7 @@ mod tests {
             &pool,
             None,
             "Unit1.LIC101.PV",
-            bhtune_db::models::TuneBackend::Simulator,
+            bhtune_db::models::TuneDriver::Simulator,
             bhtune_core::LoopConfig {
                 process_type: bhtune_core::ProcessType::Flow,
                 controller_type: bhtune_core::ControllerType::Pi,

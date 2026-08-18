@@ -1,5 +1,5 @@
-//! `SimulatorBackend`: an in-process FOPDT (first-order-plus-dead-time) process model,
-//! served through the [`Backend`] trait, for fully automated E2E tests (no Windows, no
+//! `SimulatorDriver`: an in-process FOPDT (first-order-plus-dead-time) process model,
+//! served through the [`Driver`] trait, for fully automated E2E tests (no Windows, no
 //! Kepware, no external process) and demo mode.
 //!
 //! Ported from `Model/ProcessModelOPC.py`, the Python model the legacy app's hidden
@@ -7,12 +7,12 @@
 //! module splits into three independent pieces:
 //!
 //! - [`FopdtProcess`]: the process itself -- pure state advanced one tick at a time, with no
-//!   `Backend`/async awareness at all.
+//!   `Driver`/async awareness at all.
 //! - [`VirtualPid`]: a standalone position-form PID controller, for *closed-loop* validation
 //!   (e.g. "do the constants a completed MRFT run just calculated actually control this
-//!   process well?") and demos. Not wired into [`SimulatorBackend`] -- the open-loop MRFT
+//!   process well?") and demos. Not wired into [`SimulatorDriver`] -- the open-loop MRFT
 //!   relay test drives the MV itself, so nothing here needs to close the loop automatically.
-//! - [`SimulatorBackend`]: the thin [`Backend`] shell wrapping one [`FopdtProcess`].
+//! - [`SimulatorDriver`]: the thin [`Driver`] shell wrapping one [`FopdtProcess`].
 
 use std::{collections::VecDeque, sync::Mutex};
 
@@ -20,15 +20,15 @@ use async_trait::async_trait;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 use crate::{
-    backend::Backend,
-    error::{BackendError, BackendResult},
+    driver::Driver,
+    error::{DriverError, DriverResult},
     types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome},
 };
 
 /// Configuration for a [`FopdtProcess`]: the classic three parameters process control
 /// literature uses to characterize a first-order-plus-dead-time (FOPDT) process, plus the
 /// tick cadence and measurement noise needed to turn the continuous model into a discrete
-/// one a [`Backend`] can serve one sample at a time.
+/// one a [`Driver`] can serve one sample at a time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FopdtConfig {
     /// Process gain (`Kp`): steady-state change in PV per unit change in MV.
@@ -43,7 +43,7 @@ pub struct FopdtConfig {
     /// `ndelay` calculation. `0.0` disables the delay line entirely.
     pub dead_time_s: f32,
     /// Simulated seconds advanced per [`FopdtProcess::step`] call. Deliberately unrelated to
-    /// real wall-clock time -- a caller can call `step` (via [`SimulatorBackend::read`]) as
+    /// real wall-clock time -- a caller can call `step` (via [`SimulatorDriver::read`]) as
     /// fast as the CPU allows, and the simulated clock still advances at this rate, which is
     /// what lets an E2E test run an entire tuning cycle in milliseconds instead of the
     /// minutes a real 800ms-tick MRFT test takes.
@@ -209,8 +209,8 @@ pub struct VirtualPidConfig {
 
 /// A standalone position-form PID controller, for *closed-loop* validation and demos (e.g.
 /// "do the constants a completed MRFT run just calculated actually control this process
-/// well?"). Deliberately not wired into [`SimulatorBackend`]/[`Backend`] at all: the
-/// `Backend` trait models open-loop tag I/O, and during an actual MRFT relay test the engine
+/// well?"). Deliberately not wired into [`SimulatorDriver`]/[`Driver`] at all: the
+/// `Driver` trait models open-loop tag I/O, and during an actual MRFT relay test the engine
 /// itself (`bhtune_core::mrft::MrftEngine`) drives the MV -- nothing needs to close the loop
 /// automatically for that. This exists for whatever, later, wants to run this process in
 /// automatic mode instead (e.g. simulating a completed tune's results before trusting them
@@ -276,30 +276,30 @@ impl VirtualPid {
     }
 }
 
-/// The [`Backend`] implementation for CI E2E tests and demo mode: an in-process
+/// The [`Driver`] implementation for CI E2E tests and demo mode: an in-process
 /// [`FopdtProcess`] served through exactly two tags -- a PV tag (reading it advances the
 /// simulated clock by one tick) and an MV tag (reading it reports the last-written value
 /// without advancing anything; writing it records a new controller output). Any other tag
-/// is [`BackendError::InvalidTagValue`]; [`Backend::browse`] is always
-/// [`BackendError::Unsupported`], per that method's own documented convention for backends
+/// is [`DriverError::InvalidTagValue`]; [`Driver::browse`] is always
+/// [`DriverError::Unsupported`], per that method's own documented convention for drivers
 /// with no real tag tree.
 ///
-/// Uses a plain `std::sync::Mutex`, not `tokio::sync::Mutex` like [`crate::OpcDaBackend`]:
+/// Uses a plain `std::sync::Mutex`, not `tokio::sync::Mutex` like [`crate::OpcDaDriver`]:
 /// every operation here is synchronous, in-memory math with no `.await` point anywhere in
 /// the critical section, so there is nothing that could hold the guard across a suspension
 /// point -- the concern `tokio::sync::Mutex` exists for -- in the first place.
 #[derive(Debug)]
-pub struct SimulatorBackend {
+pub struct SimulatorDriver {
     pv_tag: TagId,
     mv_tag: TagId,
     process: Mutex<FopdtProcess>,
 }
 
-impl SimulatorBackend {
-    /// `pv_tag`/`mv_tag` are the only two tags this backend recognizes -- pick names that
+impl SimulatorDriver {
+    /// `pv_tag`/`mv_tag` are the only two tags this driver recognizes -- pick names that
     /// match whatever tag configuration the rest of a test or demo run uses, so the same
-    /// tag names work whether the caller is pointed at this backend or a real
-    /// [`crate::OpcDaBackend`].
+    /// tag names work whether the caller is pointed at this driver or a real
+    /// [`crate::OpcDaDriver`].
     pub fn new(
         pv_tag: impl Into<TagId>,
         mv_tag: impl Into<TagId>,
@@ -307,8 +307,8 @@ impl SimulatorBackend {
         initial_pv: f32,
         initial_mv: f32,
         seed: u64,
-    ) -> SimulatorBackend {
-        SimulatorBackend {
+    ) -> SimulatorDriver {
+        SimulatorDriver {
             pv_tag: pv_tag.into(),
             mv_tag: mv_tag.into(),
             process: Mutex::new(FopdtProcess::new(config, initial_pv, initial_mv, seed)),
@@ -317,8 +317,8 @@ impl SimulatorBackend {
 }
 
 #[async_trait]
-impl Backend for SimulatorBackend {
-    async fn read(&self, tags: &[TagId]) -> BackendResult<Vec<TagValue>> {
+impl Driver for SimulatorDriver {
+    async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
         let mut process = self.process.lock().unwrap();
         tags.iter()
             .map(|tag| {
@@ -327,10 +327,9 @@ impl Backend for SimulatorBackend {
                 } else if *tag == self.mv_tag {
                     process.mv()
                 } else {
-                    return Err(BackendError::InvalidTagValue {
+                    return Err(DriverError::InvalidTagValue {
                         tag: tag.clone(),
-                        message: "SimulatorBackend only knows its configured PV/MV tags"
-                            .to_string(),
+                        message: "SimulatorDriver only knows its configured PV/MV tags".to_string(),
                     });
                 };
                 Ok(TagValue {
@@ -343,12 +342,11 @@ impl Backend for SimulatorBackend {
             .collect()
     }
 
-    async fn write(&self, tag: &TagId, value: TagWrite) -> BackendResult<WriteOutcome> {
+    async fn write(&self, tag: &TagId, value: TagWrite) -> DriverResult<WriteOutcome> {
         if *tag != self.mv_tag {
-            return Err(BackendError::InvalidTagValue {
+            return Err(DriverError::InvalidTagValue {
                 tag: tag.clone(),
-                message: "SimulatorBackend only accepts writes to its configured MV tag"
-                    .to_string(),
+                message: "SimulatorDriver only accepts writes to its configured MV tag".to_string(),
             });
         }
         let mv = match value {
@@ -366,8 +364,8 @@ impl Backend for SimulatorBackend {
         Ok(WriteOutcome::success())
     }
 
-    async fn browse(&self, _path: &str) -> BackendResult<Vec<TagNode>> {
-        Err(BackendError::Unsupported {
+    async fn browse(&self, _path: &str) -> DriverResult<Vec<TagNode>> {
+        Err(DriverError::Unsupported {
             operation: "browse",
         })
     }
@@ -599,10 +597,10 @@ mod tests {
         );
     }
 
-    // --- SimulatorBackend ------------------------------------------------------------------
+    // --- SimulatorDriver ------------------------------------------------------------------
 
-    fn backend() -> SimulatorBackend {
-        SimulatorBackend::new(
+    fn driver() -> SimulatorDriver {
+        SimulatorDriver::new(
             "Loop.PV",
             "Loop.MV",
             FopdtConfig::new(1.0, 4.0, 0.0, 1.0),
@@ -614,9 +612,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_mv_tag_reports_current_mv_without_advancing_pv() {
-        let backend = backend();
-        let first = backend.read(&["Loop.MV".to_string()]).await.unwrap();
-        let second = backend.read(&["Loop.MV".to_string()]).await.unwrap();
+        let driver = driver();
+        let first = driver.read(&["Loop.MV".to_string()]).await.unwrap();
+        let second = driver.read(&["Loop.MV".to_string()]).await.unwrap();
         assert_eq!(first[0].value, "50");
         assert_eq!(second[0].value, "50");
         assert_eq!(first[0].quality, Quality::Good);
@@ -624,15 +622,15 @@ mod tests {
 
     #[tokio::test]
     async fn read_pv_tag_advances_the_simulated_process_each_call() {
-        let backend = backend();
-        backend
+        let driver = driver();
+        driver
             .write(&"Loop.MV".to_string(), TagWrite::Float(80.0))
             .await
             .unwrap();
 
         let mut values = Vec::new();
         for _ in 0..5 {
-            let read = backend.read(&["Loop.PV".to_string()]).await.unwrap();
+            let read = driver.read(&["Loop.PV".to_string()]).await.unwrap();
             values.push(read[0].value.parse::<f32>().unwrap());
         }
         // Each successive read should move further toward the new MV-driven target (80.0),
@@ -644,20 +642,20 @@ mod tests {
 
     #[tokio::test]
     async fn write_accepts_a_raw_string_that_parses_as_a_number() {
-        let backend = backend();
-        let outcome = backend
+        let driver = driver();
+        let outcome = driver
             .write(&"Loop.MV".to_string(), TagWrite::Raw("65.5".to_string()))
             .await
             .unwrap();
         assert!(outcome.success);
-        let read = backend.read(&["Loop.MV".to_string()]).await.unwrap();
+        let read = driver.read(&["Loop.MV".to_string()]).await.unwrap();
         assert_eq!(read[0].value, "65.5");
     }
 
     #[tokio::test]
     async fn write_rejects_a_raw_string_that_does_not_parse_as_a_number() {
-        let backend = backend();
-        let outcome = backend
+        let driver = driver();
+        let outcome = driver
             .write(
                 &"Loop.MV".to_string(),
                 TagWrite::Raw("not-a-number".to_string()),
@@ -670,45 +668,45 @@ mod tests {
 
     #[tokio::test]
     async fn read_unknown_tag_is_invalid_tag_value_not_a_panic() {
-        let backend = backend();
-        let err = backend
+        let driver = driver();
+        let err = driver
             .read(&["Nonexistent.Tag".to_string()])
             .await
             .unwrap_err();
-        assert!(matches!(err, BackendError::InvalidTagValue { .. }));
+        assert!(matches!(err, DriverError::InvalidTagValue { .. }));
     }
 
     #[tokio::test]
     async fn write_unknown_tag_is_invalid_tag_value_not_a_panic() {
-        let backend = backend();
-        let err = backend
+        let driver = driver();
+        let err = driver
             .write(&"Nonexistent.Tag".to_string(), TagWrite::Float(1.0))
             .await
             .unwrap_err();
-        assert!(matches!(err, BackendError::InvalidTagValue { .. }));
+        assert!(matches!(err, DriverError::InvalidTagValue { .. }));
     }
 
     #[tokio::test]
     async fn browse_is_unsupported() {
-        let backend = backend();
-        let err = backend.browse("").await.unwrap_err();
+        let driver = driver();
+        let err = driver.browse("").await.unwrap_err();
         assert!(matches!(
             err,
-            BackendError::Unsupported {
+            DriverError::Unsupported {
                 operation: "browse"
             }
         ));
     }
 
-    /// End-to-end: a real `MrftEngine` (from `bhtune-core`) drives `SimulatorBackend`
-    /// through the actual `Backend` trait -- not a hand-rolled process simulation local to
+    /// End-to-end: a real `MrftEngine` (from `bhtune-core`) drives `SimulatorDriver`
+    /// through the actual `Driver` trait -- not a hand-rolled process simulation local to
     /// the test, as `bhtune-core`'s own equivalent test necessarily uses (it cannot depend
-    /// on `bhtune-backend`, which depends on it) -- and completes with plausible peaks,
-    /// troughs, and switch counts. Proves `SimulatorBackend` is actually fit for its
+    /// on `bhtune-driver`, which depends on it) -- and completes with plausible peaks,
+    /// troughs, and switch counts. Proves `SimulatorDriver` is actually fit for its
     /// intended purpose: driving synthetic MRFT runs for `core-replay-harness`-style
     /// coverage and future `e2e-simulator` CI tests, entirely without wall-clock sleeps.
     #[tokio::test]
-    async fn mrft_engine_completes_a_realistic_relay_test_against_the_simulator_backend() {
+    async fn mrft_engine_completes_a_realistic_relay_test_against_the_simulator_driver() {
         use bhtune_core::{
             Action, ControllerDirection, ControllerType, InitialReadings, LoopConfig, MrftCompat,
             MrftEngine, ProcessType, ResponseLevel, Tick, lookup,
@@ -729,7 +727,7 @@ mod tests {
         // needs process phase lag to sustain oscillation (a memoryless process makes the
         // relay chatter every tick instead) -- matching the reasoning already established
         // for `bhtune-core`'s own equivalent test.
-        let backend = SimulatorBackend::new(
+        let driver = SimulatorDriver::new(
             pv_tag.clone(),
             mv_tag.clone(),
             FopdtConfig::new(1.0, 2.0, 5.0, 1.0),
@@ -764,14 +762,14 @@ mod tests {
 
         let mut completion = None;
         for i in 1..=500 {
-            let read = backend.read(std::slice::from_ref(&pv_tag)).await.unwrap();
+            let read = driver.read(std::slice::from_ref(&pv_tag)).await.unwrap();
             let pv: f32 = read[0].value.parse().unwrap();
             let time = start_time + chrono::Duration::seconds(i);
 
             for action in engine.step(Tick { time, pv }) {
                 match action {
                     Action::WriteMv(mv) => {
-                        backend.write(&mv_tag, TagWrite::Float(mv)).await.unwrap();
+                        driver.write(&mv_tag, TagWrite::Float(mv)).await.unwrap();
                     }
                     Action::Complete {
                         peaks,

@@ -5,7 +5,7 @@
 //!
 //! v1 deliberately allows only **one** active run at a time, matching the CLI's own
 //! single-sequential-process model: a second `POST /api/runs` while one is already running
-//! gets `409 Conflict` rather than starting a concurrent `OpcDaBackend` against the same live
+//! gets `409 Conflict` rather than starting a concurrent `OpcDaDriver` against the same live
 //! plant, which is untested territory this project isn't taking on yet. See AGENTS.md's
 //! `server-start-tune-api` notes.
 
@@ -68,7 +68,7 @@ impl ActiveRun {
 
     /// The currently active run's id, if any -- a cheap, non-authoritative check `POST
     /// /api/runs`'s handler uses *before* calling `prepare()` (template lookup, tag
-    /// derivation, a real backend connection attempt) purely to avoid that work when it's
+    /// derivation, a real driver connection attempt) purely to avoid that work when it's
     /// already obvious a run is active. Not a substitute for [`ActiveRun::start`]'s own
     /// atomic reservation: a run can start or finish between this call returning and
     /// whatever the caller does next, which is exactly why `start` re-checks and is the one

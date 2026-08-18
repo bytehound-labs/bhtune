@@ -20,7 +20,7 @@
 //! describes a type's shape, with zero runtime behavior of its own. Anything added here
 //! must be justified by the pure domain logic itself (or, for `utoipa`, by describing it
 //! accurately to a consumer), not by a consumer's I/O or presentation needs — those belong
-//! in `bhtune-backend`, `bhtune-db`, `bhtune-cli`, or `bhtune-server`.
+//! in `bhtune-driver`, `bhtune-db`, `bhtune-cli`, or `bhtune-server`.
 
 pub mod constants;
 pub mod controller_type;

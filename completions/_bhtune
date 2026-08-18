@@ -38,8 +38,8 @@ _bhtune() {
         case $line[1] in
             (tune)
 _arguments "${_arguments_options[@]}" : \
-'-t+[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--backend simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
-'--tagname=[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--backend simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
+'-t+[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--driver simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
+'--tagname=[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--driver simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
 '--template=[DCS/PLC template name (see \`bhtune template list\`)]:TEMPLATE:_default' \
 '--process-type=[]:PROCESS_TYPE:(flow pressure-line pressure-vessel level temperature-mixing temperature-heat-exchange)' \
 '--controller-type=[]:CONTROLLER_TYPE:(p pi pid)' \
@@ -48,27 +48,27 @@ _arguments "${_arguments_options[@]}" : \
 '--cycles-count=[Relay cycles to count once the skip period ends (default\: looked up per \`--process-type\`)]:CYCLES_COUNT:_default' \
 '--noise-protection-secs=[Seconds a switch must persist before it'\''s accepted (default\: looked up per \`--process-type\`)]:NOISE_PROTECTION_SECS:_default' \
 '--mrft-delay=[Pre/post-test recording padding, in seconds (legacy\: \`--mrftDelayTime\`)]:MRFT_DELAY:_default' \
-'--backend=[Which backend drives this tune]:BACKEND:((opcda\:"A real OPC DA server, reached through an opcda-bridge gateway"
+'--driver=[Which driver drives this tune]:DRIVER:((opcda\:"A real OPC DA server, reached through an opcda-bridge gateway"
 simulator\:"The in-process FOPDT simulator — no external dependency at all"))' \
-'--bridge-host=[opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md'\''s OPC DA integration notes. Only meaningful with \`--backend opcda\` (default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via the \`BHTUNE_BRIDGE_HOST\` env var or the config file'\''s \`bridge_host\` key)]:BRIDGE_HOST:_default' \
-'--server=[OPC DA server ProgID (legacy\: \`-s\`/\`--opcServerID\`). Required with \`--backend opcda\`]:SERVER:_default' \
-'--sim-gain=[Simulator process gain (\`--backend simulator\` only)]:SIM_GAIN:_default' \
-'--sim-tau=[Simulator process time constant, in seconds (\`--backend simulator\` only)]:SIM_TAU:_default' \
-'--sim-dead-time=[Simulator dead time, in seconds (\`--backend simulator\` only)]:SIM_DEAD_TIME:_default' \
-'--sim-noise=[Simulator measurement noise amplitude (\`--backend simulator\` only)]:SIM_NOISE:_default' \
-'--sim-seed=[Simulator RNG seed, for reproducible noise (\`--backend simulator\` only)]:SIM_SEED:_default' \
-'--sim-initial-pv=[Simulator initial PV (\`--backend simulator\` only)]:SIM_INITIAL_PV:_default' \
-'--sim-initial-mv=[Simulator initial MV (\`--backend simulator\` only)]:SIM_INITIAL_MV:_default' \
-'--pv-range-high=[Fixed PV range high, overriding a live tag read (legacy\: the PV range "toggle tag/value" button). Required (defaults to 100.0) for \`--backend simulator\`, which has no range tags at all]:PV_RANGE_HIGH:_default' \
+'--bridge-host=[opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md'\''s OPC DA integration notes. Only meaningful with \`--driver opcda\` (default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via the \`BHTUNE_BRIDGE_HOST\` env var or the config file'\''s \`bridge_host\` key)]:BRIDGE_HOST:_default' \
+'--server=[OPC DA server ProgID (legacy\: \`-s\`/\`--opcServerID\`). Required with \`--driver opcda\`]:SERVER:_default' \
+'--sim-gain=[Simulator process gain (\`--driver simulator\` only)]:SIM_GAIN:_default' \
+'--sim-tau=[Simulator process time constant, in seconds (\`--driver simulator\` only)]:SIM_TAU:_default' \
+'--sim-dead-time=[Simulator dead time, in seconds (\`--driver simulator\` only)]:SIM_DEAD_TIME:_default' \
+'--sim-noise=[Simulator measurement noise amplitude (\`--driver simulator\` only)]:SIM_NOISE:_default' \
+'--sim-seed=[Simulator RNG seed, for reproducible noise (\`--driver simulator\` only)]:SIM_SEED:_default' \
+'--sim-initial-pv=[Simulator initial PV (\`--driver simulator\` only)]:SIM_INITIAL_PV:_default' \
+'--sim-initial-mv=[Simulator initial MV (\`--driver simulator\` only)]:SIM_INITIAL_MV:_default' \
+'--pv-range-high=[Fixed PV range high, overriding a live tag read (legacy\: the PV range "toggle tag/value" button). Required (defaults to 100.0) for \`--driver simulator\`, which has no range tags at all]:PV_RANGE_HIGH:_default' \
 '--pv-range-low=[Fixed PV range low, overriding a live tag read]:PV_RANGE_LOW:_default' \
 '--mv-range-high=[Fixed MV range high, overriding a live tag read]:MV_RANGE_HIGH:_default' \
 '--mv-range-low=[Fixed MV range low, overriding a live tag read]:MV_RANGE_LOW:_default' \
 '--direction=[Fixed controller direction, overriding a live tag read]:DIRECTION:(direct reverse)' \
-'--poll-interval-ms=[How often to poll the backend, in milliseconds (legacy\: the 800 ms WinForms timer)]:POLL_INTERVAL_MS:_default' \
+'--poll-interval-ms=[How often to poll the driver, in milliseconds (legacy\: the 800 ms WinForms timer)]:POLL_INTERVAL_MS:_default' \
 '--timeout-secs=[Hard wall-clock cap on this run'\''s total duration (including any \`--mrft-delay\` padding), in seconds. If the engine hasn'\''t reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop'\''s expected test duration -- temperature loops in particular can need much longer than the default]:TIMEOUT_SECS:_default' \
 '--name=[A friendly name for this run, recorded as \`loop_name\` (default\: the PV tag name)]:NAME:_default' \
 '--write-pid=[Non-interactively write this response level'\''s calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires \`--yes\`]:WRITE_PID:(aggressive moderate sluggish)' \
-'--op-timeout-secs=[Cap on any single backend read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and \`--timeout-secs\` both stay effective even mid-hung-read/write -- see AGENTS.md'\''s \`safety-cancellation\` section. Distinct from \`--timeout-secs\`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration]:OP_TIMEOUT_SECS:_default' \
+'--op-timeout-secs=[Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and \`--timeout-secs\` both stay effective even mid-hung-read/write -- see AGENTS.md'\''s \`safety-cancellation\` section. Distinct from \`--timeout-secs\`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration]:OP_TIMEOUT_SECS:_default' \
 '--restore-timeout-secs=[Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of \`--timeout-secs\`, since a restore triggered *by* a timeout would otherwise inherit an already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits \`EXIT_RESTORE_INCOMPLETE\` with a warning naming the loop and its last-written value, instead of hanging indefinitely]:RESTORE_TIMEOUT_SECS:_default' \
 '--output=[How to print this run'\''s final outcome line]:OUTPUT:((table\:"Human-readable text (default)"
 json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
@@ -711,7 +711,7 @@ _bhtune__subcmd__help__subcmd__history_commands() {
     local commands; commands=(
 'list:List past runs, newest first' \
 'show:Show one run'\''s full detail\: config, initial readings, calculated results, and any PID write-back audit rows' \
-'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` backend (nothing live to revert against)' \
+'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` driver (nothing live to revert against)' \
 'prune:Delete runs older than the configured retention policy (\`history-retention\`), without waiting for the next automatic startup sweep' \
     )
     _describe -t commands 'bhtune help history commands' commands "$@"
@@ -811,7 +811,7 @@ _bhtune__subcmd__history_commands() {
     local commands; commands=(
 'list:List past runs, newest first' \
 'show:Show one run'\''s full detail\: config, initial readings, calculated results, and any PID write-back audit rows' \
-'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` backend (nothing live to revert against)' \
+'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` driver (nothing live to revert against)' \
 'prune:Delete runs older than the configured retention policy (\`history-retention\`), without waiting for the next automatic startup sweep' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -822,7 +822,7 @@ _bhtune__subcmd__history__subcmd__help_commands() {
     local commands; commands=(
 'list:List past runs, newest first' \
 'show:Show one run'\''s full detail\: config, initial readings, calculated results, and any PID write-back audit rows' \
-'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` backend (nothing live to revert against)' \
+'revert:Undo a run'\''s PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever \`write\`-kind write-back that run last recorded; refuses if the run has none, if that write-back'\''s pre-read itself failed (nothing to revert to), or if the run did not use the \`opcda\` driver (nothing live to revert against)' \
 'prune:Delete runs older than the configured retention policy (\`history-retention\`), without waiting for the next automatic startup sweep' \
 'help:Print this message or the help of the given subcommand(s)' \
     )

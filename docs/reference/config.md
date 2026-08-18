@@ -21,7 +21,7 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
       ]
     },
     "bridge_host": {
-      "description": "Overrides [`DEFAULT_BRIDGE_HOST`] for every `tune --backend opcda` and `opc`\nsubcommand invocation that doesn't pass `--bridge-host` explicitly.",
+      "description": "Overrides [`DEFAULT_BRIDGE_HOST`] for every `tune --driver opcda` and `opc`\nsubcommand invocation that doesn't pass `--bridge-host` explicitly.",
       "type": [
         "string",
         "null"

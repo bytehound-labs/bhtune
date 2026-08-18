@@ -14,14 +14,14 @@ If one of these matters to you sooner than it might otherwise land, say so on th
 [issue tracker](https://github.com/bytehound-labs/bhtune/issues) — real usage is what decides
 order here, not a fixed sequence.
 
-## Additional protocol backends: OPC UA and Modbus
+## Additional protocol drivers: OPC UA and Modbus
 
 OPC DA (via [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge)) is the primary,
 supported driver today, but it isn't the only industrial protocol in the field, and it isn't
-architecturally privileged: BHTune talks to the plant entirely through one `Backend` trait
+architecturally privileged: BHTune talks to the plant entirely through one `Driver` trait
 (`read`/`write`/`browse`), and the tuning engine has no idea which protocol is on the other
-side of it. Adding `OpcUaBackend` and `ModbusBackend` implementations is additive work at the
-`bhtune-backend` layer — it needs no changes to `bhtune-core`'s tuning math or the MRFT state
+side of it. Adding `OpcUaDriver` and `ModbusDriver` implementations is additive work at the
+`bhtune-driver` layer — it needs no changes to `bhtune-core`'s tuning math or the MRFT state
 machine, and no schema changes either, since a loop's tags are just strings regardless of the
 protocol that resolves them.
 

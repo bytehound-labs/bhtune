@@ -133,7 +133,7 @@ CREATE INDEX idx_loops_dcs_template ON loops(dcs_template_id);
 --
 -- The initial-readings columns (`pv_ini` through `controller_direction`)
 -- are nullable: a row is written the moment a run is attempted, before
--- those values are read from the backend, so a failure during that very
+-- those values are read from the driver, so a failure during that very
 -- read (the legacy app's `ReadInitialOPCvalues`/`InvalidCastException`
 -- failure mode) still leaves an auditable "attempted at <time>, failed:
 -- <reason>" record instead of silently vanishing.
@@ -164,7 +164,7 @@ CREATE TABLE tune_runs (
     tags_json               TEXT NOT NULL CHECK (json_valid(tags_json)),
 
     test_type               TEXT NOT NULL DEFAULT 'mrft' CHECK (test_type IN ('mrft')),
-    backend                  TEXT NOT NULL CHECK (backend IN ('opcda', 'simulator', 'replay')),
+    driver                  TEXT NOT NULL CHECK (driver IN ('opcda', 'simulator', 'replay')),
     -- Whether this run permitted `Quality::Uncertain` OPC readings via
     -- `--allow-uncertain-quality` (`Quality::Bad` is never accepted, flag or
     -- no flag). Defaults to 0/false, set via a follow-up
@@ -180,7 +180,7 @@ CREATE TABLE tune_runs (
     failure_reason           TEXT,
 
     -- Snapshot of `bhtune_core::loop_config::LoopConfig`. Always known
-    -- before a run starts (user/schedule input, not backend-read), so
+    -- before a run starts (user/schedule input, not driver-read), so
     -- these stay `NOT NULL` even though the initial-readings columns below
     -- don't.
     process_type             TEXT NOT NULL CHECK (process_type IN ('flow', 'pressure_line', 'pressure_vessel', 'level', 'temperature_mixing', 'temperature_heat_exchange')),
@@ -242,7 +242,7 @@ CREATE TABLE tune_samples (
     tick                    INTEGER NOT NULL,
     time                    TEXT NOT NULL,
     pv                      REAL NOT NULL,
-    -- Backend-reported quality of this tick's `pv` reading (finding 5 of the
+    -- Driver-reported quality of this tick's `pv` reading (finding 5 of the
     -- live-plant safety review). A non-`Good` sample (unless the run set
     -- `allow_uncertain_quality` and this is merely `uncertain`) aborts the
     -- run before this row is even the last one written -- see

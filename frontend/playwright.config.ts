@@ -11,7 +11,7 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 /**
  * `e2e-playwright`: drives a full tune through the real, built React SPA served by a real
- * `bhtune-server` binary running the in-process simulator backend -- no mocked HTTP layer,
+ * `bhtune-server` binary running the in-process simulator driver -- no mocked HTTP layer,
  * no Vite dev server. A direct dividend of dropping Tauri (see AGENTS.md's "Web app
  * architecture"): `tauri-driver`/WebDriver would have been markedly more fragile in CI than
  * plain Playwright-against-a-browser.

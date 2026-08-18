@@ -60,7 +60,7 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 - Coverage is tracked by Codecov and enforced at 100% (`codecov.yml`). Add tests for new code —
   including error branches and edge cases — in the same PR.
 - End-to-end browser tests live in `frontend/e2e/` (Playwright), driving a real
-  `bhtune-server` running the simulator backend through the actual built UI — no mocked HTTP
+  `bhtune-server` running the simulator driver through the actual built UI — no mocked HTTP
   layer. Run locally with:
 
   ```sh

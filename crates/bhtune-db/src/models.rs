@@ -381,13 +381,13 @@ pub struct LoopRow {
 
 // tune_runs {{{1
 
-/// Which [`crate`]-agnostic I/O backend a run used. Lives in `bhtune-db` rather than
+/// Which [`crate`]-agnostic I/O driver a run used. Lives in `bhtune-db` rather than
 /// `bhtune-core` because it's a persistence/orchestration concept (which adapter drove this
 /// run), not a domain concept the pure MRFT engine itself needs to know about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
-pub enum TuneBackend {
+pub enum TuneDriver {
     Opcda,
     Simulator,
     Replay,
@@ -422,7 +422,7 @@ pub enum RestoreStatus {
     Incomplete,
 }
 
-/// The initial-readings snapshot for a [`TuneRunRow`] — known only once the backend's initial
+/// The initial-readings snapshot for a [`TuneRunRow`] — known only once the driver's initial
 /// read actually succeeds (`ReadInitialOPCvalues` in the legacy app); `None` for a run that
 /// failed before or during that step. Combines
 /// [`bhtune_core::mrft::InitialReadings`]/[`bhtune_core::range::PvRange`] with the
@@ -460,13 +460,13 @@ pub struct TuneRunRow {
     pub id: i64,
     pub loop_id: Option<i64>,
     pub loop_name: String,
-    pub backend: TuneBackend,
+    pub driver: TuneDriver,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub outcome: TuneOutcome,
     pub failure_reason: Option<String>,
     /// Snapshot of the `LoopConfig` this run was started with — always known up front, since
-    /// it's user/schedule input rather than something read from the backend.
+    /// it's user/schedule input rather than something read from the driver.
     pub config: LoopConfig,
     /// Where the snapshotted `template` below came from (see [`TemplateOrigin`]).
     pub template_origin: TemplateOrigin,
@@ -509,7 +509,7 @@ pub struct TuneRunFilter {
     pub process_type: Option<ProcessType>,
     pub controller_type: Option<ControllerType>,
     pub outcome: Option<TuneOutcome>,
-    pub backend: Option<TuneBackend>,
+    pub driver: Option<TuneDriver>,
     /// Matches runs with `started_at >= started_after` (inclusive).
     pub started_after: Option<DateTime<Utc>>,
     /// Matches runs with `started_at <= started_before` (inclusive).
@@ -539,8 +539,8 @@ impl TuneRunFilter {
         self
     }
 
-    pub fn with_backend(mut self, backend: TuneBackend) -> TuneRunFilter {
-        self.backend = Some(backend);
+    pub fn with_driver(mut self, driver: TuneDriver) -> TuneRunFilter {
+        self.driver = Some(driver);
         self
     }
 
@@ -614,7 +614,7 @@ impl TuneRunRow {
         pool: &SqlitePool,
         loop_id: Option<i64>,
         loop_name: &str,
-        backend: TuneBackend,
+        driver: TuneDriver,
         config: LoopConfig,
         template_origin: TemplateOrigin,
         template: &DcsTemplate,
@@ -628,7 +628,7 @@ impl TuneRunRow {
         let row = sqlx::query(
             r#"
             INSERT INTO tune_runs (
-                loop_id, loop_name, backend, started_at, outcome,
+                loop_id, loop_name, driver, started_at, outcome,
                 process_type, controller_type, relay_amp_percent, num_cycles_skip,
                 num_cycles_count, noise_protection_secs, mrft_delay_secs,
                 template_name, template_origin, template_snapshot_json, tags_json,
@@ -639,7 +639,7 @@ impl TuneRunRow {
         )
         .bind(loop_id)
         .bind(loop_name)
-        .bind(enum_to_text(&backend))
+        .bind(enum_to_text(&driver))
         .bind(now)
         .bind(enum_to_text(&config.process_type))
         .bind(enum_to_text(&config.controller_type))
@@ -660,7 +660,7 @@ impl TuneRunRow {
         row_to_tune_run(row)
     }
 
-    /// Records the backend's initial-readings snapshot (`ReadInitialOPCvalues` in the legacy
+    /// Records the driver's initial-readings snapshot (`ReadInitialOPCvalues` in the legacy
     /// app) for an already-started run. Called at most once per run, right after that read
     /// succeeds -- and, deliberately, *before* `transition_to_manual`'s first mutating write
     /// rather than after it (`safety-restore-guard`, finding 3 of the live-plant safety
@@ -941,10 +941,10 @@ fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) {
             .push(" AND outcome = ")
             .push_bind(enum_to_text(&outcome));
     }
-    if let Some(backend) = filter.backend {
+    if let Some(driver) = filter.driver {
         builder
-            .push(" AND backend = ")
-            .push_bind(enum_to_text(&backend));
+            .push(" AND driver = ")
+            .push_bind(enum_to_text(&driver));
     }
     if let Some(started_after) = filter.started_after {
         builder.push(" AND started_at >= ").push_bind(started_after);
@@ -1003,7 +1003,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         mrft_delay_secs: row.try_get("mrft_delay_secs").map_err(DbError::Query)?,
     };
 
-    let backend: String = row.try_get("backend").map_err(DbError::Query)?;
+    let driver: String = row.try_get("driver").map_err(DbError::Query)?;
     let outcome: String = row.try_get("outcome").map_err(DbError::Query)?;
 
     let restore_status_text: Option<String> =
@@ -1034,7 +1034,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         id: row.try_get("id").map_err(DbError::Query)?,
         loop_id: row.try_get("loop_id").map_err(DbError::Query)?,
         loop_name: row.try_get("loop_name").map_err(DbError::Query)?,
-        backend: text_to_enum("backend", &backend)?,
+        driver: text_to_enum("driver", &driver)?,
         started_at: row.try_get("started_at").map_err(DbError::Query)?,
         completed_at: row.try_get("completed_at").map_err(DbError::Query)?,
         outcome: text_to_enum("outcome", &outcome)?,
@@ -1059,8 +1059,8 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
 /// How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the
 /// moment it was read (finding 5 of the live-plant safety review).
 ///
-/// A `bhtune-db`-local mirror of [`bhtune_backend::Quality`], not a reuse of it directly:
-/// `bhtune-db` deliberately doesn't depend on `bhtune-backend` (a leaf I/O-adapter crate with
+/// A `bhtune-db`-local mirror of [`bhtune_driver::Quality`], not a reuse of it directly:
+/// `bhtune-db` deliberately doesn't depend on `bhtune-driver` (a leaf I/O-adapter crate with
 /// a much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business
 /// in the persistence crate just to name one three-variant enum), so `bhtune-cli`, which
 /// already depends on both, is the one place that converts between them. This mirrors
@@ -1085,7 +1085,7 @@ pub struct TuneSampleRow {
     pub tick_index: i64,
     pub sample: Tick,
     pub state: MrftState,
-    /// The backend-reported quality of `sample.pv` at the moment it was read. See
+    /// The driver-reported quality of `sample.pv` at the moment it was read. See
     /// [`SampleQuality`].
     pub pv_quality: SampleQuality,
 }
@@ -1093,7 +1093,7 @@ pub struct TuneSampleRow {
 impl TuneSampleRow {
     /// Records one tick of a run, taking the exact [`Tick`]/[`MrftState`] pair
     /// [`bhtune_core::mrft::MrftEngine::step`] produced, plus the [`SampleQuality`] the
-    /// backend reported for `sample.pv` at read time. `(run_id, tick_index)` is unique (see
+    /// driver reported for `sample.pv` at read time. `(run_id, tick_index)` is unique (see
     /// the migration), so re-recording the same tick twice is a caller bug, not a silent
     /// overwrite.
     pub async fn insert(
@@ -1320,7 +1320,7 @@ pub struct TuneWriteRow {
     /// Whether this row is a normal write-back or `bhtune history revert` undoing one. See
     /// [`WriteKind`].
     pub kind: WriteKind,
-    /// The P/I/D values read from the backend *before* any write was attempted. `None` only
+    /// The P/I/D values read from the driver *before* any write was attempted. `None` only
     /// when the pre-read itself failed -- a hard stop before any write, so nothing else on
     /// this row was ever attempted either (`success = false`, every other field below `None`).
     pub previous: Option<WriteReadback>,
@@ -1344,7 +1344,7 @@ pub struct TuneWriteRow {
     pub rollback_error: Option<String>,
 }
 
-/// A triple of proportional/integral/derivative values, read from the backend before any
+/// A triple of proportional/integral/derivative values, read from the driver before any
 /// write is attempted ([`TuneWriteRow::previous`]). Not a `bhtune-core` type like
 /// `bhtune_core::tuning_math::OpcWriteValues`: this is a raw observation, not a
 /// calculated/intended value.
@@ -1558,18 +1558,15 @@ mod tests {
     use crate::convert::{enum_to_text, text_to_enum};
 
     #[test]
-    fn tune_backend_round_trips_and_matches_check_constraint() {
+    fn tune_driver_round_trips_and_matches_check_constraint() {
         let cases = [
-            (TuneBackend::Opcda, "opcda"),
-            (TuneBackend::Simulator, "simulator"),
-            (TuneBackend::Replay, "replay"),
+            (TuneDriver::Opcda, "opcda"),
+            (TuneDriver::Simulator, "simulator"),
+            (TuneDriver::Replay, "replay"),
         ];
         for (variant, text) in cases {
             assert_eq!(enum_to_text(&variant), text);
-            assert_eq!(
-                text_to_enum::<TuneBackend>("backend", text).unwrap(),
-                variant
-            );
+            assert_eq!(text_to_enum::<TuneDriver>("driver", text).unwrap(), variant);
         }
     }
 

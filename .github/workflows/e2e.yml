@@ -25,7 +25,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # Not confirmed strictly required to build just `bhtune-server` in isolation, but
-      # included defensively -- `bhtune-backend`'s `opcda-bridge` dependency may need it
+      # included defensively -- `bhtune-driver`'s `opcda-bridge` dependency may need it
       # transitively, matching `checks.yml`'s `check` job installing it before any
       # workspace-wide build.
       - uses: taiki-e/install-action@v2

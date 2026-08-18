@@ -56,11 +56,11 @@ Headless MRFT auto-tuner
 
 Run an MRFT tune against a real OPC DA loop or the in-process simulator
 
-**Usage:** `bhtune tune [OPTIONS] --tagname <TAGNAME> --template <TEMPLATE> --process-type <PROCESS_TYPE> --controller-type <CONTROLLER_TYPE> --relay-amp <RELAY_AMP> --backend <BACKEND>`
+**Usage:** `bhtune tune [OPTIONS] --tagname <TAGNAME> --template <TEMPLATE> --process-type <PROCESS_TYPE> --controller-type <CONTROLLER_TYPE> --relay-amp <RELAY_AMP> --driver <DRIVER>`
 
 ###### **Options:**
 
-* `-t`, `--tagname <TAGNAME>` — PV tag prefix; the rest of the tag set is derived from it using `--template`'s suffix convention. Ignored for `--backend simulator`, which uses two fixed internal tag names instead
+* `-t`, `--tagname <TAGNAME>` — PV tag prefix; the rest of the tag set is derived from it using `--template`'s suffix convention. Ignored for `--driver simulator`, which uses two fixed internal tag names instead
 * `--template <TEMPLATE>` — DCS/PLC template name (see `bhtune template list`)
 * `--process-type <PROCESS_TYPE>`
 
@@ -77,7 +77,7 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
 * `--mrft-delay <MRFT_DELAY>` — Pre/post-test recording padding, in seconds (legacy: `--mrftDelayTime`)
 
   Default value: `0`
-* `--backend <BACKEND>` — Which backend drives this tune
+* `--driver <DRIVER>` — Which driver drives this tune
 
   Possible values:
   - `opcda`:
@@ -85,30 +85,30 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
   - `simulator`:
     The in-process FOPDT simulator — no external dependency at all
 
-* `--bridge-host <BRIDGE_HOST>` — opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md's OPC DA integration notes. Only meaningful with `--backend opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file's `bridge_host` key)
-* `--server <SERVER>` — OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--backend opcda`
-* `--sim-gain <SIM_GAIN>` — Simulator process gain (`--backend simulator` only)
+* `--bridge-host <BRIDGE_HOST>` — opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md's OPC DA integration notes. Only meaningful with `--driver opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file's `bridge_host` key)
+* `--server <SERVER>` — OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--driver opcda`
+* `--sim-gain <SIM_GAIN>` — Simulator process gain (`--driver simulator` only)
 
   Default value: `1`
-* `--sim-tau <SIM_TAU>` — Simulator process time constant, in seconds (`--backend simulator` only)
+* `--sim-tau <SIM_TAU>` — Simulator process time constant, in seconds (`--driver simulator` only)
 
   Default value: `2`
-* `--sim-dead-time <SIM_DEAD_TIME>` — Simulator dead time, in seconds (`--backend simulator` only)
+* `--sim-dead-time <SIM_DEAD_TIME>` — Simulator dead time, in seconds (`--driver simulator` only)
 
   Default value: `5`
-* `--sim-noise <SIM_NOISE>` — Simulator measurement noise amplitude (`--backend simulator` only)
+* `--sim-noise <SIM_NOISE>` — Simulator measurement noise amplitude (`--driver simulator` only)
 
   Default value: `0`
-* `--sim-seed <SIM_SEED>` — Simulator RNG seed, for reproducible noise (`--backend simulator` only)
+* `--sim-seed <SIM_SEED>` — Simulator RNG seed, for reproducible noise (`--driver simulator` only)
 
   Default value: `0`
-* `--sim-initial-pv <SIM_INITIAL_PV>` — Simulator initial PV (`--backend simulator` only)
+* `--sim-initial-pv <SIM_INITIAL_PV>` — Simulator initial PV (`--driver simulator` only)
 
   Default value: `50`
-* `--sim-initial-mv <SIM_INITIAL_MV>` — Simulator initial MV (`--backend simulator` only)
+* `--sim-initial-mv <SIM_INITIAL_MV>` — Simulator initial MV (`--driver simulator` only)
 
   Default value: `50`
-* `--pv-range-high <PV_RANGE_HIGH>` — Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle tag/value" button). Required (defaults to 100.0) for `--backend simulator`, which has no range tags at all
+* `--pv-range-high <PV_RANGE_HIGH>` — Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle tag/value" button). Required (defaults to 100.0) for `--driver simulator`, which has no range tags at all
 * `--pv-range-low <PV_RANGE_LOW>` — Fixed PV range low, overriding a live tag read
 * `--mv-range-high <MV_RANGE_HIGH>` — Fixed MV range high, overriding a live tag read
 * `--mv-range-low <MV_RANGE_LOW>` — Fixed MV range low, overriding a live tag read
@@ -116,7 +116,7 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
 
   Possible values: `direct`, `reverse`
 
-* `--poll-interval-ms <POLL_INTERVAL_MS>` — How often to poll the backend, in milliseconds (legacy: the 800 ms WinForms timer)
+* `--poll-interval-ms <POLL_INTERVAL_MS>` — How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer)
 
   Default value: `800`
 * `--timeout-secs <TIMEOUT_SECS>` — Hard wall-clock cap on this run's total duration (including any `--mrft-delay` padding), in seconds. If the engine hasn't reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop's expected test duration -- temperature loops in particular can need much longer than the default
@@ -129,7 +129,7 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
   Possible values: `aggressive`, `moderate`, `sluggish`
 
 * `--allow-uncertain-quality` — Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. Off by default: a stale/held value is indistinguishable from a live one to the MRFT engine, so tolerating it can silently corrupt the switch-period measurement the whole test depends on. Only for sites whose gateway reports `Uncertain` as a matter of course -- `Quality::Bad` is never accepted, with or without this flag. Logged loudly when used and recorded on the run (`tune_runs.allow_uncertain_quality`), so history shows a run executed under relaxed rules
-* `--op-timeout-secs <OP_TIMEOUT_SECS>` — Cap on any single backend read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even mid-hung-read/write -- see AGENTS.md's `safety-cancellation` section. Distinct from `--timeout-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration
+* `--op-timeout-secs <OP_TIMEOUT_SECS>` — Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even mid-hung-read/write -- see AGENTS.md's `safety-cancellation` section. Distinct from `--timeout-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration
 
   Default value: `30`
 * `--restore-timeout-secs <RESTORE_TIMEOUT_SECS>` — Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of `--timeout-secs`, since a restore triggered *by* a timeout would otherwise inherit an already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits `EXIT_RESTORE_INCOMPLETE` with a warning naming the loop and its last-written value, instead of hanging indefinitely
@@ -328,7 +328,7 @@ Inspect past tune runs
 
 * `list` — List past runs, newest first
 * `show` — Show one run's full detail: config, initial readings, calculated results, and any PID write-back audit rows
-* `revert` — Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses if the run has none, if that write-back's pre-read itself failed (nothing to revert to), or if the run did not use the `opcda` backend (nothing live to revert against)
+* `revert` — Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses if the run has none, if that write-back's pre-read itself failed (nothing to revert to), or if the run did not use the `opcda` driver (nothing live to revert against)
 * `prune` — Delete runs older than the configured retention policy (`history-retention`), without waiting for the next automatic startup sweep
 
 
@@ -391,7 +391,7 @@ Show one run's full detail: config, initial readings, calculated results, and an
 
 ## `bhtune history revert`
 
-Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses if the run has none, if that write-back's pre-read itself failed (nothing to revert to), or if the run did not use the `opcda` backend (nothing live to revert against)
+Undo a run's PID write-back, writing its recorded pre-write P/I/D values back to the live loop. Reverts whichever `write`-kind write-back that run last recorded; refuses if the run has none, if that write-back's pre-read itself failed (nothing to revert to), or if the run did not use the `opcda` driver (nothing live to revert against)
 
 **Usage:** `bhtune history revert [OPTIONS] <RUN_ID>`
 

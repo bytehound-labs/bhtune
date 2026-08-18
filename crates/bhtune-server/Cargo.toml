@@ -23,7 +23,7 @@ bhtune-db = { workspace = true, features = ["utoipa"] }
 # database open/migrate/seed bootstrap, and tracing setup verbatim, rather than duplicating
 # or re-deriving any of it. This is a deliberate, and deliberately named, temporary coupling
 # -- see "Key architectural decisions" in AGENTS.md: `bhtune-cli` and `bhtune-server` are
-# meant to be peer adapters over `bhtune-core`/`bhtune-db`/`bhtune-backend`, not one
+# meant to be peer adapters over `bhtune-core`/`bhtune-db`/`bhtune-driver`, not one
 # depending on the other, but extracting the shared pieces (`config.rs`/`db.rs`/`logging.rs`,
 # none of which touch `clap`) into their own crate is a refactor with no payoff until a
 # second reason to do it shows up. Revisit if this coupling ever becomes awkward (e.g. the
@@ -34,7 +34,7 @@ anyhow = "1"
 chrono.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Same major version already in the workspace's dependency graph via `bhtune-backend`'s
+# Same major version already in the workspace's dependency graph via `bhtune-driver`'s
 # `tonic`/`tower` stack (see `cargo deny check`'s duplicate-version lints), so this doesn't
 # add a second `axum` build to the tree.
 axum = "0.8"

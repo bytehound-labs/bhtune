@@ -37,7 +37,7 @@ export interface paths {
     put?: never;
     /**
      * Start a new tune run.
-     * @description `POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, backend connect,
+     * @description `POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, driver connect,
      *     and the `tune_runs` insert) inline and returns as soon as that succeeds, having already
      *     `tokio::spawn`ed the actual polling/tuning phase in the background. `201 Created` carries
      *     the same [`RunDetailResponse`] `GET /api/runs/{id}` would show for this run at this
@@ -463,10 +463,10 @@ export interface components {
      */
     RollbackState: "succeeded" | "failed";
     RunDetailResponse: {
-      backend: components["schemas"]["TuneBackend"];
       /** Format: date-time */
       completed_at?: string | null;
       config: components["schemas"]["LoopConfig"];
+      driver: components["schemas"]["TuneDriver"];
       failure_reason?: string | null;
       /** Format: int64 */
       id: number;
@@ -526,7 +526,7 @@ export interface components {
      *     `GET /api/runs/{id}`).
      */
     RunSummaryResponse: {
-      backend: components["schemas"]["TuneBackend"];
+      driver: components["schemas"]["TuneDriver"];
       /** Format: int64 */
       id: number;
       loop_name: string;
@@ -539,8 +539,8 @@ export interface components {
      * @description How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the
      *     moment it was read (finding 5 of the live-plant safety review).
      *
-     *     A `bhtune-db`-local mirror of [`bhtune_backend::Quality`], not a reuse of it directly:
-     *     `bhtune-db` deliberately doesn't depend on `bhtune-backend` (a leaf I/O-adapter crate with
+     *     A `bhtune-db`-local mirror of [`bhtune_driver::Quality`], not a reuse of it directly:
+     *     `bhtune-db` deliberately doesn't depend on `bhtune-driver` (a leaf I/O-adapter crate with
      *     a much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business
      *     in the persistence crate just to name one three-variant enum), so `bhtune-cli`, which
      *     already depends on both, is the one place that converts between them. This mirrors
@@ -550,7 +550,7 @@ export interface components {
      */
     SampleQuality: "good" | "uncertain" | "bad";
     /**
-     * @description One recorded tick: the [`Tick`] input and resulting engine state, plus the backend-
+     * @description One recorded tick: the [`Tick`] input and resulting engine state, plus the driver-
      *     reported PV quality at read time. `Tick`/`MrftState` already derive `Serialize` in
      *     `bhtune-core` (they round-trip through golden-trace fixtures too), so they're embedded
      *     directly rather than re-projected field-by-field like the other DTOs here.
@@ -578,12 +578,7 @@ export interface components {
        */
       allow_uncertain_quality?: boolean;
       /**
-       * @description Which backend drives this tune. `"replay"` is rejected -- that backend exists only
-       *     for offline golden-trace validation, not for starting a live/simulated run.
-       */
-      backend: components["schemas"]["TuneBackend"];
-      /**
-       * @description opcda-bridge gateway address. Only meaningful with `backend: "opcda"` (default:
+       * @description opcda-bridge gateway address. Only meaningful with `driver: "opcda"` (default:
        *     resolved the same way the CLI resolves `--bridge-host`, via this process's own
        *     config/env).
        */
@@ -601,6 +596,11 @@ export interface components {
        */
       cycles_skip?: number | null;
       direction?: null | components["schemas"]["ControllerDirection"];
+      /**
+       * @description Which driver drives this tune. `"replay"` is rejected -- that driver exists only
+       *     for offline golden-trace validation, not for starting a live/simulated run.
+       */
+      driver: components["schemas"]["TuneDriver"];
       /**
        * Format: int32
        * @description Pre/post-test recording padding, in seconds.
@@ -626,18 +626,18 @@ export interface components {
       noise_protection_secs?: number | null;
       /**
        * Format: int64
-       * @description Cap on any single backend read/write during the run, in seconds.
+       * @description Cap on any single driver read/write during the run, in seconds.
        */
       op_timeout_secs?: number;
       /**
        * Format: int64
-       * @description How often to poll the backend, in milliseconds.
+       * @description How often to poll the driver, in milliseconds.
        */
       poll_interval_ms?: number;
       process_type: components["schemas"]["ProcessType"];
       /**
        * Format: float
-       * @description Fixed PV range high, overriding a live tag read. Required for `backend: "simulator"`,
+       * @description Fixed PV range high, overriding a live tag read. Required for `driver: "simulator"`,
        *     which has no range tags at all.
        */
       pv_range_high?: number | null;
@@ -656,44 +656,44 @@ export interface components {
        * @description Cap on restoring the loop to its pre-test state after the run ends, in seconds.
        */
       restore_timeout_secs?: number;
-      /** @description OPC DA server ProgID. Required with `backend: "opcda"`. */
+      /** @description OPC DA server ProgID. Required with `driver: "opcda"`. */
       server?: string | null;
       /**
        * Format: float
-       * @description Simulator dead time, in seconds (`backend: "simulator"` only).
+       * @description Simulator dead time, in seconds (`driver: "simulator"` only).
        */
       sim_dead_time?: number;
       /**
        * Format: float
-       * @description Simulator process gain (`backend: "simulator"` only).
+       * @description Simulator process gain (`driver: "simulator"` only).
        */
       sim_gain?: number;
       /**
        * Format: float
-       * @description Simulator initial MV (`backend: "simulator"` only).
+       * @description Simulator initial MV (`driver: "simulator"` only).
        */
       sim_initial_mv?: number;
       /**
        * Format: float
-       * @description Simulator initial PV (`backend: "simulator"` only).
+       * @description Simulator initial PV (`driver: "simulator"` only).
        */
       sim_initial_pv?: number;
       /**
        * Format: float
-       * @description Simulator measurement noise amplitude (`backend: "simulator"` only).
+       * @description Simulator measurement noise amplitude (`driver: "simulator"` only).
        */
       sim_noise?: number;
       /**
        * Format: int64
-       * @description Simulator RNG seed, for reproducible noise (`backend: "simulator"` only).
+       * @description Simulator RNG seed, for reproducible noise (`driver: "simulator"` only).
        */
       sim_seed?: number;
       /**
        * Format: float
-       * @description Simulator process time constant, in seconds (`backend: "simulator"` only).
+       * @description Simulator process time constant, in seconds (`driver: "simulator"` only).
        */
       sim_tau?: number;
-      /** @description PV tag prefix; ignored for `backend: "simulator"`. See [`TuneArgs::tagname`]. */
+      /** @description PV tag prefix; ignored for `driver: "simulator"`. See [`TuneArgs::tagname`]. */
       tagname: string;
       /** @description DCS/PLC template name (see `GET /api/templates`). */
       template: string;
@@ -761,12 +761,12 @@ export interface components {
      */
     TimeUnit: "seconds" | "minutes";
     /**
-     * @description Which [`crate`]-agnostic I/O backend a run used. Lives in `bhtune-db` rather than
+     * @description Which [`crate`]-agnostic I/O driver a run used. Lives in `bhtune-db` rather than
      *     `bhtune-core` because it's a persistence/orchestration concept (which adapter drove this
      *     run), not a domain concept the pure MRFT engine itself needs to know about.
      * @enum {string}
      */
-    TuneBackend: "opcda" | "simulator" | "replay";
+    TuneDriver: "opcda" | "simulator" | "replay";
     /**
      * @description A run's lifecycle state.
      * @enum {string}
@@ -845,7 +845,7 @@ export interface operations {
         process_type?: components["schemas"]["ProcessType"];
         controller_type?: components["schemas"]["ControllerType"];
         outcome?: components["schemas"]["TuneOutcome"];
-        backend?: components["schemas"]["TuneBackend"];
+        driver?: components["schemas"]["TuneDriver"];
         started_after?: string;
         started_before?: string;
         template_name?: string;
@@ -892,7 +892,7 @@ export interface operations {
           "application/json": components["schemas"]["RunDetailResponse"];
         };
       };
-      /** @description The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable backend). */
+      /** @description The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable driver). */
       400: {
         headers: {
           [name: string]: unknown;

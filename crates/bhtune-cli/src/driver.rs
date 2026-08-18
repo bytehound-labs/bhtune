@@ -1,25 +1,25 @@
-//! Constructs the selected [`bhtune_backend::Backend`] implementation from a [`TuneArgs`].
+//! Constructs the selected [`bhtune_driver::Driver`] implementation from a [`TuneArgs`].
 
-use bhtune_backend::{Backend, FopdtConfig, OpcDaBackend, SimulatorBackend};
+use bhtune_driver::{Driver, FopdtConfig, OpcDaDriver, SimulatorDriver};
 
-use crate::args::{BackendKindArg, TuneArgs};
+use crate::args::{DriverKindArg, TuneArgs};
 
-/// The two tag names [`SimulatorBackend`] is configured with — fixed rather than derived
+/// The two tag names [`SimulatorDriver`] is configured with — fixed rather than derived
 /// from `--tagname`/a template, since the simulator has no DCS suffix convention at all (see
-/// `backend-simulator`'s two-tag-only contract).
+/// `driver-simulator`'s two-tag-only contract).
 pub const SIMULATOR_PV_TAG: &str = "Sim.PV";
 pub const SIMULATOR_MV_TAG: &str = "Sim.MV";
 
-/// Builds the backend `args` selects. For `--backend simulator`, `args.tagname` is ignored;
+/// Builds the driver `args` selects. For `--driver simulator`, `args.tagname` is ignored;
 /// the caller must build its [`bhtune_core::LoopTags`] using [`SIMULATOR_PV_TAG`]/
 /// [`SIMULATOR_MV_TAG`] instead of deriving from a template.
-pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Backend>> {
-    match args.backend {
-        BackendKindArg::Opcda => {
+pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Driver>> {
+    match args.driver {
+        DriverKindArg::Opcda => {
             let server = args
                 .server
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("--server is required with --backend opcda"))?;
+                .ok_or_else(|| anyhow::anyhow!("--server is required with --driver opcda"))?;
             // By the time `build` runs, `commands::tune::run` has already resolved
             // `args.bridge_host` through `crate::config::resolve_bridge_host` (CLI > env >
             // config file > default), so this `unwrap_or` is a defensive fallback for
@@ -30,15 +30,15 @@ pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Backend>> {
                 .as_deref()
                 .unwrap_or(crate::config::DEFAULT_BRIDGE_HOST);
             tracing::info!(bridge_host, server = %server, "connecting to opcda-bridge gateway");
-            let backend = OpcDaBackend::connect(bridge_host, server).await?;
-            Ok(Box::new(backend))
+            let driver = OpcDaDriver::connect(bridge_host, server).await?;
+            Ok(Box::new(driver))
         }
-        BackendKindArg::Simulator => {
+        DriverKindArg::Simulator => {
             tracing::info!(
                 gain = args.sim_gain,
                 tau = args.sim_tau,
                 dead_time = args.sim_dead_time,
-                "constructing simulator backend"
+                "constructing simulator driver"
             );
             let config = FopdtConfig::new(
                 args.sim_gain,
@@ -47,7 +47,7 @@ pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Backend>> {
                 args.poll_interval_ms as f32 / 1000.0,
             )
             .with_noise_amplitude(args.sim_noise);
-            let backend = SimulatorBackend::new(
+            let driver = SimulatorDriver::new(
                 SIMULATOR_PV_TAG,
                 SIMULATOR_MV_TAG,
                 config,
@@ -55,7 +55,7 @@ pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Backend>> {
                 args.sim_initial_mv,
                 args.sim_seed,
             );
-            Ok(Box::new(backend))
+            Ok(Box::new(driver))
         }
     }
 }
@@ -76,7 +76,7 @@ mod tests {
             cycles_count: None,
             noise_protection_secs: None,
             mrft_delay: 0,
-            backend: BackendKindArg::Simulator,
+            driver: DriverKindArg::Simulator,
             bridge_host: None,
             server: None,
             sim_gain: 1.0,
@@ -104,16 +104,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn builds_a_working_simulator_backend() {
-        let backend = build(&sim_args()).await.unwrap();
-        let values = backend.read(&[SIMULATOR_MV_TAG.to_string()]).await.unwrap();
+    async fn builds_a_working_simulator_driver() {
+        let driver = build(&sim_args()).await.unwrap();
+        let values = driver.read(&[SIMULATOR_MV_TAG.to_string()]).await.unwrap();
         assert_eq!(values[0].value, "50");
     }
 
     #[tokio::test]
-    async fn opcda_backend_requires_a_server_flag() {
+    async fn opcda_driver_requires_a_server_flag() {
         let mut args = sim_args();
-        args.backend = BackendKindArg::Opcda;
+        args.driver = DriverKindArg::Opcda;
         args.bridge_host = Some("127.0.0.1:1".to_string());
         args.server = None;
         let result = build(&args).await;
@@ -122,13 +122,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opcda_backend_falls_back_to_the_default_bridge_host_when_unset() {
+    async fn opcda_driver_falls_back_to_the_default_bridge_host_when_unset() {
         // `build()` is normally only reached after `commands::tune::run` has already
         // resolved `bridge_host` via `crate::config::resolve_bridge_host`, so a `None` here
         // only happens for a direct/test caller -- confirms the fallback constant is used
         // rather than e.g. an empty host string.
         let mut args = sim_args();
-        args.backend = BackendKindArg::Opcda;
+        args.driver = DriverKindArg::Opcda;
         args.bridge_host = None;
         args.server = Some("MockServer".to_string());
         let err = build(&args).await.err().unwrap();
@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opcda_backend_connects_and_reads_through_a_mock_bridge() {
+    async fn opcda_driver_connects_and_reads_through_a_mock_bridge() {
         use crate::test_support::{MockBridgeService, start_mock_server};
         use opcda_bridge_proto::bridge::{ReadResponse, TagValue as ProtoTagValue};
 
@@ -156,14 +156,14 @@ mod tests {
         .await;
 
         let mut args = sim_args();
-        args.backend = BackendKindArg::Opcda;
+        args.driver = DriverKindArg::Opcda;
         args.bridge_host = Some(host);
         args.server = Some("MockServer".to_string());
 
         // Reaching a real read confirms `build()`'s OPC DA branch actually returned a
-        // connected, working `OpcDaBackend`, not just that `connect()` didn't error.
-        let backend = build(&args).await.unwrap();
-        let values = backend.read(&["Sim.MV".to_string()]).await.unwrap();
+        // connected, working `OpcDaDriver`, not just that `connect()` didn't error.
+        let driver = build(&args).await.unwrap();
+        let values = driver.read(&["Sim.MV".to_string()]).await.unwrap();
         assert_eq!(values[0].value, "50");
 
         server.shutdown().await;

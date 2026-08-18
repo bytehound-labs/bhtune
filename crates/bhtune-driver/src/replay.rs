@@ -1,19 +1,19 @@
-//! `ReplayBackend`: feeds a previously captured golden-master trace back through the
-//! [`Backend`] trait, tick by tick, instead of a live OPC DA connection or the in-process
+//! `ReplayDriver`: feeds a previously captured golden-master trace back through the
+//! [`Driver`] trait, tick by tick, instead of a live OPC DA connection or the in-process
 //! FOPDT simulator.
 //!
 //! `core-replay-harness` (`crates/bhtune-core/tests/golden_replay.rs`) already proves the
 //! *pure* `MrftEngine` reproduces the legacy C# application's behavior exactly, by feeding a
 //! fixture's recorded ticks directly into `engine.step(Tick { time, pv })`. That test cannot
-//! exercise anything in this crate at all -- `bhtune-core` cannot depend on `bhtune-backend`,
-//! which depends on it -- so it says nothing about whether the *real* async `Backend`
+//! exercise anything in this crate at all -- `bhtune-core` cannot depend on `bhtune-driver`,
+//! which depends on it -- so it says nothing about whether the *real* async `Driver`
 //! abstraction a live run actually goes through (tag-based indirection, `TagValue`/
 //! `TagWrite` conversions, `Quality`, `Send`-across-`.await` dispatch behind `Box<dyn
-//! Backend>`/`Arc<dyn Backend>`) introduces its own bugs on top of a provably-correct engine.
-//! `ReplayBackend` closes that gap: it serves the exact same recorded trace through the
+//! Driver>`/`Arc<dyn Driver>`) introduces its own bugs on top of a provably-correct engine.
+//! `ReplayDriver` closes that gap: it serves the exact same recorded trace through the
 //! genuine trait boundary, so a validation test can drive a real `MrftEngine` through it and
 //! confirm the same golden trace still reaches the same answer -- see this module's own
-//! `mrft_engine_replays_the_golden_trace_through_the_real_backend_trait` test.
+//! `mrft_engine_replays_the_golden_trace_through_the_real_driver_trait` test.
 
 use std::sync::Mutex;
 
@@ -22,18 +22,18 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::{
-    backend::Backend,
-    error::{BackendError, BackendResult},
+    driver::Driver,
+    error::{DriverError, DriverResult},
     types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome},
 };
 
 /// One recorded `(time, PV)` sample from a captured trace -- the two fields
-/// [`ReplayBackend`] actually needs to serve a PV read.
+/// [`ReplayDriver`] actually needs to serve a PV read.
 ///
 /// Deliberately not `bhtune-core`'s `Tick`: this crate stays free of a `bhtune-core`
-/// dependency in production code (matching `backend-trait`/`backend-opcda`/
-/// `backend-simulator`'s "reading/writing named string tags has no domain meaning by
-/// itself" rule -- see `backend-trait`'s design notes in `AGENTS.md`). Also deliberately not
+/// dependency in production code (matching `driver-trait`/`driver-opcda`/
+/// `driver-simulator`'s "reading/writing named string tags has no domain meaning by
+/// itself" rule -- see `driver-trait`'s design notes in `AGENTS.md`). Also deliberately not
 /// the full golden-fixture JSON schema `crates/bhtune-core/tests/golden_replay.rs` owns
 /// (`config`, `direction`, `initial`, `pv_range`, `template_name`, each tick's `expected`
 /// block, `expected_final`) -- none of that is needed to *serve* a replay, only to
@@ -44,17 +44,17 @@ pub struct ReplaySample {
     pub pv: f32,
 }
 
-/// A single MV write [`ReplayBackend`] observed, in the order [`Backend::write`] was called
-/// -- what a validation test inspects afterward (via [`ReplayBackend::writes`]) to see
-/// exactly what an engine driven through the real `Backend` trait chose to write, without
-/// needing its own separate bookkeeping alongside the backend's.
+/// A single MV write [`ReplayDriver`] observed, in the order [`Driver::write`] was called
+/// -- what a validation test inspects afterward (via [`ReplayDriver::writes`]) to see
+/// exactly what an engine driven through the real `Driver` trait chose to write, without
+/// needing its own separate bookkeeping alongside the driver's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedWrite {
     pub tag: TagId,
     pub value: f32,
 }
 
-/// The subset of a golden-master fixture's JSON shape [`ReplayBackend::from_fixture_json`]
+/// The subset of a golden-master fixture's JSON shape [`ReplayDriver::from_fixture_json`]
 /// parses -- every other top-level or per-tick field is silently ignored by `serde`'s
 /// default "unknown fields are fine" behavior, since none of it is needed to serve PV
 /// samples. See [`ReplaySample`]'s doc comment for why this is a deliberate subset rather
@@ -70,7 +70,7 @@ struct FixtureTick {
     pv: f32,
 }
 
-/// The error [`Backend::read`] wraps in [`BackendError::Operation`] when the configured PV
+/// The error [`Driver::read`] wraps in [`DriverError::Operation`] when the configured PV
 /// tag is read after every recorded sample has already been consumed.
 ///
 /// A correctly captured trace paired with a correctly behaving engine should never reach
@@ -79,10 +79,10 @@ struct FixtureTick {
 /// that stops polling as soon as completion is observed -- exactly the shape that test and
 /// this module's own end-to-end test both use -- never triggers it. Seeing this in practice
 /// means either the trace's tick count doesn't actually cover a real MRFT completion, or the
-/// engine driving this backend has a genuine regression that fails to complete in time.
+/// engine driving this driver has a genuine regression that fails to complete in time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplayTraceExhausted {
-    /// How many samples this backend was constructed with.
+    /// How many samples this driver was constructed with.
     pub recorded: usize,
     /// The 1-based read attempt number that failed (`recorded + 1`, `recorded + 2`, ...).
     pub attempted: usize,
@@ -108,47 +108,47 @@ struct ReplayState {
     writes: Vec<RecordedWrite>,
 }
 
-/// Serves a captured `(time, PV)` trace through the real [`Backend`] trait, for validating
+/// Serves a captured `(time, PV)` trace through the real [`Driver`] trait, for validating
 /// that a live `MrftEngine` run reproduces a golden-master trace's result when driven
 /// through the actual async abstraction -- not just when fed the trace directly, as
 /// `core-replay-harness` already does at the pure-engine level.
 ///
 /// Reading the configured PV tag returns the next unconsumed sample's PV value, with its
-/// *real* recorded time in `TagValue.timestamp`. This is the one [`Backend`] implementation
+/// *real* recorded time in `TagValue.timestamp`. This is the one [`Driver`] implementation
 /// in this crate where that field is genuinely meaningful rather than a diagnostic-only
-/// extra: [`crate::types::TagValue`]'s own doc comment is clear that a live backend's
+/// extra: [`crate::types::TagValue`]'s own doc comment is clear that a live driver's
 /// timestamp must never become "the tick time the tuning engine itself runs on, which comes
 /// from the caller's own polling clock instead" -- true and load-bearing for
-/// `OpcDaBackend`/`SimulatorBackend`, whose reported (or absent) timestamps cannot be
-/// trusted to reconstruct a control loop's real tick cadence. `ReplayBackend` is a
+/// `OpcDaDriver`/`SimulatorDriver`, whose reported (or absent) timestamps cannot be
+/// trusted to reconstruct a control loop's real tick cadence. `ReplayDriver` is a
 /// deliberate, narrow exception to that rule, not a violation of it: it is not a live
-/// backend at all, its entire purpose is exact historical replay, and the recorded time
+/// driver at all, its entire purpose is exact historical replay, and the recorded time
 /// *is* the tick time a validation test needs -- reading it straight back out of the trait
 /// boundary is simpler and less redundant than threading the same value through some
 /// separate side channel the test would otherwise have to keep in lockstep with this
-/// backend's own internal cursor.
+/// driver's own internal cursor.
 ///
 /// Reading the configured MV tag returns the last written value (or the seeded initial MV
-/// before any write), matching [`crate::SimulatorBackend`]'s convention exactly. Running a
-/// PV read past the last recorded sample is [`BackendError::Operation`] (wrapping
+/// before any write), matching [`crate::SimulatorDriver`]'s convention exactly. Running a
+/// PV read past the last recorded sample is [`DriverError::Operation`] (wrapping
 /// [`ReplayTraceExhausted`]) rather than panicking or silently repeating/holding the last
 /// value, since either of those would let a real regression (the engine failing to
 /// complete) masquerade as a passing test.
 ///
-/// Uses `std::sync::Mutex`, matching [`crate::SimulatorBackend`]: every operation here is
+/// Uses `std::sync::Mutex`, matching [`crate::SimulatorDriver`]: every operation here is
 /// synchronous index/vec bookkeeping with no `.await` point in the critical section.
 #[derive(Debug)]
-pub struct ReplayBackend {
+pub struct ReplayDriver {
     pv_tag: TagId,
     mv_tag: TagId,
     samples: Vec<ReplaySample>,
     state: Mutex<ReplayState>,
 }
 
-impl ReplayBackend {
-    /// Builds a replay backend from an already-parsed sample sequence. `initial_mv` is what
+impl ReplayDriver {
+    /// Builds a replay driver from an already-parsed sample sequence. `initial_mv` is what
     /// the MV tag reads as before the first write -- mirroring
-    /// [`crate::SimulatorBackend::new`]'s `initial_mv` parameter, and matching the fact that
+    /// [`crate::SimulatorDriver::new`]'s `initial_mv` parameter, and matching the fact that
     /// a real trace's MV convention (see `crates/bhtune-core/tests/golden_replay.rs`'s
     /// `FixtureInitial::mv_ini`) is likewise supplied out of band from the tick sequence
     /// itself.
@@ -157,8 +157,8 @@ impl ReplayBackend {
         mv_tag: impl Into<TagId>,
         samples: Vec<ReplaySample>,
         initial_mv: f32,
-    ) -> ReplayBackend {
-        ReplayBackend {
+    ) -> ReplayDriver {
+        ReplayDriver {
             pv_tag: pv_tag.into(),
             mv_tag: mv_tag.into(),
             samples,
@@ -171,20 +171,20 @@ impl ReplayBackend {
     }
 
     /// Parses a golden-master fixture JSON document's `ticks[].time`/`ticks[].pv` fields
-    /// (see [`FixtureFile`]) into the sample sequence [`ReplayBackend::new`] expects, so a
-    /// validation test can point this backend directly at the same fixture file
+    /// (see [`FixtureFile`]) into the sample sequence [`ReplayDriver::new`] expects, so a
+    /// validation test can point this driver directly at the same fixture file
     /// `core-replay-harness` already validates against (`tests/golden/fixtures/*.json`)
     /// rather than hand-transcribing the tick sequence a second time. A parse failure is
-    /// [`BackendError::Operation`], matching this crate's error-model doc comment's own
+    /// [`DriverError::Operation`], matching this crate's error-model doc comment's own
     /// forward-looking note that golden-trace parse errors belong there.
     pub fn from_fixture_json(
         pv_tag: impl Into<TagId>,
         mv_tag: impl Into<TagId>,
         json: &str,
         initial_mv: f32,
-    ) -> BackendResult<ReplayBackend> {
+    ) -> DriverResult<ReplayDriver> {
         let file: FixtureFile =
-            serde_json::from_str(json).map_err(|e| BackendError::Operation(Box::new(e)))?;
+            serde_json::from_str(json).map_err(|e| DriverError::Operation(Box::new(e)))?;
         let samples = file
             .ticks
             .into_iter()
@@ -193,7 +193,7 @@ impl ReplayBackend {
                 pv: t.pv,
             })
             .collect();
-        Ok(ReplayBackend::new(pv_tag, mv_tag, samples, initial_mv))
+        Ok(ReplayDriver::new(pv_tag, mv_tag, samples, initial_mv))
     }
 
     /// Every MV write observed so far, in call order -- for a validation test to compare
@@ -210,15 +210,15 @@ impl ReplayBackend {
 }
 
 #[async_trait]
-impl Backend for ReplayBackend {
-    async fn read(&self, tags: &[TagId]) -> BackendResult<Vec<TagValue>> {
+impl Driver for ReplayDriver {
+    async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
         let mut state = self.state.lock().unwrap();
         tags.iter()
             .map(|tag| {
                 if *tag == self.pv_tag {
                     let index = state.next_index;
                     let sample = self.samples.get(index).ok_or_else(|| {
-                        BackendError::Operation(Box::new(ReplayTraceExhausted {
+                        DriverError::Operation(Box::new(ReplayTraceExhausted {
                             recorded: self.samples.len(),
                             attempted: index + 1,
                         }))
@@ -238,20 +238,20 @@ impl Backend for ReplayBackend {
                         timestamp: None,
                     })
                 } else {
-                    Err(BackendError::InvalidTagValue {
+                    Err(DriverError::InvalidTagValue {
                         tag: tag.clone(),
-                        message: "ReplayBackend only knows its configured PV/MV tags".to_string(),
+                        message: "ReplayDriver only knows its configured PV/MV tags".to_string(),
                     })
                 }
             })
             .collect()
     }
 
-    async fn write(&self, tag: &TagId, value: TagWrite) -> BackendResult<WriteOutcome> {
+    async fn write(&self, tag: &TagId, value: TagWrite) -> DriverResult<WriteOutcome> {
         if *tag != self.mv_tag {
-            return Err(BackendError::InvalidTagValue {
+            return Err(DriverError::InvalidTagValue {
                 tag: tag.clone(),
-                message: "ReplayBackend only accepts writes to its configured MV tag".to_string(),
+                message: "ReplayDriver only accepts writes to its configured MV tag".to_string(),
             });
         }
         let mv = match value {
@@ -274,8 +274,8 @@ impl Backend for ReplayBackend {
         Ok(WriteOutcome::success())
     }
 
-    async fn browse(&self, _path: &str) -> BackendResult<Vec<TagNode>> {
-        Err(BackendError::Unsupported {
+    async fn browse(&self, _path: &str) -> DriverResult<Vec<TagNode>> {
+        Err(DriverError::Unsupported {
             operation: "browse",
         })
     }
@@ -311,10 +311,10 @@ mod tests {
 
     #[tokio::test]
     async fn reads_pv_samples_in_order_with_their_recorded_timestamps() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 50.0);
+        let driver = ReplayDriver::new("PV", "MV", samples(), 50.0);
 
         for (i, expected) in samples().iter().enumerate() {
-            let read = backend.read(&["PV".to_string()]).await.unwrap();
+            let read = driver.read(&["PV".to_string()]).await.unwrap();
             assert_eq!(read.len(), 1, "tick {i}");
             assert_eq!(read[0].tag, "PV");
             assert_eq!(read[0].value, expected.pv.to_string(), "tick {i}");
@@ -325,41 +325,41 @@ mod tests {
 
     #[tokio::test]
     async fn mv_read_before_any_write_returns_the_seeded_initial_value() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 42.5);
-        let read = backend.read(&["MV".to_string()]).await.unwrap();
+        let driver = ReplayDriver::new("PV", "MV", samples(), 42.5);
+        let read = driver.read(&["MV".to_string()]).await.unwrap();
         assert_eq!(read[0].value, "42.5");
         assert_eq!(read[0].timestamp, None, "MV reads have no recorded time");
     }
 
     #[tokio::test]
     async fn mv_read_reflects_the_most_recent_write() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 0.0);
-        backend
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        driver
             .write(&"MV".to_string(), TagWrite::Float(37.0))
             .await
             .unwrap();
-        let read = backend.read(&["MV".to_string()]).await.unwrap();
+        let read = driver.read(&["MV".to_string()]).await.unwrap();
         assert_eq!(read[0].value, "37");
     }
 
     #[tokio::test]
     async fn reading_pv_does_not_advance_a_subsequent_mv_read_and_vice_versa() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 0.0);
-        backend.read(&["MV".to_string()]).await.unwrap();
-        backend.read(&["MV".to_string()]).await.unwrap();
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        driver.read(&["MV".to_string()]).await.unwrap();
+        driver.read(&["MV".to_string()]).await.unwrap();
         assert_eq!(
-            backend.remaining(),
+            driver.remaining(),
             3,
             "MV reads must not consume PV samples"
         );
-        backend.read(&["PV".to_string()]).await.unwrap();
-        assert_eq!(backend.remaining(), 2);
+        driver.read(&["PV".to_string()]).await.unwrap();
+        assert_eq!(driver.remaining(), 2);
     }
 
     #[tokio::test]
     async fn reading_multiple_tags_in_one_call_resolves_each_independently() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 5.0);
-        let read = backend
+        let driver = ReplayDriver::new("PV", "MV", samples(), 5.0);
+        let read = driver
             .read(&["PV".to_string(), "MV".to_string()])
             .await
             .unwrap();
@@ -368,7 +368,7 @@ mod tests {
         assert_eq!(read[1].tag, "MV");
         assert_eq!(read[1].value, "5");
         assert_eq!(
-            backend.remaining(),
+            driver.remaining(),
             2,
             "the one PV tag in the batch consumed one sample"
         );
@@ -378,20 +378,20 @@ mod tests {
 
     #[tokio::test]
     async fn writes_are_recorded_in_call_order() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 0.0);
-        backend
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        driver
             .write(&"MV".to_string(), TagWrite::Float(1.0))
             .await
             .unwrap();
-        backend
+        driver
             .write(&"MV".to_string(), TagWrite::Float(2.0))
             .await
             .unwrap();
-        backend
+        driver
             .write(&"MV".to_string(), TagWrite::Raw("3".to_string()))
             .await
             .unwrap();
-        let writes = backend.writes();
+        let writes = driver.writes();
         assert_eq!(
             writes,
             vec![
@@ -413,15 +413,15 @@ mod tests {
 
     #[tokio::test]
     async fn raw_write_with_unparseable_value_is_a_rejected_outcome_not_an_error() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 0.0);
-        let outcome = backend
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        let outcome = driver
             .write(&"MV".to_string(), TagWrite::Raw("not-a-number".to_string()))
             .await
             .unwrap();
         assert!(!outcome.success);
         assert!(outcome.error_message.unwrap().contains("not-a-number"));
         assert!(
-            backend.writes().is_empty(),
+            driver.writes().is_empty(),
             "a rejected write must not be recorded"
         );
     }
@@ -430,34 +430,34 @@ mod tests {
 
     #[tokio::test]
     async fn reading_an_unknown_tag_is_invalid_tag_value() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 0.0);
-        let err = backend
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        let err = driver
             .read(&["SomeOtherTag".to_string()])
             .await
             .unwrap_err();
         assert!(matches!(
             err,
-            BackendError::InvalidTagValue { tag, .. } if tag == "SomeOtherTag"
+            DriverError::InvalidTagValue { tag, .. } if tag == "SomeOtherTag"
         ));
     }
 
     #[tokio::test]
     async fn writing_an_unknown_tag_is_invalid_tag_value() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 0.0);
-        let err = backend
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        let err = driver
             .write(&"SomeOtherTag".to_string(), TagWrite::Float(1.0))
             .await
             .unwrap_err();
-        assert!(matches!(err, BackendError::InvalidTagValue { .. }));
+        assert!(matches!(err, DriverError::InvalidTagValue { .. }));
     }
 
     #[tokio::test]
     async fn browse_is_unsupported() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 0.0);
-        let err = backend.browse("/").await.unwrap_err();
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        let err = driver.browse("/").await.unwrap_err();
         assert!(matches!(
             err,
-            BackendError::Unsupported {
+            DriverError::Unsupported {
                 operation: "browse"
             }
         ));
@@ -465,14 +465,14 @@ mod tests {
 
     #[tokio::test]
     async fn reading_pv_past_the_last_sample_is_operation_error_not_a_panic() {
-        let backend = ReplayBackend::new("PV", "MV", samples(), 0.0);
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
         for _ in 0..3 {
-            backend.read(&["PV".to_string()]).await.unwrap();
+            driver.read(&["PV".to_string()]).await.unwrap();
         }
-        assert_eq!(backend.remaining(), 0);
-        let err = backend.read(&["PV".to_string()]).await.unwrap_err();
+        assert_eq!(driver.remaining(), 0);
+        let err = driver.read(&["PV".to_string()]).await.unwrap_err();
         match err {
-            BackendError::Operation(source) => {
+            DriverError::Operation(source) => {
                 let exhausted = source
                     .downcast_ref::<ReplayTraceExhausted>()
                     .expect("source should be ReplayTraceExhausted");
@@ -480,21 +480,21 @@ mod tests {
                 assert_eq!(exhausted.attempted, 4);
                 assert!(exhausted.to_string().contains("exhausted"));
             }
-            other => panic!("expected BackendError::Operation, got {other:?}"),
+            other => panic!("expected DriverError::Operation, got {other:?}"),
         }
     }
 
     #[tokio::test]
     async fn an_empty_trace_reports_exhaustion_on_the_very_first_read() {
-        let backend = ReplayBackend::new("PV", "MV", Vec::new(), 0.0);
-        let err = backend.read(&["PV".to_string()]).await.unwrap_err();
+        let driver = ReplayDriver::new("PV", "MV", Vec::new(), 0.0);
+        let err = driver.read(&["PV".to_string()]).await.unwrap_err();
         match err {
-            BackendError::Operation(source) => {
+            DriverError::Operation(source) => {
                 let exhausted = source.downcast_ref::<ReplayTraceExhausted>().unwrap();
                 assert_eq!(exhausted.recorded, 0);
                 assert_eq!(exhausted.attempted, 1);
             }
-            other => panic!("expected BackendError::Operation, got {other:?}"),
+            other => panic!("expected DriverError::Operation, got {other:?}"),
         }
     }
 
@@ -517,43 +517,43 @@ mod tests {
             ]
         }"#;
 
-        let backend = ReplayBackend::from_fixture_json("PV", "MV", json, 40.0).unwrap();
-        assert_eq!(backend.remaining(), 2);
+        let driver = ReplayDriver::from_fixture_json("PV", "MV", json, 40.0).unwrap();
+        assert_eq!(driver.remaining(), 2);
     }
 
     #[test]
     fn from_fixture_json_rejects_malformed_json_as_operation_error() {
-        let err = ReplayBackend::from_fixture_json("PV", "MV", "not json", 0.0).unwrap_err();
-        assert!(matches!(err, BackendError::Operation(_)));
+        let err = ReplayDriver::from_fixture_json("PV", "MV", "not json", 0.0).unwrap_err();
+        assert!(matches!(err, DriverError::Operation(_)));
     }
 
     #[test]
     fn from_fixture_json_rejects_a_document_with_no_ticks_field() {
-        let err = ReplayBackend::from_fixture_json("PV", "MV", "{}", 0.0).unwrap_err();
-        assert!(matches!(err, BackendError::Operation(_)));
+        let err = ReplayDriver::from_fixture_json("PV", "MV", "{}", 0.0).unwrap_err();
+        assert!(matches!(err, DriverError::Operation(_)));
     }
 
     // --- object safety -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn is_usable_as_a_boxed_dyn_backend() {
-        let backend: Box<dyn Backend> = Box::new(ReplayBackend::new("PV", "MV", samples(), 0.0));
-        let read = backend.read(&["PV".to_string()]).await.unwrap();
+    async fn is_usable_as_a_boxed_dyn_driver() {
+        let driver: Box<dyn Driver> = Box::new(ReplayDriver::new("PV", "MV", samples(), 0.0));
+        let read = driver.read(&["PV".to_string()]).await.unwrap();
         assert_eq!(read[0].value, "10");
     }
 
-    /// End-to-end: a real `MrftEngine` (from `bhtune-core`) drives `ReplayBackend` through
-    /// the actual `Backend` trait, fed from the *same* captured golden-master fixture
+    /// End-to-end: a real `MrftEngine` (from `bhtune-core`) drives `ReplayDriver` through
+    /// the actual `Driver` trait, fed from the *same* captured golden-master fixture
     /// `core-replay-harness` (`crates/bhtune-core/tests/golden_replay.rs`) already validates
     /// at the pure-engine level, and reaches the same final tuning result. This is
     /// deliberately not a re-run of that test's exhaustive per-tick assertions (hysteresis,
     /// `mv_sign_next_step`, cycle counters, ...) at every tick -- that would just duplicate
     /// already-proven engine correctness. What this test adds is proof that the *real* async
-    /// `Backend` abstraction this trace is now served through -- tag lookup, `TagValue`/
+    /// `Driver` abstraction this trace is now served through -- tag lookup, `TagValue`/
     /// `TagWrite` conversions, the `timestamp` field carrying the tick time -- introduces no
     /// bugs of its own on top of an already-correct engine.
     #[tokio::test]
-    async fn mrft_engine_replays_the_golden_trace_through_the_real_backend_trait() {
+    async fn mrft_engine_replays_the_golden_trace_through_the_real_driver_trait() {
         use std::{fs, path::Path};
 
         use bhtune_core::{
@@ -574,10 +574,10 @@ mod tests {
         // deliberately only parses `ticks[].time`/`ticks[].pv` via `from_fixture_json`, not
         // the fixture's other fields.
         let initial_mv = 40.0;
-        let backend =
-            ReplayBackend::from_fixture_json(pv_tag.clone(), mv_tag.clone(), &json, initial_mv)
+        let driver =
+            ReplayDriver::from_fixture_json(pv_tag.clone(), mv_tag.clone(), &json, initial_mv)
                 .expect("flow_pi_direct.json should parse");
-        let total_samples = backend.remaining();
+        let total_samples = driver.remaining();
 
         // This fixture's own config/direction/initial-readings/pv-range, matching
         // `golden_replay.rs`'s hardcoded transcription of the same fixture exactly (that
@@ -619,10 +619,10 @@ mod tests {
         // The first read's timestamp is this trace's own start time -- read here (rather
         // than hardcoded) purely to seed `MrftEngine::new`, which needs a start time before
         // the first `step` call.
-        let first = backend.read(std::slice::from_ref(&pv_tag)).await.unwrap();
+        let first = driver.read(std::slice::from_ref(&pv_tag)).await.unwrap();
         let start_time = first[0]
             .timestamp
-            .expect("ReplayBackend always sets a timestamp on PV reads");
+            .expect("ReplayDriver always sets a timestamp on PV reads");
         let mut pending_tick = Some(Tick {
             time: start_time,
             pv: first[0].value.parse().unwrap(),
@@ -642,10 +642,10 @@ mod tests {
             let tick = match pending_tick.take() {
                 Some(tick) => tick,
                 None => {
-                    let read = backend.read(std::slice::from_ref(&pv_tag)).await.unwrap();
+                    let read = driver.read(std::slice::from_ref(&pv_tag)).await.unwrap();
                     let time = read[0]
                         .timestamp
-                        .expect("ReplayBackend always sets a timestamp on PV reads");
+                        .expect("ReplayDriver always sets a timestamp on PV reads");
                     Tick {
                         time,
                         pv: read[0].value.parse().unwrap(),
@@ -656,7 +656,7 @@ mod tests {
             for action in engine.step(tick) {
                 match action {
                     Action::WriteMv(mv) => {
-                        backend.write(&mv_tag, TagWrite::Float(mv)).await.unwrap();
+                        driver.write(&mv_tag, TagWrite::Float(mv)).await.unwrap();
                     }
                     Action::Complete {
                         peaks,
@@ -709,9 +709,9 @@ mod tests {
         );
 
         assert!(
-            !backend.writes().is_empty(),
+            !driver.writes().is_empty(),
             "the engine should have written at least one relay step through the real \
-             Backend trait"
+             Driver trait"
         );
         // The engine stops driving reads the instant completion is observed (matching
         // `core-replay-harness`'s own "any remaining fixture ticks are exactly this harmless
@@ -720,7 +720,7 @@ mod tests {
         // assertion is that real consumption happened at all, not that every recorded tick
         // was read.
         assert!(
-            backend.remaining() < total_samples,
+            driver.remaining() < total_samples,
             "expected at least one sample to be consumed before completion"
         );
     }

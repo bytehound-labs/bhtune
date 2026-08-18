@@ -1,7 +1,7 @@
-//! `OpcDaBackend`: the primary [`Backend`] implementation, talking to a DCS/PLC's OPC DA
+//! `OpcDaDriver`: the primary [`Driver`] implementation, talking to a DCS/PLC's OPC DA
 //! server through the `opcda-bridge` gateway's gRPC API.
 //!
-//! This module intentionally splits into two halves: a thin async shell (`OpcDaBackend`
+//! This module intentionally splits into two halves: a thin async shell (`OpcDaDriver`
 //! itself) that only locks the client and calls into `opcda_bridge`, and a set of small,
 //! pure, synchronous mapping functions (`quality_from_raw`, `tag_value_from_raw`,
 //! `opc_value_from_write`, `write_outcome_from_result`, `tag_node_from_browse`,
@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use crate::{
-    backend::Backend,
-    error::{BackendError, BackendResult},
+    driver::Driver,
+    error::{DriverError, DriverResult},
     types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome},
 };
 
@@ -26,27 +26,27 @@ use crate::{
 /// than picking an unrelated number.
 const DEFAULT_MAX_TAGS: u32 = 1000;
 
-/// The primary [`Backend`] for v1: reads, writes, and browses OPC DA tags through an
+/// The primary [`Driver`] for v1: reads, writes, and browses OPC DA tags through an
 /// `opcda-bridge` gateway's gRPC API.
 ///
 /// Holds its `opcda_bridge::Client` behind a `tokio::sync::Mutex` because the client's own
-/// methods take `&mut self` (it buffers per-call gRPC codec state) while [`Backend`]'s
-/// methods take `&self` (required so a backend can be shared behind `Arc<dyn Backend>`) —
+/// methods take `&mut self` (it buffers per-call gRPC codec state) while [`Driver`]'s
+/// methods take `&self` (required so a driver can be shared behind `Arc<dyn Driver>`) —
 /// serializing calls through the one connection is a reasonable tradeoff, since a single
 /// tuning session only ever has one read/write/browse in flight at a time, and the
 /// underlying HTTP/2 channel stays cheaply multiplexed regardless of how many logical
 /// callers there are.
 #[derive(Debug)]
-pub struct OpcDaBackend {
+pub struct OpcDaDriver {
     client: Mutex<opcda_bridge::Client>,
     server: String,
 }
 
-impl OpcDaBackend {
+impl OpcDaDriver {
     /// Connects to an `opcda-bridge` gateway at `host` (e.g. `"localhost:7600"`) and binds
     /// to `server` — the OPC DA server's ProgID (e.g. `"Matrikon.OPC.Simulation.1"`) that
     /// every subsequent `read`/`write`/`browse` call is scoped to.
-    pub async fn connect(host: &str, server: impl Into<String>) -> BackendResult<Self> {
+    pub async fn connect(host: &str, server: impl Into<String>) -> DriverResult<Self> {
         let client = opcda_bridge::Client::connect(host)
             .await
             .map_err(map_bridge_error)?;
@@ -58,8 +58,8 @@ impl OpcDaBackend {
 }
 
 #[async_trait]
-impl Backend for OpcDaBackend {
-    async fn read(&self, tags: &[TagId]) -> BackendResult<Vec<TagValue>> {
+impl Driver for OpcDaDriver {
+    async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
         let mut client = self.client.lock().await;
         let raw = client
             .read(self.server.clone(), tags.to_vec())
@@ -68,7 +68,7 @@ impl Backend for OpcDaBackend {
         Ok(raw.into_iter().map(tag_value_from_raw).collect())
     }
 
-    async fn write(&self, tag: &TagId, value: TagWrite) -> BackendResult<WriteOutcome> {
+    async fn write(&self, tag: &TagId, value: TagWrite) -> DriverResult<WriteOutcome> {
         let mut client = self.client.lock().await;
         let result = client
             .write(
@@ -81,7 +81,7 @@ impl Backend for OpcDaBackend {
         Ok(write_outcome_from_result(result))
     }
 
-    async fn browse(&self, path: &str) -> BackendResult<Vec<TagNode>> {
+    async fn browse(&self, path: &str) -> DriverResult<Vec<TagNode>> {
         let mut client = self.client.lock().await;
         let nodes = client
             .browse(
@@ -166,18 +166,18 @@ fn tag_node_from_browse(node: opcda_bridge::BrowseNode) -> TagNode {
     }
 }
 
-/// Maps every `opcda_bridge::Error` this backend can encounter — at connect time or during
-/// any RPC — to the matching [`BackendError`] variant: `opcda_bridge::Error::Connect` (the
-/// gRPC channel itself couldn't be established) becomes [`BackendError::Connect`], and
+/// Maps every `opcda_bridge::Error` this driver can encounter — at connect time or during
+/// any RPC — to the matching [`DriverError`] variant: `opcda_bridge::Error::Connect` (the
+/// gRPC channel itself couldn't be established) becomes [`DriverError::Connect`], and
 /// `opcda_bridge::Error::Rpc` (the channel is fine, but the gateway returned a gRPC error
-/// for this specific call) becomes [`BackendError::Operation`]. An exhaustive match rather
+/// for this specific call) becomes [`DriverError::Operation`]. An exhaustive match rather
 /// than a wildcard arm, deliberately: if `opcda_bridge::Error` ever gains a new variant,
 /// this should fail to compile and force a real decision about where it belongs, not
 /// silently fall into one bucket.
-fn map_bridge_error(err: opcda_bridge::Error) -> BackendError {
+fn map_bridge_error(err: opcda_bridge::Error) -> DriverError {
     match &err {
-        opcda_bridge::Error::Connect(_) => BackendError::Connect(Box::new(err)),
-        opcda_bridge::Error::Rpc(_) => BackendError::Operation(Box::new(err)),
+        opcda_bridge::Error::Connect(_) => DriverError::Connect(Box::new(err)),
+        opcda_bridge::Error::Rpc(_) => DriverError::Operation(Box::new(err)),
     }
 }
 
@@ -307,18 +307,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_failure_maps_to_backend_error_connect() {
+    async fn connect_failure_maps_to_driver_error_connect() {
         // Nothing is listening on this port, so `Client::connect` fails at the transport
-        // level before any RPC is attempted -- exactly the `BackendError::Connect` case.
-        let err = OpcDaBackend::connect("127.0.0.1:1", "AnyServer")
+        // level before any RPC is attempted -- exactly the `DriverError::Connect` case.
+        let err = OpcDaDriver::connect("127.0.0.1:1", "AnyServer")
             .await
             .unwrap_err();
-        assert!(matches!(err, BackendError::Connect(_)));
+        assert!(matches!(err, DriverError::Connect(_)));
     }
 }
 
 /// End-to-end smoke tests against a minimal mock `Bridge` gRPC service: these exist to
-/// prove `OpcDaBackend` is wired together correctly (locking, field mapping, error
+/// prove `OpcDaDriver` is wired together correctly (locking, field mapping, error
 /// propagation all actually compose through a real `tonic` round trip), not to
 /// re-exercise `opcda-bridge`'s own already-tested RPC error-path matrix.
 #[cfg(test)]
@@ -387,7 +387,7 @@ mod smoke_tests {
     }
 
     /// Starts `service` on an ephemeral localhost port and returns its `host:port` address,
-    /// ready to be passed to [`OpcDaBackend::connect`]. Mirrors the pattern
+    /// ready to be passed to [`OpcDaDriver::connect`]. Mirrors the pattern
     /// `opcda-bridge`'s own `test_support.rs` uses for its equivalent mock server, trimmed
     /// to only what these smoke tests exercise (no graceful shutdown -- each test's server
     /// simply runs for the rest of the test process, on its own ephemeral port).
@@ -419,12 +419,9 @@ mod smoke_tests {
             ..Default::default()
         };
         let host = start_mock_server(service).await;
-        let backend = OpcDaBackend::connect(&host, "S1").await.unwrap();
+        let driver = OpcDaDriver::connect(&host, "S1").await.unwrap();
 
-        let values = backend
-            .read(&["Area1.LIC101.PV".to_string()])
-            .await
-            .unwrap();
+        let values = driver.read(&["Area1.LIC101.PV".to_string()]).await.unwrap();
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].tag, "Area1.LIC101.PV");
         assert_eq!(values[0].value, "42.5");
@@ -442,9 +439,9 @@ mod smoke_tests {
             ..Default::default()
         };
         let host = start_mock_server(service).await;
-        let backend = OpcDaBackend::connect(&host, "S1").await.unwrap();
+        let driver = OpcDaDriver::connect(&host, "S1").await.unwrap();
 
-        let outcome = backend
+        let outcome = driver
             .write(&"Area1.LIC101.MV".to_string(), TagWrite::Float(55.0))
             .await
             .unwrap();
@@ -453,19 +450,19 @@ mod smoke_tests {
     }
 
     #[tokio::test]
-    async fn write_rpc_error_maps_to_backend_error_operation() {
+    async fn write_rpc_error_maps_to_driver_error_operation() {
         let service = MockBridgeService {
             write_error: Some(Status::internal("boom")),
             ..Default::default()
         };
         let host = start_mock_server(service).await;
-        let backend = OpcDaBackend::connect(&host, "S1").await.unwrap();
+        let driver = OpcDaDriver::connect(&host, "S1").await.unwrap();
 
-        let err = backend
+        let err = driver
             .write(&"Area1.LIC101.MV".to_string(), TagWrite::Float(55.0))
             .await
             .unwrap_err();
-        assert!(matches!(err, BackendError::Operation(_)));
+        assert!(matches!(err, DriverError::Operation(_)));
     }
 
     #[tokio::test]
@@ -484,9 +481,9 @@ mod smoke_tests {
             ..Default::default()
         };
         let host = start_mock_server(service).await;
-        let backend = OpcDaBackend::connect(&host, "S1").await.unwrap();
+        let driver = OpcDaDriver::connect(&host, "S1").await.unwrap();
 
-        let nodes = backend.browse("").await.unwrap();
+        let nodes = driver.browse("").await.unwrap();
         assert_eq!(nodes.len(), 2);
         assert!(nodes[0].is_branch);
         assert!(!nodes[1].is_branch);
