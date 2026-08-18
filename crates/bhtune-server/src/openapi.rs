@@ -34,6 +34,8 @@ use crate::routes::{health, history, runs, stream, templates};
         history::delete_run,
         runs::start_run,
         runs::cancel_run,
+        runs::write_run,
+        runs::revert_run,
         stream::stream_run,
     ),
     components(schemas(
@@ -48,6 +50,7 @@ use crate::routes::{health, history, runs, stream, templates};
         history::RunDetailResponse,
         history::RunExportFormat,
         runs::StartRunRequest,
+        runs::WriteRunRequest,
         stream::RunStreamDone,
         ErrorBody,
     )),

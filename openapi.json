@@ -390,6 +390,70 @@
         }
       }
     },
+    "/api/runs/{id}/revert": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Revert a run's most recent PID write-back, restoring the pre-write values it recorded.",
+        "description": "`POST /api/runs/{id}/revert` -- no request body: like `POST /api/runs/{id}/cancel`, the\nGUI's own confirmation dialog (naming the loop, the tags, and the exact values from\n`writes[]`) is the human confirmation step, not a body field. Finds the run's last\n[`WriteKind::Write`] row regardless of whether it succeeded (matching\n`bhtune history revert`'s own semantics exactly), requiring it to have recorded pre-write\nvalues to revert to. A revert never attempts a nested rollback of itself if it fails\npartway through -- see [`WriteKind`]'s doc comment.\n\nAlways `200` once the request itself is valid and no conflicting operation is active; see\n[`reserve_connect_and_write`]'s doc comment for why a physical revert failure is not a\n`4xx`/`5xx`.",
+        "operationId": "revert_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revert was attempted; see `writes[]` in the body for its outcome.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The run isn't eligible for a post-hoc revert (still running, wrong driver, no PID tags/connection recorded, no recorded write-back to revert, or its pre-write values were never recorded), or the driver connection itself failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another run or write/revert is already active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{id}/stream": {
       "get": {
         "tags": [
@@ -423,6 +487,80 @@
           },
           "404": {
             "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/write": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Write one of a run's calculated candidate PID parameter sets back to the live loop.",
+        "description": "`POST /api/runs/{id}/write` -- unlike the CLI's `--write-pid`, which can only fire once\nat the end of the run it belongs to, this can be called at any time after the run has\nfinished, letting an engineer compare Sluggish/Moderate/Aggressive on screen before\npicking one. Pre-reads the loop's current P/I/D, writes and verifies each constant in\nturn, and rolls back to the pre-read values if a later constant is rejected\n(`safety-writeback-rollback`) -- recorded as a new write-back audit row exactly like an\nin-run write.\n\nAlways `200` once the request itself is valid and no conflicting operation is active,\nwhether or not the write actually succeeded -- see [`reserve_connect_and_write`]'s doc\ncomment for why a physical write failure is not a `4xx`/`5xx`.",
+        "operationId": "write_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The write was attempted; see `writes[]` in the body for its outcome.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, or no calculated result for the requested response level), or the driver connection itself failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another run or write/revert is already active.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1739,6 +1877,19 @@
           "written_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "WriteRunRequest": {
+        "type": "object",
+        "description": "The body of `POST /api/runs/{id}/write`.",
+        "required": [
+          "response_level"
+        ],
+        "properties": {
+          "response_level": {
+            "$ref": "#/components/schemas/ResponseLevel",
+            "description": "Which of the run's three calculated candidate result sets to write."
           }
         }
       }

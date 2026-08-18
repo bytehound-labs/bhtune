@@ -16,10 +16,28 @@ use bhtune_cli::cancel::CtrlCHandle;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+/// What kind of activity currently holds the single active-run slot.
+enum ActiveRunKind {
+    /// A tune run's own spawned background task -- cancellable via a real [`CtrlCHandle`]
+    /// and awaited on shutdown via its [`JoinHandle`], exactly as [`ActiveRun::start`]
+    /// always worked before [`ActiveRun::reserve`] existed.
+    Task {
+        cancel: CtrlCHandle,
+        handle: JoinHandle<()>,
+    },
+    /// A short operation the caller awaits directly in the same request/response cycle,
+    /// rather than a detached background task -- currently only a post-hoc PID write or
+    /// revert (`api-post-run-write`), which mutate the same live loop a tune does and so
+    /// must not run concurrently with one. Nothing to cancel or wait for via this path: the
+    /// HTTP handler that reserved the slot is itself still running the operation, so axum's
+    /// own graceful-shutdown drain (which waits for in-flight requests) already covers it on
+    /// shutdown -- see [`ActiveRun::cancel_and_wait`].
+    Exclusive,
+}
+
 struct ActiveRunEntry {
     run_id: i64,
-    cancel: CtrlCHandle,
-    handle: JoinHandle<()>,
+    kind: ActiveRunKind,
 }
 
 /// Cheap to clone (an `Arc<Mutex<..>>` underneath), matching [`crate::state::AppState`]'s own
@@ -60,8 +78,34 @@ impl ActiveRun {
         let handle = tokio::spawn(task);
         *guard = Some(ActiveRunEntry {
             run_id,
-            cancel,
-            handle,
+            kind: ActiveRunKind::Task { cancel, handle },
+        });
+        Ok(())
+    }
+
+    /// Reserves the single active-run slot for `run_id` for the duration of a short
+    /// operation the caller awaits directly -- currently a post-hoc PID write or revert
+    /// (`api-post-run-write`). Unlike [`ActiveRun::start`], nothing is spawned here: the
+    /// caller must still call [`ActiveRun::release`] itself once its own operation finishes,
+    /// on *every* exit path including an error return. There is no `Drop`-based guard for
+    /// this -- `Drop` cannot await, matching this project's established rule for anything
+    /// requiring async cleanup (see `bhtune-cli`'s `execute` doc comment for the same rule
+    /// applied to run restoration).
+    ///
+    /// Returns the currently active run's id (wrapped in [`RunAlreadyActive`]) instead of
+    /// reserving anything if a run -- or another post-hoc write/revert -- is already active,
+    /// exactly like [`ActiveRun::start`]'s own check and for the same reason: only one
+    /// operation may touch the live loop at a time.
+    pub async fn reserve(&self, run_id: i64) -> Result<(), RunAlreadyActive> {
+        let mut guard = self.inner.lock().await;
+        if let Some(existing) = guard.as_ref() {
+            return Err(RunAlreadyActive {
+                run_id: existing.run_id,
+            });
+        }
+        *guard = Some(ActiveRunEntry {
+            run_id,
+            kind: ActiveRunKind::Exclusive,
         });
         Ok(())
     }
@@ -79,15 +123,23 @@ impl ActiveRun {
 
     /// Triggers cancellation for `run_id` if it is the currently active run, exactly as if
     /// Ctrl+C had been pressed against an equivalent CLI-driven run. Returns whether a
-    /// matching run was found (and thus cancelled) -- `false` covers both "nothing is
-    /// active" and "a *different* run is active", which a caller (the `POST
-    /// /api/runs/{id}/cancel` handler) deliberately doesn't need to distinguish: either way,
-    /// `id` is not a run this call can cancel right now.
+    /// matching run was found -- `false` covers both "nothing is active" and "a *different*
+    /// run is active", which a caller (the `POST /api/runs/{id}/cancel` handler)
+    /// deliberately doesn't need to distinguish: either way, `id` is not a run this call can
+    /// cancel right now.
+    ///
+    /// If the matching entry is an [`ActiveRunKind::Exclusive`] reservation (a post-hoc
+    /// write/revert in flight) rather than a spawned tune task, there is nothing to actually
+    /// trigger -- it still returns `true`, since a matching active entry for `run_id` was
+    /// genuinely found, but the short write/revert operation runs to its own completion
+    /// regardless (it has no per-tick polling loop for a cancellation flag to interrupt).
     pub async fn cancel(&self, run_id: i64) -> bool {
         let guard = self.inner.lock().await;
         match guard.as_ref() {
             Some(entry) if entry.run_id == run_id => {
-                entry.cancel.trigger();
+                if let ActiveRunKind::Task { cancel, .. } = &entry.kind {
+                    cancel.trigger();
+                }
                 true
             }
             _ => false,
@@ -119,17 +171,22 @@ impl ActiveRun {
     pub async fn cancel_and_wait(&self, wait_timeout: Duration) {
         let entry = self.inner.lock().await.take();
         let Some(entry) = entry else { return };
+        let ActiveRunKind::Task { cancel, handle } = entry.kind else {
+            // An `Exclusive` reservation (a post-hoc write/revert in flight) has no detached
+            // task to cancel or wait for -- the HTTP handler that reserved it is still
+            // directly awaiting its own operation, so axum's own graceful-shutdown drain
+            // (which waits for in-flight requests) already covers it. The slot was already
+            // cleared by `.take()` above, so there is nothing further to do here.
+            return;
+        };
         tracing::warn!(
             run_id = entry.run_id,
             ?wait_timeout,
             "shutdown requested while a tune is in flight; cancelling and waiting for the \
              loop to be restored before exiting"
         );
-        entry.cancel.trigger();
-        if tokio::time::timeout(wait_timeout, entry.handle)
-            .await
-            .is_err()
-        {
+        cancel.trigger();
+        if tokio::time::timeout(wait_timeout, handle).await.is_err() {
             tracing::error!(
                 run_id = entry.run_id,
                 "tune did not finish restoring within the shutdown grace period and was \
@@ -203,6 +260,81 @@ mod tests {
             .unwrap();
         active.release(999).await;
         assert_eq!(active.active_run_id().await, Some(1));
+    }
+
+    #[tokio::test]
+    async fn reserve_reserves_the_slot_without_spawning_anything() {
+        let active = ActiveRun::default();
+        active.reserve(1).await.unwrap();
+        assert_eq!(active.active_run_id().await, Some(1));
+    }
+
+    #[tokio::test]
+    async fn reserve_refuses_while_a_spawned_task_is_active() {
+        let active = ActiveRun::default();
+        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        active
+            .start(1, handle, std::future::pending())
+            .await
+            .unwrap();
+        let err = active.reserve(2).await.unwrap_err();
+        assert_eq!(err, RunAlreadyActive { run_id: 1 });
+    }
+
+    #[tokio::test]
+    async fn start_refuses_while_a_reservation_is_active() {
+        let active = ActiveRun::default();
+        active.reserve(1).await.unwrap();
+        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let err = active
+            .start(2, handle, std::future::pending())
+            .await
+            .unwrap_err();
+        assert_eq!(err, RunAlreadyActive { run_id: 1 });
+    }
+
+    #[tokio::test]
+    async fn reserve_refuses_a_second_reservation_while_one_is_active() {
+        let active = ActiveRun::default();
+        active.reserve(1).await.unwrap();
+        let err = active.reserve(2).await.unwrap_err();
+        assert_eq!(err, RunAlreadyActive { run_id: 1 });
+    }
+
+    #[tokio::test]
+    async fn release_frees_a_reserved_slot() {
+        let active = ActiveRun::default();
+        active.reserve(1).await.unwrap();
+        active.release(1).await;
+        assert_eq!(active.active_run_id().await, None);
+    }
+
+    #[tokio::test]
+    async fn cancel_returns_true_for_a_reservation_but_has_nothing_to_trigger() {
+        // A reservation has no `CtrlCHandle` at all, so this only proves `cancel` still
+        // reports "yes, something is active for this id" -- matching a real tune task's
+        // `cancel` return value -- rather than panicking or misreporting `false` just
+        // because there's no cancellation machinery to fire.
+        let active = ActiveRun::default();
+        active.reserve(1).await.unwrap();
+        assert!(active.cancel(1).await);
+        // The reservation itself is untouched by a `cancel` call -- it isn't released.
+        assert_eq!(active.active_run_id().await, Some(1));
+    }
+
+    #[tokio::test]
+    async fn cancel_and_wait_clears_a_reservation_immediately_without_waiting() {
+        let active = ActiveRun::default();
+        active.reserve(1).await.unwrap();
+        // Must return promptly -- there is no `JoinHandle` to wait for, unlike a spawned
+        // tune task.
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            active.cancel_and_wait(Duration::from_secs(5)),
+        )
+        .await
+        .expect("cancel_and_wait must not block on a reservation with no task to await");
+        assert_eq!(active.active_run_id().await, None);
     }
 
     #[tokio::test]

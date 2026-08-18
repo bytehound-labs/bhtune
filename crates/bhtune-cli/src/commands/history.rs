@@ -2,8 +2,8 @@
 
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    NewTuneWrite, Pagination, TuneDriver, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow,
-    TuneWriteRow, WriteKind,
+    Pagination, TuneDriver, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
+    WriteKind,
 };
 use bhtune_driver::OpcDaDriver;
 
@@ -675,73 +675,30 @@ async fn revert(
         );
     }
 
-    let written_at = chrono::Utc::now();
-    let mut new_write = NewTuneWrite::new(response_level, written_at);
-    new_write.kind = WriteKind::Revert;
+    if output == OutputFormat::Table {
+        println!(
+            "Reverting run {run_id}'s {response_level:?} PID write-back on '{}' to \
+             P={:.4} I={:.4} D={:.4}...",
+            run.loop_name, target.proportional, target.integral, target.derivative
+        );
+    }
 
-    // Pre-read the loop's *current* values before writing -- same rationale as `tune`'s own
-    // write-back: whatever is live right now becomes this revert row's `previous`, so a
-    // second `history revert` could undo this one too if it ever turned out to be wrong.
-    let live_previous = match crate::commands::tune::read_previous_pid_values(
+    let outcome = crate::commands::tune::write_pid_values(
+        pool,
+        run_id,
         &driver,
         p_tag,
         i_tag,
         d_tag,
+        response_level,
+        target,
+        WriteKind::Revert,
         run.allow_uncertain_quality,
     )
-    .await
-    {
-        Ok(previous) => previous,
-        Err(e) => {
-            let message = e.to_string();
-            new_write.error_message = Some(message.clone());
-            TuneWriteRow::insert(pool, run_id, new_write).await?;
-            anyhow::bail!("revert pre-read failed: {message}");
-        }
-    };
-    new_write.previous = Some(live_previous);
+    .await?;
 
-    let steps: [(&str, &str, f32); 3] = [
-        ("Proportional", p_tag.as_str(), target.proportional),
-        ("Integral", i_tag.as_str(), target.integral),
-        ("Derivative", d_tag.as_str(), target.derivative),
-    ];
-    let mut written_vals: [Option<f32>; 3] = [None; 3];
-    let mut readback_vals: [Option<f32>; 3] = [None; 3];
-    let mut failure: Option<String> = None;
-
-    for (i, (label, tag, value)) in steps.into_iter().enumerate() {
-        written_vals[i] = Some(value);
-        match crate::commands::tune::write_and_verify_pid_value(
-            &driver,
-            label,
-            tag,
-            value,
-            run.allow_uncertain_quality,
-        )
-        .await
-        {
-            Ok(readback) => readback_vals[i] = Some(readback),
-            Err(e) => {
-                failure = Some(e);
-                break;
-            }
-        }
-    }
-
-    new_write.proportional_written = written_vals[0];
-    new_write.integral_written = written_vals[1];
-    new_write.derivative_written = written_vals[2];
-    new_write.proportional_readback = readback_vals[0];
-    new_write.integral_readback = readback_vals[1];
-    new_write.derivative_readback = readback_vals[2];
-    new_write.success = failure.is_none();
-    new_write.error_message = failure.clone();
-
-    TuneWriteRow::insert(pool, run_id, new_write).await?;
-
-    match failure {
-        None => {
+    match outcome {
+        crate::commands::tune::PidWriteOutcome::Written => {
             tracing::info!(run_id, ?response_level, "PID revert succeeded");
             match output {
                 OutputFormat::Table => {
@@ -766,12 +723,12 @@ async fn revert(
             }
             Ok(())
         }
-        Some(error_message) => {
-            tracing::error!(run_id, ?response_level, %error_message, "PID revert failed partway through; the loop may hold a mismatched set of PID constants -- see `history show` for the recorded partial state");
+        crate::commands::tune::PidWriteOutcome::Failed { detail } => {
+            tracing::error!(run_id, ?response_level, error_message = %detail, "PID revert failed partway through; the loop may hold a mismatched set of PID constants -- see `history show` for the recorded partial state");
             anyhow::bail!(
-                "revert failed partway through: {error_message} (the loop may now hold a \
-                 mismatched set of PID constants -- see `history show {run_id}` for the \
-                 recorded partial state)"
+                "revert failed partway through: {detail} (the loop may now hold a mismatched \
+                 set of PID constants -- see `history show {run_id}` for the recorded partial \
+                 state)"
             );
         }
     }

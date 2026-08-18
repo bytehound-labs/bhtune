@@ -137,6 +137,36 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/runs/{id}/revert": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Revert a run's most recent PID write-back, restoring the pre-write values it recorded.
+     * @description `POST /api/runs/{id}/revert` -- no request body: like `POST /api/runs/{id}/cancel`, the
+     *     GUI's own confirmation dialog (naming the loop, the tags, and the exact values from
+     *     `writes[]`) is the human confirmation step, not a body field. Finds the run's last
+     *     [`WriteKind::Write`] row regardless of whether it succeeded (matching
+     *     `bhtune history revert`'s own semantics exactly), requiring it to have recorded pre-write
+     *     values to revert to. A revert never attempts a nested rollback of itself if it fails
+     *     partway through -- see [`WriteKind`]'s doc comment.
+     *
+     *     Always `200` once the request itself is valid and no conflicting operation is active; see
+     *     [`reserve_connect_and_write`]'s doc comment for why a physical revert failure is not a
+     *     `4xx`/`5xx`.
+     */
+    post: operations["revert_run"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/runs/{id}/stream": {
     parameters: {
       query?: never;
@@ -157,6 +187,36 @@ export interface paths {
     get: operations["stream_run"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/runs/{id}/write": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Write one of a run's calculated candidate PID parameter sets back to the live loop.
+     * @description `POST /api/runs/{id}/write` -- unlike the CLI's `--write-pid`, which can only fire once
+     *     at the end of the run it belongs to, this can be called at any time after the run has
+     *     finished, letting an engineer compare Sluggish/Moderate/Aggressive on screen before
+     *     picking one. Pre-reads the loop's current P/I/D, writes and verifies each constant in
+     *     turn, and rolls back to the pre-read values if a later constant is rejected
+     *     (`safety-writeback-rollback`) -- recorded as a new write-back audit row exactly like an
+     *     in-run write.
+     *
+     *     Always `200` once the request itself is valid and no conflicting operation is active,
+     *     whether or not the write actually succeeded -- see [`reserve_connect_and_write`]'s doc
+     *     comment for why a physical write failure is not a `4xx`/`5xx`.
+     */
+    post: operations["write_run"];
     delete?: never;
     options?: never;
     head?: never;
@@ -817,6 +877,11 @@ export interface components {
       /** Format: date-time */
       written_at: string;
     };
+    /** @description The body of `POST /api/runs/{id}/write`. */
+    WriteRunRequest: {
+      /** @description Which of the run's three calculated candidate result sets to write. */
+      response_level: components["schemas"]["ResponseLevel"];
+    };
   };
   responses: never;
   parameters: never;
@@ -1063,6 +1128,56 @@ export interface operations {
       };
     };
   };
+  revert_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Run id */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The revert was attempted; see `writes[]` in the body for its outcome. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunDetailResponse"];
+        };
+      };
+      /** @description The run isn't eligible for a post-hoc revert (still running, wrong driver, no PID tags/connection recorded, no recorded write-back to revert, or its pre-write values were never recorded), or the driver connection itself failed. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No run with that id. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Another run or write/revert is already active. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   stream_run: {
     parameters: {
       query?: never;
@@ -1086,6 +1201,60 @@ export interface operations {
       };
       /** @description No run with that id. */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  write_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Run id */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WriteRunRequest"];
+      };
+    };
+    responses: {
+      /** @description The write was attempted; see `writes[]` in the body for its outcome. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunDetailResponse"];
+        };
+      };
+      /** @description The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, or no calculated result for the requested response level), or the driver connection itself failed. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description No run with that id. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description Another run or write/revert is already active. */
+      409: {
         headers: {
           [name: string]: unknown;
         };

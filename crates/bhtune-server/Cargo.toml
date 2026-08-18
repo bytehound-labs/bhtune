@@ -30,6 +30,15 @@ bhtune-db = { workspace = true, features = ["utoipa"] }
 # two crates' config needs diverge, or `bhtune-cli`'s `clap`/`csv` dependencies become a real
 # concern in this binary's footprint).
 bhtune-cli.workspace = true
+# `routes::runs`'s `write_run`/`revert_run` (`api-post-run-write`) connect an `OpcDaDriver`
+# directly, the same way `bhtune-cli`'s own `commands::history::revert` does, rather than
+# going through `bhtune_cli::driver::build` (which is shaped around a full `TuneArgs`, not a
+# post-hoc write against a run's already-recorded connection). This is the first direct
+# `bhtune-server` -> `bhtune-driver` edge, matching the "peer adapters over
+# bhtune-core/bhtune-db/bhtune-driver" architecture described above -- the temporary
+# `bhtune-cli` coupling is for config/db/logging reuse, not because `bhtune-driver` itself is
+# off limits.
+bhtune-driver.workspace = true
 anyhow = "1"
 chrono.workspace = true
 serde = { version = "1", features = ["derive"] }
@@ -142,6 +151,15 @@ tokio = { version = "1", features = ["time"] }
 # test's own `#[cfg(unix)]` gate; already present transitively (tokio/mio), so this just names
 # the version directly rather than introducing a new dependency to the build graph.
 libc = "0.2"
+# `routes/runs.rs`'s `write_run`/`revert_run` tests (`api-post-run-write`) stand up a
+# minimal mock `Bridge` gRPC service to prove the two new handlers actually complete a real
+# `OpcDaDriver` connect-write-verify round trip, mirroring `bhtune-driver::opcda`'s own
+# `smoke_tests` module. Pinned to the exact same versions that module (and `opcda-bridge`
+# itself) use, for the same reason: the mock service's generated `tonic`/`prost` types must
+# agree on the wire format with `opcda_bridge::Client`'s generated stub on the other end.
+opcda-bridge-proto = "0.2"
+tonic = "0.14"
+tokio-stream = "0.1"
 
 [[bin]]
 name = "bhtune-server"

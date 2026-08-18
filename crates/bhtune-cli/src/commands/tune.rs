@@ -20,7 +20,7 @@ use bhtune_core::{
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
     DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TuneDriver, TuneResultRow,
-    TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
+    TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind, WriteReadback,
 };
 use bhtune_driver::{Driver, TagWrite};
 use chrono::{DateTime, Utc};
@@ -1985,6 +1985,173 @@ async fn rollback_pid_writes(
     }
 }
 
+/// The result of [`write_pid_values`] -- deliberately simpler than [`WriteBackOutcome`]
+/// below, which layers CLI-only concerns (a `Skipped` variant covering unconfigured tags, no
+/// recorded results, or an interactive skip) on top of this. `write_pid_values` only ever
+/// runs once a specific, available target has already been chosen, so there is nothing left
+/// to "skip" by the time it's called. Named distinctly from `bhtune_driver::WriteOutcome`
+/// (that one describes a single raw tag write's own outcome; this one describes the full
+/// pre-read/write/verify/rollback/audit sequence across all three PID constants).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PidWriteOutcome {
+    /// Every constant was written and confirmed within tolerance.
+    Written,
+    /// The pre-read, a write, or a readback failed. `detail` is a human-readable summary
+    /// suitable for surfacing directly to a CLI user or an HTTP error body -- including
+    /// whether/how rollback resolved, for a [`WriteKind::Write`] that failed partway
+    /// through. A [`TuneWriteRow`] audit row was still inserted recording the same story in
+    /// full detail; this is only ever a summary of it.
+    Failed { detail: String },
+}
+
+/// Pre-reads the existing Proportional/Integral/Derivative values, writes and verifies
+/// `target` (Proportional then Integral then Derivative, stopping at the first failure),
+/// rolls back to the pre-read values on partial failure (only for `kind =
+/// `[`WriteKind::Write`]` -- [`WriteKind::Revert`] never does, so a revert can't chase its
+/// own failure with a nested rollback; see [`WriteKind`]'s own doc comment), and records
+/// exactly one [`TuneWriteRow`] audit row for the attempt, success or not
+/// (`safety-writeback-rollback`, finding 6 of the live-plant safety review).
+///
+/// The one implementation of "pre-read, write, verify, roll back, audit" in the whole
+/// workspace, shared by three callers: [`maybe_write_back`]'s in-run write-back,
+/// `commands::history::revert`, and `bhtune-server`'s post-hoc `POST /api/runs/{id}/write`/
+/// `.../revert` (`api-post-run-write`) -- `pub` (not `pub(crate)`) specifically so that
+/// third, different-crate caller can reach it. `bhtune-server` calls only this function, not
+/// the lower-level [`read_previous_pid_values`]/[`write_and_verify_pid_value`] helpers this
+/// builds on -- those stay `pub(crate)`, since nothing outside `bhtune-cli` needs the
+/// individual pre-read/write-single-value steps, only the complete audited sequence.
+///
+/// `target` is the caller-selected P/I/D values to write: freshly calculated parameters for a
+/// [`WriteKind::Write`], or a past write's recorded `previous` values for a
+/// [`WriteKind::Revert`]. Never propagates a driver/database error via `?` for an
+/// operational failure -- a pre-read failure, a rejected write, a failed confirmation
+/// readback, or a failed rollback all still produce their audit row and return
+/// [`PidWriteOutcome::Failed`]; the `Err` case is reserved for the one thing that really is
+/// exceptional here, [`TuneWriteRow::insert`] itself failing.
+#[allow(clippy::too_many_arguments)]
+pub async fn write_pid_values(
+    pool: &SqlitePool,
+    run_id: i64,
+    driver: &dyn Driver,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain: bool,
+) -> anyhow::Result<PidWriteOutcome> {
+    let written_at = Utc::now();
+    let mut new_write = NewTuneWrite::new(response_level, written_at);
+    new_write.kind = kind;
+
+    let previous =
+        match read_previous_pid_values(driver, p_tag, i_tag, d_tag, allow_uncertain).await {
+            Ok(previous) => previous,
+            Err(e) => {
+                let message = e.to_string();
+                new_write.error_message = Some(message.clone());
+                TuneWriteRow::insert(pool, run_id, new_write).await?;
+                tracing::error!(run_id, ?response_level, ?kind, %message, "PID pre-read failed");
+                return Ok(PidWriteOutcome::Failed {
+                    detail: format!("pre-read failed: {message}"),
+                });
+            }
+        };
+    new_write.previous = Some(previous);
+
+    // Write and verify Proportional, then Integral, then Derivative, stopping at the first
+    // failure. `rollback_targets` accumulates only the constants confirmed written so far,
+    // so a failure partway through knows exactly what needs rolling back (when rollback
+    // applies at all -- see `kind` below).
+    let steps: [(&str, &str, f32, f32); 3] = [
+        (
+            "Proportional",
+            p_tag,
+            target.proportional,
+            previous.proportional,
+        ),
+        ("Integral", i_tag, target.integral, previous.integral),
+        ("Derivative", d_tag, target.derivative, previous.derivative),
+    ];
+    let mut written_vals: [Option<f32>; 3] = [None; 3];
+    let mut readback_vals: [Option<f32>; 3] = [None; 3];
+    let mut rollback_targets: Vec<(&str, &str, f32)> = Vec::new();
+    let mut failure: Option<String> = None;
+
+    for (i, (label, tag, value, previous_value)) in steps.into_iter().enumerate() {
+        written_vals[i] = Some(value);
+        match write_and_verify_pid_value(driver, label, tag, value, allow_uncertain).await {
+            Ok(readback) => {
+                readback_vals[i] = Some(readback);
+                rollback_targets.push((label, tag, previous_value));
+            }
+            Err(e) => {
+                failure = Some(e);
+                break;
+            }
+        }
+    }
+
+    new_write.proportional_written = written_vals[0];
+    new_write.integral_written = written_vals[1];
+    new_write.derivative_written = written_vals[2];
+    new_write.proportional_readback = readback_vals[0];
+    new_write.integral_readback = readback_vals[1];
+    new_write.derivative_readback = readback_vals[2];
+
+    let Some(error_message) = failure else {
+        new_write.success = true;
+        TuneWriteRow::insert(pool, run_id, new_write).await?;
+        tracing::info!(run_id, ?response_level, ?kind, "PID write succeeded");
+        return Ok(PidWriteOutcome::Written);
+    };
+
+    new_write.success = false;
+    new_write.error_message = Some(error_message.clone());
+
+    // `WriteKind::Revert` never chases its own failure with a nested rollback (see that
+    // variant's doc comment); neither does a `Write` that failed before confirming even one
+    // constant, since there is nothing yet to roll back.
+    if kind != WriteKind::Write || rollback_targets.is_empty() {
+        TuneWriteRow::insert(pool, run_id, new_write).await?;
+        tracing::error!(run_id, ?response_level, ?kind, %error_message, "PID write failed");
+        return Ok(PidWriteOutcome::Failed {
+            detail: error_message,
+        });
+    }
+
+    match rollback_pid_writes(driver, &rollback_targets).await {
+        Ok(()) => {
+            new_write.rollback_state = Some(RollbackState::Succeeded);
+            TuneWriteRow::insert(pool, run_id, new_write).await?;
+            tracing::error!(run_id, ?response_level, %error_message, "PID write failed partway through; rollback succeeded");
+            Ok(PidWriteOutcome::Failed {
+                detail: format!("{error_message} (rolled back)"),
+            })
+        }
+        Err(rollback_error) => {
+            new_write.rollback_state = Some(RollbackState::Failed);
+            new_write.rollback_error = Some(rollback_error.clone());
+            TuneWriteRow::insert(pool, run_id, new_write).await?;
+            tracing::error!(
+                run_id,
+                ?response_level,
+                %error_message,
+                %rollback_error,
+                "PID write failed partway through; rollback also failed"
+            );
+            Ok(PidWriteOutcome::Failed {
+                detail: format!(
+                    "{error_message}; rollback also failed: {rollback_error} -- the loop may \
+                     hold a mismatched set of PID constants, see \
+                     `bhtune history revert {run_id}`"
+                ),
+            })
+        }
+    }
+}
+
 /// Writes back the calculated PID parameters for one response level -- chosen either
 /// interactively (prompting on `reader`) or non-interactively via `write_pid`
 /// (`--write-pid`; the caller has already validated `--yes` was also given before the tune
@@ -2132,137 +2299,36 @@ async fn maybe_write_back(
         derivative: selected.derivative,
     };
     let written = opc_write_values(pid, config.controller_type, template.integral_type);
-    let written_at = Utc::now();
+    let target = WriteReadback {
+        proportional: written.proportional,
+        integral: written.integral,
+        derivative: written.derivative,
+    };
 
-    let mut new_write = NewTuneWrite::new(response_level, written_at);
+    let outcome = write_pid_values(
+        pool,
+        run_id,
+        driver,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        WriteKind::Write,
+        allow_uncertain,
+    )
+    .await?;
 
-    let previous =
-        match read_previous_pid_values(driver, p_tag, i_tag, d_tag, allow_uncertain).await {
-            Ok(previous) => previous,
-            Err(e) => {
-                let message = e.to_string();
-                new_write.error_message = Some(message.clone());
-                TuneWriteRow::insert(pool, run_id, new_write).await?;
-                if output == OutputFormat::Table {
-                    println!("PID write-back skipped: {message}");
-                }
-                tracing::error!(run_id, ?response_level, %message, "PID pre-read failed");
-                return Ok((
-                    WriteBackOutcome::Failed,
-                    Some(format!("pre-read failed: {message}")),
-                ));
-            }
-        };
-    new_write.previous = Some(previous);
-
-    // Write and verify Proportional, then Integral, then Derivative, stopping at the first
-    // failure. `rollback_targets` accumulates only the constants confirmed written so far,
-    // so a failure partway through knows exactly what needs rolling back.
-    let steps: [(&str, &str, f32, f32); 3] = [
-        (
-            "Proportional",
-            p_tag.as_str(),
-            written.proportional,
-            previous.proportional,
-        ),
-        (
-            "Integral",
-            i_tag.as_str(),
-            written.integral,
-            previous.integral,
-        ),
-        (
-            "Derivative",
-            d_tag.as_str(),
-            written.derivative,
-            previous.derivative,
-        ),
-    ];
-    let mut written_vals: [Option<f32>; 3] = [None; 3];
-    let mut readback_vals: [Option<f32>; 3] = [None; 3];
-    let mut rollback_targets: Vec<(&str, &str, f32)> = Vec::new();
-    let mut failure: Option<String> = None;
-
-    for (i, (label, tag, value, previous_value)) in steps.into_iter().enumerate() {
-        written_vals[i] = Some(value);
-        match write_and_verify_pid_value(driver, label, tag, value, allow_uncertain).await {
-            Ok(readback) => {
-                readback_vals[i] = Some(readback);
-                rollback_targets.push((label, tag, previous_value));
-            }
-            Err(e) => {
-                failure = Some(e);
-                break;
-            }
-        }
-    }
-
-    new_write.proportional_written = written_vals[0];
-    new_write.integral_written = written_vals[1];
-    new_write.derivative_written = written_vals[2];
-    new_write.proportional_readback = readback_vals[0];
-    new_write.integral_readback = readback_vals[1];
-    new_write.derivative_readback = readback_vals[2];
-
-    match failure {
-        None => {
-            new_write.success = true;
-            TuneWriteRow::insert(pool, run_id, new_write).await?;
+    match outcome {
+        PidWriteOutcome::Written => {
             if output == OutputFormat::Table {
                 println!("Wrote and confirmed {response_level:?} PID parameters.");
             }
-            tracing::info!(run_id, ?response_level, "PID write-back succeeded");
             Ok((WriteBackOutcome::Written { response_level }, None))
         }
-        Some(error_message) => {
-            new_write.success = false;
-            new_write.error_message = Some(error_message.clone());
-
-            if rollback_targets.is_empty() {
-                // Nothing had been confirmed written yet, so there is nothing to roll back.
-                TuneWriteRow::insert(pool, run_id, new_write).await?;
-                if output == OutputFormat::Table {
-                    println!("PID write-back failed: {error_message}");
-                }
-                tracing::error!(run_id, ?response_level, %error_message, "PID write-back failed before writing anything");
-                return Ok((WriteBackOutcome::Failed, Some(error_message)));
-            }
-
-            let detail;
-            match rollback_pid_writes(driver, &rollback_targets).await {
-                Ok(()) => {
-                    new_write.rollback_state = Some(RollbackState::Succeeded);
-                    TuneWriteRow::insert(pool, run_id, new_write).await?;
-                    if output == OutputFormat::Table {
-                        println!("PID write-back failed and was rolled back: {error_message}");
-                    }
-                    tracing::error!(run_id, ?response_level, %error_message, "PID write-back failed partway through; rollback succeeded");
-                    detail = format!("{error_message} (rolled back)");
-                }
-                Err(rollback_error) => {
-                    new_write.rollback_state = Some(RollbackState::Failed);
-                    new_write.rollback_error = Some(rollback_error.clone());
-                    TuneWriteRow::insert(pool, run_id, new_write).await?;
-                    if output == OutputFormat::Table {
-                        println!(
-                            "PID write-back failed ({error_message}) and rollback also failed \
-                             ({rollback_error}); the loop may hold a mismatched set of PID \
-                             constants -- see `bhtune history revert {run_id}`."
-                        );
-                    }
-                    tracing::error!(
-                        run_id,
-                        ?response_level,
-                        %error_message,
-                        %rollback_error,
-                        "PID write-back failed partway through; rollback also failed"
-                    );
-                    detail = format!(
-                        "{error_message}; rollback also failed: {rollback_error} -- the loop \
-                         may hold a mismatched set of PID constants, see \
-                         `bhtune history revert {run_id}`"
-                    );
-                }
+        PidWriteOutcome::Failed { detail } => {
+            if output == OutputFormat::Table {
+                println!("PID write-back failed: {detail}");
             }
             Ok((WriteBackOutcome::Failed, Some(detail)))
         }

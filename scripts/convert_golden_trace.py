@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a captured legacy FalconTune `--log --decryptedLog` CSV pair into a bhtune
+"""Convert a captured legacy C# app `--log --decryptedLog` CSV pair into a bhtune
 golden-trace fixture (see `tests/golden/fixtures/` and `crates/bhtune-core/tests/golden_replay.rs`).
 
 Usage:
@@ -140,7 +140,7 @@ def main() -> None:
     troughs = [f32(static_row, f"MinPVlist_{n}") for n in range(troughs_len)]
 
     description = (
-        f"Real MRFT capture from legacy FalconTune.exe against the Python FOPDT simulator "
+        f"Real MRFT capture from the legacy C# app against the Python FOPDT simulator "
         f"on the hp Windows VM (see capture-traces)."
     )
     if args.description:

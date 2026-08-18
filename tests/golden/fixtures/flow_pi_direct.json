@@ -1,6 +1,6 @@
 {
   "name": "flow_pi_direct",
-  "description": "Real MRFT capture from legacy FalconTune.exe against the Python FOPDT simulator on the hp Windows VM (see capture-traces). Flow process, PI controller, no MV range floor (uncascaded). NOTE: direction is \"reverse\" here, confirmed against the recorded per-tick MvSignNextStep values -- the \"direct\" in this trace filename does not refer to bhtune ControllerDirection. NOTE: tick index 3 timestamp is nudged 500ms earlier than the CSV whole-second-rounded value to break a noise-protection-boundary tie the source log precision could not represent -- see scripts/convert_golden_trace.py.",
+  "description": "Real MRFT capture from the legacy C# app against the Python FOPDT simulator on the hp Windows VM (see capture-traces). Flow process, PI controller, no MV range floor (uncascaded). NOTE: direction is \"reverse\" here, confirmed against the recorded per-tick MvSignNextStep values -- the \"direct\" in this trace filename does not refer to bhtune ControllerDirection. NOTE: tick index 3 timestamp is nudged 500ms earlier than the CSV whole-second-rounded value to break a noise-protection-boundary tie the source log precision could not represent -- see scripts/convert_golden_trace.py.",
   "source": {
     "static_log": "flow_pi_direct_20260812_142707_1d.csv",
     "dynamic_log": "flow_pi_direct_20260812_142707_2d.csv",

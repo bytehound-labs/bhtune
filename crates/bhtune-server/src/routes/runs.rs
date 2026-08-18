@@ -14,10 +14,16 @@ use axum::routing::post;
 use axum::{Json, Router};
 use bhtune_cli::args::{DriverKindArg, TuneArgs};
 use bhtune_cli::cancel::CtrlC;
-use bhtune_cli::commands::tune::{drive, prepare};
+use bhtune_cli::commands::tune::{PidWriteOutcome, drive, prepare, write_pid_values};
 use bhtune_cli::output::OutputFormat;
-use bhtune_core::{ControllerDirection, ControllerType, ProcessType, ResponseLevel};
-use bhtune_db::models::{TuneDriver, TuneRunRow};
+use bhtune_core::{
+    ControllerDirection, ControllerType, PidParameters, ProcessType, ResponseLevel,
+    opc_write_values,
+};
+use bhtune_db::models::{
+    TuneDriver, TuneOutcome, TuneResultRow, TuneRunRow, TuneWriteRow, WriteKind, WriteReadback,
+};
+use bhtune_driver::OpcDaDriver;
 use chrono::Utc;
 use serde::Deserialize;
 use utoipa::ToSchema;
@@ -367,10 +373,300 @@ pub(crate) async fn cancel_run(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The body of `POST /api/runs/{id}/write`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct WriteRunRequest {
+    /// Which of the run's three calculated candidate result sets to write.
+    pub response_level: ResponseLevel,
+}
+
+/// Checks that `run` is eligible for a post-hoc PID write or revert (`api-post-run-write`):
+/// finished (not still running its own test), used the `opcda` driver, has PID constant
+/// tags in its snapshotted [`bhtune_core::LoopTags`], and recorded the OPC server/bridge
+/// host it actually connected through. Shared by [`write_run`] and [`revert_run`] -- both
+/// need exactly the same eligibility, only the *target* values to write differ.
+fn require_writable_run(run: &TuneRunRow) -> Result<(), ApiError> {
+    if run.outcome == TuneOutcome::Running {
+        return Err(ApiError::BadRequest(format!(
+            "run {} is still running; wait for it to finish before writing or reverting PID \
+             constants",
+            run.id
+        )));
+    }
+    if run.driver != TuneDriver::Opcda {
+        return Err(ApiError::BadRequest(format!(
+            "run {} used the {:?} driver, which has no live loop to write PID constants to",
+            run.id, run.driver
+        )));
+    }
+    if run.tags.proportional_constant.is_none()
+        || run.tags.integral_constant.is_none()
+        || run.tags.derivative_constant.is_none()
+    {
+        return Err(ApiError::BadRequest(format!(
+            "run {}'s snapshotted tags have no PID constant tags configured",
+            run.id
+        )));
+    }
+    if run.opc_server.is_none() || run.bridge_host.is_none() {
+        return Err(ApiError::BadRequest(format!(
+            "run {} has no recorded OPC server/bridge host; refusing to guess which \
+             connection to use",
+            run.id
+        )));
+    }
+    Ok(())
+}
+
+/// Connects an [`OpcDaDriver`] using `run`'s own recorded `opc_server`/`bridge_host` --
+/// never re-resolved from this process's own config/flags, for exactly the reason
+/// `bhtune-cli`'s `commands::history::resolve_revert_connection` documents: a value
+/// re-resolved at write/revert time could silently point at a different gateway than the
+/// run itself actually used. [`require_writable_run`] must already have confirmed both
+/// fields are present.
+async fn connect_to_runs_recorded_driver(run: &TuneRunRow) -> Result<OpcDaDriver, ApiError> {
+    let opc_server = run
+        .opc_server
+        .as_deref()
+        .expect("require_writable_run already checked opc_server is Some");
+    let bridge_host = run
+        .bridge_host
+        .as_deref()
+        .expect("require_writable_run already checked bridge_host is Some");
+    OpcDaDriver::connect(bridge_host, opc_server)
+        .await
+        .map_err(|e| {
+            ApiError::BadRequest(format!(
+                "failed to connect to OPC server '{opc_server}' via bridge '{bridge_host}': {e}"
+            ))
+        })
+}
+
+/// Reserves the [`crate::active_run::ActiveRun`] slot for `run.id`, connects, and calls
+/// [`write_pid_values`] -- releasing the reservation on every exit path (this project's
+/// established "no `Drop`-based cleanup, `Drop` cannot await" rule; see
+/// `crate::active_run::ActiveRun::reserve`'s own doc comment) -- then rebuilds and returns
+/// the run's fresh [`RunDetailResponse`] regardless of whether the write/revert itself
+/// succeeded. A [`PidWriteOutcome::Failed`] is not an HTTP error: the request was processed
+/// successfully and its result -- including the failure -- is recorded in the returned
+/// `writes[]` array's `success`/`error_message` fields, exactly how a client already reads a
+/// write-back outcome from `GET /api/runs/{id}`. Only [`ApiError::Conflict`] (another
+/// operation holds the slot), [`ApiError::BadRequest`] (the driver connection itself
+/// failed), or [`ApiError::Internal`] (an unexpected database failure inside
+/// [`write_pid_values`]) short-circuit this into an actual error response.
+#[allow(clippy::too_many_arguments)]
+async fn reserve_connect_and_write(
+    state: &AppState,
+    run_id: i64,
+    run: &TuneRunRow,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+) -> Result<RunDetailResponse, ApiError> {
+    state
+        .active_run
+        .reserve(run_id)
+        .await
+        .map_err(|RunAlreadyActive { run_id: existing }| {
+            ApiError::Conflict(format!(
+                "run {existing} is already active; try again once it finishes"
+            ))
+        })?;
+
+    let result: Result<PidWriteOutcome, ApiError> = async {
+        let driver = connect_to_runs_recorded_driver(run).await?;
+        let outcome = write_pid_values(
+            &state.pool,
+            run_id,
+            &driver,
+            p_tag,
+            i_tag,
+            d_tag,
+            response_level,
+            target,
+            kind,
+            run.allow_uncertain_quality,
+        )
+        .await?;
+        Ok(outcome)
+    }
+    .await;
+
+    state.active_run.release(run_id).await;
+    result?;
+
+    build_run_detail(&state.pool, run_id).await?.ok_or_else(|| {
+        ApiError::Internal(anyhow::anyhow!(
+            "run {run_id} vanished while its write/revert was being processed"
+        ))
+    })
+}
+
+/// Write one of a run's calculated candidate PID parameter sets back to the live loop.
+///
+/// `POST /api/runs/{id}/write` -- unlike the CLI's `--write-pid`, which can only fire once
+/// at the end of the run it belongs to, this can be called at any time after the run has
+/// finished, letting an engineer compare Sluggish/Moderate/Aggressive on screen before
+/// picking one. Pre-reads the loop's current P/I/D, writes and verifies each constant in
+/// turn, and rolls back to the pre-read values if a later constant is rejected
+/// (`safety-writeback-rollback`) -- recorded as a new write-back audit row exactly like an
+/// in-run write.
+///
+/// Always `200` once the request itself is valid and no conflicting operation is active,
+/// whether or not the write actually succeeded -- see [`reserve_connect_and_write`]'s doc
+/// comment for why a physical write failure is not a `4xx`/`5xx`.
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/write",
+    tag = "runs",
+    params(
+        ("id" = i64, Path, description = "Run id"),
+    ),
+    request_body = WriteRunRequest,
+    responses(
+        (status = 200, description = "The write was attempted; see `writes[]` in the body for its outcome.", body = RunDetailResponse),
+        (status = 400, description = "The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, or no calculated result for the requested response level), or the driver connection itself failed.", body = ErrorBody),
+        (status = 404, description = "No run with that id.", body = ErrorBody),
+        (status = 409, description = "Another run or write/revert is already active.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn write_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<i64>,
+    Json(request): Json<WriteRunRequest>,
+) -> Result<Json<RunDetailResponse>, ApiError> {
+    let run = TuneRunRow::get(&state.pool, run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
+    require_writable_run(&run)?;
+
+    let results = TuneResultRow::list_for_run(&state.pool, run_id).await?;
+    let selected = results
+        .iter()
+        .find(|r| r.response_level == request.response_level)
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "run {run_id} has no calculated {:?} result to write",
+                request.response_level
+            ))
+        })?;
+
+    let pid = PidParameters {
+        response_level: selected.response_level,
+        proportional: selected.proportional,
+        integral: selected.integral,
+        derivative: selected.derivative,
+    };
+    let written = opc_write_values(pid, run.config.controller_type, run.template.integral_type);
+    let target = WriteReadback {
+        proportional: written.proportional,
+        integral: written.integral,
+        derivative: written.derivative,
+    };
+
+    // `require_writable_run` already confirmed all three tags are `Some`.
+    let p_tag = run.tags.proportional_constant.clone().unwrap();
+    let i_tag = run.tags.integral_constant.clone().unwrap();
+    let d_tag = run.tags.derivative_constant.clone().unwrap();
+
+    let detail = reserve_connect_and_write(
+        &state,
+        run_id,
+        &run,
+        &p_tag,
+        &i_tag,
+        &d_tag,
+        request.response_level,
+        target,
+        WriteKind::Write,
+    )
+    .await?;
+    Ok(Json(detail))
+}
+
+/// Revert a run's most recent PID write-back, restoring the pre-write values it recorded.
+///
+/// `POST /api/runs/{id}/revert` -- no request body: like `POST /api/runs/{id}/cancel`, the
+/// GUI's own confirmation dialog (naming the loop, the tags, and the exact values from
+/// `writes[]`) is the human confirmation step, not a body field. Finds the run's last
+/// [`WriteKind::Write`] row regardless of whether it succeeded (matching
+/// `bhtune history revert`'s own semantics exactly), requiring it to have recorded pre-write
+/// values to revert to. A revert never attempts a nested rollback of itself if it fails
+/// partway through -- see [`WriteKind`]'s doc comment.
+///
+/// Always `200` once the request itself is valid and no conflicting operation is active; see
+/// [`reserve_connect_and_write`]'s doc comment for why a physical revert failure is not a
+/// `4xx`/`5xx`.
+#[utoipa::path(
+    post,
+    path = "/api/runs/{id}/revert",
+    tag = "runs",
+    params(
+        ("id" = i64, Path, description = "Run id"),
+    ),
+    responses(
+        (status = 200, description = "The revert was attempted; see `writes[]` in the body for its outcome.", body = RunDetailResponse),
+        (status = 400, description = "The run isn't eligible for a post-hoc revert (still running, wrong driver, no PID tags/connection recorded, no recorded write-back to revert, or its pre-write values were never recorded), or the driver connection itself failed.", body = ErrorBody),
+        (status = 404, description = "No run with that id.", body = ErrorBody),
+        (status = 409, description = "Another run or write/revert is already active.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn revert_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<i64>,
+) -> Result<Json<RunDetailResponse>, ApiError> {
+    let run = TuneRunRow::get(&state.pool, run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
+    require_writable_run(&run)?;
+
+    let writes = TuneWriteRow::list_for_run(&state.pool, run_id).await?;
+    let last_write = writes
+        .iter()
+        .rev()
+        .find(|w| w.kind == WriteKind::Write)
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "run {run_id} has no recorded PID write-back to revert"
+            ))
+        })?;
+    let response_level = last_write.response_level;
+    let target = last_write.previous.ok_or_else(|| {
+        ApiError::BadRequest(format!(
+            "run {run_id}'s {response_level:?} PID write-back never recorded pre-write values; \
+             nothing to revert to"
+        ))
+    })?;
+
+    // `require_writable_run` already confirmed all three tags are `Some`.
+    let p_tag = run.tags.proportional_constant.clone().unwrap();
+    let i_tag = run.tags.integral_constant.clone().unwrap();
+    let d_tag = run.tags.derivative_constant.clone().unwrap();
+
+    let detail = reserve_connect_and_write(
+        &state,
+        run_id,
+        &run,
+        &p_tag,
+        &i_tag,
+        &d_tag,
+        response_level,
+        target,
+        WriteKind::Revert,
+    )
+    .await?;
+    Ok(Json(detail))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/runs", post(start_run))
         .route("/api/runs/{id}/cancel", post(cancel_run))
+        .route("/api/runs/{id}/write", post(write_run))
+        .route("/api/runs/{id}/revert", post(revert_run))
 }
 
 #[cfg(test)]
@@ -378,6 +674,7 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
+    use bhtune_core::LoopConfig;
     use tower::ServiceExt;
 
     /// A fast-converging simulator-backed request body, mirroring `bhtune-cli`'s own
@@ -764,5 +1061,681 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cancel_response.status(), StatusCode::NO_CONTENT);
+    }
+
+    /// A minimal mock `Bridge` gRPC service backing `write_run`/`revert_run`'s tests, so
+    /// they exercise a real `OpcDaDriver` connect/read/write round trip rather than stopping
+    /// at the eligibility checks. Mirrors `bhtune_driver::opcda`'s own `smoke_tests` module
+    /// (itself mirroring `bhtune-cli`'s `test_support`) field-for-field, trimmed further:
+    /// `list_servers`/`browse` are stubbed to empty since neither handler under test ever
+    /// calls them.
+    mod mock_bridge {
+        use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
+        use opcda_bridge_proto::bridge::{
+            BrowseRequest, BrowseResponse, ListServersRequest, ListServersResponse, ReadRequest,
+            ReadResponse, WriteRequest, WriteResponse,
+        };
+        use std::net::SocketAddr;
+        use tokio_stream::wrappers::TcpListenerStream;
+        use tonic::transport::Server;
+        use tonic::{Request, Response, Status};
+
+        #[derive(Default)]
+        pub(super) struct MockBridgeService {
+            pub(super) read_response: ReadResponse,
+            pub(super) read_error: Option<Status>,
+            pub(super) write_response: WriteResponse,
+            pub(super) write_error: Option<Status>,
+        }
+
+        #[tonic::async_trait]
+        impl Bridge for MockBridgeService {
+            async fn list_servers(
+                &self,
+                _request: Request<ListServersRequest>,
+            ) -> Result<Response<ListServersResponse>, Status> {
+                Ok(Response::new(ListServersResponse { servers: vec![] }))
+            }
+
+            type BrowseStream =
+                tokio_stream::wrappers::ReceiverStream<Result<BrowseResponse, Status>>;
+
+            async fn browse(
+                &self,
+                _request: Request<BrowseRequest>,
+            ) -> Result<Response<Self::BrowseStream>, Status> {
+                // Dropping the sender immediately closes the channel, so the stream ends with
+                // no items -- neither handler under test ever browses.
+                let (_tx, rx) = tokio::sync::mpsc::channel(1);
+                Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+                    rx,
+                )))
+            }
+
+            async fn read(
+                &self,
+                _request: Request<ReadRequest>,
+            ) -> Result<Response<ReadResponse>, Status> {
+                if let Some(status) = self.read_error.clone() {
+                    return Err(status);
+                }
+                Ok(Response::new(self.read_response.clone()))
+            }
+
+            async fn write(
+                &self,
+                _request: Request<WriteRequest>,
+            ) -> Result<Response<WriteResponse>, Status> {
+                if let Some(status) = self.write_error.clone() {
+                    return Err(status);
+                }
+                Ok(Response::new(self.write_response.clone()))
+            }
+        }
+
+        /// Starts `service` on an ephemeral localhost port and returns its `host:port`
+        /// address, ready to be recorded as a run's `bridge_host`. No graceful shutdown --
+        /// each test's server simply runs for the rest of the test process on its own
+        /// ephemeral port, matching the upstream pattern this mirrors.
+        pub(super) async fn start_mock_server(service: MockBridgeService) -> String {
+            let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                Server::builder()
+                    .add_service(BridgeServer::new(service))
+                    .serve_with_incoming(TcpListenerStream::new(listener))
+                    .await
+                    .unwrap();
+            });
+            format!("127.0.0.1:{port}")
+        }
+
+        /// A "Good"-quality `"10.0"` reading, regardless of which tag was requested --
+        /// matching `bhtune-cli`'s own `history::revert` test fixtures' rationale: every
+        /// pre-read and every write's confirmation readback returns this same value, so a
+        /// fixture that also writes/reverts to `10.0` always sees a matching readback no
+        /// matter which of the three PID constants is being processed.
+        pub(super) fn good_reading(value: &str) -> ReadResponse {
+            ReadResponse {
+                values: vec![opcda_bridge_proto::bridge::TagValue {
+                    tag_id: "ignored".to_string(),
+                    value: value.to_string(),
+                    quality: "Good".to_string(),
+                    timestamp: "2024-01-15 10:23:45".to_string(),
+                }],
+            }
+        }
+    }
+
+    /// Starts (but does not complete, record a connection for, or attach any result/write
+    /// to) an `opcda`-driven run with real PID constant tags derived from the Yokogawa
+    /// CentumVP template -- the common setup shared by every `write_run`/`revert_run`
+    /// eligibility fixture below. Uses `ControllerType::Pid` and
+    /// `ProcessType::TemperatureHeatExchange` (the only process types PID is offered for,
+    /// matching the legacy app's own rule -- see `core-model`) purely so `opc_write_values`
+    /// never zeroes the derivative constant, keeping every written PID value in these tests
+    /// exactly `10.0` regardless of which constant is inspected.
+    async fn start_opcda_run(state: &AppState) -> i64 {
+        let template_row =
+            bhtune_db::models::DcsTemplateRow::get_by_name(&state.pool, "Yokogawa CentumVP")
+                .await
+                .unwrap()
+                .unwrap();
+        let template = template_row.template;
+        let config = LoopConfig {
+            process_type: ProcessType::TemperatureHeatExchange,
+            controller_type: ControllerType::Pid,
+            relay_amp_percent: 5.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 3,
+            noise_protection_secs: 0,
+            mrft_delay_secs: 0,
+        };
+        let tags = bhtune_core::LoopTags::derive_from_pv_tag("Loop3.PV", &template);
+        let run = TuneRunRow::start(
+            &state.pool,
+            None,
+            "Loop3",
+            TuneDriver::Opcda,
+            config,
+            template_row.origin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        run.id
+    }
+
+    /// Same as `start_opcda_run`, but with all three PID constant tags stripped after
+    /// derivation -- exercises `require_writable_run`'s "no PID constant tags configured"
+    /// branch, which a normal built-in template's fixture can never reach (every built-in
+    /// template always defines these suffixes; see `core-model`).
+    async fn start_opcda_run_without_pid_tags(state: &AppState) -> i64 {
+        let template_row =
+            bhtune_db::models::DcsTemplateRow::get_by_name(&state.pool, "Yokogawa CentumVP")
+                .await
+                .unwrap()
+                .unwrap();
+        let template = template_row.template;
+        let config = LoopConfig {
+            process_type: ProcessType::TemperatureHeatExchange,
+            controller_type: ControllerType::Pid,
+            relay_amp_percent: 5.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 3,
+            noise_protection_secs: 0,
+            mrft_delay_secs: 0,
+        };
+        let mut tags = bhtune_core::LoopTags::derive_from_pv_tag("Loop3.PV", &template);
+        tags.proportional_constant = None;
+        tags.integral_constant = None;
+        tags.derivative_constant = None;
+        let run = TuneRunRow::start(
+            &state.pool,
+            None,
+            "Loop3",
+            TuneDriver::Opcda,
+            config,
+            template_row.origin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        run.id
+    }
+
+    /// Marks `run_id` completed and attaches a single calculated Moderate result
+    /// (P = I = D = `10.0`) -- the minimum `write_run` needs to have something to write.
+    async fn add_moderate_result(state: &AppState, run_id: i64) {
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+        TuneResultRow::insert(
+            &state.pool,
+            &TuneResultRow {
+                id: 0,
+                run_id,
+                response_level: ResponseLevel::Moderate,
+                kp: 1.5,
+                ti_minutes: 2.0,
+                td_minutes: 1.0,
+                proportional: 10.0,
+                integral: 10.0,
+                derivative: 10.0,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The full happy-path fixture: a completed `opcda` run with a recorded connection to
+    /// `bridge_host`/`opc_server` and a calculated Moderate result ready to write.
+    async fn seed_writable_opcda_run(state: &AppState, bridge_host: &str, opc_server: &str) -> i64 {
+        let run_id = start_opcda_run(state).await;
+        TuneRunRow::record_connection(
+            &state.pool,
+            run_id,
+            Some(opc_server),
+            Some(bridge_host),
+            "{}",
+        )
+        .await
+        .unwrap();
+        add_moderate_result(state, run_id).await;
+        run_id
+    }
+
+    async fn post_empty(app: axum::Router, path: &str) -> axum::http::Response<Body> {
+        app.oneshot(Request::post(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn write_run_succeeds_and_records_a_write_kind_row() {
+        use mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+
+        let response = post_json(
+            crate::build_router(state.clone()),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail = body_json(response).await;
+
+        let writes = detail["writes"].as_array().unwrap();
+        let write_row = writes.iter().find(|w| w["kind"] == "write").unwrap();
+        assert_eq!(write_row["response_level"], "moderate");
+        assert_eq!(write_row["success"], true);
+        assert_eq!(write_row["proportional_written"], 10.0);
+        assert_eq!(write_row["integral_written"], 10.0);
+        assert_eq!(write_row["derivative_written"], 10.0);
+        assert_eq!(write_row["proportional_readback"], 10.0);
+        assert!(write_row["rollback_state"].is_null());
+
+        // The slot must be free again for a later request, not left held by this one.
+        assert!(state.active_run.reserve(999).await.is_ok());
+        state.active_run.release(999).await;
+    }
+
+    #[tokio::test]
+    async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
+        use mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+
+        let host = start_mock_server(MockBridgeService {
+            // The pre-read (all three constants) still succeeds; every subsequent *write*
+            // is rejected at the transport level, so the very first write attempted
+            // (Proportional) fails before anything is confirmed -- no rollback is even
+            // attempted, matching `write_pid_values`'s documented "nothing yet to roll
+            // back" short-circuit.
+            read_response: good_reading("10.0"),
+            write_error: Some(tonic::Status::invalid_argument("nope")),
+            ..Default::default()
+        })
+        .await;
+
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+
+        let response = post_json(
+            crate::build_router(state.clone()),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        // A physical write failure is not an HTTP error -- see `reserve_connect_and_write`'s
+        // doc comment.
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail = body_json(response).await;
+
+        let writes = detail["writes"].as_array().unwrap();
+        let write_row = writes.iter().find(|w| w["kind"] == "write").unwrap();
+        assert_eq!(write_row["success"], false);
+        // `DriverError::Operation`'s `Display` is the fixed message "driver operation
+        // failed" (thiserror doesn't interpolate the boxed source's own text unless the
+        // format string names it), so this asserts on that fixed wording rather than the
+        // mock's "nope" status message, which never surfaces here.
+        assert!(
+            write_row["error_message"]
+                .as_str()
+                .unwrap()
+                .contains("driver operation failed")
+        );
+        assert!(write_row["rollback_state"].is_null());
+    }
+
+    #[tokio::test]
+    async fn write_run_reports_a_failed_pre_read_as_200_not_an_http_error() {
+        use mock_bridge::{MockBridgeService, start_mock_server};
+
+        let host = start_mock_server(MockBridgeService {
+            // Every `read` (including the Proportional pre-read, the very first driver call
+            // `write_pid_values` makes) is rejected at the transport level -- no `write` is
+            // ever attempted, and the resulting row's `previous` stays entirely unset.
+            read_error: Some(tonic::Status::unavailable("gateway unreachable")),
+            ..Default::default()
+        })
+        .await;
+
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+
+        let response = post_json(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        // A failed pre-read is not an HTTP error either -- same rationale as a failed write.
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail = body_json(response).await;
+
+        let writes = detail["writes"].as_array().unwrap();
+        let write_row = writes.iter().find(|w| w["kind"] == "write").unwrap();
+        assert_eq!(write_row["success"], false);
+        assert!(write_row["proportional_previous"].is_null());
+        assert!(write_row["proportional_written"].is_null());
+        assert!(write_row["rollback_state"].is_null());
+        assert!(
+            write_row["error_message"]
+                .as_str()
+                .unwrap()
+                .contains("pre-read")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_404_for_unknown_run() {
+        let app = crate::build_router(crate::test_support::in_memory_state().await);
+        let response = post_json(
+            app,
+            "/api/runs/999999/write",
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_400_when_run_is_still_running() {
+        let state = crate::test_support::in_memory_state().await;
+        // Never completed -- `require_writable_run` checks this before the driver, tags, or
+        // connection, so no result/connection needs to be attached for this fixture.
+        let run_id = start_opcda_run(&state).await;
+
+        let response = post_json(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(error["error"].as_str().unwrap().contains("still running"));
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_400_for_simulator_driver() {
+        let state = crate::test_support::in_memory_state().await;
+        let template_row =
+            bhtune_db::models::DcsTemplateRow::get_by_name(&state.pool, "Yokogawa CentumVP")
+                .await
+                .unwrap()
+                .unwrap();
+        let template = template_row.template;
+        let config = LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 5.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 3,
+            noise_protection_secs: 0,
+            mrft_delay_secs: 0,
+        };
+        let tags = bhtune_core::LoopTags::derive_from_pv_tag("Sim.PV", &template);
+        let run = TuneRunRow::start(
+            &state.pool,
+            None,
+            "SimLoop",
+            TuneDriver::Simulator,
+            config,
+            template_row.origin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        add_moderate_result(&state, run.id).await;
+
+        let response = post_json(
+            crate::build_router(state),
+            &format!("/api/runs/{}/write", run.id),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(error["error"].as_str().unwrap().contains("Simulator"));
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_400_when_run_has_no_pid_constant_tags() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = start_opcda_run_without_pid_tags(&state).await;
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+
+        let response = post_json(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("no PID constant tags configured")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_400_when_no_connection_was_recorded() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = start_opcda_run(&state).await;
+        add_moderate_result(&state, run_id).await;
+        // `record_connection` deliberately never called -- mirrors a run that somehow
+        // never recorded its connection (should not happen in practice, since `start_run`
+        // always records it for an `opcda` run, but `require_writable_run` must still
+        // refuse to guess).
+
+        let response = post_json(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("no recorded OPC server")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_400_when_no_result_for_the_requested_level() {
+        let state = crate::test_support::in_memory_state().await;
+        // Only a Moderate result is attached -- requesting Sluggish must fail cleanly.
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+
+        let response = post_json(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "sluggish" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(error["error"].as_str().unwrap().contains("Sluggish"));
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_400_when_the_driver_connection_fails() {
+        let state = crate::test_support::in_memory_state().await;
+        // Nothing is listening on this port, so `OpcDaDriver::connect` fails at the
+        // transport level -- mirrors `bhtune-driver`'s own
+        // `connect_failure_maps_to_driver_error_connect` test.
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+
+        let response = post_json(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("failed to connect")
+        );
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_409_when_another_operation_is_active() {
+        use mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+        state.active_run.reserve(424242).await.unwrap();
+
+        let response = post_json(
+            crate::build_router(state.clone()),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let error = body_json(response).await;
+        assert!(error["error"].as_str().unwrap().contains("424242"));
+
+        state.active_run.release(424242).await;
+    }
+
+    #[tokio::test]
+    async fn revert_run_succeeds_and_records_a_revert_kind_row() {
+        use mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+
+        let mut previous_write =
+            bhtune_db::models::NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());
+        previous_write.previous = Some(WriteReadback {
+            proportional: 10.0,
+            integral: 10.0,
+            derivative: 10.0,
+        });
+        previous_write.proportional_written = Some(66.7);
+        previous_write.integral_written = Some(2.0);
+        previous_write.derivative_written = Some(0.5);
+        previous_write.proportional_readback = Some(66.7);
+        previous_write.integral_readback = Some(2.0);
+        previous_write.derivative_readback = Some(0.5);
+        previous_write.success = true;
+        TuneWriteRow::insert(&state.pool, run_id, previous_write)
+            .await
+            .unwrap();
+
+        let response = post_empty(
+            crate::build_router(state.clone()),
+            &format!("/api/runs/{run_id}/revert"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail = body_json(response).await;
+
+        let writes = detail["writes"].as_array().unwrap();
+        assert_eq!(writes.len(), 2);
+        let revert_row = writes.iter().find(|w| w["kind"] == "revert").unwrap();
+        assert_eq!(revert_row["response_level"], "moderate");
+        assert_eq!(revert_row["success"], true);
+        assert_eq!(revert_row["proportional_written"], 10.0);
+        assert_eq!(revert_row["integral_written"], 10.0);
+        assert_eq!(revert_row["derivative_written"], 10.0);
+        // Reverts never chain a nested rollback of themselves.
+        assert!(revert_row["rollback_state"].is_null());
+    }
+
+    #[tokio::test]
+    async fn revert_run_returns_400_when_there_is_no_write_to_revert() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+        // No `TuneWriteRow` attached at all.
+
+        let response = post_empty(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/revert"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("no recorded PID write-back to revert")
+        );
+    }
+
+    #[tokio::test]
+    async fn revert_run_returns_400_when_the_last_write_has_no_previous_values() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+
+        // A `Write`-kind row whose pre-read itself failed -- `previous` stays `None` and
+        // nothing else on the row was ever attempted (mirrors `write_pid_values`'s
+        // pre-read-failure short-circuit). No driver connection is needed to prove this:
+        // `revert_run` must refuse before ever trying to connect.
+        let mut failed_write =
+            bhtune_db::models::NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());
+        failed_write.success = false;
+        failed_write.error_message =
+            Some("pre-read of Proportional tag failed: unavailable".to_string());
+        TuneWriteRow::insert(&state.pool, run_id, failed_write)
+            .await
+            .unwrap();
+
+        let response = post_empty(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/revert"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("never recorded pre-write values")
+        );
+    }
+
+    #[tokio::test]
+    async fn revert_run_returns_404_for_unknown_run() {
+        let app = crate::build_router(crate::test_support::in_memory_state().await);
+        let response = post_empty(app, "/api/runs/999999/revert").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
