@@ -70,3 +70,24 @@ export const OUTCOME_LABELS: Record<
   failed: "Failed",
   aborted: "Aborted",
 };
+
+export const SAMPLE_QUALITY_LABELS: Record<
+  components["schemas"]["SampleQuality"],
+  string
+> = {
+  good: "Good",
+  uncertain: "Uncertain",
+  bad: "Bad",
+};
+
+/** `<Badge>` tone for each `SampleQuality` -- first needed by the OPC tag-tree browser's
+ * "Test connection" read (`ui-opc-browser`), the first place this project renders OPC/sample
+ * quality in the UI at all. */
+export const SAMPLE_QUALITY_TONE: Record<
+  components["schemas"]["SampleQuality"],
+  "success" | "warning" | "error"
+> = {
+  good: "success",
+  uncertain: "warning",
+  bad: "error",
+};

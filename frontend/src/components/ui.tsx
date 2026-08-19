@@ -3,7 +3,7 @@
  * the `frontend-shell` health badge (slate = pending/neutral, red = error, emerald =
  * success) stays consistent across every screen rather than being re-invented per file.
  */
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 export function PageHeading({
   title,
@@ -370,5 +370,59 @@ export function FormSection({
         </div>
       </Card>
     </section>
+  );
+}
+
+/**
+ * A centered overlay dialog: a fixed, full-viewport backdrop behind a bordered panel,
+ * following the same dark `slate` theme as every other component here. First built for the
+ * OPC tag-tree browser (`ui-opc-browser`) -- no earlier screen needed a true modal, since
+ * `RunDetailPage`'s write/revert confirmations use the browser's native `window.confirm`
+ * instead, which doesn't fit an interactive, multi-step tree browse. Closes on a backdrop
+ * click, the header's close button, or Escape; a click inside the panel itself is stopped
+ * from bubbling to the backdrop so interacting with the dialog's own content never closes it.
+ */
+export function Modal({
+  title,
+  onClose,
+  children,
+  widthClassName = "max-w-lg",
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  widthClassName?: string;
+}) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/70 p-4 pt-12"
+      onClick={onClose}
+    >
+      <div
+        className={`w-full ${widthClassName} rounded-lg border border-slate-700 bg-slate-900 shadow-xl`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+          <h2 className="text-sm font-semibold text-slate-200">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="text-slate-400 hover:text-slate-200"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
+      </div>
+    </div>
   );
 }

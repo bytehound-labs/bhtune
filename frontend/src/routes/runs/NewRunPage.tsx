@@ -11,6 +11,8 @@ import {
   PROCESS_TYPE_LABELS,
   RESPONSE_LEVEL_LABELS,
 } from "../../lib/enumLabels";
+import { OpcServerDiscovery } from "../../components/OpcServerDiscovery";
+import { OpcTagBrowserModal } from "../../components/OpcTagBrowserModal";
 import {
   Button,
   CheckboxField,
@@ -311,6 +313,8 @@ export function NewRunPage() {
       : null,
   );
   const seededFromLastRunRef = useRef(false);
+  const [tagBrowserOpen, setTagBrowserOpen] = useState(false);
+  const activeTemplate = templates.data?.find((t) => t.name === form.template);
 
   // Prefill from the newest run's own settings on a plain visit -- a "Duplicate this run"
   // navigation already seeded the lazy `useState` initializer above from a *specific* run's
@@ -493,31 +497,56 @@ export function NewRunPage() {
             placeholder="Defaults to the tag name"
             hint="A friendly label recorded as this run's loop name."
           />
-          <TextField
-            label="Tag name"
-            required={form.driver !== "simulator"}
-            disabled={form.driver === "simulator"}
-            value={form.tagname}
-            onChange={(v) => set("tagname", v)}
-            hint={
-              form.driver === "simulator"
-                ? "Disabled — the simulator hardcodes its own PV/MV tags and ignores this."
-                : "PV tag prefix; the rest of the tag set is derived from it via the template's suffixes."
-            }
-          />
-          <TextField
-            label="OPC DA server ProgID"
-            required={form.driver === "opcda"}
-            disabled={form.driver === "simulator"}
-            value={form.server}
-            onChange={(v) => set("server", v)}
-            placeholder="e.g. Matrikon.OPC.Simulation"
-            hint={
-              form.driver === "simulator"
-                ? "Disabled — the simulator never contacts a gateway."
-                : undefined
-            }
-          />
+          <div>
+            <TextField
+              label="Tag name"
+              required={form.driver !== "simulator"}
+              disabled={form.driver === "simulator"}
+              value={form.tagname}
+              onChange={(v) => set("tagname", v)}
+              hint={
+                form.driver === "simulator"
+                  ? "Disabled — the simulator hardcodes its own PV/MV tags and ignores this."
+                  : "PV tag prefix; the rest of the tag set is derived from it via the template's suffixes."
+              }
+            />
+            {form.driver === "opcda" && (
+              <div className="mt-1">
+                <Button
+                  onClick={() => setTagBrowserOpen(true)}
+                  disabled={!form.server.trim()}
+                  title={
+                    form.server.trim()
+                      ? undefined
+                      : "Enter an OPC DA server ProgID first."
+                  }
+                >
+                  Browse tags…
+                </Button>
+              </div>
+            )}
+          </div>
+          <div>
+            <TextField
+              label="OPC DA server ProgID"
+              required={form.driver === "opcda"}
+              disabled={form.driver === "simulator"}
+              value={form.server}
+              onChange={(v) => set("server", v)}
+              placeholder="e.g. Matrikon.OPC.Simulation"
+              hint={
+                form.driver === "simulator"
+                  ? "Disabled — the simulator never contacts a gateway."
+                  : undefined
+              }
+            />
+            {form.driver === "opcda" && (
+              <OpcServerDiscovery
+                bridgeHost={form.bridgeHost}
+                onSelect={(v) => set("server", v)}
+              />
+            )}
+          </div>
           <TextField
             label="Bridge host"
             disabled={form.driver === "simulator"}
@@ -797,6 +826,16 @@ export function NewRunPage() {
           </Link>
         </div>
       </form>
+
+      {tagBrowserOpen && (
+        <OpcTagBrowserModal
+          bridgeHost={form.bridgeHost}
+          opcServer={form.server}
+          template={activeTemplate}
+          onClose={() => setTagBrowserOpen(false)}
+          onSelect={(tag) => set("tagname", tag)}
+        />
+      )}
     </div>
   );
 }
