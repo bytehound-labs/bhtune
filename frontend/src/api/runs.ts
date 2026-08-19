@@ -11,6 +11,7 @@ export type ResultResponse = components["schemas"]["ResultResponse"];
 export type WriteResponse = components["schemas"]["WriteResponse"];
 export type StartRunRequest = components["schemas"]["StartRunRequest"];
 export type TuneOutcome = components["schemas"]["TuneOutcome"];
+export type ResponseLevel = components["schemas"]["ResponseLevel"];
 
 /** Query params accepted by `GET /api/runs` — every field optional (see `RunListQuery`). */
 export type RunListFilter = NonNullable<
@@ -203,6 +204,67 @@ export function useCancelRun() {
     },
     onSuccess: (_data, id) => {
       void queryClient.invalidateQueries({ queryKey: runKey(id) });
+    },
+  });
+}
+
+/**
+ * `POST /api/runs/{id}/write` — writes one of the run's calculated candidate PID parameter
+ * sets back to the live loop, post-hoc (`api-post-run-write`). The `200` response is the
+ * run's fresh `RunDetailResponse` regardless of whether the write itself succeeded (see the
+ * endpoint's own doc comment) — a physical write failure shows up in the returned `writes[]`
+ * array, not as a mutation error, so this seeds the query cache from the response exactly
+ * like `useStartRun` rather than merely invalidating and refetching.
+ */
+export function useWriteRun() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      responseLevel,
+    }: {
+      id: number;
+      responseLevel: ResponseLevel;
+    }) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/runs/{id}/write",
+        {
+          params: { path: { id } },
+          body: { response_level: responseLevel },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data;
+    },
+    onSuccess: (data, { id }) => {
+      queryClient.setQueryData(runKey(id), data);
+    },
+  });
+}
+
+/**
+ * `POST /api/runs/{id}/revert` — restores the pre-write values recorded by the run's most
+ * recent PID write-back (`api-post-run-write`). No request body: the caller's own
+ * confirmation dialog (naming the loop, the tags, and the exact values) is the human
+ * confirmation step, matching the endpoint's own doc comment. Same cache-seeding rationale
+ * as {@link useWriteRun} — a physical revert failure is still a `200` with the failure
+ * recorded in `writes[]`.
+ */
+export function useRevertRun() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/runs/{id}/revert",
+        {
+          params: { path: { id } },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data;
+    },
+    onSuccess: (data, id) => {
+      queryClient.setQueryData(runKey(id), data);
     },
   });
 }

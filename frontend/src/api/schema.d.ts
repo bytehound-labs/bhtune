@@ -466,6 +466,17 @@ export interface components {
       mv_value_current: number;
     };
     /**
+     * @description A run's snapshotted PID constant tag names, present only when all three were configured.
+     *     Nested under `RunDetailResponse::pid_constant_tags` following the same
+     *     "`Option<...>` presence itself is the signal" convention `initial_readings` already uses,
+     *     rather than a separate boolean plus three more nullable top-level fields.
+     */
+    PidConstantTagsResponse: {
+      derivative: string;
+      integral: string;
+      proportional: string;
+    };
+    /**
      * @description A process/loop category. Each has its own row in the tuning-constant matrices in
      *     [`crate::constants`] and its own default cycle/noise-protection settings.
      *
@@ -542,6 +553,8 @@ export interface components {
        */
       opc_server?: string | null;
       outcome: components["schemas"]["TuneOutcome"];
+      pid_constant_tags?:
+        null | components["schemas"]["PidConstantTagsResponse"];
       restore_detail?: string | null;
       restore_status?: null | components["schemas"]["RestoreStatus"];
       results: components["schemas"]["ResultResponse"][];

@@ -287,6 +287,17 @@ impl From<&TuneWriteRow> for WriteResponse {
     }
 }
 
+/// A run's snapshotted PID constant tag names, present only when all three were configured.
+/// Nested under `RunDetailResponse::pid_constant_tags` following the same
+/// "`Option<...>` presence itself is the signal" convention `initial_readings` already uses,
+/// rather than a separate boolean plus three more nullable top-level fields.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PidConstantTagsResponse {
+    pub proportional: String,
+    pub integral: String,
+    pub derivative: String,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RunDetailResponse {
     pub id: i64,
@@ -307,6 +318,13 @@ pub struct RunDetailResponse {
     pub opc_server: Option<String>,
     /// The resolved bridge host this run actually used, matching `opc_server` above.
     pub bridge_host: Option<String>,
+    /// `Some` exactly when `routes::runs::require_writable_run`'s tag-presence check would
+    /// pass -- i.e. when all three PID constant tags were configured on this run. The
+    /// frontend uses this (together with `driver`/`outcome`/`opc_server`/`bridge_host`) to
+    /// decide whether the post-hoc write/revert buttons are enabled and, when they are not,
+    /// to explain why -- without duplicating `require_writable_run`'s logic client-side or
+    /// discovering ineligibility only after a failed request (`api-post-run-write`).
+    pub pid_constant_tags: Option<PidConstantTagsResponse>,
     pub initial_readings: Option<InitialReadingsResponse>,
     pub samples: Vec<SampleResponse>,
     pub results: Vec<ResultResponse>,
@@ -330,6 +348,18 @@ pub(crate) async fn build_run_detail(
     let samples = TuneSampleRow::list_for_run(pool, run_id).await?;
     let results = TuneResultRow::list_for_run(pool, run_id).await?;
     let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
+    let pid_constant_tags = match (
+        &run.tags.proportional_constant,
+        &run.tags.integral_constant,
+        &run.tags.derivative_constant,
+    ) {
+        (Some(proportional), Some(integral), Some(derivative)) => Some(PidConstantTagsResponse {
+            proportional: proportional.clone(),
+            integral: integral.clone(),
+            derivative: derivative.clone(),
+        }),
+        _ => None,
+    };
 
     Ok(Some(RunDetailResponse {
         id: run.id,
@@ -344,6 +374,7 @@ pub(crate) async fn build_run_detail(
         config: run.config,
         opc_server: run.opc_server,
         bridge_host: run.bridge_host,
+        pid_constant_tags,
         initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
         samples: samples.iter().map(SampleResponse::from).collect(),
         results: results.iter().map(ResultResponse::from).collect(),
@@ -786,6 +817,64 @@ mod tests {
         assert!(body["samples"].as_array().unwrap().is_empty());
         assert!(body["results"].as_array().unwrap().is_empty());
         assert!(body["writes"].as_array().unwrap().is_empty());
+        // Yokogawa CentumVP always defines P/I/D suffixes, so a run derived from it always
+        // has all three PID constant tags -- see `pid_constant_tags`'s doc comment.
+        assert_eq!(body["pid_constant_tags"]["proportional"], "Loop1.P");
+        assert_eq!(body["pid_constant_tags"]["integral"], "Loop1.I");
+        assert_eq!(body["pid_constant_tags"]["derivative"], "Loop1.D");
+    }
+
+    /// `pid_constant_tags` must be `null`, not merely three `null` fields, when the run's
+    /// snapshotted tags lack any of the three PID constants -- exactly the case
+    /// `routes::runs::require_writable_run` refuses a post-hoc write/revert for (see that
+    /// module's own `write_run_returns_400_when_run_has_no_pid_constant_tags` test).
+    #[tokio::test]
+    async fn show_run_reports_no_pid_constant_tags_as_a_null_pid_constant_tags_field() {
+        let state = crate::test_support::in_memory_state().await;
+        let template_row =
+            bhtune_db::models::DcsTemplateRow::get_by_name(&state.pool, "Yokogawa CentumVP")
+                .await
+                .unwrap()
+                .unwrap();
+        let template = template_row.template;
+        let config = LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 5.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 3,
+            noise_protection_secs: 0,
+            mrft_delay_secs: 0,
+        };
+        let mut tags = bhtune_core::LoopTags::derive_from_pv_tag("Loop3.PV", &template);
+        tags.proportional_constant = None;
+        tags.integral_constant = None;
+        tags.derivative_constant = None;
+        let run = TuneRunRow::start(
+            &state.pool,
+            None,
+            "Loop3",
+            TuneDriver::Simulator,
+            config,
+            template_row.origin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{}", run.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert!(body["pid_constant_tags"].is_null());
     }
 
     #[tokio::test]
@@ -812,6 +901,9 @@ mod tests {
         // below for the opcda-with-a-recorded-connection case.
         assert!(body["opc_server"].is_null());
         assert!(body["bridge_host"].is_null());
+        assert_eq!(body["pid_constant_tags"]["proportional"], "Loop2.P");
+        assert_eq!(body["pid_constant_tags"]["integral"], "Loop2.I");
+        assert_eq!(body["pid_constant_tags"]["derivative"], "Loop2.D");
 
         let initial_readings = &body["initial_readings"];
         assert_eq!(initial_readings["pv_ini"], 50.0);

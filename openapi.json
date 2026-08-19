@@ -1145,6 +1145,26 @@
           }
         }
       },
+      "PidConstantTagsResponse": {
+        "type": "object",
+        "description": "A run's snapshotted PID constant tag names, present only when all three were configured.\nNested under `RunDetailResponse::pid_constant_tags` following the same\n\"`Option<...>` presence itself is the signal\" convention `initial_readings` already uses,\nrather than a separate boolean plus three more nullable top-level fields.",
+        "required": [
+          "proportional",
+          "integral",
+          "derivative"
+        ],
+        "properties": {
+          "derivative": {
+            "type": "string"
+          },
+          "integral": {
+            "type": "string"
+          },
+          "proportional": {
+            "type": "string"
+          }
+        }
+      },
       "ProcessType": {
         "type": "string",
         "description": "A process/loop category. Each has its own row in the tuning-constant matrices in\n[`crate::constants`] and its own default cycle/noise-protection settings.\n\nDiscriminants double as the row index into those matrices — see\n[`ProcessType::index`].",
@@ -1300,6 +1320,17 @@
           },
           "outcome": {
             "$ref": "#/components/schemas/TuneOutcome"
+          },
+          "pid_constant_tags": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PidConstantTagsResponse",
+                "description": "`Some` exactly when `routes::runs::require_writable_run`'s tag-presence check would\npass -- i.e. when all three PID constant tags were configured on this run. The\nfrontend uses this (together with `driver`/`outcome`/`opc_server`/`bridge_host`) to\ndecide whether the post-hoc write/revert buttons are enabled and, when they are not,\nto explain why -- without duplicating `require_writable_run`'s logic client-side or\ndiscovering ineligibility only after a failed request (`api-post-run-write`)."
+              }
+            ]
           },
           "restore_detail": {
             "type": [

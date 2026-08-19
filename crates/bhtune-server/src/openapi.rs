@@ -47,6 +47,7 @@ use crate::routes::{health, history, runs, stream, templates};
         history::SampleResponse,
         history::ResultResponse,
         history::WriteResponse,
+        history::PidConstantTagsResponse,
         history::RunDetailResponse,
         history::RunExportFormat,
         runs::StartRunRequest,

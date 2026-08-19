@@ -3,8 +3,11 @@ import {
   runExportUrl,
   useCancelRun,
   useDeleteRun,
+  useRevertRun,
   useRun,
   useRunStream,
+  useWriteRun,
+  type RunDetailResponse,
 } from "../../api/runs";
 import {
   CONTROLLER_TYPE_LABELS,
@@ -53,6 +56,44 @@ function dateTime(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : "—";
 }
 
+/**
+ * Whether this run is eligible for a post-hoc PID write/revert, mirroring
+ * `routes::runs::require_writable_run`'s checks client-side so the buttons can be disabled
+ * with a reason *before* a request is ever made, rather than only discovering ineligibility
+ * from a failed call (`api-post-run-write`, `ui-post-run-write`). Both actions share the same
+ * eligibility on the server, so one check covers the Write and Revert buttons alike.
+ */
+function writeEligibility(run: RunDetailResponse): {
+  eligible: boolean;
+  reason?: string;
+} {
+  if (run.outcome === "running") {
+    return {
+      eligible: false,
+      reason: "This run is still in progress; wait for it to finish.",
+    };
+  }
+  if (run.driver !== "opcda") {
+    return {
+      eligible: false,
+      reason: `${DRIVER_LABELS[run.driver]} runs have no live loop to write PID constants to.`,
+    };
+  }
+  if (!run.pid_constant_tags) {
+    return {
+      eligible: false,
+      reason: "This run's template has no PID constant tags configured.",
+    };
+  }
+  if (!run.opc_server || !run.bridge_host) {
+    return {
+      eligible: false,
+      reason: "This run has no recorded OPC server/bridge host connection.",
+    };
+  }
+  return { eligible: true };
+}
+
 export function RunDetailPage() {
   const { id } = useParams<{ id: string }>();
   const runId = Number(id);
@@ -60,8 +101,23 @@ export function RunDetailPage() {
   const run = useRun(runId);
   const cancelRun = useCancelRun();
   const deleteRun = useDeleteRun();
+  const writeRun = useWriteRun();
+  const revertRun = useRevertRun();
   const isRunning = run.data?.outcome === "running";
   const hasSamples = run.data ? run.data.samples.length > 0 : false;
+  const eligibility = run.data
+    ? writeEligibility(run.data)
+    : { eligible: false };
+  const writes = run.data?.writes ?? [];
+  const lastWrite = writes.length > 0 ? writes[writes.length - 1] : undefined;
+  // Revert always targets "the last WriteKind::Write row" server-side (see
+  // `require_writable_run`), so only offer it while that row is still the newest one — once
+  // superseded by a later write or revert, showing Revert here would be misleading.
+  const canRevertLastWrite =
+    eligibility.eligible &&
+    lastWrite !== undefined &&
+    lastWrite.kind === "write" &&
+    lastWrite.success;
   const stream = useRunStream(runId, isRunning);
   // While running, the live SSE feed is the source of truth (it replays every sample from
   // tick 0, so it's a complete trend on its own); once terminal, fall back to `useRun`'s
@@ -129,6 +185,8 @@ export function RunDetailPage() {
       {run.isError && <ErrorBanner message={run.error.message} />}
       {cancelRun.isError && <ErrorBanner message={cancelRun.error.message} />}
       {deleteRun.isError && <ErrorBanner message={deleteRun.error.message} />}
+      {writeRun.isError && <ErrorBanner message={writeRun.error.message} />}
+      {revertRun.isError && <ErrorBanner message={revertRun.error.message} />}
 
       {run.isSuccess && (
         <>
@@ -309,6 +367,7 @@ export function RunDetailPage() {
                       <th className="px-4 py-2 font-medium">P</th>
                       <th className="px-4 py-2 font-medium">I</th>
                       <th className="px-4 py-2 font-medium">D</th>
+                      <th className="px-4 py-2 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
@@ -335,11 +394,47 @@ export function RunDetailPage() {
                         <td className="px-4 py-3 font-mono">
                           {num(result.derivative)}
                         </td>
+                        <td className="px-4 py-3">
+                          <Button
+                            variant="primary"
+                            disabled={
+                              !eligibility.eligible || writeRun.isPending
+                            }
+                            title={eligibility.reason}
+                            onClick={() => {
+                              const tags = run.data.pid_constant_tags;
+                              if (!eligibility.eligible || !tags) return;
+                              const confirmed = window.confirm(
+                                `Write ${RESPONSE_LEVEL_LABELS[result.response_level]} PID constants to loop "${run.data.loop_name}"?\n\n` +
+                                  `${tags.proportional}: ${num(result.proportional)}\n` +
+                                  `${tags.integral}: ${num(result.integral)}\n` +
+                                  `${tags.derivative}: ${num(result.derivative)}`,
+                              );
+                              if (confirmed) {
+                                writeRun.mutate({
+                                  id: runId,
+                                  responseLevel: result.response_level,
+                                });
+                              }
+                            }}
+                          >
+                            {writeRun.isPending &&
+                            writeRun.variables?.responseLevel ===
+                              result.response_level
+                              ? "Writing…"
+                              : "Write"}
+                          </Button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+            )}
+            {!eligibility.eligible && eligibility.reason && (
+              <p className="mt-2 text-xs text-slate-500">
+                Write/revert disabled: {eligibility.reason}
+              </p>
             )}
           </section>
 
@@ -368,6 +463,7 @@ export function RunDetailPage() {
                       </th>
                       <th className="px-4 py-2 font-medium">Success</th>
                       <th className="px-4 py-2 font-medium">Rollback</th>
+                      <th className="px-4 py-2 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
@@ -411,6 +507,33 @@ export function RunDetailPage() {
                             >
                               {write.rollback_state}
                             </Badge>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {i === run.data.writes.length - 1 &&
+                          canRevertLastWrite ? (
+                            <Button
+                              variant="danger"
+                              disabled={revertRun.isPending}
+                              title={eligibility.reason}
+                              onClick={() => {
+                                const tags = run.data.pid_constant_tags;
+                                if (!eligibility.eligible || !tags) return;
+                                const confirmed = window.confirm(
+                                  `Revert loop "${run.data.loop_name}" to its pre-write PID constants?\n\n` +
+                                    `${tags.proportional}: ${num(write.proportional_previous)}\n` +
+                                    `${tags.integral}: ${num(write.integral_previous)}\n` +
+                                    `${tags.derivative}: ${num(write.derivative_previous)}`,
+                                );
+                                if (confirmed) {
+                                  revertRun.mutate(runId);
+                                }
+                              }}
+                            >
+                              {revertRun.isPending ? "Reverting…" : "Revert"}
+                            </Button>
                           ) : (
                             <span className="text-slate-500">—</span>
                           )}

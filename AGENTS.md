@@ -510,6 +510,40 @@ the omission it warned about; fixed before `openapi.json`/`frontend/src/api/sche
 were regenerated. Unblocks `ui-post-run-write` (the Write/Revert buttons) and completes the
 connection/audit-trail groundwork `ui-prefill-last-run` also depends on.
 
+Phase 7.5's `ui-post-run-write` is also done: the run detail screen now has a "Write" button
+per response-level row in the "Calculated results" table and a "Revert" button on the
+newest successful row of the existing "Write-back audit" table, both calling the two new
+`api-post-run-write` endpoints via new `useWriteRun`/`useRevertRun` hooks (`frontend/src/
+api/runs.ts`) that seed the `run` query cache from the returned `RunDetailResponse` on
+success, matching `useStartRun`'s existing cache-seeding pattern rather than invalidating
+and refetching. A client-side `writeEligibility()` helper mirrors `require_writable_run`'s
+checks exactly (not-still-running, `opcda` driver, `pid_constant_tags` present, `opc_server`/
+`bridge_host` present) so a disabled button always carries a `title` tooltip and a persistent
+"Write/revert disabled: ..." note explaining why, rather than a mystery grey control — this
+needed a small, deliberate addition to the shared `Button` component (`ui.tsx`), which had no
+`title` prop before. Both actions are gated behind a `window.confirm` naming the loop, the
+exact tag names, and the exact P/I/D values that will be written or restored, sourced
+directly from the same row being acted on. The Revert button's visibility is intentionally
+narrow: it renders only on the single newest `writes[]` row, and only when that row is a
+successful write (`kind === "write" && success`) — once superseded by a later write or
+revert, the button disappears, matching the server's own "revert always targets the most
+recent write" rule. Verified with real browser automation (`@playwright/test`'s `chromium`
+launcher driven from standalone Node scripts, since the `chrome-devtools-*` MCP tools
+timed out repeatedly in this environment) against a real running `bhtune-server` and Vite
+dev server: an eligible opcda run (hand-crafted via direct SQLite edits, since no real OPC
+DA gateway was available) shows all three Write buttons enabled with correct confirm-dialog
+text, and clicking Write against an unreachable bridge host correctly surfaces the
+connection failure as an `ErrorBanner` — confirming the deliberate `api-post-run-write`
+distinction between a driver **connection** failure (HTTP 400, no audit row) and a **write**
+failure after a successful connection (HTTP 200, a `success: false` audit row rendered by
+the existing Write-back audit table); an ineligible simulator run shows all three Write
+buttons disabled with the correct tooltip and note; and the Revert button was confirmed to
+appear on a seeded successful write row and correctly disappear once a newer row supersedes
+it. Completes Phase 7.5's GUI gap list alongside `ui-simulator-greyout`/
+`ui-friendly-process-names`/`ui-tune-nav`; remaining Phase 7.5 work is
+`ui-prefill-last-run`, `driver-list-servers`, `api-opc-browse`, `ui-opc-browser`, and
+`phase75-docs`.
+
 ## Design philosophy and scope discipline
 
 Most PID auto-tuning tools for industrial DCS/PLC systems are Windows-only desktop applications
