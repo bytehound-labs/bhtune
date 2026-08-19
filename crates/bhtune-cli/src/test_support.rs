@@ -1,9 +1,9 @@
 //! Test-only mock gRPC `Bridge` service, shared by [`crate::driver`] and the
 //! [`crate::commands::tune`]/[`crate::commands::opc`] tests that need a real (mock) OPC DA
-//! bridge for [`bhtune_driver::OpcDaDriver`] to connect to — proving the CLI's own OPC DA
-//! wiring (connect success path, driver-kind bookkeeping, mid-poll error propagation, the
-//! `opc` passthrough commands) actually composes, without re-exercising `opcda-bridge`'s own
-//! already-tested RPC error-path matrix.
+//! bridge for [`bhtune_driver::OpcDaDriver`]/[`bhtune_driver::list_opcda_servers`] to connect
+//! to — proving the CLI's own OPC DA wiring (connect success path, driver-kind bookkeeping,
+//! mid-poll error propagation, the `opc` passthrough commands) actually composes, without
+//! re-exercising `opcda-bridge`'s own already-tested RPC error-path matrix.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,6 +25,7 @@ pub(crate) struct MockBridgeService {
     pub(crate) read_response: ReadResponse,
     pub(crate) write_response: WriteResponse,
     pub(crate) browse_responses: Vec<BrowseResponse>,
+    pub(crate) list_servers_response: ListServersResponse,
     /// Once the `read` RPC has been called this many times (1-based) or more, it fails with
     /// a gRPC error instead of returning `read_response` — lets a test simulate a bridge
     /// that works fine during setup and then drops partway through a poll loop.
@@ -44,16 +45,11 @@ impl MockBridgeService {
 
 #[tonic::async_trait]
 impl Bridge for MockBridgeService {
-    // `list_servers` is never called by any test that uses this shared mock —
-    // `bhtune-cli`'s OPC DA support has no "list servers on a gateway host" passthrough
-    // command (only `read`/`write`/`browse`, all against an already-known server). Still a
-    // required `Bridge` trait method, so it's exercised directly (bypassing a live gRPC
-    // round trip) by `list_servers_returns_an_empty_response` below.
     async fn list_servers(
         &self,
         _request: Request<ListServersRequest>,
     ) -> Result<Response<ListServersResponse>, Status> {
-        Ok(Response::new(ListServersResponse::default()))
+        Ok(Response::new(self.list_servers_response.clone()))
     }
 
     type BrowseStream = ReceiverStream<Result<BrowseResponse, Status>>;
@@ -147,13 +143,31 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn list_servers_returns_an_empty_response() {
+    async fn list_servers_returns_an_empty_response_by_default() {
         let service = MockBridgeService::default();
         let response = service
             .list_servers(Request::new(ListServersRequest::default()))
             .await
             .unwrap();
         assert!(response.into_inner().servers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_servers_returns_the_configured_response() {
+        let service = MockBridgeService {
+            list_servers_response: ListServersResponse {
+                servers: vec!["Matrikon.OPC.Simulation.1".to_string()],
+            },
+            ..Default::default()
+        };
+        let response = service
+            .list_servers(Request::new(ListServersRequest::default()))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.into_inner().servers,
+            vec!["Matrikon.OPC.Simulation.1".to_string()]
+        );
     }
 
     #[tokio::test]

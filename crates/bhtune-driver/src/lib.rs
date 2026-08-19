@@ -6,7 +6,9 @@
 //!
 //! - [`opcda`]: the primary driver for v1 ([`OpcDaDriver`]), over the `opcda-bridge`
 //!   crates.io dependency (Windows OPC DA via a network gateway — no COM/DCOM dependency in
-//!   this process).
+//!   this process). Also home to [`list_opcda_servers`], a standalone pre-connection
+//!   function for OPC DA server discovery (see that function's doc comment for why it
+//!   isn't a `Driver`/`OpcDaDriver` method).
 //! - [`simulator`]: an in-process FOPDT (first-order-plus-dead-time) process model
 //!   ([`SimulatorDriver`]), used for fully automated E2E tests on CI (no Windows, no
 //!   Kepware, no external process) and as a demo mode. Also home to [`VirtualPid`], a
@@ -22,7 +24,7 @@
 //! - [`types`] — the plain data types ([`TagId`], [`TagValue`], [`TagWrite`],
 //!   [`WriteOutcome`], [`TagNode`]) that cross the trait boundary.
 //! - [`error`] — the crate's error type, [`DriverError`].
-//! - [`opcda`] — [`OpcDaDriver`], the OPC DA implementation.
+//! - [`opcda`] — [`OpcDaDriver`], the OPC DA implementation, and [`list_opcda_servers`].
 //! - [`simulator`] — [`SimulatorDriver`], [`FopdtProcess`]/[`FopdtConfig`], and
 //!   [`VirtualPid`]/[`VirtualPidConfig`].
 //! - [`replay`] — [`ReplayDriver`], [`ReplaySample`], and [`RecordedWrite`].
@@ -36,7 +38,7 @@ pub mod types;
 
 pub use driver::Driver;
 pub use error::{DriverError, DriverResult};
-pub use opcda::OpcDaDriver;
+pub use opcda::{OpcDaDriver, list_opcda_servers};
 pub use replay::{RecordedWrite, ReplayDriver, ReplaySample, ReplayTraceExhausted};
 pub use simulator::{FopdtConfig, FopdtProcess, SimulatorDriver, VirtualPid, VirtualPidConfig};
 pub use types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome};

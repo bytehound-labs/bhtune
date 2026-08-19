@@ -782,6 +782,13 @@ pub enum ExportFormat {
 
 #[derive(Subcommand, Debug)]
 pub enum OpcCommand {
+    /// List the OPC DA servers registered on the bridge gateway's host.
+    Servers {
+        /// (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST`
+        /// or the config file's `bridge_host` key.)
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+    },
     /// Read one or more tags.
     Read {
         /// (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST`
@@ -1400,6 +1407,15 @@ mod tests {
         ]);
         let args = expect_variant!(cli.command, Command::Tune(a) => a, "Tune");
         assert_eq!(args.bridge_host, None);
+    }
+
+    #[test]
+    fn opc_servers_bridge_host_defaults_to_none() {
+        let cli = Cli::parse_from(["bhtune", "opc", "servers"]);
+        let command = expect_variant!(cli.command, Command::Opc { command } => command, "Opc");
+        let bridge_host =
+            expect_variant!(command, OpcCommand::Servers { bridge_host } => bridge_host, "Servers");
+        assert_eq!(bridge_host, None);
     }
 
     #[test]

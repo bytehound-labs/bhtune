@@ -1,13 +1,17 @@
-//! `bhtune opc read/write/browse`: thin passthrough diagnostics directly over
+//! `bhtune opc servers/read/write/browse`: thin passthrough diagnostics directly over
 //! [`bhtune_driver::OpcDaDriver`], independent of running a full tune. Useful for checking
 //! gateway connectivity and confirming tag names before starting a real test.
 
-use bhtune_driver::{Driver, OpcDaDriver, TagWrite};
+use bhtune_driver::{Driver, OpcDaDriver, TagWrite, list_opcda_servers};
 
 use crate::args::OpcCommand;
 
 pub async fn run(command: OpcCommand, config: &crate::config::BhtuneConfig) -> anyhow::Result<()> {
     match command {
+        OpcCommand::Servers { bridge_host } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            servers(&bridge_host).await
+        }
         OpcCommand::Read {
             bridge_host,
             server,
@@ -37,6 +41,18 @@ pub async fn run(command: OpcCommand, config: &crate::config::BhtuneConfig) -> a
             browse(&bridge_host, &server, &path).await
         }
     }
+}
+
+async fn servers(bridge_host: &str) -> anyhow::Result<()> {
+    let servers = list_opcda_servers(bridge_host).await?;
+    if servers.is_empty() {
+        println!("No OPC DA servers registered on the gateway's host.");
+        return Ok(());
+    }
+    for server in servers {
+        println!("{server}");
+    }
+    Ok(())
 }
 
 async fn read(bridge_host: &str, server: &str, tags: &[String]) -> anyhow::Result<()> {
@@ -107,8 +123,39 @@ mod tests {
     use super::*;
     use crate::test_support::{MockBridgeService, start_mock_server};
     use opcda_bridge_proto::bridge::{
-        BrowseResponse, ReadResponse, TagValue as ProtoTagValue, WriteResponse,
+        BrowseResponse, ListServersResponse, ReadResponse, TagValue as ProtoTagValue, WriteResponse,
     };
+
+    #[tokio::test]
+    async fn servers_prints_every_registered_server_from_a_mock_gateway() {
+        let (host, server) = start_mock_server(MockBridgeService {
+            list_servers_response: ListServersResponse {
+                servers: vec![
+                    "Matrikon.OPC.Simulation.1".to_string(),
+                    "Kepware.KEPServerEX.V6".to_string(),
+                ],
+            },
+            ..Default::default()
+        })
+        .await;
+
+        servers(&host).await.unwrap();
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn servers_handles_an_empty_result() {
+        let (host, server) = start_mock_server(MockBridgeService::default()).await;
+        servers(&host).await.unwrap();
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn servers_connect_failure_surfaces_as_an_error() {
+        let err = servers("127.0.0.1:1").await.unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
 
     #[tokio::test]
     async fn read_prints_values_from_a_mock_gateway() {
@@ -233,8 +280,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_dispatches_read_write_and_browse() {
+    async fn run_dispatches_servers_read_write_and_browse() {
         let (host, server) = start_mock_server(MockBridgeService {
+            list_servers_response: ListServersResponse {
+                servers: vec!["Matrikon.OPC.Simulation.1".to_string()],
+            },
             read_response: ReadResponse {
                 values: vec![ProtoTagValue {
                     tag_id: "Unit1.LIC101.PV".to_string(),
@@ -256,6 +306,15 @@ mod tests {
         })
         .await;
         let config = crate::config::BhtuneConfig::default();
+
+        run(
+            OpcCommand::Servers {
+                bridge_host: Some(host.clone()),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
 
         run(
             OpcCommand::Read {
@@ -324,6 +383,21 @@ mod tests {
         )
         .await
         .unwrap();
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn run_resolves_bridge_host_from_config_for_servers_when_cli_flag_is_unset() {
+        let (host, server) = start_mock_server(MockBridgeService::default()).await;
+        let config = crate::config::BhtuneConfig {
+            bridge_host: Some(host),
+            ..Default::default()
+        };
+
+        run(OpcCommand::Servers { bridge_host: None }, &config)
+            .await
+            .unwrap();
 
         server.shutdown().await;
     }

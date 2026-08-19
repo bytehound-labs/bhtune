@@ -76,6 +76,9 @@ _bhtune() {
             bhtune__subcmd__help__subcmd__opc,read)
                 cmd="bhtune__subcmd__help__subcmd__opc__subcmd__read"
                 ;;
+            bhtune__subcmd__help__subcmd__opc,servers)
+                cmd="bhtune__subcmd__help__subcmd__opc__subcmd__servers"
+                ;;
             bhtune__subcmd__help__subcmd__opc,write)
                 cmd="bhtune__subcmd__help__subcmd__opc__subcmd__write"
                 ;;
@@ -133,6 +136,9 @@ _bhtune() {
             bhtune__subcmd__opc,read)
                 cmd="bhtune__subcmd__opc__subcmd__read"
                 ;;
+            bhtune__subcmd__opc,servers)
+                cmd="bhtune__subcmd__opc__subcmd__servers"
+                ;;
             bhtune__subcmd__opc,write)
                 cmd="bhtune__subcmd__opc__subcmd__write"
                 ;;
@@ -144,6 +150,9 @@ _bhtune() {
                 ;;
             bhtune__subcmd__opc__subcmd__help,read)
                 cmd="bhtune__subcmd__opc__subcmd__help__subcmd__read"
+                ;;
+            bhtune__subcmd__opc__subcmd__help,servers)
+                cmd="bhtune__subcmd__opc__subcmd__help__subcmd__servers"
                 ;;
             bhtune__subcmd__opc__subcmd__help,write)
                 cmd="bhtune__subcmd__opc__subcmd__help__subcmd__write"
@@ -403,7 +412,7 @@ _bhtune() {
             return 0
             ;;
         bhtune__subcmd__help__subcmd__opc)
-            opts="read write browse"
+            opts="servers read write browse"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -431,6 +440,20 @@ _bhtune() {
             return 0
             ;;
         bhtune__subcmd__help__subcmd__opc__subcmd__read)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bhtune__subcmd__help__subcmd__opc__subcmd__servers)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -925,7 +948,7 @@ _bhtune() {
             return 0
             ;;
         bhtune__subcmd__opc)
-            opts="-h --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help read write browse help"
+            opts="-h --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help servers read write browse help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1025,7 +1048,7 @@ _bhtune() {
             return 0
             ;;
         bhtune__subcmd__opc__subcmd__help)
-            opts="read write browse help"
+            opts="servers read write browse help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1080,6 +1103,20 @@ _bhtune() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        bhtune__subcmd__opc__subcmd__help__subcmd__servers)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         bhtune__subcmd__opc__subcmd__help__subcmd__write)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -1106,6 +1143,56 @@ _bhtune() {
                     return 0
                     ;;
                 --server)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --db)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --templates)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --retention-days)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-format)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-rotation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bhtune__subcmd__opc__subcmd__servers)
+            opts="-h --bridge-host --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --bridge-host)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

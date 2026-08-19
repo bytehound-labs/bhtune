@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc-servers 1  "bhtune-opc-servers " 
+.SH NAME
+bhtune\-opc\-servers \- List the OPC DA servers registered on the bridge gateway\*(Aqs host
+.SH SYNOPSIS
+\fBbhtune\-opc\-servers\fR [\fB\-\-bridge\-host\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+List the OPC DA servers registered on the bridge gateway\*(Aqs host
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+(default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file\*(Aqs `bridge_host` key.)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

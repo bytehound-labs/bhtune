@@ -57,6 +57,29 @@ impl OpcDaDriver {
     }
 }
 
+/// Lists the OPC DA servers registered on the `opcda-bridge` gateway's own host at
+/// `bridge_host` (e.g. `"localhost:7600"`).
+///
+/// A standalone free function rather than a [`Driver`] method or an [`OpcDaDriver`]
+/// associated function: server discovery is a *pre-connection* operation — it needs only a
+/// bridge host, not the OPC DA server ProgID that [`OpcDaDriver::connect`] requires and that
+/// discovery exists to help a caller find in the first place. Connects for the one call and
+/// drops the connection immediately afterward; unlike `OpcDaDriver`, there is no ongoing
+/// session to hold open here.
+///
+/// Note: `opcda_bridge::Client::list_servers` always sends `host: "localhost"` in its
+/// request — i.e. it lists servers registered on *the gateway's own* machine, not on
+/// whatever machine bhtune itself happens to run on. That is exactly right for this
+/// topology (the gateway runs next to the OPC DA server; bhtune runs wherever the
+/// engineer's browser or scheduler is) and is called out here so it is never mistaken for a
+/// bug.
+pub async fn list_opcda_servers(bridge_host: &str) -> DriverResult<Vec<String>> {
+    let mut client = opcda_bridge::Client::connect(bridge_host)
+        .await
+        .map_err(map_bridge_error)?;
+    client.list_servers().await.map_err(map_bridge_error)
+}
+
 #[async_trait]
 impl Driver for OpcDaDriver {
     async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
@@ -315,6 +338,12 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, DriverError::Connect(_)));
     }
+
+    #[tokio::test]
+    async fn list_opcda_servers_connect_failure_maps_to_driver_error_connect() {
+        let err = list_opcda_servers("127.0.0.1:1").await.unwrap_err();
+        assert!(matches!(err, DriverError::Connect(_)));
+    }
 }
 
 /// End-to-end smoke tests against a minimal mock `Bridge` gRPC service: these exist to
@@ -341,6 +370,7 @@ mod smoke_tests {
         read_response: ReadResponse,
         write_response: WriteResponse,
         write_error: Option<Status>,
+        list_servers_response: ListServersResponse,
     }
 
     #[tonic::async_trait]
@@ -349,7 +379,7 @@ mod smoke_tests {
             &self,
             _request: Request<ListServersRequest>,
         ) -> Result<Response<ListServersResponse>, Status> {
-            Ok(Response::new(ListServersResponse { servers: vec![] }))
+            Ok(Response::new(self.list_servers_response.clone()))
         }
 
         type BrowseStream = ReceiverStream<Result<BrowseResponse, Status>>;
@@ -487,5 +517,37 @@ mod smoke_tests {
         assert_eq!(nodes.len(), 2);
         assert!(nodes[0].is_branch);
         assert!(!nodes[1].is_branch);
+    }
+
+    #[tokio::test]
+    async fn list_opcda_servers_returns_the_gateways_registered_servers() {
+        let service = MockBridgeService {
+            list_servers_response: ListServersResponse {
+                servers: vec![
+                    "Matrikon.OPC.Simulation.1".to_string(),
+                    "Kepware.KEPServerEX.V6".to_string(),
+                ],
+            },
+            ..Default::default()
+        };
+        let host = start_mock_server(service).await;
+
+        let servers = list_opcda_servers(&host).await.unwrap();
+        assert_eq!(
+            servers,
+            vec![
+                "Matrikon.OPC.Simulation.1".to_string(),
+                "Kepware.KEPServerEX.V6".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_opcda_servers_returns_an_empty_list_when_the_gateway_has_none_registered() {
+        let host = start_mock_server(MockBridgeService::default()).await;
+        assert_eq!(
+            list_opcda_servers(&host).await.unwrap(),
+            Vec::<String>::new()
+        );
     }
 }
