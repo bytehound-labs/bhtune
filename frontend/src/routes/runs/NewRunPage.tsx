@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router";
-import { useStartRun } from "../../api/runs";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
+import { useLastRunRequest, useStartRun } from "../../api/runs";
 import type { StartRunRequest } from "../../api/runs";
 import { useTemplates } from "../../api/templates";
 import type { components } from "../../api/schema";
@@ -140,6 +140,75 @@ function toOptional(value: NumOrBlank): number | undefined {
   return value === "" ? undefined : value;
 }
 
+function toNumOrBlank(value: number | null | undefined): NumOrBlank {
+  return value ?? "";
+}
+
+/**
+ * Converts a stored [`StartRunRequest`] (from `GET /api/runs/last-request` or a specific
+ * run's own `original_request`) into `FormState`, so the form can prefill from a past run's
+ * exact settings (`ui-prefill-last-run`).
+ *
+ * `bhtune-cli`'s `RequestSnapshot` (what actually populates `request_json`) always resolves
+ * the fields that carry a CLI/server default — `mrft_delay`, `poll_interval_ms`, every
+ * timeout, every `sim_*` field, `yes`, `allow_uncertain_quality` — to a concrete value before
+ * it's stored, so those are simply copied across; the `?? initialForm...` fallback only ever
+ * matters for a foreign/pre-`db-run-request-snapshot` row that somehow lacks the field. Every
+ * other optional field (cycles, ranges, direction, connection overrides, the run name) is
+ * shown *blank* when absent rather than substituting today's hardcoded default — an absent
+ * value there specifically means "the engineer relied on a default last time", which is
+ * exactly what should be shown again, not silently overwritten.
+ */
+function formFromRequest(request: StartRunRequest): FormState {
+  return {
+    driver: request.driver,
+    template: request.template,
+    name: request.name ?? "",
+    tagname: request.tagname,
+    server: request.server ?? "",
+    bridgeHost: request.bridge_host ?? "",
+    processType: request.process_type,
+    controllerType: request.controller_type,
+    relayAmp: request.relay_amp,
+    cyclesSkip: toNumOrBlank(request.cycles_skip),
+    cyclesCount: toNumOrBlank(request.cycles_count),
+    noiseProtectionSecs: toNumOrBlank(request.noise_protection_secs),
+    mrftDelay: request.mrft_delay ?? initialForm.mrftDelay,
+    pollIntervalMs: request.poll_interval_ms ?? initialForm.pollIntervalMs,
+    timeoutSecs: request.timeout_secs ?? initialForm.timeoutSecs,
+    opTimeoutSecs: request.op_timeout_secs ?? initialForm.opTimeoutSecs,
+    restoreTimeoutSecs:
+      request.restore_timeout_secs ?? initialForm.restoreTimeoutSecs,
+    allowUncertainQuality: request.allow_uncertain_quality ?? false,
+    direction: request.direction ?? "",
+    pvRangeHigh: toNumOrBlank(request.pv_range_high),
+    pvRangeLow: toNumOrBlank(request.pv_range_low),
+    mvRangeHigh: toNumOrBlank(request.mv_range_high),
+    mvRangeLow: toNumOrBlank(request.mv_range_low),
+    simGain: request.sim_gain ?? initialForm.simGain,
+    simTau: request.sim_tau ?? initialForm.simTau,
+    simDeadTime: request.sim_dead_time ?? initialForm.simDeadTime,
+    simNoise: request.sim_noise ?? initialForm.simNoise,
+    simSeed: request.sim_seed ?? initialForm.simSeed,
+    simInitialPv: request.sim_initial_pv ?? initialForm.simInitialPv,
+    simInitialMv: request.sim_initial_mv ?? initialForm.simInitialMv,
+    writePid: request.write_pid ?? "",
+    yes: request.yes ?? false,
+  };
+}
+
+/**
+ * Router `state` shape for navigating to this page to duplicate a specific historical run
+ * (`RunDetailPage`'s "Duplicate this run" button) — as opposed to a plain visit to
+ * `/runs/new`, which prefills from `GET /api/runs/last-request` (the *newest* run)
+ * instead. Exported so `RunDetailPage` constructs it with type safety rather than an
+ * untyped object literal that could silently drift from what this page reads.
+ */
+export interface DuplicateRunState {
+  duplicateRequest: StartRunRequest;
+  duplicateFromRunId: number;
+}
+
 /** Builds the request body, or returns a client-side validation message instead. Mirrors
  * `StartRunRequest::into_tune_args`'s own checks so most mistakes are caught before the round
  * trip — the server re-validates everything regardless, this is purely for fast feedback. */
@@ -217,18 +286,81 @@ function buildRequest(form: FormState): StartRunRequest | string {
 
 export function NewRunPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const templates = useTemplates();
   const startRun = useStartRun();
-  const [form, setForm] = useState<FormState>(initialForm);
+  const lastRunRequest = useLastRunRequest();
+
+  // Set only by `RunDetailPage`'s "Duplicate this run" button -- a plain visit to
+  // `/runs/new` has no location state and falls through to the last-run prefill below.
+  const duplicateState = location.state as DuplicateRunState | null | undefined;
+
+  const [form, setForm] = useState<FormState>(() =>
+    duplicateState
+      ? formFromRequest(duplicateState.duplicateRequest)
+      : initialForm,
+  );
   const [validationError, setValidationError] = useState<string | null>(null);
+  // Tracks *why* the form currently looks the way it does, purely to show an explanatory
+  // note -- not read anywhere else. `null` means "still the hardcoded defaults".
+  const [prefillSource, setPrefillSource] = useState<
+    { kind: "duplicate"; runId: number } | { kind: "last-run" } | null
+  >(() =>
+    duplicateState
+      ? { kind: "duplicate", runId: duplicateState.duplicateFromRunId }
+      : null,
+  );
+  const seededFromLastRunRef = useRef(false);
+
+  // Prefill from the newest run's own settings on a plain visit -- a "Duplicate this run"
+  // navigation already seeded the lazy `useState` initializer above from a *specific* run's
+  // request instead, so this must not run in that case. Guarded to run at most once: a
+  // background refetch of `useLastRunRequest` later (e.g. on window refocus) must never
+  // clobber whatever the engineer has since typed.
+  useEffect(() => {
+    if (duplicateState) return;
+    if (seededFromLastRunRef.current) return;
+    if (!lastRunRequest.data) return;
+    seededFromLastRunRef.current = true;
+    setForm(formFromRequest(lastRunRequest.data));
+    setPrefillSource({ kind: "last-run" });
+  }, [duplicateState, lastRunRequest.data]);
 
   // Default to the first available template once the list loads, so a first-time visitor
-  // doesn't have to know a template name exists before they can start a run at all.
+  // doesn't have to know a template name exists before they can start a run at all -- and
+  // so "Start from blank" (which clears `form.template` back to "") gets a sensible default
+  // back rather than an empty dropdown.
+  //
+  // The gating check reads `prev.template` from inside the *functional* `setForm` updater
+  // rather than this effect's own `form.template` closure. That distinction is load-bearing:
+  // when `templates.data` and `lastRunRequest.data` resolve in the same React batch, this
+  // effect and the prefill effect above both run in the *same* commit, and both see that
+  // render's stale, pre-update `form.template` ("") -- reading it directly here would then
+  // unconditionally queue an update that clobbers the prefill's own just-queued update with
+  // the alphabetically-first template. The functional updater instead evaluates `prev` at
+  // *application* time, after the prefill effect's update has already been applied (it's
+  // declared first above, so it runs -- and its `setForm` call is queued -- first in this
+  // commit), so it correctly sees the just-prefilled template and leaves it alone. Returning
+  // `prev` unchanged when there's nothing to do also means this never schedules a wasted
+  // re-render on the (common) already-templated path.
   useEffect(() => {
-    if (!form.template && templates.data && templates.data.length > 0) {
-      setForm((prev) => ({ ...prev, template: templates.data[0].name }));
-    }
-  }, [templates.data, form.template]);
+    if (duplicateState) return;
+    setForm((prev) => {
+      if (prev.template || !templates.data || templates.data.length === 0) {
+        return prev;
+      }
+      return { ...prev, template: templates.data[0].name };
+    });
+  }, [duplicateState, templates.data, form.template]);
+
+  /** Resets every field back to the hardcoded defaults, discarding whatever this page was
+   * prefilled with. Marks the last-run seed as already applied so a still-in-flight
+   * `useLastRunRequest` fetch that resolves afterward can't silently undo this. */
+  function resetToBlank() {
+    seededFromLastRunRef.current = true;
+    setPrefillSource(null);
+    setForm(initialForm);
+  }
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -290,11 +422,33 @@ export function NewRunPage() {
         title="New run"
         description="Starts a tune over HTTP — the same MRFT engine and drivers the CLI uses, driven from the browser."
         actions={
-          <Link to="/runs">
-            <Button>Cancel</Button>
-          </Link>
+          <>
+            <Button
+              onClick={resetToBlank}
+              disabled={prefillSource === null}
+              title={
+                prefillSource === null
+                  ? "Already using the default settings."
+                  : undefined
+              }
+            >
+              Start from blank
+            </Button>
+            <Link to="/runs">
+              <Button>Cancel</Button>
+            </Link>
+          </>
         }
       />
+
+      {prefillSource !== null && (
+        <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
+          {prefillSource.kind === "duplicate"
+            ? `Prefilled from run #${prefillSource.runId}'s settings.`
+            : "Prefilled from the most recent run's settings."}{" "}
+          Change anything below, or "Start from blank" to reset to the defaults.
+        </div>
+      )}
 
       {validationError && (
         <div className="mb-4">

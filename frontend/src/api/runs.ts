@@ -20,6 +20,7 @@ export type RunListFilter = NonNullable<
 
 const runsKey = (filter: RunListFilter) => ["runs", filter] as const;
 const runKey = (id: number) => ["runs", id] as const;
+const lastRunRequestKey = ["runs", "last-request"] as const;
 
 /** `GET /api/runs` — a filtered, paginated page of run summaries, newest-started-first. */
 export function useRuns(filter: RunListFilter = {}) {
@@ -60,6 +61,28 @@ export function useRun(id: number) {
     enabled: Number.isFinite(id),
     refetchInterval: (query) =>
       query.state.data?.outcome === "running" ? 5000 : false,
+  });
+}
+
+/**
+ * `GET /api/runs/last-request` — the newest run's own original request, or `null` on a
+ * fresh install with no runs yet (`ui-prefill-last-run`). `NewRunPage` seeds its form from
+ * this on load so an engineer's connection details, tag names, ranges, and every other
+ * field they typed follow them across browsers and machines instead of resetting to
+ * hardcoded defaults on every visit. A stable query key with no arguments (there's nothing
+ * to filter by) and default `staleTime`/no polling — this is a one-shot seed read for a
+ * form's initial state, not a live view of anything.
+ */
+export function useLastRunRequest() {
+  return useQuery({
+    queryKey: lastRunRequestKey,
+    queryFn: async () => {
+      const { data, error, response } = await apiClient.GET(
+        "/api/runs/last-request",
+      );
+      if (error) throw toApiError(error, response);
+      return data;
+    },
   });
 }
 

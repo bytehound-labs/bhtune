@@ -215,6 +215,35 @@
         }
       }
     },
+    "/api/runs/last-request": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "The most recently started run's original request, if any.",
+        "description": "`GET /api/runs/last-request` -- returns the newest run's `request_json`\n(`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh\ninstall with no runs yet, or if the newest run's stored request isn't usable (see\n[`parse_stored_request`]) (`ui-prefill-last-run`). The New Run form seeds itself from this\nresponse on load, so connection details, tag names, ranges, and every other field an\nengineer typed follow them across browsers and machines instead of resetting to hardcoded\ndefaults on every visit -- deliberately server-side rather than `localStorage` for that\nreason. \"Newest\" means newest by `started_at`, matching `GET /api/runs`'s own ordering,\nregardless of that run's `outcome` -- a still-`running` run is a perfectly good source of\n\"what was just submitted\" to prefill from.",
+        "operationId": "last_request",
+        "responses": {
+          "200": {
+            "description": "The newest run's original request, or `null` if no runs exist yet or its request isn't usable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StartRunRequest"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{id}": {
       "get": {
         "tags": [
@@ -1318,6 +1347,17 @@
             ],
             "description": "The resolved OPC DA server ProgID this run actually used, or `None` for a\nsimulator/replay run (`db-run-request-snapshot`). This is what `history revert`\ntrusts over any `--server` flag -- see `bhtune-cli::commands::history`."
           },
+          "original_request": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StartRunRequest",
+                "description": "This run's own `request_json` (`db-run-request-snapshot`), parsed back into a\n[`StartRunRequest`], or `None` if it isn't usable -- see [`parse_stored_request`].\nPowers the run detail page's \"Duplicate this run\" action (`ui-prefill-last-run`):\nunlike `GET /api/runs/last-request`, which only ever answers for the single newest\nrun, this lets the New Run form seed itself from *this specific* historical run\nregardless of how many later runs exist."
+              }
+            ]
+          },
           "outcome": {
             "$ref": "#/components/schemas/TuneOutcome"
           },
@@ -1494,7 +1534,7 @@
       },
       "StartRunRequest": {
         "type": "object",
-        "description": "The body of `POST /api/runs` -- full field parity with [`TuneArgs`], since starting a run\nover HTTP must be able to express everything `bhtune tune` can. Every field that has a\nCLI default (`--sim-gain`, `--poll-interval-ms`, etc.) repeats that exact default here via\n`#[serde(default = \"...\")]`, so an HTTP caller that omits a field gets identical behavior\nto a CLI invocation that omits the matching flag. `Option<T>` fields need no\n`#[serde(default)]` of their own -- serde already treats a missing key as `None` for an\n`Option` field.",
+        "description": "The body of `POST /api/runs` -- full field parity with [`TuneArgs`], since starting a run\nover HTTP must be able to express everything `bhtune tune` can. Every field that has a\nCLI default (`--sim-gain`, `--poll-interval-ms`, etc.) repeats that exact default here via\n`#[serde(default = \"...\")]`, so an HTTP caller that omits a field gets identical behavior\nto a CLI invocation that omits the matching flag. `Option<T>` fields need no\n`#[serde(default)]` of their own -- serde already treats a missing key as `None` for an\n`Option` field.\n\nAlso derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s\nresponse (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses\na run's stored `request_json` straight into a `StartRunRequest` rather than duplicating\nits ~30 fields into a second struct, giving a \"what you `GET` is exactly what you'd `POST`\nto repeat it\" symmetry in both the Rust types and the generated OpenAPI schema. This is\nsafe precisely because `request_json` is *already* built to this exact shape --\n`bhtune-cli`'s `RequestSnapshot` doc comment describes the two as kept in sync by\nconvention.",
         "required": [
           "tagname",
           "template",

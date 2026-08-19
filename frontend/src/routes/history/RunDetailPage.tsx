@@ -9,6 +9,7 @@ import {
   useWriteRun,
   type RunDetailResponse,
 } from "../../api/runs";
+import type { DuplicateRunState } from "../runs/NewRunPage";
 import {
   CONTROLLER_TYPE_LABELS,
   DIRECTION_LABELS,
@@ -169,6 +170,24 @@ export function RunDetailPage() {
                 {deleteRun.isPending ? "Deleting…" : "Delete run"}
               </Button>
             )}
+            <Button
+              disabled={!run.data?.original_request}
+              title={
+                run.isSuccess && !run.data.original_request
+                  ? "This run's original settings weren't recorded and can't be duplicated."
+                  : undefined
+              }
+              onClick={() => {
+                if (!run.data?.original_request) return;
+                const duplicateState: DuplicateRunState = {
+                  duplicateRequest: run.data.original_request,
+                  duplicateFromRunId: run.data.id,
+                };
+                navigate("/runs/new", { state: duplicateState });
+              }}
+            >
+              Duplicate this run
+            </Button>
             <Link to="/runs">
               <Button>Back to history</Button>
             </Link>

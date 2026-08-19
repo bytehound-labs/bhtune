@@ -54,6 +54,35 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/runs/last-request": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The most recently started run's original request, if any.
+     * @description `GET /api/runs/last-request` -- returns the newest run's `request_json`
+     *     (`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh
+     *     install with no runs yet, or if the newest run's stored request isn't usable (see
+     *     [`parse_stored_request`]) (`ui-prefill-last-run`). The New Run form seeds itself from this
+     *     response on load, so connection details, tag names, ranges, and every other field an
+     *     engineer typed follow them across browsers and machines instead of resetting to hardcoded
+     *     defaults on every visit -- deliberately server-side rather than `localStorage` for that
+     *     reason. "Newest" means newest by `started_at`, matching `GET /api/runs`'s own ordering,
+     *     regardless of that run's `outcome` -- a still-`running` run is a perfectly good source of
+     *     "what was just submitted" to prefill from.
+     */
+    get: operations["last_request"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/runs/{id}": {
     parameters: {
       query?: never;
@@ -552,6 +581,7 @@ export interface components {
        *     trusts over any `--server` flag -- see `bhtune-cli::commands::history`.
        */
       opc_server?: string | null;
+      original_request?: null | components["schemas"]["StartRunRequest"];
       outcome: components["schemas"]["TuneOutcome"];
       pid_constant_tags?:
         null | components["schemas"]["PidConstantTagsResponse"];
@@ -651,6 +681,15 @@ export interface components {
      *     to a CLI invocation that omits the matching flag. `Option<T>` fields need no
      *     `#[serde(default)]` of their own -- serde already treats a missing key as `None` for an
      *     `Option` field.
+     *
+     *     Also derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s
+     *     response (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses
+     *     a run's stored `request_json` straight into a `StartRunRequest` rather than duplicating
+     *     its ~30 fields into a second struct, giving a "what you `GET` is exactly what you'd `POST`
+     *     to repeat it" symmetry in both the Rust types and the generated OpenAPI schema. This is
+     *     safe precisely because `request_json` is *already* built to this exact shape --
+     *     `bhtune-cli`'s `RequestSnapshot` doc comment describes the two as kept in sync by
+     *     convention.
      */
     StartRunRequest: {
       /**
@@ -1001,6 +1040,26 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  last_request: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The newest run's original request, or `null` if no runs exist yet or its request isn't usable. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": null | components["schemas"]["StartRunRequest"];
         };
       };
     };

@@ -29,6 +29,7 @@ use crate::routes::{health, history, runs, stream, templates};
         templates::update_template,
         templates::delete_template,
         history::list_runs,
+        history::last_request,
         history::show_run,
         history::export_run,
         history::delete_run,

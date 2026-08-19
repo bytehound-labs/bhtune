@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::error::{ApiError, ErrorBody};
+use crate::routes::runs::StartRunRequest;
 use crate::state::AppState;
 
 /// Query parameters for `GET /api/runs`, mirroring [`TuneRunFilter`]'s fields one-to-one
@@ -158,6 +159,60 @@ pub(crate) async fn list_runs(
         runs: runs.iter().map(RunSummaryResponse::from).collect(),
         total,
     }))
+}
+
+/// The most recently started run's original request, if any.
+///
+/// `GET /api/runs/last-request` -- returns the newest run's `request_json`
+/// (`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh
+/// install with no runs yet, or if the newest run's stored request isn't usable (see
+/// [`parse_stored_request`]) (`ui-prefill-last-run`). The New Run form seeds itself from this
+/// response on load, so connection details, tag names, ranges, and every other field an
+/// engineer typed follow them across browsers and machines instead of resetting to hardcoded
+/// defaults on every visit -- deliberately server-side rather than `localStorage` for that
+/// reason. "Newest" means newest by `started_at`, matching `GET /api/runs`'s own ordering,
+/// regardless of that run's `outcome` -- a still-`running` run is a perfectly good source of
+/// "what was just submitted" to prefill from.
+#[utoipa::path(
+    get,
+    path = "/api/runs/last-request",
+    tag = "runs",
+    responses(
+        (status = 200, description = "The newest run's original request, or `null` if no runs exist yet or its request isn't usable.", body = Option<StartRunRequest>),
+    ),
+)]
+pub(crate) async fn last_request(
+    State(state): State<AppState>,
+) -> Result<Json<Option<StartRunRequest>>, ApiError> {
+    let newest =
+        TuneRunRow::list(&state.pool, &TuneRunFilter::default(), Pagination::first(1)).await?;
+    let Some(run) = newest.into_iter().next() else {
+        return Ok(Json(None));
+    };
+    Ok(Json(parse_stored_request(run.id, &run.request_json)))
+}
+
+/// Parses a run's stored `request_json` back into a [`StartRunRequest`], or `None` if it
+/// isn't usable -- shared by [`last_request`] and [`build_run_detail`]'s `original_request`
+/// field, both of which exist to *prefill a form*, not to guarantee every historical row is
+/// well-formed. A row created by `prepare()` (every real CLI- or HTTP-started run) always
+/// parses; this only fails for a row that predates `db-run-request-snapshot`, or one poked
+/// at directly through the SQLite file itself -- a supported way to interact with bhtune's
+/// data, per this project's "just an open SQLite db, nothing hidden" design goal. Either way,
+/// the honest response is "nothing to prefill from", logged at `warn` so the data quality
+/// issue is visible without failing the request a real user is waiting on.
+fn parse_stored_request(run_id: i64, request_json: &str) -> Option<StartRunRequest> {
+    match serde_json::from_str(request_json) {
+        Ok(request) => Some(request),
+        Err(e) => {
+            tracing::warn!(
+                run_id,
+                error = %e,
+                "run's stored request_json did not parse as StartRunRequest; treating as unavailable"
+            );
+            None
+        }
+    }
 }
 
 /// Local projection of [`bhtune_db::models::TuneRunInitialReadings`] -- see this module's
@@ -331,6 +386,13 @@ pub struct RunDetailResponse {
     pub writes: Vec<WriteResponse>,
     pub restore_status: Option<RestoreStatus>,
     pub restore_detail: Option<String>,
+    /// This run's own `request_json` (`db-run-request-snapshot`), parsed back into a
+    /// [`StartRunRequest`], or `None` if it isn't usable -- see [`parse_stored_request`].
+    /// Powers the run detail page's "Duplicate this run" action (`ui-prefill-last-run`):
+    /// unlike `GET /api/runs/last-request`, which only ever answers for the single newest
+    /// run, this lets the New Run form seed itself from *this specific* historical run
+    /// regardless of how many later runs exist.
+    pub original_request: Option<StartRunRequest>,
 }
 
 /// Builds the full `RunDetailResponse` for one run, or `Ok(None)` if no run has that id --
@@ -381,6 +443,7 @@ pub(crate) async fn build_run_detail(
         writes: writes.iter().map(WriteResponse::from).collect(),
         restore_status: run.restore_status,
         restore_detail: run.restore_detail,
+        original_request: parse_stored_request(run.id, &run.request_json),
     }))
 }
 
@@ -541,6 +604,7 @@ pub(crate) async fn delete_run(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/runs", get(list_runs))
+        .route("/api/runs/last-request", get(last_request))
         .route("/api/runs/{id}", get(show_run).delete(delete_run))
         .route("/api/runs/{id}/export", get(export_run))
 }
@@ -822,6 +886,11 @@ mod tests {
         assert_eq!(body["pid_constant_tags"]["proportional"], "Loop1.P");
         assert_eq!(body["pid_constant_tags"]["integral"], "Loop1.I");
         assert_eq!(body["pid_constant_tags"]["derivative"], "Loop1.D");
+        // `seed_one_run` never calls `record_connection`, so `request_json` is left at the
+        // column default `"{}"` -- not a valid `StartRunRequest`, so `original_request` must
+        // gracefully read `null` rather than the request failing (see
+        // `parse_stored_request`'s doc comment).
+        assert!(body["original_request"].is_null());
     }
 
     /// `pid_constant_tags` must be `null`, not merely three `null` fields, when the run's
@@ -1032,6 +1101,171 @@ mod tests {
         let detail_body = body_json(detail_response).await;
         assert_eq!(detail_body["opc_server"], "Kepware.KEPServerEX.V6");
         assert_eq!(detail_body["bridge_host"], "gateway-a:7600");
+    }
+
+    /// A simulator-driven [`StartRunRequest`] JSON body, built the same way
+    /// `runs::tests::fast_simulator_request_json` is but parsed through the real
+    /// `StartRunRequest` `Deserialize` impl and re-serialized -- so the resulting string is
+    /// guaranteed well-formed per that type's actual schema (defaults filled in for every
+    /// field this literal omits) rather than a hand-typed guess that could silently drift
+    /// from it.
+    fn fast_simulator_request_json_string() -> String {
+        let value = serde_json::json!({
+            "tagname": "ignored-for-simulator",
+            "template": "Yokogawa CentumVP",
+            "process_type": "flow",
+            "controller_type": "pi",
+            "relay_amp": 10.0,
+            "cycles_skip": 1,
+            "cycles_count": 2,
+            "noise_protection_secs": 0,
+            "driver": "simulator",
+            "sim_gain": 1.0,
+            "sim_tau": 0.01,
+            "sim_dead_time": 0.025,
+            "pv_range_high": 100.0,
+            "pv_range_low": 0.0,
+            "mv_range_high": 100.0,
+            "mv_range_low": 0.0,
+            "direction": "reverse",
+            "poll_interval_ms": 5,
+            "name": "http-test-loop",
+        });
+        let request: StartRunRequest = serde_json::from_value(value).unwrap();
+        serde_json::to_string(&request).unwrap()
+    }
+
+    #[tokio::test]
+    async fn last_request_returns_null_when_the_newest_runs_request_json_does_not_parse() {
+        // The column default `"{}"` (what `seed_one_run` leaves behind, since it never
+        // calls `record_connection`) isn't a valid `StartRunRequest` -- proving this
+        // gracefully reads `null` rather than 500ing is what actually justifies
+        // `parse_stored_request` existing instead of just propagating `?`.
+        let state = crate::test_support::in_memory_state().await;
+        seed_one_run(&state).await;
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::get("/api/runs/last-request")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body_json(response).await.is_null());
+    }
+
+    /// `show_run`'s `original_request` field is the mechanism `ui-prefill-last-run`'s
+    /// "Duplicate this run" action relies on: unlike `last_request`, which only ever answers
+    /// for the single newest run, this must round-trip a *specific*, non-newest run's own
+    /// stored request correctly.
+    #[tokio::test]
+    async fn show_run_returns_the_runs_own_original_request() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        let request_json = fast_simulator_request_json_string();
+        TuneRunRow::record_connection(&state.pool, run_id, None, None, &request_json)
+            .await
+            .unwrap();
+        // A newer run exists too, proving `show_run` returns *this* run's request rather
+        // than always answering with the newest one the way `last_request` does.
+        seed_one_run(&state).await;
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["original_request"]["tagname"], "ignored-for-simulator");
+        assert_eq!(body["original_request"]["driver"], "simulator");
+        assert_eq!(body["original_request"]["name"], "http-test-loop");
+    }
+
+    #[tokio::test]
+    async fn last_request_returns_null_when_no_runs_exist() {
+        let app = router().with_state(crate::test_support::in_memory_state().await);
+        let response = app
+            .oneshot(
+                Request::get("/api/runs/last-request")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body_json(response).await.is_null());
+    }
+
+    #[tokio::test]
+    async fn last_request_returns_the_newest_runs_request_not_the_first() {
+        let state = crate::test_support::in_memory_state().await;
+        let older_run_id = seed_one_run(&state).await;
+        TuneRunRow::record_connection(&state.pool, older_run_id, None, None, "{}")
+            .await
+            .unwrap();
+
+        // A second, newer run carrying a real request body -- `seed_one_run` itself only
+        // ever inserts `request_json = "{}"` (the column default), so this is also what
+        // proves the endpoint parses a *real* snapshot correctly, not just an empty one.
+        let template_row =
+            bhtune_db::models::DcsTemplateRow::get_by_name(&state.pool, "Yokogawa CentumVP")
+                .await
+                .unwrap()
+                .unwrap();
+        let template = template_row.template;
+        let config = LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 10.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 0,
+            mrft_delay_secs: 0,
+        };
+        let tags = bhtune_core::LoopTags::derive_from_pv_tag("Sim.PV", &template);
+        let newer_run = TuneRunRow::start(
+            &state.pool,
+            None,
+            "http-test-loop",
+            TuneDriver::Simulator,
+            config,
+            template_row.origin,
+            &template,
+            &tags,
+            Utc::now() + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+        let request_json = fast_simulator_request_json_string();
+        TuneRunRow::record_connection(&state.pool, newer_run.id, None, None, &request_json)
+            .await
+            .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::get("/api/runs/last-request")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["tagname"], "ignored-for-simulator");
+        assert_eq!(body["template"], "Yokogawa CentumVP");
+        assert_eq!(body["process_type"], "flow");
+        assert_eq!(body["controller_type"], "pi");
+        assert_eq!(body["driver"], "simulator");
+        assert_eq!(body["name"], "http-test-loop");
+        assert_eq!(body["relay_amp"], 10.0);
     }
 
     #[tokio::test]

@@ -25,7 +25,7 @@ use bhtune_db::models::{
 };
 use bhtune_driver::OpcDaDriver;
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::active_run::RunAlreadyActive;
@@ -62,7 +62,16 @@ fn default_op_or_restore_timeout_secs() -> u64 {
 /// to a CLI invocation that omits the matching flag. `Option<T>` fields need no
 /// `#[serde(default)]` of their own -- serde already treats a missing key as `None` for an
 /// `Option` field.
-#[derive(Debug, Deserialize, ToSchema)]
+///
+/// Also derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s
+/// response (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses
+/// a run's stored `request_json` straight into a `StartRunRequest` rather than duplicating
+/// its ~30 fields into a second struct, giving a "what you `GET` is exactly what you'd `POST`
+/// to repeat it" symmetry in both the Rust types and the generated OpenAPI schema. This is
+/// safe precisely because `request_json` is *already* built to this exact shape --
+/// `bhtune-cli`'s `RequestSnapshot` doc comment describes the two as kept in sync by
+/// convention.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StartRunRequest {
     /// PV tag prefix; ignored for `driver: "simulator"`. See [`TuneArgs::tagname`].
     pub tagname: String,
