@@ -12,7 +12,7 @@
 use utoipa::OpenApi;
 
 use crate::error::ErrorBody;
-use crate::routes::{health, history, runs, stream, templates};
+use crate::routes::{health, history, opc, runs, stream, templates};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -38,6 +38,9 @@ use crate::routes::{health, history, runs, stream, templates};
         runs::write_run,
         runs::revert_run,
         stream::stream_run,
+        opc::servers,
+        opc::browse,
+        opc::read,
     ),
     components(schemas(
         health::Health,
@@ -54,12 +57,17 @@ use crate::routes::{health, history, runs, stream, templates};
         runs::StartRunRequest,
         runs::WriteRunRequest,
         stream::RunStreamDone,
+        opc::OpcServersResponse,
+        opc::OpcTagNodeResponse,
+        opc::OpcBrowseResponse,
+        opc::OpcReadResponse,
         ErrorBody,
     )),
     tags(
         (name = "health", description = "Liveness probe"),
         (name = "templates", description = "DCS/PLC template catalog (built-in, community-catalog, and user-created)"),
         (name = "runs", description = "Start, cancel, and browse the history of tune runs"),
+        (name = "opc", description = "Read-only OPC DA server/tag diagnostics: server discovery, tag-tree browsing, and single-tag reads"),
     ),
 )]
 pub struct ApiDoc;

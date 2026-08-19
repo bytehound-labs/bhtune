@@ -139,11 +139,14 @@ tower = { version = "0.5", features = ["util"] }
 # Reads a response's body bytes out in tests (`axum::body::Body` implements `http_body::Body`
 # but has no built-in "collect to bytes" convenience of its own).
 http-body-util = "0.1"
-# `tests/graceful_shutdown.rs` only: bounds how long it waits for the spawned subprocess to
-# print its "listening" line and to exit after being signalled (on top of the regular
-# dependency's `net`/`signal`/`macros`/`rt-multi-thread` features, unified by Cargo for test
-# builds only).
-tokio = { version = "1", features = ["time"] }
+# `tests/graceful_shutdown.rs`: bounds how long it waits for the spawned subprocess to print
+# its "listening" line and to exit after being signalled (on top of the regular dependency's
+# `net`/`signal`/`macros`/`rt-multi-thread` features, unified by Cargo for test builds only).
+# `test-util` (`routes/opc.rs`'s `with_timeout` unit tests): `#[tokio::test(start_paused =
+# true)]` + `std::future::pending()` exercises the real 30-second `OPC_QUERY_TIMEOUT_SECS`
+# deadline in virtual rather than real time -- same rationale as `bhtune-cli`'s identical
+# dev-dependency (see that crate's `Cargo.toml` comment).
+tokio = { version = "1", features = ["time", "test-util"] }
 # `tests/graceful_shutdown.rs` only: sends a real SIGTERM/SIGINT to a spawned `bhtune-server`
 # subprocess, mirroring `bhtune-cli`'s own `tests/ctrlc_abort.rs` rationale -- a real OS
 # signal can't be delivered to one `#[test]` inside a shared multi-threaded `cargo test`

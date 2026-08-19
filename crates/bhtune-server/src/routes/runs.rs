@@ -1072,111 +1072,6 @@ mod tests {
         assert_eq!(cancel_response.status(), StatusCode::NO_CONTENT);
     }
 
-    /// A minimal mock `Bridge` gRPC service backing `write_run`/`revert_run`'s tests, so
-    /// they exercise a real `OpcDaDriver` connect/read/write round trip rather than stopping
-    /// at the eligibility checks. Mirrors `bhtune_driver::opcda`'s own `smoke_tests` module
-    /// (itself mirroring `bhtune-cli`'s `test_support`) field-for-field, trimmed further:
-    /// `list_servers`/`browse` are stubbed to empty since neither handler under test ever
-    /// calls them.
-    mod mock_bridge {
-        use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
-        use opcda_bridge_proto::bridge::{
-            BrowseRequest, BrowseResponse, ListServersRequest, ListServersResponse, ReadRequest,
-            ReadResponse, WriteRequest, WriteResponse,
-        };
-        use std::net::SocketAddr;
-        use tokio_stream::wrappers::TcpListenerStream;
-        use tonic::transport::Server;
-        use tonic::{Request, Response, Status};
-
-        #[derive(Default)]
-        pub(super) struct MockBridgeService {
-            pub(super) read_response: ReadResponse,
-            pub(super) read_error: Option<Status>,
-            pub(super) write_response: WriteResponse,
-            pub(super) write_error: Option<Status>,
-        }
-
-        #[tonic::async_trait]
-        impl Bridge for MockBridgeService {
-            async fn list_servers(
-                &self,
-                _request: Request<ListServersRequest>,
-            ) -> Result<Response<ListServersResponse>, Status> {
-                Ok(Response::new(ListServersResponse { servers: vec![] }))
-            }
-
-            type BrowseStream =
-                tokio_stream::wrappers::ReceiverStream<Result<BrowseResponse, Status>>;
-
-            async fn browse(
-                &self,
-                _request: Request<BrowseRequest>,
-            ) -> Result<Response<Self::BrowseStream>, Status> {
-                // Dropping the sender immediately closes the channel, so the stream ends with
-                // no items -- neither handler under test ever browses.
-                let (_tx, rx) = tokio::sync::mpsc::channel(1);
-                Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
-                    rx,
-                )))
-            }
-
-            async fn read(
-                &self,
-                _request: Request<ReadRequest>,
-            ) -> Result<Response<ReadResponse>, Status> {
-                if let Some(status) = self.read_error.clone() {
-                    return Err(status);
-                }
-                Ok(Response::new(self.read_response.clone()))
-            }
-
-            async fn write(
-                &self,
-                _request: Request<WriteRequest>,
-            ) -> Result<Response<WriteResponse>, Status> {
-                if let Some(status) = self.write_error.clone() {
-                    return Err(status);
-                }
-                Ok(Response::new(self.write_response.clone()))
-            }
-        }
-
-        /// Starts `service` on an ephemeral localhost port and returns its `host:port`
-        /// address, ready to be recorded as a run's `bridge_host`. No graceful shutdown --
-        /// each test's server simply runs for the rest of the test process on its own
-        /// ephemeral port, matching the upstream pattern this mirrors.
-        pub(super) async fn start_mock_server(service: MockBridgeService) -> String {
-            let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-            let port = listener.local_addr().unwrap().port();
-            tokio::spawn(async move {
-                Server::builder()
-                    .add_service(BridgeServer::new(service))
-                    .serve_with_incoming(TcpListenerStream::new(listener))
-                    .await
-                    .unwrap();
-            });
-            format!("127.0.0.1:{port}")
-        }
-
-        /// A "Good"-quality `"10.0"` reading, regardless of which tag was requested --
-        /// matching `bhtune-cli`'s own `history::revert` test fixtures' rationale: every
-        /// pre-read and every write's confirmation readback returns this same value, so a
-        /// fixture that also writes/reverts to `10.0` always sees a matching readback no
-        /// matter which of the three PID constants is being processed.
-        pub(super) fn good_reading(value: &str) -> ReadResponse {
-            ReadResponse {
-                values: vec![opcda_bridge_proto::bridge::TagValue {
-                    tag_id: "ignored".to_string(),
-                    value: value.to_string(),
-                    quality: "Good".to_string(),
-                    timestamp: "2024-01-15 10:23:45".to_string(),
-                }],
-            }
-        }
-    }
-
     /// Starts (but does not complete, record a connection for, or attach any result/write
     /// to) an `opcda`-driven run with real PID constant tags derived from the Yokogawa
     /// CentumVP template -- the common setup shared by every `write_run`/`revert_run`
@@ -1307,7 +1202,9 @@ mod tests {
 
     #[tokio::test]
     async fn write_run_succeeds_and_records_a_write_kind_row() {
-        use mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
 
         let host = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
@@ -1349,7 +1246,9 @@ mod tests {
 
     #[tokio::test]
     async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
-        use mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
 
         let host = start_mock_server(MockBridgeService {
             // The pre-read (all three constants) still succeeds; every subsequent *write*
@@ -1395,7 +1294,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_run_reports_a_failed_pre_read_as_200_not_an_http_error() {
-        use mock_bridge::{MockBridgeService, start_mock_server};
+        use crate::test_support::mock_bridge::{MockBridgeService, start_mock_server};
 
         let host = start_mock_server(MockBridgeService {
             // Every `read` (including the Proportional pre-read, the very first driver call
@@ -1601,7 +1500,9 @@ mod tests {
 
     #[tokio::test]
     async fn write_run_returns_409_when_another_operation_is_active() {
-        use mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
 
         let host = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
@@ -1633,7 +1534,9 @@ mod tests {
 
     #[tokio::test]
     async fn revert_run_succeeds_and_records_a_revert_kind_row() {
-        use mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
 
         let host = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),

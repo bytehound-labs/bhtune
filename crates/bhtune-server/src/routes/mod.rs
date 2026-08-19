@@ -3,6 +3,7 @@
 
 pub mod health;
 pub mod history;
+pub mod opc;
 pub mod runs;
 pub mod stream;
 pub mod templates;

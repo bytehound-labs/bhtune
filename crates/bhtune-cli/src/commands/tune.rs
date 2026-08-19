@@ -1121,9 +1121,12 @@ fn check_quality(
 /// Maps the driver's live [`bhtune_driver::Quality`] to the database's persisted
 /// [`SampleQuality`] -- two separate enums (rather than one shared type) because
 /// `bhtune-driver` and `bhtune-db` are sibling crates that each depend only on
-/// `bhtune-core`, not on each other; only `bhtune-cli`, which depends on both, needs this
-/// mapping, so it lives here rather than forcing a new cross-dependency onto either crate.
-fn sample_quality_from_driver(quality: bhtune_driver::Quality) -> SampleQuality {
+/// `bhtune-core`, not on each other; only a crate depending on both needs this mapping, so
+/// it lives here rather than forcing a new cross-dependency onto either crate. `pub` (not
+/// just used by [`run_polling_loop`] below) because `bhtune-server`'s `routes::opc` reuses
+/// it verbatim for `GET /api/opc/read`'s quality field, rather than a second copy of the
+/// same three-arm match.
+pub fn sample_quality_from_driver(quality: bhtune_driver::Quality) -> SampleQuality {
     match quality {
         bhtune_driver::Quality::Good => SampleQuality::Good,
         bhtune_driver::Quality::Uncertain => SampleQuality::Uncertain,

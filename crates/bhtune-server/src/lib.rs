@@ -48,6 +48,7 @@ pub fn build_router(state: AppState) -> axum::Router {
         .merge(routes::history::router())
         .merge(routes::runs::router())
         .merge(routes::stream::router())
+        .merge(routes::opc::router())
         .route("/api/openapi.json", axum::routing::get(openapi_json))
         .merge(utoipa_scalar::Scalar::with_url(
             "/api/docs",
@@ -112,6 +113,26 @@ mod tests {
             .unwrap();
         assert_ne!(post_runs.status(), StatusCode::NOT_FOUND);
         assert_ne!(post_runs.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let opc_servers = app
+            .clone()
+            .oneshot(
+                // Port 1 (a privileged/unlikely-bound port, matching `bhtune-cli`'s own
+                // `servers_connect_failure_surfaces_as_an_error` test precedent) so this
+                // resolves via a fast, deterministic connection refusal rather than the
+                // default bridge host, which nothing is guaranteed to be listening on either
+                // way but isn't a *guaranteed-immediate* refusal.
+                Request::get("/api/opc/servers?bridge_host=127.0.0.1:1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // No bridge host is configured/reachable in this in-memory test state, so this is a
+        // `400` (a diagnostic, client-actionable failure -- see `routes::opc::with_timeout`),
+        // not a routing failure; the point of this assertion is that the route exists at all.
+        assert_ne!(opc_servers.status(), StatusCode::NOT_FOUND);
+        assert_ne!(opc_servers.status(), StatusCode::METHOD_NOT_ALLOWED);
 
         let openapi_json = app
             .clone()

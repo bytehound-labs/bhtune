@@ -21,6 +21,77 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/opc/browse": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List the tags/branches directly under one tree level of an OPC DA server.
+     * @description `GET /api/opc/browse` -- one level at a time (not a recursive dump of the whole tree),
+     *     matching `Driver::browse`'s own contract; the GUI's tag-tree modal calls this again for
+     *     each branch the user expands. Requires `opc_server` (from the query or config) since,
+     *     unlike `GET /api/opc/servers`, browsing needs a specific server to connect to.
+     */
+    get: operations["browse"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/read": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Read one tag's current value, quality, and timestamp.
+     * @description `GET /api/opc/read` -- backs the GUI's "Test connection" button (read the tag the user is
+     *     about to use as the loop's PV and show what comes back) and the tag-tree's live preview.
+     *     Deliberately does not enforce [`bhtune_driver::Quality::is_trustworthy`] the way a real
+     *     tune's readings must -- this is a diagnostic command, so it reports whatever quality it
+     *     gets rather than failing on `Uncertain`/`Bad`, matching `bhtune opc read`'s own behavior.
+     */
+    get: operations["read"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/servers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List every OPC DA server registered on the bridge gateway's own host.
+     * @description `GET /api/opc/servers` -- powers the GUI's server dropdown. Server discovery needs only a
+     *     bridge host, not a ProgID, so it cannot be a `Driver` trait method (constructing a
+     *     `Driver` already requires the ProgID this call exists to find); it's the free function
+     *     `bhtune_driver::list_opcda_servers` instead. An empty `servers` array is a normal, valid
+     *     answer, not an error -- only a connection failure or timeout is a 400.
+     */
+    get: operations["servers"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/runs": {
     parameters: {
       query?: never;
@@ -494,6 +565,48 @@ export interface components {
       /** Format: float */
       mv_value_current: number;
     };
+    /** @description Response body of `GET /api/opc/browse`. */
+    OpcBrowseResponse: {
+      nodes: components["schemas"]["OpcTagNodeResponse"][];
+    };
+    /**
+     * @description Response body of `GET /api/opc/read`.
+     *
+     *     `quality` reuses [`SampleQuality`] rather than a third quality representation --
+     *     `bhtune-db`'s `SampleQuality` (mapped from the driver's live [`bhtune_driver::Quality`] by
+     *     [`sample_quality_from_driver`]) is already exposed directly over HTTP in
+     *     `GET /api/runs/{id}`'s `SampleResponse::pv_quality` (see `routes::history`), so this
+     *     follows that same precedent instead of inventing a parallel `OpcQualityResponse` enum.
+     */
+    OpcReadResponse: {
+      quality: components["schemas"]["SampleQuality"];
+      tag: string;
+      /**
+       * Format: date-time
+       * @description Always `null` for the OPC DA driver today: the gateway's last-change time is a
+       *     *local*, offset-less string with no reliable way to convert it to a trustworthy
+       *     `DateTime<Utc>` (see `bhtune_driver::opcda::tag_value_from_raw`'s doc comment) -- kept
+       *     as a field rather than dropped entirely so a future driver that *can* supply a
+       *     trustworthy instant (or a bridge protocol revision that reports the gateway's own
+       *     timezone) doesn't need an API shape change to start populating it.
+       */
+      timestamp?: string | null;
+      value: string;
+    };
+    /** @description Response body of `GET /api/opc/servers`. */
+    OpcServersResponse: {
+      servers: string[];
+    };
+    /**
+     * @description One node of `GET /api/opc/browse`'s `nodes` array -- a plain HTTP-facing projection of
+     *     [`bhtune_driver::TagNode`], per this workspace's DTO-decoupling convention (`bhtune-driver`
+     *     types deliberately don't derive `Serialize`/`ToSchema`; every JSON-facing consumer builds
+     *     its own projection instead).
+     */
+    OpcTagNodeResponse: {
+      is_branch: boolean;
+      tag: string;
+    };
     /**
      * @description A run's snapshotted PID constant tag names, present only when all three were configured.
      *     Nested under `RunDetailResponse::pid_constant_tags` following the same
@@ -959,6 +1072,112 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Health"];
+        };
+      };
+    };
+  };
+  browse: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+        /**
+         * @description The tree level to list; an absent or empty path lists the top level, matching
+         *     `Driver::browse`'s own "empty string for the top level" convention.
+         */
+        path?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcBrowseResponse"];
+        };
+      };
+      /** @description No OPC server was specified (and none is configured), or the gateway/browse call could not be reached in time. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  read: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+        /**
+         * @description The fully qualified tag to read (e.g. `"Unit1.LIC101.PV"`). Required -- unlike the
+         *     other two fields, there is no configured default for "which tag".
+         */
+        tag?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcReadResponse"];
+        };
+      };
+      /** @description No tag or OPC server was specified (and none is configured), or the gateway/read call could not be reached in time. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  servers: {
+    parameters: {
+      query?: {
+        /**
+         * @description Overrides the configured/default bridge host for this one request, matching `bhtune
+         *     opc servers --bridge-host`.
+         */
+        bridge_host?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcServersResponse"];
+        };
+      };
+      /** @description The bridge gateway could not be reached in time. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
     };

@@ -30,6 +30,167 @@
         }
       }
     },
+    "/api/opc/browse": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "summary": "List the tags/branches directly under one tree level of an OPC DA server.",
+        "description": "`GET /api/opc/browse` -- one level at a time (not a recursive dump of the whole tree),\nmatching `Driver::browse`'s own contract; the GUI's tag-tree modal calls this again for\neach branch the user expands. Requires `opc_server` (from the query or config) since,\nunlike `GET /api/opc/servers`, browsing needs a specific server to connect to.",
+        "operationId": "browse",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "The tree level to list; an absent or empty path lists the top level, matching\n`Driver::browse`'s own \"empty string for the top level\" convention.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcBrowseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No OPC server was specified (and none is configured), or the gateway/browse call could not be reached in time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/read": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "summary": "Read one tag's current value, quality, and timestamp.",
+        "description": "`GET /api/opc/read` -- backs the GUI's \"Test connection\" button (read the tag the user is\nabout to use as the loop's PV and show what comes back) and the tag-tree's live preview.\nDeliberately does not enforce [`bhtune_driver::Quality::is_trustworthy`] the way a real\ntune's readings must -- this is a diagnostic command, so it reports whatever quality it\ngets rather than failing on `Uncertain`/`Bad`, matching `bhtune opc read`'s own behavior.",
+        "operationId": "read",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "The fully qualified tag to read (e.g. `\"Unit1.LIC101.PV\"`). Required -- unlike the\nother two fields, there is no configured default for \"which tag\".",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcReadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No tag or OPC server was specified (and none is configured), or the gateway/read call could not be reached in time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/servers": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "summary": "List every OPC DA server registered on the bridge gateway's own host.",
+        "description": "`GET /api/opc/servers` -- powers the GUI's server dropdown. Server discovery needs only a\nbridge host, not a ProgID, so it cannot be a `Driver` trait method (constructing a\n`Driver` already requires the ProgID this call exists to find); it's the free function\n`bhtune_driver::list_opcda_servers` instead. An empty `servers` array is a normal, valid\nanswer, not an error -- only a connection failure or timeout is a 400.",
+        "operationId": "servers",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "description": "Overrides the configured/default bridge host for this one request, matching `bhtune\nopc servers --bridge-host`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcServersResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The bridge gateway could not be reached in time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs": {
       "get": {
         "tags": [
@@ -1174,6 +1335,80 @@
           }
         }
       },
+      "OpcBrowseResponse": {
+        "type": "object",
+        "description": "Response body of `GET /api/opc/browse`.",
+        "required": [
+          "nodes"
+        ],
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpcTagNodeResponse"
+            }
+          }
+        }
+      },
+      "OpcReadResponse": {
+        "type": "object",
+        "description": "Response body of `GET /api/opc/read`.\n\n`quality` reuses [`SampleQuality`] rather than a third quality representation --\n`bhtune-db`'s `SampleQuality` (mapped from the driver's live [`bhtune_driver::Quality`] by\n[`sample_quality_from_driver`]) is already exposed directly over HTTP in\n`GET /api/runs/{id}`'s `SampleResponse::pv_quality` (see `routes::history`), so this\nfollows that same precedent instead of inventing a parallel `OpcQualityResponse` enum.",
+        "required": [
+          "tag",
+          "value",
+          "quality"
+        ],
+        "properties": {
+          "quality": {
+            "$ref": "#/components/schemas/SampleQuality"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Always `null` for the OPC DA driver today: the gateway's last-change time is a\n*local*, offset-less string with no reliable way to convert it to a trustworthy\n`DateTime<Utc>` (see `bhtune_driver::opcda::tag_value_from_raw`'s doc comment) -- kept\nas a field rather than dropped entirely so a future driver that *can* supply a\ntrustworthy instant (or a bridge protocol revision that reports the gateway's own\ntimezone) doesn't need an API shape change to start populating it."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "OpcServersResponse": {
+        "type": "object",
+        "description": "Response body of `GET /api/opc/servers`.",
+        "required": [
+          "servers"
+        ],
+        "properties": {
+          "servers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "OpcTagNodeResponse": {
+        "type": "object",
+        "description": "One node of `GET /api/opc/browse`'s `nodes` array -- a plain HTTP-facing projection of\n[`bhtune_driver::TagNode`], per this workspace's DTO-decoupling convention (`bhtune-driver`\ntypes deliberately don't derive `Serialize`/`ToSchema`; every JSON-facing consumer builds\nits own projection instead).",
+        "required": [
+          "tag",
+          "is_branch"
+        ],
+        "properties": {
+          "is_branch": {
+            "type": "boolean"
+          },
+          "tag": {
+            "type": "string"
+          }
+        }
+      },
       "PidConstantTagsResponse": {
         "type": "object",
         "description": "A run's snapshotted PID constant tag names, present only when all three were configured.\nNested under `RunDetailResponse::pid_constant_tags` following the same\n\"`Option<...>` presence itself is the signal\" convention `initial_readings` already uses,\nrather than a separate boolean plus three more nullable top-level fields.",
@@ -1978,6 +2213,10 @@
     {
       "name": "runs",
       "description": "Start, cancel, and browse the history of tune runs"
+    },
+    {
+      "name": "opc",
+      "description": "Read-only OPC DA server/tag diagnostics: server discovery, tag-tree browsing, and single-tag reads"
     }
   ]
 }
