@@ -52,27 +52,62 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
 
 ## Run a tune from the browser
 
-1. **Templates** (`/templates`) — the four built-in DCS/PLC templates are listed on first
-   launch (seeded automatically into the database). Open one to see its full tag-suffix
-   mapping, or create a new one from the browser instead of hand-editing a TOML file.
-2. **New Run** (`/runs/new`) — one form covering everything `bhtune tune` takes as flags:
-   connection (which driver — OPC DA or the simulator), tag mapping, test parameters (process
-   type, controller type, relay amplitude, cycles), simulator parameters (gain/time constant/
-   dead time/noise, when the simulator driver is selected), and write-back. Submitting POSTs
-   to the same `/api/runs` endpoint the CLI's `bhtune-server` mode exposes — there's exactly
-   one API, used by both the browser and any script that wants to drive a run over HTTP
-   directly.
-3. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
+1. **Tune** (`/runs/new`) — the app's default landing page, and the first item in the header
+   nav. One form covering everything `bhtune tune` takes as flags: connection (which driver —
+   OPC DA or the simulator), tag mapping, test parameters (process type, controller type,
+   relay amplitude, cycles), simulator parameters (gain/time constant/dead time/noise, when
+   the simulator driver is selected), and write-back. Submitting POSTs to the same
+   `/api/runs` endpoint the CLI's `bhtune-server` mode exposes — there's exactly one API,
+   used by both the browser and any script that wants to drive a run over HTTP directly.
+
+   - Switching the driver to **Simulator** greys out every field the simulator genuinely
+     ignores (OPC server ProgID, bridge host, tag name, write-back, quality/timeout options)
+     rather than hiding them, so the form doesn't reflow and the greyed field itself explains
+     what the simulator doesn't use. Fields the simulator still needs — template, PV/MV
+     ranges, controller direction, and every engine parameter — stay enabled, since the
+     template's unit conversions and PID type apply to every run regardless of driver.
+   - Switching to **OPC DA** reveals a **Discover servers** button next to the ProgID field,
+     which calls the bridge gateway and lists every OPC DA server registered on it as
+     clickable buttons — no need to already know (or spell correctly) a ProgID like
+     `Matrikon.OPC.Simulation`. A **Browse tags…** button next to the Tag name field (enabled
+     once a ProgID is entered) opens a lazily-expanding tag tree fetched one level at a time
+     from the gateway; selecting a leaf previews the complete tag set the active template
+     would derive from it (the clearest way to see how a template's suffixes actually work),
+     offers a **Test read** showing a live value and its quality, and **Use this tag** writes
+     the selection back into the Tag name field.
+   - The form prefills from the newest run's own settings every time you open it fresh (or
+     from a specific past run's settings via **Duplicate this run**, below) — remembered
+     server-side, so it follows you across browsers and machines rather than living in
+     `localStorage`. A **Start from blank** button resets to the built-in defaults.
+
+2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
    in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current
    relay switch count and cycles remaining. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
-   [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows the
-   calculated Aggressive/Moderate/Sluggish PID constants and any write-back audit rows, plus
-   **Export CSV**/**Export JSON** download links and a **Delete run** button (with a
-   confirmation prompt — deleting a run also removes its recorded samples, results, and
-   write-back audit rows, and cannot be undone).
-4. **History** (`/runs`) — every past run, filterable by loop/outcome/process type, with the
+   [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
+   - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own
+     **Write** button to send that response level's constants to the loop after the fact —
+     independently of any `--write-pid` choice made before the run started. A confirmation
+     dialog names the loop and the exact tag/value pairs before anything is sent.
+   - A **Write-back audit** table of every write this run has made, each with a pre-write
+     readback, a post-write readback, and a rollback status. The newest successful write
+     shows a **Revert** button that writes the pre-write values back, also behind a
+     confirmation dialog.
+
+     Both buttons are disabled — with the reason shown as text, never a silent, unexplained
+     grey button — unless the run is finished, used the OPC DA driver, has PID constant tags
+     configured, and recorded which OPC server/bridge host it connected to.
+
+   - **Export CSV**/**Export JSON** download links and a **Delete run** button (with a
+     confirmation prompt — deleting a run also removes its recorded samples, results, and
+     write-back audit rows, and cannot be undone).
+   - A **Duplicate this run** button, returning to the New Run form prefilled from this run's
+     exact settings instead of the newest run's.
+3. **History** (`/runs`) — every past run, filterable by loop/outcome/process type, with the
    same detail view available for any completed run — not just the one you just started.
+4. **Templates** (`/templates`) — the four built-in DCS/PLC templates are listed on first
+   launch (seeded automatically into the database). Open one to see its full tag-suffix
+   mapping, or create a new one from the browser instead of hand-editing a TOML file.
 
 ## Explore the API directly
 

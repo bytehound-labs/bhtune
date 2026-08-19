@@ -48,7 +48,7 @@ subcommands/flags (`cli-commands` phase) need to cover the following capability 
 does not need matching widgets to any particular layout, only equivalent capability plus real
 validation.
 
-- [ ] REQUIRED — Loop Configuration: set/browse the PV tag; derive/fill the rest of the tag set
+- [x] REQUIRED — Loop Configuration: set/browse the PV tag; derive/fill the rest of the tag set
       from it.
 - [ ] REQUIRED — Algorithm Settings: process type (6 types), controller type, relay amplitude,
       cycles to skip/test, noise protection delay.
