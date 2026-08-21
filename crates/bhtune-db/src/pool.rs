@@ -20,7 +20,7 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Opens (creating if missing) the SQLite database at `path`, applies the standard pragmas,
 /// and runs any pending migrations. This is the only supported way to get a `SqlitePool` in
-/// bhtune — every caller (CLI, desktop, tests) goes through this function so the pragmas and
+/// bhtune — every caller (CLI, web server, tests) goes through this function so the pragmas and
 /// migration state can never drift between adapters.
 pub async fn connect(path: &Path) -> DbResult<SqlitePool> {
     let options = SqliteConnectOptions::new()
@@ -128,5 +128,90 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn connect_upgrades_a_pre_index_database_without_losing_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("before-history-indexes.db");
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+
+        let migrations = sqlx::migrate!("./migrations");
+        let initial = &migrations.migrations[0];
+        sqlx::query(
+            r#"
+            CREATE TABLE _sqlx_migrations (
+                version BIGINT PRIMARY KEY,
+                description TEXT NOT NULL,
+                installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                success BOOLEAN NOT NULL,
+                checksum BLOB NOT NULL,
+                execution_time BIGINT NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(sqlx::AssertSqlSafe(initial.sql.as_str()))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations \
+             (version, description, success, checksum, execution_time) VALUES (?, ?, 1, ?, 0)",
+        )
+        .bind(initial.version)
+        .bind(initial.description.as_ref())
+        .bind(initial.checksum.as_ref())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO settings (key, value, updated_at) VALUES ('migration-fixture', ?, ?)",
+        )
+        .bind(r#"{"preserve":true}"#)
+        .bind(chrono::Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let upgraded = connect(&path).await.unwrap();
+        let (value,): (String,) =
+            sqlx::query_as("SELECT value FROM settings WHERE key = 'migration-fixture'")
+                .fetch_one(&upgraded)
+                .await
+                .unwrap();
+        assert_eq!(value, r#"{"preserve":true}"#);
+
+        let indexes: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_index_list('tune_samples')")
+                .fetch_all(&upgraded)
+                .await
+                .unwrap();
+        assert!(
+            indexes
+                .iter()
+                .any(|name| name == "idx_tune_samples_run_time")
+        );
+        let indexes: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_index_list('tune_writes')")
+                .fetch_all(&upgraded)
+                .await
+                .unwrap();
+        assert!(
+            indexes
+                .iter()
+                .any(|name| name == "idx_tune_writes_run_written")
+        );
     }
 }

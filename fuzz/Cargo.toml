@@ -1,0 +1,45 @@
+[package]
+name = "bhtune-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bhtune-cli = { path = "../crates/bhtune-cli" }
+bhtune-core = { path = "../crates/bhtune-core" }
+bhtune-driver = { path = "../crates/bhtune-driver" }
+opcda-bridge = "0.2"
+
+[[bin]]
+name = "config"
+path = "fuzz_targets/config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "template-catalog"
+path = "fuzz_targets/template_catalog.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "template-import"
+path = "fuzz_targets/template_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "opc-payload"
+path = "fuzz_targets/opc_payload.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

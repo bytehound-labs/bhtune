@@ -32,12 +32,15 @@ jobs:
   create-release:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # for taiki-e/create-gh-release-action
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
-      - uses: taiki-e/create-gh-release-action@v1
+      - uses: taiki-e/create-gh-release-action@eba8ea96c86cca8a37f1b56e94b4d13301fba651
         with:
           # No `changelog:` yet -- release-plz (`release-v1`) is what will eventually
           # produce a CHANGELOG.md to point this at. Until then every release's notes are
@@ -64,28 +67,27 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     permissions:
       contents: write # for taiki-e/upload-rust-binary-action
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          shared-key: release-${{ matrix.target }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
 
       # bhtune-driver depends on opcda-bridge, whose opcda-bridge-proto crate compiles
       # bridge.proto via tonic-prost-build at build time -- protoc is a real, non-dev build
       # requirement here, not just a test-only one. Matches checks.yml's `check`/`windows`/
       # `package`/`msrv` jobs, which install it for the same reason.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: protoc
 
-      # `pnpm/setup@v2` runs `pnpm install` itself (default `install: true`), so no separate
+      # `pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2` runs `pnpm install` itself (default `install: true`), so no separate
       # install step is needed here -- matches checks.yml's `frontend`/`website` jobs.
-      - uses: pnpm/setup@v2
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
         with:
           runtime: node@lts
           cache: true
@@ -102,7 +104,7 @@ jobs:
       # into one per-platform archive -- matching the "one package, not two" decision in
       # AGENTS.md's "Packaging and distribution" section, since there is no GUI-toolkit
       # dependency to split them apart for anymore now that the UI is browser-served.
-      - uses: taiki-e/upload-rust-binary-action@v1
+      - uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6
         with:
           bin: bhtune,bhtune-server
           target: ${{ matrix.target }}
@@ -130,25 +132,24 @@ jobs:
     needs: create-release
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: write # for `gh release upload`
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          shared-key: release-deb-rpm
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
 
       # Same protoc/frontend-embed requirements as `build` above -- bhtune-driver's
       # opcda-bridge-proto dependency and bhtune-server's rust-embed both need them present
       # before `cargo build --release` runs.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: protoc
 
-      - uses: pnpm/setup@v2
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
         with:
           runtime: node@lts
           cache: true
@@ -169,7 +170,7 @@ jobs:
       # cargo-deb ships prebuilt Linux binaries taiki-e/install-action fetches directly;
       # cargo-generate-rpm does not (confirmed against its GitHub Releases, which carry no
       # binary assets), so it's built from source via a plain `cargo install` instead.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: cargo-deb
 
@@ -199,8 +200,82 @@ jobs:
         if: github.event_name == 'push'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release upload "${{ github.ref_name }}" \
+          gh release upload "$RELEASE_TAG" \
             target/debian/*.deb \
             target/generate-rpm/*.rpm \
+            --clobber
+
+  supply-chain:
+    name: Sign release assets and publish SBOM/provenance
+    needs: [build, package-deb-rpm]
+    if: startsWith(github.ref, 'refs/tags/') && !cancelled()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release download "$RELEASE_TAG" --dir dist --pattern '*'
+
+      - name: Generate release SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          path: dist
+          format: cyclonedx-json
+          output-file: release-sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Create release asset checksums
+        run: |
+          (
+            cd dist
+            sha256sum -- * > ../release-assets.sha256
+          )
+
+      - name: Attest release asset provenance
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
+        with:
+          subject-checksums: release-assets.sha256
+
+      - name: Save the provenance bundle for the release
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" release-provenance.bundle.json
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac
+
+      - name: Sign every release asset
+        run: |
+          while IFS= read -r -d '' asset; do
+            cosign sign-blob \
+              --yes \
+              --bundle "${asset}.sigstore.json" \
+              "$asset"
+          done < <(find dist -maxdepth 1 -type f -print0 | sort -z)
+
+      - name: Publish SBOM, provenance, checksums, and signatures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            release-sbom.cdx.json \
+            release-assets.sha256 \
+            release-provenance.bundle.json \
+            dist/*.sigstore.json \
             --clobber

@@ -393,6 +393,30 @@ original, not just arguing that it should. The full v1 feature checklist — wha
 deferred, and what's deliberately not planned — lives at
 [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md).
 
+The repository also validates high-risk boundaries and delivery artifacts automatically:
+
+- `proptest` covers configuration, template catalogs, bridge payload mappings, and template
+  imports; standalone `cargo-fuzz` targets cover the same parsers with arbitrary byte streams.
+- Pull requests compare the generated `openapi.json` with the base branch and reject removed
+  operations, response shapes, enum values, or newly required request fields.
+- Databases created before the current migration set are upgraded in a compatibility test that
+  verifies representative settings survive the forward migration.
+- CodeQL, Semgrep, Gitleaks, actionlint, and zizmor run in GitHub Actions. Release assets carry
+  keyless Sigstore signatures, a CycloneDX SBOM, and GitHub artifact provenance attestations.
+
+Run the local parser and compatibility checks with:
+
+```sh
+cargo test --workspace
+python3 scripts/check_openapi_breaking_test.py
+```
+
+Fuzzing requires [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz); for example:
+
+```sh
+cargo fuzz run config
+```
+
 ## Roadmap
 
 - OPC UA and Modbus `Driver` implementations, alongside OPC DA.

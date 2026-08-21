@@ -15,27 +15,83 @@ permissions:
   contents: read
 
 jobs:
-  coverage:
+  changes:
+    name: Detect coverage changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.coverage == 'true' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - name: Detect changed paths
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        with:
+          filters: |
+            coverage:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/**'
+              - 'crates/**/*.rs'
+              - 'crates/**/build.rs'
+              - 'crates/**/Cargo.toml'
+              - 'crates/**/proto/**'
+
+  coverage_run:
+    name: Generate coverage
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb
         with:
           components: llvm-tools-preview
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: cargo-llvm-cov,protoc
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Generate coverage
         run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
+
+  coverage:
+    name: Required coverage status
+    if: always()
+    needs: [changes, coverage_run]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail if change detection failed
+        if: needs.changes.result != 'success'
+        run: |
+          echo "Change detection did not complete successfully."
+          exit 1
+
+      - name: Report skipped coverage
+        if: needs.changes.outputs.run != 'true'
+        run: echo "No coverage-affecting files changed; coverage generation skipped."
+
+      - name: Verify coverage result
+        if: needs.changes.outputs.run == 'true' && needs.coverage_run.result != 'success'
+        run: |
+          echo "Coverage ended with: ${{ needs.coverage_run.result }}"
+          exit 1

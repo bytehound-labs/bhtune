@@ -3,7 +3,7 @@
 //! `opcda-bridge-client`'s `config.rs` (see AGENTS.md's `cli-config` notes) so both projects'
 //! configuration surfaces stay recognizable to the same user.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Default opcda-bridge gateway address bhtune connects to when nothing else specifies one.
@@ -21,7 +21,7 @@ pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 /// bhtune's configuration, loaded from an optional TOML file. Every field is optional; a
 /// value missing from the file (or the file itself missing) falls back to the env var / CLI
 /// flag / built-in default resolution in the `resolve_*` functions below.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BhtuneConfig {
     /// Overrides the default SQLite database path (see [`default_db_path_from`]).
@@ -59,7 +59,7 @@ pub struct BhtuneConfig {
 /// `crate::logging::resolve_log_settings`. Every field is optional and falls back through
 /// the same `CLI flag > env var > config file > default` precedence as the rest of
 /// [`BhtuneConfig`].
-#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LogConfig {
     pub level: Option<String>,
@@ -203,7 +203,7 @@ pub fn default_log_dir_from(
 /// parse as TOML is always a hard error -- a config typo should never be silently ignored.
 pub fn load_config_file(path: &Path, missing_is_error: bool) -> anyhow::Result<BhtuneConfig> {
     match std::fs::read_to_string(path) {
-        Ok(contents) => toml::from_str(&contents)
+        Ok(contents) => parse_config_contents(&contents)
             .map_err(|e| anyhow::anyhow!("failed to parse config file {}: {e}", path.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && !missing_is_error => {
             Ok(BhtuneConfig::default())
@@ -216,6 +216,14 @@ pub fn load_config_file(path: &Path, missing_is_error: bool) -> anyhow::Result<B
             path.display()
         )),
     }
+}
+
+/// Parses the in-memory TOML representation of a config file.
+///
+/// Keeping the parser separate from filesystem discovery gives property tests and fuzz
+/// targets a narrow, side-effect-free boundary to exercise.
+pub fn parse_config_contents(contents: &str) -> anyhow::Result<BhtuneConfig> {
+    toml::from_str(contents).map_err(Into::into)
 }
 
 /// Load the config from an auto-discovered path, falling back to defaults when no path
@@ -362,6 +370,45 @@ pub fn resolve_server(cli_server: Option<String>, config: &BhtuneConfig) -> anyh
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest::proptest! {
+        #[test]
+        fn serialized_configs_round_trip(
+            db in prop::option::of("[A-Za-z0-9_./:-]{0,32}"),
+            bridge_host in prop::option::of("[A-Za-z0-9_.:-]{0,32}"),
+            server in prop::option::of("[A-Za-z0-9_.:-]{0,32}"),
+            templates in prop::option::of("[A-Za-z0-9_./:-]{0,32}"),
+            bind in prop::option::of("[A-Za-z0-9_.:-]{0,32}"),
+            retention_days in prop::option::of(any::<u32>()),
+            level in prop::option::of("[A-Za-z0-9_.:-]{0,16}"),
+            dir in prop::option::of("[A-Za-z0-9_./:-]{0,32}"),
+            format in prop::option::of("[A-Za-z0-9_.:-]{0,16}"),
+            rotation in prop::option::of("[A-Za-z0-9_.:-]{0,16}"),
+        ) {
+            let config = BhtuneConfig {
+                db: db.map(PathBuf::from),
+                bridge_host,
+                server,
+                templates: templates.map(PathBuf::from),
+                bind,
+                retention_days,
+                log: LogConfig {
+                    level,
+                    dir,
+                    format,
+                    rotation,
+                },
+            };
+            let encoded = toml::to_string(&config).unwrap();
+            prop_assert_eq!(parse_config_contents(&encoded).unwrap(), config);
+        }
+
+        #[test]
+        fn arbitrary_config_text_never_panics(input in any::<String>()) {
+            let _ = parse_config_contents(&input);
+        }
+    }
     use std::io::Write;
 
     #[test]

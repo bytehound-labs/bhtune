@@ -77,6 +77,7 @@ name = "gen_docs"
 required-features = ["schemars"]
 
 [dev-dependencies]
+proptest.workspace = true
 tempfile = "3"
 # Test-only: `template.rs`'s "delete a template still referenced by a loop" test inserts a
 # raw `loops` row directly via SQL to trigger that FK restriction -- there is no

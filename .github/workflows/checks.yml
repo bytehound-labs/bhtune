@@ -15,18 +15,87 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  changes:
+    name: Detect validation changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.rust == 'true' }}
+      frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
+      website: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.website == 'true' }}
+      package: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.package == 'true' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Detect changed paths
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        with:
+          filters: |
+            rust:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'LICENSE'
+              - 'deny.toml'
+              - 'release-plz.toml'
+              - 'openapi.json'
+              - '.cargo/**'
+              - '.github/workflows/**'
+              - 'scripts/**'
+              - 'crates/**/*.rs'
+              - 'crates/**/build.rs'
+              - 'crates/**/Cargo.toml'
+              - 'crates/**/proto/**'
+            frontend:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'openapi.json'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/**'
+              - 'frontend/**'
+            website:
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/**'
+              - 'docs/**'
+              - 'website/**'
+            package:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'LICENSE'
+              - 'README.md'
+              - '.github/workflows/**'
+              - 'crates/**/Cargo.toml'
+              - 'crates/**/README.md'
+              - 'crates/**/LICENSE'
+              - 'crates/**/CHANGELOG.md'
+              - 'packaging/**'
+              - 'scripts/**'
+
+  check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: cargo-deny,cargo-machete,protoc
 
@@ -47,37 +116,50 @@ jobs:
 
       - name: Regenerate OpenAPI spec and check for drift
         run: |
-          cargo run -p bhtune-server --example gen_openapi
+          cargo run --locked -p bhtune-server --example gen_openapi
           git diff --exit-code openapi.json
+
+      - name: Check OpenAPI compatibility comparator
+        run: python3 scripts/check_openapi_breaking_test.py
+
+      - name: Fetch base OpenAPI spec
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          git show "origin/$BASE_REF:openapi.json" > /tmp/openapi-base.json
+
+      - name: Reject breaking OpenAPI changes
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/check_openapi_breaking.py /tmp/openapi-base.json openapi.json
 
       - name: Regenerate CLI docs and check for drift
         run: |
-          cargo run -p bhtune-cli --example gen_docs --features schemars
+          cargo run --locked -p bhtune-cli --example gen_docs --features schemars
           git diff --exit-code -- docs/reference/ man/ completions/
 
       - name: Build workspace
         run: cargo build --workspace --locked
 
-  # Fmt/clippy/test only -- not the doc/OpenAPI drift checks above (those regenerate and
-  # `git diff`, which is already exercised on Linux and would only add noise from CRLF
-  # checkout settings on Windows) and not a release/packaging build (that's `build-matrix`'s
-  # job, once it exists). This exists because bhtune ships a Windows MSI as its primary
-  # distribution artifact (see AGENTS.md's "Windows installer" plan), so proving the
-  # workspace actually builds and tests clean on Windows -- not just Linux -- is directly
-  # relevant, unlike a typical server-only project.
   windows:
     name: Windows validation
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: cargo-deny,cargo-machete,protoc
 
@@ -90,41 +172,44 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
-  # Verifies every crate is actually publishable (correct manifests, no missing `version`
-  # requirements on path dependencies, etc.) even while `release-plz.toml` has
-  # `publish = false` workspace-wide -- catching a packaging break now is far cheaper than
-  # discovering it for the first time at `release-v1`.
   package:
     name: Package verification
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: protoc
 
       - name: Verify publishable packages
         run: cargo package --workspace --locked
 
-  # Mirrors opcda-bridge's `msrv` job. Re-verify the pinned toolchain version against
-  # `rust-version` in the root `Cargo.toml` whenever a dependency bump might raise the real
-  # floor further (see that field's own comment for how it was determined).
   msrv:
     name: MSRV
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: dtolnay/rust-toolchain@35d8a35b823d6c20db516f5c35eb0a9640942c17
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: protoc
 
@@ -132,11 +217,16 @@ jobs:
         run: cargo check --workspace --all-targets --all-features --locked
 
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/setup@v2
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
         with:
           runtime: node@lts
           cache: true
@@ -158,18 +248,17 @@ jobs:
       - name: Build (typecheck + bundle)
         run: pnpm --filter bhtune-frontend run build
 
-  # `pnpm run check:licenses` (in the frontend job above) already covers the website's
-  # dependency tree too, since `pnpm licenses list` reports on the whole workspace -- no
-  # need to duplicate it here. The build step is the real value: Docusaurus defaults to
-  # `onBrokenLinks: 'throw'`/`onBrokenAnchors: 'throw'` (see website/docusaurus.config.ts),
-  # so it doubles as a drift gate against docs/ content referencing a renamed or deleted
-  # page -- already caught one real broken link during initial scaffolding.
   website:
+    needs: changes
+    if: needs.changes.outputs.website == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/setup@v2
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
         with:
           runtime: node@lts
           cache: true
@@ -185,3 +274,65 @@ jobs:
 
       - name: Build (also a broken-link/anchor drift gate for docs/)
         run: pnpm --filter bhtune-website run build
+
+  status:
+    name: Required validation status
+    if: always()
+    needs: [changes, check, windows, package, msrv, frontend, website]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail if change detection failed
+        if: needs.changes.result != 'success'
+        run: |
+          echo "Change detection did not complete successfully."
+          exit 1
+
+      - name: Report skipped validation
+        if: >-
+          needs.changes.outputs.rust != 'true' &&
+          needs.changes.outputs.frontend != 'true' &&
+          needs.changes.outputs.website != 'true' &&
+          needs.changes.outputs.package != 'true'
+        run: echo "No validation-affecting files changed; heavy validation skipped."
+
+      - name: Verify validation results
+        env:
+          RUST_CHANGED: ${{ needs.changes.outputs.rust }}
+          FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
+          WEBSITE_CHANGED: ${{ needs.changes.outputs.website }}
+          PACKAGE_CHANGED: ${{ needs.changes.outputs.package }}
+          CHECK_RESULT: ${{ needs.check.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          MSRV_RESULT: ${{ needs.msrv.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          WEBSITE_RESULT: ${{ needs.website.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+        run: |
+          failed=0
+
+          if [[ "$RUST_CHANGED" == "true" ]]; then
+            for result in "$CHECK_RESULT" "$WINDOWS_RESULT" "$MSRV_RESULT"; do
+              if [[ "$result" != "success" ]]; then
+                echo "A required Rust validation job ended with: $result"
+                failed=1
+              fi
+            done
+          fi
+
+          if [[ "$FRONTEND_CHANGED" == "true" && "$FRONTEND_RESULT" != "success" ]]; then
+            echo "Frontend validation ended with: $FRONTEND_RESULT"
+            failed=1
+          fi
+
+          if [[ "$WEBSITE_CHANGED" == "true" && "$WEBSITE_RESULT" != "success" ]]; then
+            echo "Website validation ended with: $WEBSITE_RESULT"
+            failed=1
+          fi
+
+          if [[ "$PACKAGE_CHANGED" == "true" && "$PACKAGE_RESULT" != "success" ]]; then
+            echo "Package verification ended with: $PACKAGE_RESULT"
+            failed=1
+          fi
+
+          exit "$failed"

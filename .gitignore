@@ -44,3 +44,7 @@ frontend/blob-report/
 # Python (scripts/convert_golden_trace.py)
 __pycache__/
 *.pyc
+
+# cargo-fuzz output
+fuzz/artifacts/
+fuzz/corpus/

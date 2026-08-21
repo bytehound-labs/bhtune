@@ -186,6 +186,8 @@ mod windows_impl {
 
     /// Registers `bhtune-server` with the SCM (does not start it).
     pub fn install(cli: &Cli) -> anyhow::Result<()> {
+        // The install command deliberately registers the executable the operator invoked.
+        // nosemgrep: rust.lang.security.current-exe.current-exe
         let exe = std::env::current_exe()?;
         let definition = build_service_definition(exe, cli);
         let manager = ServiceManager::local_computer(

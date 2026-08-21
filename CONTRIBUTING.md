@@ -110,6 +110,22 @@ touching `docs/` or `website/` must pass `pnpm --filter bhtune-website run forma
 check across `docs/`, since Docusaurus fails the build rather than shipping a dead link or
 a heading reference that no longer exists.
 
+## Security and compatibility checks
+
+Security workflows run CodeQL, Semgrep, full-history Gitleaks, actionlint, and zizmor. Keep
+workflow permissions least-privilege and do not replace `pull_request` with
+`pull_request_target` to obtain secrets for forked contributions.
+All referenced GitHub Actions are pinned to immutable commit SHAs; Dependabot updates those
+pins through the configured `github-actions` ecosystem.
+
+Parser changes should include both a focused property test and, where the input boundary is
+externally reachable, a `fuzz/` target. OpenAPI changes must regenerate `openapi.json` and
+pass the breaking-change comparison against the pull request base. Database changes must
+include a representative upgrade test when they alter an existing schema.
+
+Release tags publish checksums, a CycloneDX SBOM, Sigstore blob-signature bundles, and GitHub
+artifact provenance. Do not add release artifacts that bypass those steps.
+
 ## Documentation
 
 A documentation update is part of a PR's definition of done whenever it changes user-visible

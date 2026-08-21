@@ -69,3 +69,6 @@ clap = { version = "4", features = ["derive"] }
 # `#[utoipa::path]` derives, already the crate default) plus `chrono` (for `DateTime<Utc>`
 # fields); `bhtune-server`'s own `Cargo.toml` adds `chrono` on top of this workspace entry.
 utoipa = { version = "5", default-features = false, features = ["macros"] }
+# Property tests exercise the same parser boundaries that the standalone libFuzzer targets
+# under `fuzz/` cover continuously in dedicated fuzzing jobs.
+proptest = "1"

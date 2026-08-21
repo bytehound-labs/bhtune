@@ -3895,19 +3895,8 @@ while auditing rather than pre-existing on either side): **`.github/dependabot.y
 `cargo` + `github-actions` (no `npm` — pure Rust workspace, no frontend), with matching
 `dependencies`/`rust`/`ci` labels created using the same colors as `bhtune`'s.
 
-Deliberately **not** done, recommended instead:
-
-- **`dorny/paths-filter` + aggregator-gate restructuring of `bhtune`'s `checks.yml`**,
-  matching `opcda-bridge`'s `changes` → fan-out (`windows`/`linux`/`package`/`msrv`) →
-  aggregator (`check`) shape. Would let branch protection require a single `check` context
-  again and skip irrelevant jobs on doc-only changes, but requires renaming the existing
-  `check` job (name collision with the aggregator pattern) — a larger, riskier restructuring
-  than the rest of this audit, deferred rather than rushed.
-- **GitHub Actions SHA-pinning** for supply-chain hardening — easier now that both repos'
-  `github-actions` Dependabot ecosystem is configured to keep pinned SHAs current, but not
-  applied yet.
-- **CLA-enforcement bot** — separate pre-existing gap, tracked under "Deferred setup" below,
-  not part of this audit's CI/CD scope.
+The **CLA-enforcement bot** remains a separate pre-existing gap, tracked under "Deferred setup"
+below, not part of this audit's CI/CD scope.
 
 **Follow-up, implemented later:** **CODEOWNERS, issue templates, and a PR template** — a
 shared gap on both repos, not something to port one way — were added to both
@@ -3925,6 +3914,43 @@ enabled (confirmed via `gh api repos/.../{repo}` before writing `config.yml`), s
 `blank_issues_enabled: true` with no `contact_links` was the right shape for both — forcing
 every report into a rigid form when there's nowhere else to ask would be worse than a
 free-form issue.
+
+## Workflow and release hardening (`security-workflows`, `ci-efficiency`, `release-attestations`,
+
+`parser-property-tests`, `api-migration-compatibility`, done)
+
+The repository now has a layered hardening gate for both source changes and release outputs:
+
+- **Security analysis.** `.github/workflows/codeql.yml` builds the Rust and JavaScript/
+  TypeScript targets for CodeQL; `semgrep.yml` runs the Rust and TypeScript community rules;
+  `gitleaks.yml` scans the complete git history on every relevant change and weekly; and
+  `security-lint.yml` runs actionlint plus zizmor against every workflow change. These use
+  ordinary `pull_request` events, `persist-credentials: false` wherever checkout does not need
+  to push, least-privilege permissions, immutable action commit pins, and explicit job
+  timeouts. The docs agent has two narrow, documented zizmor exceptions: its authenticated
+  checkout must retain credentials to push its reviewed prose commit, and its isolated,
+  version-pinned Copilot CLI install cannot use a repository lockfile.
+- **Change-aware CI.** `checks.yml`, `coverage.yml`, and `e2e.yml` use
+  `dorny/paths-filter` to skip unrelated work and finish with an always-running aggregator
+  status, so branch protection still receives one deterministic result when a fan-out job is
+  intentionally skipped. Every major workflow job has a `timeout-minutes` bound.
+- **Release integrity.** Docker builds publish provenance and SBOM attestations. Tagged
+  releases download their archives/packages into a dedicated supply-chain job, generate a
+  CycloneDX SBOM and checksums, create GitHub artifact provenance attestations, and sign every
+  release asset with keyless Cosign bundles before uploading the evidence beside the assets.
+- **Parser resilience.** `proptest` tests cover config serialization/parsing, template TOML/
+  JSON, OPC bridge payload mappings, and template imports. The separate `fuzz/` Cargo-fuzz
+  package has targets for each of those byte-stream boundaries without becoming a workspace
+  runtime dependency.
+- **API compatibility.** `scripts/check_openapi_breaking.py` is a dependency-free comparison
+  for removed operations/responses/properties/enum values, newly required request fields, and
+  newly mandatory authentication. Its unit tests run in CI, and pull requests compare the
+  generated revision to the base branch in addition to the existing drift check.
+- **Database compatibility.** Migration `0002_history_query_indexes.sql` is the first
+  forward migration after the initial schema. `pool.rs` constructs a representative database
+  at migration 0001, inserts data, opens it through the normal connection path, and verifies
+  both preservation and application of the new indexes. Future schema changes should extend
+  this pattern rather than editing an already-applied migration.
 
 ## Build / Test / Lint / Coverage
 
@@ -4222,8 +4248,8 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
     Dependabot, branch protection, and secret scanning — see "Cross-project CI/CD audit"
     above for the full writeup. CODEOWNERS, issue templates, and a PR template (a shared gap
     the audit found on both repos) were added to both as a follow-up. Still deferred as
-    recommendations rather than implemented: a `paths-filter`+aggregator-gate restructuring
-    of `checks.yml`, and Actions SHA-pinning.
+    recommendations rather than implemented: a CLA-enforcement bot and a future review of
+    additional workflow hardening beyond the paths-filter/aggregator gate and pinned actions.
 
 ## Other notes
 

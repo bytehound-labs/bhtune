@@ -52,20 +52,23 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
 
       # No credentials are needed for a build-only run (pull_request/workflow_dispatch),
       # and forked PRs wouldn't have them anyway -- see docs-agent-ci's identical reasoning
       # in AGENTS.md for why a secrets-gated step must never run unconditionally.
       - name: Log in to GHCR
         if: github.event_name == 'push'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -77,7 +80,7 @@ jobs:
       # it produces nothing on a pull_request or a tag push.
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -86,15 +89,11 @@ jobs:
             type=edge,branch=main
             type=sha,prefix=sha-
 
-      # `provenance`/`sbom` default to on as of `build-push-action` v4+, attaching a
-      # build-provenance (and SBOM) attestation as an extra manifest in the pushed image
-      # index. That manifest has no real OS/arch, so GHCR's package UI renders it as a
-      # bogus `unknown/unknown` platform entry alongside the real `linux/amd64` image --
-      # cosmetic only (`docker pull`/`run` always resolve the correct platform and ignore
-      # it), a known GHCR UI quirk (github/community discussion #45969), not a broken
-      # build. Disabled here purely to keep the package page's platform list clean.
+      # Keep both attestations enabled. GHCR may render the attached metadata as an
+      # `unknown/unknown` platform entry in its package UI, but the supply-chain evidence
+      # is more valuable than that cosmetic presentation issue.
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           push: ${{ github.event_name == 'push' }}
@@ -102,5 +101,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: false
-          sbom: false
+          provenance: true
+          sbom: true

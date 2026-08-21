@@ -66,21 +66,36 @@ fn looks_like_json_object(contents: &str) -> bool {
     contents.trim_start().starts_with('{')
 }
 
+/// Parses either a single-template JSON document or a multi-template TOML catalog without
+/// touching the database. The shared helper is used by the import command and by the fuzz
+/// target under `fuzz/`, keeping the high-risk format boundary independently testable.
+pub fn parse_import_contents(contents: &str) -> anyhow::Result<Vec<DcsTemplate>> {
+    if looks_like_json_object(contents) {
+        let template: DcsTemplate = serde_json::from_str(contents)?;
+        template.validate()?;
+        Ok(vec![template])
+    } else {
+        Ok(bhtune_core::template::parse_catalog(contents)?)
+    }
+}
+
 async fn import(pool: &SqlitePool, path: &Path) -> anyhow::Result<()> {
     let contents = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("failed to read '{}': {e}", path.display()))?;
 
     if looks_like_json_object(&contents) {
-        let template: DcsTemplate = serde_json::from_str(&contents).map_err(|e| {
-            anyhow::anyhow!(
-                "'{}' is not a valid template JSON file: {e}",
-                path.display()
-            )
-        })?;
+        let template = parse_import_contents(&contents)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "'{}' is not a valid template JSON file: {e}",
+                    path.display()
+                )
+            })?
+            .remove(0);
         return import_one(pool, template).await;
     }
 
-    let templates = bhtune_core::template::parse_catalog(&contents).map_err(|e| {
+    let templates = parse_import_contents(&contents).map_err(|e| {
         anyhow::anyhow!(
             "'{}' is not a valid template TOML catalog: {e}",
             path.display()
@@ -220,6 +235,7 @@ async fn delete(pool: &SqlitePool, name: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     async fn seeded_pool() -> SqlitePool {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
@@ -626,5 +642,32 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn exported_json_templates_parse_as_imports(
+            name in "[A-Za-z][A-Za-z0-9 _-]{0,24}",
+        ) {
+            let mut template = bhtune_core::built_in_templates().remove(0);
+            template.name = name;
+            let encoded = serde_json::to_string(&template).unwrap();
+            prop_assert_eq!(parse_import_contents(&encoded).unwrap(), vec![template]);
+        }
+
+        #[test]
+        fn exported_toml_catalogs_parse_as_imports(
+            name in "[A-Za-z][A-Za-z0-9 _-]{0,24}",
+        ) {
+            let mut template = bhtune_core::built_in_templates().remove(0);
+            template.name = name;
+            let encoded = bhtune_core::template::to_catalog_toml(vec![template.clone()]).unwrap();
+            prop_assert_eq!(parse_import_contents(&encoded).unwrap(), vec![template]);
+        }
+
+        #[test]
+        fn arbitrary_import_text_never_panics(input in any::<String>()) {
+            let _ = parse_import_contents(&input);
+        }
     }
 }

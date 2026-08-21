@@ -1,0 +1,38 @@
+name: Gitleaks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "**"
+      - ".github/workflows/gitleaks.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "**"
+      - ".github/workflows/gitleaks.yml"
+  schedule:
+    - cron: "11 3 * * 1"
+
+concurrency:
+  group: gitleaks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan repository history
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

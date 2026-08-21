@@ -27,8 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   # Cheap, always-runs gate that decides whether the real job should do anything at all.
@@ -36,14 +35,16 @@ jobs:
   # any Copilot CLI install/invocation, even on the (expected, frequent) skip path.
   guard:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       proceed: ${{ steps.decide.outputs.proceed }}
       ref: ${{ steps.decide.outputs.ref }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr_number) }}
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Decide whether to run
         id: decide
@@ -73,6 +74,10 @@ jobs:
     needs: guard
     if: needs.guard.outputs.proceed == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Check for Copilot token
         id: token-check
@@ -91,7 +96,7 @@ jobs:
             echo "has_token=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # zizmor: ignore[artipacked]
         if: steps.token-check.outputs.has_token == 'true'
         with:
           ref: ${{ needs.guard.outputs.ref }}
@@ -99,7 +104,7 @@ jobs:
 
       - name: Install GitHub Copilot CLI
         if: steps.token-check.outputs.has_token == 'true'
-        run: npm install -g @github/copilot
+        run: npm install -g @github/copilot@1.0.80 # zizmor: ignore[adhoc-packages]
 
       - name: Run docs agent
         if: steps.token-check.outputs.has_token == 'true'
@@ -181,12 +186,12 @@ jobs:
         if: steps.token-check.outputs.has_token == 'true' && always()
         env:
           GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
           # GUARDRAIL 3 (AGENTS.md): the agent is told (and --deny-tool enforced) to never
           # edit AGENTS.md, only to describe a proposed change in its final response instead.
           # Posting that response here is what actually surfaces the proposal for human review.
-          pr_number="${{ github.event.pull_request.number || inputs.pr_number }}"
           if [ -s /tmp/docs-agent-output.txt ]; then
             { echo "**Docs agent:**"; echo; cat /tmp/docs-agent-output.txt; } | \
-              gh pr comment "$pr_number" --body-file - || true
+              gh pr comment "$PR_NUMBER" --body-file - || true
           fi

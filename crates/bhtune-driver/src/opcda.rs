@@ -127,7 +127,7 @@ impl Driver for OpcDaDriver {
 /// string other than an exact `"Good"`/`"Uncertain"` match — including that
 /// `"Unknown(...)"` case — is treated as [`Quality::Bad`]: an unrecognized quality is
 /// exactly the situation where guessing "trustworthy" would be the wrong default.
-fn quality_from_raw(raw: &str) -> Quality {
+pub fn quality_from_raw(raw: &str) -> Quality {
     match raw {
         "Good" => Quality::Good,
         "Uncertain" => Quality::Uncertain,
@@ -137,7 +137,7 @@ fn quality_from_raw(raw: &str) -> Quality {
 
 /// Maps one `opcda_bridge::TagValue` (a single tag's raw read result) to this crate's
 /// [`TagValue`].
-fn tag_value_from_raw(raw: opcda_bridge::TagValue) -> TagValue {
+pub fn tag_value_from_raw(raw: opcda_bridge::TagValue) -> TagValue {
     TagValue {
         tag: raw.tag_id,
         value: raw.value,
@@ -155,7 +155,7 @@ fn tag_value_from_raw(raw: opcda_bridge::TagValue) -> TagValue {
 }
 
 /// Maps a [`TagWrite`] to the `opcda_bridge::Value` its `Client::write` expects.
-fn opc_value_from_write(write: TagWrite) -> opcda_bridge::Value {
+pub fn opc_value_from_write(write: TagWrite) -> opcda_bridge::Value {
     match write {
         TagWrite::Float(f) => opcda_bridge::Value::Float(f64::from(f)),
         TagWrite::Raw(s) => opcda_bridge::Value::String(s),
@@ -164,7 +164,7 @@ fn opc_value_from_write(write: TagWrite) -> opcda_bridge::Value {
 
 /// Maps an `opcda_bridge::WriteResult` (the RPC-level outcome of one write) to
 /// [`WriteOutcome`].
-fn write_outcome_from_result(result: opcda_bridge::WriteResult) -> WriteOutcome {
+pub fn write_outcome_from_result(result: opcda_bridge::WriteResult) -> WriteOutcome {
     if result.success {
         WriteOutcome::success()
     } else {
@@ -182,7 +182,7 @@ fn write_outcome_from_result(result: opcda_bridge::WriteResult) -> WriteOutcome 
 /// wrongly assumes a real branch is a leaf will at worst attempt to read/write it and get a
 /// clear error back, whereas wrongly assuming a real leaf is a branch would make a genuine
 /// tag silently invisible to a tag-tree browser.
-fn tag_node_from_browse(node: opcda_bridge::BrowseNode) -> TagNode {
+pub fn tag_node_from_browse(node: opcda_bridge::BrowseNode) -> TagNode {
     TagNode {
         tag: node.tag_id,
         is_branch: node.node_type == "Branch",
@@ -549,5 +549,58 @@ mod smoke_tests {
             list_opcda_servers(&host).await.unwrap(),
             Vec::<String>::new()
         );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn arbitrary_protocol_payloads_preserve_safe_fields(
+            tag in proptest::prelude::any::<String>(),
+            value in proptest::prelude::any::<String>(),
+            quality in proptest::prelude::any::<String>(),
+            timestamp in proptest::prelude::any::<String>(),
+            node_type in proptest::prelude::any::<String>(),
+            write_error in proptest::prelude::prop::option::of(proptest::prelude::any::<String>()),
+            success in proptest::prelude::any::<bool>(),
+        ) {
+            let mapped = tag_value_from_raw(opcda_bridge::TagValue {
+                tag_id: tag.clone(),
+                value: value.clone(),
+                quality,
+                timestamp,
+            });
+            proptest::prop_assert_eq!(mapped.tag, tag.clone());
+            proptest::prop_assert_eq!(mapped.value, value);
+            proptest::prop_assert_eq!(mapped.timestamp, None);
+
+            let node = tag_node_from_browse(opcda_bridge::BrowseNode {
+                tag_id: tag.clone(),
+                node_type: node_type.clone(),
+            });
+            proptest::prop_assert_eq!(node.tag, tag);
+            proptest::prop_assert_eq!(node.is_branch, node_type == "Branch");
+
+            let outcome = write_outcome_from_result(opcda_bridge::WriteResult {
+                tag_id: String::new(),
+                success,
+                error: write_error.clone(),
+            });
+            proptest::prop_assert_eq!(outcome.success, success);
+            if success {
+                proptest::prop_assert_eq!(outcome.error_message, None);
+            } else {
+                proptest::prop_assert_eq!(
+                    outcome.error_message,
+                    Some(write_error.unwrap_or_else(|| "gateway rejected the write".to_string()))
+                );
+            }
+        }
+
+        #[test]
+        fn arbitrary_numeric_writes_keep_the_f32_value(value in -1_000_000.0f32..1_000_000.0f32) {
+            proptest::prop_assert_eq!(
+                opc_value_from_write(TagWrite::Float(value)),
+                opcda_bridge::Value::Float(f64::from(value))
+            );
+        }
     }
 }

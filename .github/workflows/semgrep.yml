@@ -1,0 +1,64 @@
+name: Semgrep
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "frontend/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/semgrep.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "frontend/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/semgrep.yml"
+  schedule:
+    - cron: "47 3 * * 1"
+
+concurrency:
+  group: semgrep-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install Semgrep
+        run: python3 -m pip install --disable-pip-version-check --no-cache-dir "semgrep==1.174.0"
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --jobs 1 \
+            --config p/rust \
+            --config p/typescript \
+            --error \
+            --sarif \
+            --output semgrep.sarif
+
+      - name: Upload Semgrep results
+        if: always()
+        uses: github/codeql-action/upload-sarif@42947a340483f03ba47bb1a039b2c519aab3df85
+        with:
+          sarif_file: semgrep.sarif

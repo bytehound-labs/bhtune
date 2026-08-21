@@ -229,6 +229,7 @@ pub fn built_in_templates() -> Vec<DcsTemplate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn ships_exactly_four_templates() {
@@ -564,5 +565,34 @@ controller_action_direct_value = "0"
     fn template_error_non_toml_variants_have_no_source() {
         use std::error::Error as _;
         assert!(TemplateError::EmptyName.source().is_none());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn valid_templates_round_trip_through_catalog_toml(
+            name in "[A-Za-z][A-Za-z0-9 _-]{0,24}",
+            description in prop::option::of("[A-Za-z0-9 .,;:-]{0,40}"),
+            source in prop::option::of("[A-Za-z0-9 ./,:-]{0,40}"),
+            versions in prop::collection::vec("[A-Za-z0-9 ._-]{1,12}", 0..4),
+        ) {
+            let mut template = built_in_templates().remove(0);
+            template.name = name;
+            template.description = description;
+            template.source = source;
+            template.versions = versions;
+
+            let encoded = to_catalog_toml(vec![template.clone()]).unwrap();
+            prop_assert_eq!(parse_catalog(&encoded).unwrap(), vec![template]);
+        }
+
+        #[test]
+        fn arbitrary_catalog_text_never_panics(input in any::<String>()) {
+            let _ = parse_catalog(&input);
+        }
+
+        #[test]
+        fn arbitrary_json_text_never_panics(input in any::<String>()) {
+            let _ = serde_json::from_str::<DcsTemplate>(&input);
+        }
     }
 }
