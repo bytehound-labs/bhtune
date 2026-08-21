@@ -401,8 +401,9 @@ The repository also validates high-risk boundaries and delivery artifacts automa
   operations, response shapes, enum values, or newly required request fields.
 - Databases created before the current migration set are upgraded in a compatibility test that
   verifies representative settings survive the forward migration.
-- CodeQL, Semgrep, Gitleaks, actionlint, and zizmor run in GitHub Actions. Release assets carry
-  keyless Sigstore signatures, a CycloneDX SBOM, and GitHub artifact provenance attestations.
+- CodeQL, Semgrep, Gitleaks, actionlint, and zizmor run in GitHub Actions with immutable action
+  pins. Release assets carry keyless Sigstore signatures, a CycloneDX SBOM, and GitHub artifact
+  provenance attestations.
 
 Run the local parser and compatibility checks with:
 
