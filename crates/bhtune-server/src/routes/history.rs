@@ -561,11 +561,11 @@ pub(crate) async fn export_run(
 /// `outcome` is still [`TuneOutcome::Running`] (deleting the row out from under an in-flight
 /// task would corrupt whatever it tries to write next; cancel it first). Deliberately checks
 /// the run row's own `outcome` rather than [`crate::active_run::ActiveRun`]'s in-memory
-/// active-run slot: `drive()` persists every terminal outcome (`persist_results` then
+/// active-run registry entry: `drive()` persists every terminal outcome (`persist_results` then
 /// `TuneRunRow::complete`/`fail`/`abort`) *before* returning, and `ActiveRun::release` only
 /// runs strictly after `drive()` returns (see `routes::runs::start_run`'s spawned task), so
 /// there is a real -- if brief -- window where a run's outcome is already durably
-/// `completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the slot is free yet.
+/// `completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the registry entry is free yet.
 /// Checking the DB's own authoritative, durable state instead of the best-effort in-memory
 /// tracker closes that race outright, rather than requiring the caller to retry (as
 /// `frontend/e2e/tune.spec.ts`'s `startTune()` already has to for the equivalent gap on the

@@ -29,6 +29,13 @@ test.describe("app shell", () => {
 
     // The health badge polls a real `/api/health` -- confirms this isn't a static mock.
     await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+
+    const healthResponse = await page.request.get("/api/health");
+    expect(healthResponse.ok()).toBeTruthy();
+    const health = (await healthResponse.json()) as { version: string };
+    await expect(
+      page.getByText(`v${health.version}`, { exact: true }),
+    ).toBeVisible();
   });
 
   test("lists the seeded templates", async ({ page }) => {

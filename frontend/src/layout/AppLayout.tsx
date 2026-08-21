@@ -20,20 +20,27 @@ function HealthBadge() {
   });
 
   return (
-    <div
-      className={`rounded-md border px-3 py-1 font-mono text-xs ${
-        health.isPending
-          ? "border-slate-700 bg-slate-900 text-slate-400"
+    <div className="flex items-center gap-3">
+      <div
+        className={`rounded-md border px-3 py-1 font-mono text-xs ${
+          health.isPending
+            ? "border-slate-700 bg-slate-900 text-slate-400"
+            : health.isError
+              ? "border-red-800 bg-red-950 text-red-300"
+              : "border-emerald-800 bg-emerald-950 text-emerald-300"
+        }`}
+      >
+        {health.isPending
+          ? "Connecting…"
           : health.isError
-            ? "border-red-800 bg-red-950 text-red-300"
-            : "border-emerald-800 bg-emerald-950 text-emerald-300"
-      }`}
-    >
-      {health.isPending
-        ? "Connecting…"
-        : health.isError
-          ? "Connection unavailable"
-          : "Connected"}
+            ? "Connection unavailable"
+            : "Connected"}
+      </div>
+      {health.data && (
+        <span className="font-mono text-xs text-slate-500">
+          v{health.data.version}
+        </span>
+      )}
     </div>
   );
 }

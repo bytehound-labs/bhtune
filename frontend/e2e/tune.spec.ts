@@ -13,18 +13,10 @@ function outcomeBadge(page: Page, outcome: "Completed" | "Aborted") {
 }
 
 /**
- * Clicks "Start tune" and waits for navigation to the new run's detail page, retrying the
- * click if the server still reports the *previous* run as active.
+ * Clicks "Start tune" and waits for navigation to the new run's detail page.
  *
- * `bhtune-server` only frees its single-active-run slot (`ActiveRun::release`) once a run's
- * background task fully returns from `drive()` -- one `await` *after* the same task's
- * `drive()` call already persisted the completed/aborted outcome that the UI's SSE stream
- * reacts to (see `routes::runs::start_run`). That gap is normally sub-millisecond, but it is
- * real: a client that submits a new run the instant it observes the previous one finish can
- * still land in the brief window before `release()` itself has run, and gets rejected with
- * "run N is already active" even though the UI already shows it done. A real user pressing
- * the button a moment later would never notice; this retries rather than papering over it
- * with an arbitrary fixed sleep.
+ * Independent tune tasks may run concurrently. The retry loop remains useful for transient
+ * request failures without encoding any server-wide single-run assumption.
  */
 async function startTune(page: Page) {
   const startButton = page.getByRole("button", { name: "Start tune" });
@@ -64,15 +56,6 @@ async function startTune(page: Page) {
  * whenever `driver=simulator`, so it isn't set explicitly below.
  */
 test.describe("running a tune", () => {
-  // `bhtune-server` allows exactly one active run at a time (`ActiveRun`, `server-start-
-  // tune-api`) -- matching the real constraint that only one physical loop can be under
-  // test through a given server at once. Both tests below start a real run against the
-  // one shared `webServer` instance this whole suite runs against, so they must never
-  // execute concurrently (Playwright's default is parallel workers *across* tests in a
-  // file unless told otherwise) or the second one to start fails with a 409-equivalent
-  // "run N is already active" error instead of the scenario it's meant to test.
-  test.describe.configure({ mode: "serial" });
-
   test("completes a full simulator tune and renders sane, ordered results", async ({
     page,
   }) => {

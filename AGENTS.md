@@ -220,14 +220,10 @@ Vite dev server involved. `smoke.spec.ts` covers the app shell, the health badge
 real driver, the seeded built-in template list, and header nav; `tune.spec.ts` drives
 `/runs/new` with the same millisecond-scale simulator parameters `e2e_simulator.rs` uses and
 asserts the _rendered_ Kp/Ti/Td values are sane and correctly ordered (not just that the
-page didn't crash), plus a second test cancelling an in-flight run. This surfaced a genuine,
-benign transient race in `bhtune-server` itself, worth documenting rather than masking:
-`ActiveRun::release` only runs once a run's background task returns from `drive()` — one
-`await` _after_ the same `drive()` call already persisted the outcome a client observes as
-"completed" over SSE/REST — so a client that submits a new run the instant it sees the
-previous one finish can occasionally still be told a run is already active; `tune.spec.ts`'s
-`startTune` helper retries through this rather than papering over it with a fixed sleep. A
-third TypeScript project (`tsconfig.e2e.json`, referenced from `tsconfig.json` alongside the
+page didn't crash), plus a second test cancelling an in-flight run. The server now tracks
+multiple tune tasks independently, so separate browser requests can start concurrently;
+only post-hoc PID writes/reverts remain mutually exclusive with tunes. A third TypeScript
+project (`tsconfig.e2e.json`, referenced from `tsconfig.json` alongside the
 existing `tsconfig.app.json`/`tsconfig.node.json`) wires `e2e/`/`playwright.config.ts` into
 the existing `tsc -b`/`pnpm run build` gate, so the suite's own source is genuinely
 typechecked in CI, not merely executed. A new `.github/workflows/e2e.yml` job builds a debug
@@ -318,15 +314,14 @@ shape) and `DELETE /api/runs/{id}` (`delete_run`, cascading through `tune_sample
 `<a download>` tags, deliberately not a fetch-then-blob dance, so the browser's native
 download handling does the work) and a Delete run button (`window.confirm` then navigate
 back to the run list) to `RunDetailPage`. `delete_run`'s conflict check deliberately reads
-the run's own DB `outcome` column rather than `ActiveRun`'s in-memory active-run slot: `drive()`
+the run's own DB `outcome` column rather than `ActiveRun`'s in-memory registry: `drive()`
 persists a run's terminal outcome to the database _before_ returning, and `ActiveRun::release`
 only runs strictly after `drive()` returns (see `routes::runs::start_run`), so there is a real
-— if brief — window where a run is already durably `completed` but `ActiveRun` hasn't been
-told the slot is free yet. Checking the DB's own outcome instead of the best-effort in-memory
-tracker closes that race outright rather than requiring a client-side retry (the way
-`tune.spec.ts`'s `startTune()` helper already has to for the equivalent gap on the _start_
-side) — a genuine correctness improvement over `frontend-live-stream`'s already-documented
-"benign transient race", found and fixed by writing a real Playwright E2E test for delete
+— if brief — window where a run is already durably `completed` but its registry entry has not
+been released yet. Checking the DB's own outcome instead of the best-effort in-memory tracker
+closes that race outright, with the registry reserved for live tune/write coordination and the
+database outcome remaining authoritative for deletion — found and fixed by writing a real
+Playwright E2E test for delete
 (`tune.spec.ts`) that first failed against the naive `ActiveRun`-based guard. That same
 Playwright run also surfaced a second, unrelated pre-existing bug in TanStack Query's
 setup: `queryClient` had no `retry` policy at all, so a genuine 404 (like the deleted run's
@@ -2707,15 +2702,16 @@ was read-only plus template CRUD-minus-update.
 `bhtune_cli::commands::tune::prepare()` inline (template lookup, tag derivation, a real
 driver connect attempt, the `tune_runs` insert) and, once that succeeds, `tokio::spawn`s
 `bhtune_cli::commands::tune::drive()` (the polling/tuning phase itself) as a background task
-tracked by a new `crate::active_run::ActiveRun` (an `Arc<Mutex<Option<ActiveRunEntry>>>`
-shared via `AppState`). `POST /api/runs` returns `201 Created` with the same
+tracked by a new `crate::active_run::ActiveRun` (an `Arc<Mutex<BTreeMap<i64, ActiveTask>>>`
+plus an exclusive post-hoc write/revert reservation, shared via `AppState`). `POST /api/runs`
+returns `201 Created` with the same
 `RunDetailResponse` shape `GET /api/runs/{id}` would show for this run at this instant
 (almost always still `outcome: "running"`) as soon as `prepare()` succeeds — it does not wait
 for the tune to finish. `POST /api/runs/{id}/cancel` signals the background task's `CtrlC`
 handle and awaits it reaching a terminal outcome, then returns `204 No Content`; cancelling
 an already-finished or unknown run is not an error (`204`/`404` respectively, matching the
-CLI's own idempotent-cancel precedent). v1 allows only one active run at a time, enforced by
-`ActiveRun` itself, not by any per-loop locking.
+CLI's own idempotent-cancel precedent). Tune tasks may run concurrently; PID write/revert
+operations reserve the registry exclusively so they cannot overlap a tune or another write.
 
 **`StartRunRequest` mirrors `TuneArgs` field-for-field**, with `#[serde(default = "...")]`
 helpers reproducing the CLI's own clap defaults exactly (`sim_gain`/`sim_tau`/
@@ -2729,20 +2725,12 @@ naming the offending field. Fields already covered by `LoopConfig::validate()` i
 `prepare()` itself (`relay_amp`, `cycles_count` after defaulting, `mrft_delay`) are
 deliberately _not_ re-checked here, to avoid two divergent copies of the same rule.
 
-**Two-tier conflict detection, and why both tiers are real.** `start_run` first does an
-optimistic pre-check (`state.active_run.active_run_id().await`) purely to avoid a wasted
-`prepare()` call (a real driver connection attempt, a DB insert) in the common case where a
-run is obviously already active. This is _not_ authoritative: `prepare()` awaits real
-database I/O, which is exactly the kind of gap that lets two near-simultaneous
-`POST /api/runs` requests both pass the pre-check before either reaches the actual
-`state.active_run.start(...)` call — the real, authoritative check. Losing that second,
-deeper race is handled distinctly from losing the shallow one: since `prepare()` already
-succeeded (a `tune_runs` row exists, but no driver I/O beyond the connect attempt has
-happened), the just-inserted row is explicitly marked `failed` via `TuneRunRow::fail(...)`
-rather than left forever showing `outcome: "running"` for a run that will never actually
-progress. The two rejection messages are worded differently on purpose (the shallow one says
-"cancel it first via ..."; the deep one says "no driver I/O was performed") so a caller —
-and this phase's own tests — can tell which check actually fired.
+**Exclusive-operation conflict detection.** `start_run` performs an optimistic pre-check for
+an exclusive PID write/revert reservation to avoid a wasted `prepare()` call (a real driver
+connection attempt and DB insert). The authoritative `ActiveRun::start` check repeats that
+reservation check under the same mutex, so a reservation beginning between the pre-check and
+task registration fails cleanly: the inserted row is marked `failed` with a reason that no
+tune task was started. Independent tune starts do not conflict and are both registered.
 
 **The `Send` fix in `bhtune-cli` this required.** Spawning `drive()` as a `tokio::spawn`
 background task requires its future to be `Send + 'static`. The first compile attempt failed:

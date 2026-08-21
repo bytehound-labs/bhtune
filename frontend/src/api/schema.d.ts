@@ -115,8 +115,8 @@ export interface paths {
      *     instant (almost certainly still `outcome: "running"`) -- poll that endpoint, or use
      *     `POST /api/runs/{id}/cancel`, to follow the run to completion.
      *
-     *     `409 Conflict` if another run is already active: v1 allows only one at a time (see
-     *     `crate::active_run`).
+     *     `409 Conflict` if an exclusive post-hoc PID write/revert is active; independent tune runs
+     *     may execute concurrently.
      */
     post: operations["start_run"];
     delete?: never;
@@ -174,11 +174,11 @@ export interface paths {
      *     `outcome` is still [`TuneOutcome::Running`] (deleting the row out from under an in-flight
      *     task would corrupt whatever it tries to write next; cancel it first). Deliberately checks
      *     the run row's own `outcome` rather than [`crate::active_run::ActiveRun`]'s in-memory
-     *     active-run slot: `drive()` persists every terminal outcome (`persist_results` then
+     *     active-run registry entry: `drive()` persists every terminal outcome (`persist_results` then
      *     `TuneRunRow::complete`/`fail`/`abort`) *before* returning, and `ActiveRun::release` only
      *     runs strictly after `drive()` returns (see `routes::runs::start_run`'s spawned task), so
      *     there is a real -- if brief -- window where a run's outcome is already durably
-     *     `completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the slot is free yet.
+     *     `completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the registry entry is free yet.
      *     Checking the DB's own authoritative, durable state instead of the best-effort in-memory
      *     tracker closes that race outright, rather than requiring the caller to retry (as
      *     `frontend/e2e/tune.spec.ts`'s `startTune()` already has to for the equivalent gap on the
@@ -248,7 +248,7 @@ export interface paths {
     /**
      * Replace the operator notes attached to a run.
      * @description `PUT /api/runs/{id}/notes` deliberately works for both running and terminal runs. Notes
-     *     are metadata, not a plant mutation, so they do not take the active-run slot.
+     *     are metadata, not a plant mutation, so they do not take the active-run registry reservation.
      */
     put: operations["update_notes"];
     post?: never;
@@ -510,6 +510,7 @@ export interface components {
     };
     Health: {
       status: string;
+      version: string;
     };
     /**
      * @description Local projection of [`bhtune_db::models::TuneRunInitialReadings`] -- see this module's
@@ -1101,7 +1102,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description The process is up and answering HTTP. */
+      /** @description The process is up and answering HTTP, with its application version. */
       200: {
         headers: {
           [name: string]: unknown;
@@ -1288,7 +1289,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description Another tune run is already active. */
+      /** @description An exclusive PID write/revert is already active. */
       409: {
         headers: {
           [name: string]: unknown;
@@ -1562,7 +1563,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description Another run or write/revert is already active. */
+      /** @description A tune or another PID write/revert is already active. */
       409: {
         headers: {
           [name: string]: unknown;
@@ -1648,7 +1649,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description Another run or write/revert is already active. */
+      /** @description A tune or another PID write/revert is already active. */
       409: {
         headers: {
           [name: string]: unknown;

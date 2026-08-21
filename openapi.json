@@ -18,7 +18,7 @@
         "operationId": "health",
         "responses": {
           "200": {
-            "description": "The process is up and answering HTTP.",
+            "description": "The process is up and answering HTTP, with its application version.",
             "content": {
               "application/json": {
                 "schema": {
@@ -330,7 +330,7 @@
           "runs"
         ],
         "summary": "Start a new tune run.",
-        "description": "`POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, driver connect,\nand the `tune_runs` insert) inline and returns as soon as that succeeds, having already\n`tokio::spawn`ed the actual polling/tuning phase in the background. `201 Created` carries\nthe same [`RunDetailResponse`] `GET /api/runs/{id}` would show for this run at this\ninstant (almost certainly still `outcome: \"running\"`) -- poll that endpoint, or use\n`POST /api/runs/{id}/cancel`, to follow the run to completion.\n\n`409 Conflict` if another run is already active: v1 allows only one at a time (see\n`crate::active_run`).",
+        "description": "`POST /api/runs` -- runs `prepare()` (template lookup, tag derivation, driver connect,\nand the `tune_runs` insert) inline and returns as soon as that succeeds, having already\n`tokio::spawn`ed the actual polling/tuning phase in the background. `201 Created` carries\nthe same [`RunDetailResponse`] `GET /api/runs/{id}` would show for this run at this\ninstant (almost certainly still `outcome: \"running\"`) -- poll that endpoint, or use\n`POST /api/runs/{id}/cancel`, to follow the run to completion.\n\n`409 Conflict` if an exclusive post-hoc PID write/revert is active; independent tune runs\nmay execute concurrently.",
         "operationId": "start_run",
         "requestBody": {
           "content": {
@@ -364,7 +364,7 @@
             }
           },
           "409": {
-            "description": "Another tune run is already active.",
+            "description": "An exclusive PID write/revert is already active.",
             "content": {
               "application/json": {
                 "schema": {
@@ -453,7 +453,7 @@
           "runs"
         ],
         "summary": "Delete one run and its recorded samples/results/write-back audit rows.",
-        "description": "`DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run's own recorded\n`outcome` is still [`TuneOutcome::Running`] (deleting the row out from under an in-flight\ntask would corrupt whatever it tries to write next; cancel it first). Deliberately checks\nthe run row's own `outcome` rather than [`crate::active_run::ActiveRun`]'s in-memory\nactive-run slot: `drive()` persists every terminal outcome (`persist_results` then\n`TuneRunRow::complete`/`fail`/`abort`) *before* returning, and `ActiveRun::release` only\nruns strictly after `drive()` returns (see `routes::runs::start_run`'s spawned task), so\nthere is a real -- if brief -- window where a run's outcome is already durably\n`completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the slot is free yet.\nChecking the DB's own authoritative, durable state instead of the best-effort in-memory\ntracker closes that race outright, rather than requiring the caller to retry (as\n`frontend/e2e/tune.spec.ts`'s `startTune()` already has to for the equivalent gap on the\n*start* side).",
+        "description": "`DELETE /api/runs/{id}` -- 404 if no run has that id, 409 if the run's own recorded\n`outcome` is still [`TuneOutcome::Running`] (deleting the row out from under an in-flight\ntask would corrupt whatever it tries to write next; cancel it first). Deliberately checks\nthe run row's own `outcome` rather than [`crate::active_run::ActiveRun`]'s in-memory\nactive-run registry entry: `drive()` persists every terminal outcome (`persist_results` then\n`TuneRunRow::complete`/`fail`/`abort`) *before* returning, and `ActiveRun::release` only\nruns strictly after `drive()` returns (see `routes::runs::start_run`'s spawned task), so\nthere is a real -- if brief -- window where a run's outcome is already durably\n`completed`/`failed`/`aborted` but `ActiveRun` hasn't been told the registry entry is free yet.\nChecking the DB's own authoritative, durable state instead of the best-effort in-memory\ntracker closes that race outright, rather than requiring the caller to retry (as\n`frontend/e2e/tune.spec.ts`'s `startTune()` already has to for the equivalent gap on the\n*start* side).",
         "operationId": "delete_run",
         "parameters": [
           {
@@ -586,7 +586,7 @@
           "runs"
         ],
         "summary": "Replace the operator notes attached to a run.",
-        "description": "`PUT /api/runs/{id}/notes` deliberately works for both running and terminal runs. Notes\nare metadata, not a plant mutation, so they do not take the active-run slot.",
+        "description": "`PUT /api/runs/{id}/notes` deliberately works for both running and terminal runs. Notes\nare metadata, not a plant mutation, so they do not take the active-run registry reservation.",
         "operationId": "update_notes",
         "parameters": [
           {
@@ -728,7 +728,7 @@
             }
           },
           "409": {
-            "description": "Another run or write/revert is already active.",
+            "description": "A tune or another PID write/revert is already active.",
             "content": {
               "application/json": {
                 "schema": {
@@ -846,7 +846,7 @@
             }
           },
           "409": {
-            "description": "Another run or write/revert is already active.",
+            "description": "A tune or another PID write/revert is already active.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1266,10 +1266,14 @@
       "Health": {
         "type": "object",
         "required": [
-          "status"
+          "status",
+          "version"
         ],
         "properties": {
           "status": {
+            "type": "string"
+          },
+          "version": {
             "type": "string"
           }
         }

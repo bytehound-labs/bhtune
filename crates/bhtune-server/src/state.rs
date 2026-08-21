@@ -11,8 +11,8 @@ use crate::active_run::ActiveRun;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
-    /// The single tune run (if any) currently executing in a background task -- see
-    /// [`ActiveRun`]'s own doc comment for why v1 allows only one at a time.
+    /// The in-flight tune registry and exclusive post-hoc write/revert reservation -- see
+    /// [`ActiveRun`]'s own doc comment for the concurrency and shutdown behavior.
     pub active_run: ActiveRun,
     /// Resolved once at process startup (`main.rs`'s `config::load_config`) and shared by
     /// every `POST /api/runs` call, exactly mirroring how `bhtune-cli` resolves the same

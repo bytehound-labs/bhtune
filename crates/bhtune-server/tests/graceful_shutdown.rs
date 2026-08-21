@@ -131,7 +131,10 @@ async fn serves_real_http_and_shuts_down_gracefully_on_sigterm() {
         "expected a 200 from /api/health, got: {response}"
     );
     assert!(
-        response.contains(r#"{"status":"ok"}"#),
+        response.contains(&format!(
+            r#"{{"status":"ok","version":"{}"}}"#,
+            env!("CARGO_PKG_VERSION")
+        )),
         "expected the health body in the response, got: {response}"
     );
 

@@ -59,6 +59,8 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    the simulator driver is selected), and automatic PID settings. Submitting POSTs to the same
    `/api/runs` endpoint the CLI's `bhtune-server` mode exposes — there's exactly one API,
    used by both the browser and any script that wants to drive a run over HTTP directly.
+   Multiple tunes can run at the same time. PID writes and restores remain exclusive with
+   active tunes because they modify live controller values directly.
    The **Start tune** and **Cancel** actions remain at the top of the page while you configure
    the tune.
 
@@ -125,8 +127,10 @@ apart), and the raw spec is at `/api/openapi.json`. A minimal health check:
 
 ```sh
 curl http://127.0.0.1:8787/api/health
-# {"status":"ok"}
+# {"status":"ok","version":"<application-version>"}
 ```
+
+The web GUI displays this application version beside its connection status in the header.
 
 Starting a tune over HTTP directly (no browser) needs the same fields the CLI's `tune`/
 `simulate` commands take — see `/api/docs` for the full request schema, including the extra

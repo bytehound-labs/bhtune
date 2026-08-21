@@ -77,8 +77,9 @@ rust-embed = { version = "8", features = [
 # `rt-multi-thread`/`macros` to run as an async binary; `signal` for graceful shutdown on
 # Ctrl+C/SIGTERM, matching `bhtune-cli`'s own Ctrl+C handling story (see `cancel.rs`) rather
 # than leaving a request in flight when the process is asked to stop. `sync` for
-# `tokio::sync::Mutex` in `active_run.rs`, guarding the single-in-flight-run registry across
-# the `.await` points `POST /api/runs`'s handler needs while it holds the lock.
+# `tokio::sync::Mutex` in `active_run.rs`, guarding the in-flight tune registry and exclusive
+# write/revert reservation across the `.await` points `POST /api/runs`'s handler needs while
+# it holds the lock.
 tokio = { version = "1", features = [
   "rt-multi-thread",
   "macros",

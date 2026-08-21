@@ -5,8 +5,8 @@
 //! split unchanged, so a run started over HTTP goes through exactly the same template
 //! lookup, tag derivation, driver connection, quality checks, restore-on-abort, and
 //! write-back rollback as a run started by the CLI -- only the setup/reporting differs (see
-//! those functions' own doc comments for the full rationale). `crate::active_run` enforces
-//! the v1 constraint that only one run may be active at a time.
+//! those functions' own doc comments for the full rationale). `crate::active_run` tracks
+//! every in-flight run so each can be cancelled independently.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -282,8 +282,8 @@ impl StartRunRequest {
 /// instant (almost certainly still `outcome: "running"`) -- poll that endpoint, or use
 /// `POST /api/runs/{id}/cancel`, to follow the run to completion.
 ///
-/// `409 Conflict` if another run is already active: v1 allows only one at a time (see
-/// `crate::active_run`).
+/// `409 Conflict` if an exclusive post-hoc PID write/revert is active; independent tune runs
+/// may execute concurrently.
 #[utoipa::path(
     post,
     path = "/api/runs",
@@ -292,20 +292,19 @@ impl StartRunRequest {
     responses(
         (status = 201, description = "The run was started; detail reflects its state right now.", body = RunDetailResponse),
         (status = 400, description = "The request failed validation, or `prepare()` itself failed (unknown template, invalid flag combination, unreachable driver).", body = ErrorBody),
-        (status = 409, description = "Another tune run is already active.", body = ErrorBody),
+        (status = 409, description = "An exclusive PID write/revert is already active.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn start_run(
     State(state): State<AppState>,
     Json(request): Json<StartRunRequest>,
 ) -> Result<(StatusCode, Json<RunDetailResponse>), ApiError> {
-    // Optimistic pre-check: avoids a wasted `prepare()` call (template lookup, a real
-    // driver connection attempt) in the common case where it's already obvious a run is
-    // active. Not authoritative -- `state.active_run.start()` below is what actually decides,
-    // since a run can start or finish between this check and that call.
-    if let Some(active_id) = state.active_run.active_run_id().await {
+    // Optimistic pre-check: avoids a wasted `prepare()` call while a post-hoc PID write/revert
+    // is holding the exclusive live-loop reservation. It deliberately does not reject an
+    // already-running tune: independent tunes are allowed to execute concurrently.
+    if let Some(active_id) = state.active_run.exclusive_id().await {
         return Err(ApiError::Conflict(format!(
-            "run {active_id} is already active; cancel it first via `POST /api/runs/{active_id}/cancel` or wait for it to finish"
+            "run {active_id} has an exclusive PID write/revert in progress; wait for it to finish before starting another tune"
         )));
     }
 
@@ -332,15 +331,14 @@ pub(crate) async fn start_run(
         active_run_for_task.release(run_id).await;
     };
 
-    // The authoritative check: if this loses the race (another `POST /api/runs` reserved the
-    // slot between the pre-check above and here), nothing has mutated the live loop yet --
-    // `prepare()` only connects and inserts a row -- so the just-inserted row is marked
-    // `failed` rather than left forever showing an outcome it never actually reached.
+    // The authoritative check: if this loses the race (a post-hoc write/revert reserved the
+    // live-loop operation between the pre-check above and here), the just-inserted row is
+    // marked `failed` rather than left forever showing an outcome it never actually reached.
     if let Err(RunAlreadyActive { run_id: existing }) =
         state.active_run.start(run_id, cancel_handle, task).await
     {
         let failure_reason = format!(
-            "run {existing} was already active when this run tried to start; no driver I/O was performed"
+            "run {existing} has an exclusive PID write/revert in progress; no tune task was started"
         );
         TuneRunRow::fail(&state.pool, run_id, Utc::now(), &failure_reason).await?;
         return Err(ApiError::Conflict(failure_reason));
@@ -399,7 +397,7 @@ fn normalized_notes(notes: String) -> Option<String> {
 /// Replace the operator notes attached to a run.
 ///
 /// `PUT /api/runs/{id}/notes` deliberately works for both running and terminal runs. Notes
-/// are metadata, not a plant mutation, so they do not take the active-run slot.
+/// are metadata, not a plant mutation, so they do not take the active-run registry reservation.
 #[utoipa::path(
     put,
     path = "/api/runs/{id}/notes",
@@ -532,16 +530,17 @@ async fn connect_to_runs_recorded_driver(run: &TuneRunRow) -> Result<OpcDaDriver
         })
 }
 
-/// Reserves the [`crate::active_run::ActiveRun`] slot for `run.id`, connects, and calls
-/// [`write_pid_values`] -- releasing the reservation on every exit path (this project's
-/// established "no `Drop`-based cleanup, `Drop` cannot await" rule; see
+/// Reserves the [`crate::active_run::ActiveRun`] exclusive write/revert reservation for
+/// `run.id`, connects, and calls [`write_pid_values`] -- releasing the reservation on every
+/// exit path (this project's established "no `Drop`-based cleanup, `Drop` cannot await" rule;
+/// see
 /// `crate::active_run::ActiveRun::reserve`'s own doc comment) -- then rebuilds and returns
 /// the run's fresh [`RunDetailResponse`] regardless of whether the write/revert itself
 /// succeeded. A [`PidWriteOutcome::Failed`] is not an HTTP error: the request was processed
 /// successfully and its result -- including the failure -- is recorded in the returned
 /// `writes[]` array's `success`/`error_message` fields, exactly how a client already reads a
-/// write-back outcome from `GET /api/runs/{id}`. Only [`ApiError::Conflict`] (another
-/// operation holds the slot), [`ApiError::BadRequest`] (the driver connection itself
+/// write-back outcome from `GET /api/runs/{id}`. Only [`ApiError::Conflict`] (a tune or another
+/// write/revert operation holds the exclusive reservation), [`ApiError::BadRequest`] (the driver connection itself
 /// failed), or [`ApiError::Internal`] (an unexpected database failure inside
 /// [`write_pid_values`]) short-circuit this into an actual error response.
 #[allow(clippy::too_many_arguments)]
@@ -562,7 +561,7 @@ async fn reserve_connect_and_write(
         .await
         .map_err(|RunAlreadyActive { run_id: existing }| {
             ApiError::Conflict(format!(
-                "run {existing} is already active; try again once it finishes"
+                "run {existing} or another PID write/revert is active; try again once it finishes"
             ))
         })?;
 
@@ -620,7 +619,7 @@ async fn reserve_connect_and_write(
         (status = 200, description = "The write was attempted; see `writes[]` in the body for its outcome.", body = RunDetailResponse),
         (status = 400, description = "The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, or no calculated result for the requested response level), or the driver connection itself failed.", body = ErrorBody),
         (status = 404, description = "No run with that id.", body = ErrorBody),
-        (status = 409, description = "Another run or write/revert is already active.", body = ErrorBody),
+        (status = 409, description = "A tune or another PID write/revert is already active.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn write_run(
@@ -701,7 +700,7 @@ pub(crate) async fn write_run(
         (status = 200, description = "The revert was attempted; see `writes[]` in the body for its outcome.", body = RunDetailResponse),
         (status = 400, description = "The run isn't eligible for a post-hoc revert (still running, wrong driver, no PID tags/connection recorded, no recorded write-back to revert, or its pre-write values were never recorded), or the driver connection itself failed.", body = ErrorBody),
         (status = 404, description = "No run with that id.", body = ErrorBody),
-        (status = 409, description = "Another run or write/revert is already active.", body = ErrorBody),
+        (status = 409, description = "A tune or another PID write/revert is already active.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn revert_run(
@@ -925,7 +924,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn starting_a_second_run_while_one_is_active_returns_409() {
+    async fn starting_a_second_run_while_one_is_active_succeeds() {
         let state = crate::test_support::in_memory_state().await;
 
         // Slow enough (1s/tick, many cycles) that it is still active by the time the second
@@ -943,6 +942,7 @@ mod tests {
         .await;
         assert_eq!(first.status(), StatusCode::CREATED);
         let first_id = body_json(first).await["id"].as_i64().unwrap();
+        assert_eq!(state.active_run.active_run_ids().await, vec![first_id]);
 
         let second = post_json(
             crate::build_router(state.clone()),
@@ -950,31 +950,21 @@ mod tests {
             fast_simulator_request_json(),
         )
         .await;
-        assert_eq!(second.status(), StatusCode::CONFLICT);
-        let error = body_json(second).await;
-        assert!(
-            error["error"]
-                .as_str()
-                .unwrap()
-                .contains(&first_id.to_string()),
-            "409 body should name the already-active run id, got: {error:?}"
-        );
+        assert_eq!(second.status(), StatusCode::CREATED);
+        let second_id = body_json(second).await["id"].as_i64().unwrap();
+        assert_ne!(second_id, first_id);
 
         // Clean up rather than leaving the slow run to finish on its own 50-cycle schedule.
         state.active_run.cancel(first_id).await;
         wait_for_outcome(&state, first_id).await;
+        wait_for_outcome(&state, second_id).await;
     }
 
-    /// Exercises the *authoritative* conflict check inside `start_run` itself -- as opposed
-    /// to `starting_a_second_run_while_one_is_active_returns_409`'s optimistic pre-check,
-    /// which always wins the race in practice because the first request's `active_run.start()`
-    /// call has already completed by the time a sequential second HTTP request's handler even
-    /// begins. Calling the handler directly (bypassing the router/tower stack) and racing two
-    /// invocations with `tokio::join!` gives both a real chance to pass the optimistic
-    /// pre-check before either reaches its own authoritative `active_run.start()` -- `prepare()`
-    /// awaits real (if in-memory) database I/O in between, which is what creates the window.
+    /// Calling the handler directly (bypassing the router/tower stack) and racing two
+    /// invocations with `tokio::join!` proves concurrent starts both survive their overlapping
+    /// `prepare()` calls and register independent background tasks.
     #[tokio::test]
-    async fn a_genuine_race_between_two_starts_marks_the_losing_row_failed() {
+    async fn a_genuine_race_between_two_starts_creates_two_runs() {
         let state = crate::test_support::in_memory_state().await;
 
         let mut request_a = fast_simulator_request_json();
@@ -993,24 +983,15 @@ mod tests {
             ),
         );
 
-        // Exactly one of the two must win -- the other must lose, specifically via the
-        // authoritative check (identifiable by its distinct wording, "no driver I/O was
-        // performed", versus the optimistic pre-check's "cancel it first via ..." message).
         let outcomes = [result_a, result_b];
-        let winners = outcomes.iter().filter(|r| r.is_ok()).count();
-        let losers: Vec<_> = outcomes.iter().filter_map(|r| r.as_ref().err()).collect();
-        assert_eq!(winners, 1, "exactly one racer must win: {outcomes:?}");
-        assert_eq!(losers.len(), 1);
-        let ApiError::Conflict(message) = losers[0] else {
-            panic!("loser must be a 409 Conflict, got {:?}", losers[0]);
-        };
         assert!(
-            message.contains("no driver I/O was performed"),
-            "loser should be rejected by the authoritative check specifically, got: {message}"
+            outcomes.iter().all(Result::is_ok),
+            "both concurrent starts should succeed: {outcomes:?}"
         );
 
-        // Clean up whichever run actually won the race.
-        for (_, Json(detail)) in outcomes.iter().flatten() {
+        // Clean up both runs, whether either one finished before the other handler returned.
+        for outcome in outcomes {
+            let (_, Json(detail)) = outcome.unwrap();
             state.active_run.cancel(detail.id).await;
             wait_for_outcome(&state, detail.id).await;
         }
@@ -1388,7 +1369,7 @@ mod tests {
         assert_eq!(write_row["proportional_readback"], 10.0);
         assert!(write_row["rollback_state"].is_null());
 
-        // The slot must be free again for a later request, not left held by this one.
+        // The exclusive reservation must be free again for a later request, not left held by this one.
         assert!(state.active_run.reserve(999).await.is_ok());
         state.active_run.release(999).await;
     }
