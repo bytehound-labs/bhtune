@@ -40,7 +40,7 @@ jobs:
       proceed: ${{ steps.decide.outputs.proceed }}
       ref: ${{ steps.decide.outputs.ref }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr_number) }}
           fetch-depth: 2
@@ -91,7 +91,7 @@ jobs:
             echo "has_token=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         if: steps.token-check.outputs.has_token == 'true'
         with:
           ref: ${{ needs.guard.outputs.ref }}

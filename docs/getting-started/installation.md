@@ -50,9 +50,10 @@ Skip to [Prerequisites](#prerequisites) below to build from source instead.
   on hosts where its `msstore` source prompts for a one-time terms-of-service acceptance).
   On Linux, install your distro's `protobuf-compiler` package; on macOS,
   `brew install protobuf`.
-- [`pnpm`](https://pnpm.io/) if you want to build or develop the web GUI's frontend. The CLI
-  and server both build and run without it — the frontend is only needed to serve the browser
-  UI from `bhtune-server`.
+- [`pnpm`](https://pnpm.io/) 11.22.0 if you want to build or develop the web GUI's frontend.
+  The repository's `package.json` declares this version for Corepack. The CLI and server both
+  build and run without it — the frontend is only needed to serve the browser UI from
+  `bhtune-server`.
 
 No Windows, no Docker, and no proprietary SDKs are required beyond the above — every
 dependency, `protoc` included, is open-source (machine-enforced in CI via `cargo deny`).

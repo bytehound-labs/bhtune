@@ -190,6 +190,7 @@ frontend is built, `bhtune-server` serves the web UI itself directly at `/` (emb
 binary via `rust-embed` — see [Architecture](#architecture)):
 
 ```sh
+corepack enable                  # or install the pnpm version declared in package.json
 pnpm install                     # from the repo root — this is a pnpm workspace
 pnpm --filter bhtune-frontend run build
 cargo run --bin bhtune-server    # now also serves the built UI at http://127.0.0.1:8787/

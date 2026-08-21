@@ -18,6 +18,10 @@ cd frontend
 pnpm dev        # Vite dev server on http://localhost:5173, hot-reloading
 ```
 
+The workspace uses the latest TypeScript 6 release supported by the OpenAPI generator. Keep
+the `typescript` pins in `frontend/package.json` and `website/package.json` on the same
+compatible major until `openapi-typescript` supports TypeScript 7's compiler API.
+
 `vite.config.ts` proxies `/api/*` requests to `http://127.0.0.1:8787`, so run
 `cargo run -p bhtune-server` alongside `pnpm dev` to exercise the real HTTP API while
 developing. In production, `bhtune-server` embeds the built SPA (`rust-embed`, see

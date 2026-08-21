@@ -50,6 +50,27 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   equivalent allow-list for npm dependencies. If either fails on a new dependency, look for an
   open-source alternative rather than widening the allow-list.
 
+## Dependency updates
+
+Dependabot checks the Cargo workspace, pnpm workspace, and GitHub Actions weekly, grouping each
+ecosystem into one update PR. Routine patch and minor updates should use those PRs and update
+the relevant manifest and lockfile together; use the latest compatible version rather than
+blindly accepting a major release that breaks the current toolchain or code-generation stack.
+
+Major updates should be handled as focused PRs so compatibility work is easy to review. Cargo
+updates must preserve the declared `rust-version` unless the project intentionally raises its
+MSRV, and pnpm updates must keep the frontend and documentation-site toolchains compatible
+(notably TypeScript and `openapi-typescript`). Record any necessary compatibility pin in the
+nearest contributor-facing documentation and revisit it when the blocking dependency supports
+the newer major.
+
+Before merging an update, run the full ecosystem gates: Rust formatting, Clippy, workspace
+tests, the declared MSRV check, `cargo deny check`, and `cargo machete`; frontend and website
+format/lint/typecheck/build checks; OpenAPI and generated-reference drift checks; the Playwright
+suite; and npm license validation. A periodic intentional sweep of all direct dependencies is
+appropriate for a release or maintenance cycle, but it should still follow these compatibility
+and validation rules rather than treating "latest" as an unconditional upgrade policy.
+
 ## Testing
 
 - Unit-test domain logic with `cargo test --workspace`.
