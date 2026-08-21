@@ -7,7 +7,11 @@ updates:
     schedule:
       interval: weekly
     groups:
-      cargo-dependencies:
+      # Keep routine updates low-noise; major upgrades stay as focused PRs.
+      cargo-routine-updates:
+        update-types:
+          - "minor"
+          - "patch"
         patterns:
           - "*"
     labels:
@@ -21,7 +25,11 @@ updates:
     schedule:
       interval: weekly
     groups:
-      npm-dependencies:
+      # Keep routine updates low-noise; major upgrades stay as focused PRs.
+      npm-routine-updates:
+        update-types:
+          - "minor"
+          - "patch"
         patterns:
           - "*"
     labels:
@@ -33,7 +41,11 @@ updates:
     schedule:
       interval: weekly
     groups:
-      github-actions:
+      # Keep routine updates low-noise; major upgrades stay as focused PRs.
+      github-actions-routine-updates:
+        update-types:
+          - "minor"
+          - "patch"
         patterns:
           - "*"
     labels:

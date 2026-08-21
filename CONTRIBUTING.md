@@ -52,10 +52,11 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 
 ## Dependency updates
 
-Dependabot checks the Cargo workspace, pnpm workspace, and GitHub Actions weekly, grouping each
-ecosystem into one update PR. Routine patch and minor updates should use those PRs and update
-the relevant manifest and lockfile together; use the latest compatible version rather than
-blindly accepting a major release that breaks the current toolchain or code-generation stack.
+Dependabot checks the Cargo workspace, pnpm workspace, and GitHub Actions weekly, grouping routine
+patch and minor updates within each ecosystem. Major updates are intentionally left as focused,
+individual PRs. Routine updates should use the grouped PRs and update the relevant manifest and
+lockfile together; use the latest compatible version rather than blindly accepting a major release
+that breaks the current toolchain or code-generation stack.
 
 Major updates should be handled as focused PRs so compatibility work is easy to review. Cargo
 updates must preserve the declared `rust-version` unless the project intentionally raises its
