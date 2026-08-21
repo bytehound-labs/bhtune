@@ -1,6 +1,6 @@
 /**
  * Small shared Tailwind building blocks so the status-coloring convention established in
- * the `frontend-shell` health badge (slate = pending/neutral, red = error, emerald =
+ * the `frontend-shell` health indicator (slate = pending/neutral, red = error, emerald =
  * success) stays consistent across every screen rather than being re-invented per file.
  */
 import { useEffect, type ReactNode } from "react";

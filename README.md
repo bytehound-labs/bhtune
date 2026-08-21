@@ -201,6 +201,10 @@ pnpm --filter bhtune-frontend run build
 cargo run --bin bhtune-server    # now also serves the built UI at http://127.0.0.1:8787/
 ```
 
+The web GUI header shows a colored status dot based on that liveness endpoint. Green means the
+BHTune HTTP service is reachable; it does not verify OPC DA connectivity. Hover the dot for the
+full status detail.
+
 During frontend development, running the Vite dev server alongside `bhtune-server` instead
 gives hot-reload:
 

@@ -89,7 +89,7 @@ exactly like the Rust-side spec itself). A new `scripts/check-frontend-licenses.
 mirrors `cargo-deny`'s license allow-list for the npm dependency tree, so "no proprietary
 dependencies" stays machine-enforced on both sides of the stack — see "Key architectural
 decisions" below for both. `frontend-screens` is under way: a `react-router` (declarative
-mode) routing shell with an `AppLayout` (nav + the relocated health badge), a Templates
+mode) routing shell with an `AppLayout` (nav + the relocated health indicator), a Templates
 screen (list with delete, read-only detail, a create form covering all 27 `DcsTemplate`
 fields — no edit, since there's no update endpoint), and a History screen (filterable/
 paginated run list, full run detail with config/initial-readings/results/write-back-audit
@@ -216,7 +216,7 @@ Playwright suite (`frontend/e2e/`) drives a full tune through the real, built Re
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
 off disk rather than needing a re-embed step — see `server-embed-spa`'s `rust-embed`
 feature gating) running the in-process simulator driver, with no mocked HTTP layer and no
-Vite dev server involved. `smoke.spec.ts` covers the app shell, the health badge reaching a
+Vite dev server involved. `smoke.spec.ts` covers the app shell, the health indicator reaching a
 real driver, the seeded built-in template list, and header nav; `tune.spec.ts` drives
 `/runs/new` with the same millisecond-scale simulator parameters `e2e_simulator.rs` uses and
 asserts the _rendered_ Kp/Ti/Td values are sane and correctly ordered (not just that the
@@ -902,7 +902,7 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
   (List/Detail only).** `frontend/src/App.tsx` is now a `react-router` (v8, declarative mode
   — `<BrowserRouter>`/`<Routes>`/`<Route>`/`<Outlet>`, no data-mode loaders, since TanStack
   Query already owns data fetching) route table with `frontend/src/layout/AppLayout.tsx` as
-  the single layout route (header, nav, the health badge relocated from the old placeholder
+  the single layout route (header, nav, the health indicator relocated from the old placeholder
   `App.tsx`) and a `/` → `/templates` redirect. `frontend/src/components/ui.tsx` is the one
   shared Tailwind vocabulary every screen builds from (`PageHeading`/`Button`/`Card`/`Badge`/
   `ErrorBanner`/`EmptyState`/`LoadingState` plus `Section`/`Field` for read-only displays and
@@ -4074,7 +4074,7 @@ delete`, and validating a single-JSON-template import too), and `template-docs` 
    `openapi-fetch` client generated from that same spec, with its own CI-enforced
    regenerate-and-diff gate and a new npm license-allowlist gate mirroring `cargo-deny` — see
    "Key architectural decisions" above for all of this. `frontend-screens` is now fully
-   done: a `react-router` routing shell (`AppLayout` nav + health badge), the Templates
+   done: a `react-router` routing shell (`AppLayout` nav + health indicator), the Templates
    screens (List/Detail/Create/Edit), and the History screens (List/Detail) are done and
    verified against a real running server. `server-start-tune-api` is now done:
    `POST /api/runs`/`POST /api/runs/{id}/cancel` start and cancel a real tune over HTTP,
@@ -4161,7 +4161,7 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
    served by a real `bhtune-server` binary (debug profile -- serves `frontend/dist/` live off
    disk, no re-embed step needed between runs) over the in-process simulator driver --
-   `smoke.spec.ts` (app shell, health badge, seeded template list, header nav) and
+   `smoke.spec.ts` (app shell, health indicator, seeded template list, header nav) and
    `tune.spec.ts` (a full tune through `/runs/new` with `e2e_simulator.rs`'s own
    millisecond-scale simulator parameters, asserting sane/ordered rendered Kp/Ti/Td values,
    plus cancelling an in-flight run). `.github/workflows/e2e.yml` builds a debug

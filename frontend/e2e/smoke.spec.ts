@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 /**
  * Basic navigation/rendering smoke coverage: the app shell loads on the Tune screen, the
- * health badge reaches a real driver, and the four built-in DCS/PLC templates that
+ * health indicator reaches the server, and the four built-in DCS/PLC templates that
  * `bhtune-db`'s `seed_builtin_templates` seeds into every fresh database (see
  * `db-seed-templates`) render in the Templates list. Deliberately no interaction with
  * tune/write-back flows here -- that's `tune.spec.ts`'s job.
@@ -27,8 +27,15 @@ test.describe("app shell", () => {
       page.getByRole("button", { name: "Reset to defaults" }),
     ).toBeVisible();
 
-    // The health badge polls a real `/api/health` -- confirms this isn't a static mock.
-    await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+    // The health indicator polls a real `/api/health` -- confirms this isn't a static mock.
+    const healthIndicator = page.getByRole("img", {
+      name: "Connected to BHTune server",
+    });
+    await expect(healthIndicator).toBeVisible();
+    await expect(healthIndicator).toHaveAttribute(
+      "title",
+      "Connected — the BHTune HTTP service is reachable. This does not test OPC DA connectivity.",
+    );
 
     const healthResponse = await page.request.get("/api/health");
     expect(healthResponse.ok()).toBeTruthy();

@@ -29,6 +29,10 @@ developing. In production, `bhtune-server` embeds the built SPA (`rust-embed`, s
 `pnpm run build`, then `cargo run -p bhtune-server` serves both the API and the UI from one
 process with no proxy involved.
 
+The header's colored status dot polls `GET /api/health` every five seconds. Green means the
+BHTune HTTP service is reachable; it does not verify OPC DA or another process-driver connection.
+Hover the dot for the full status detail.
+
 ## Regenerating the API client
 
 Whenever `openapi.json` changes (i.e. whenever `bhtune-server`'s routes or DTOs change):
