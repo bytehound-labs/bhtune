@@ -81,7 +81,7 @@ by hand. An incomplete restore exits with code `6`, distinct from a normal abort
 
 ## PID write-back
 
-Requesting `--write-pid <level>` (or the Write-back section of the New Run form) is the only
+Requesting `--write-pid <level>` (or the Automatic PID settings section of the New tune form) is the only
 part of a tune that writes tuning constants rather than just testing the loop, and it's the only
 part that requires `--yes` — an explicit, deliberate confirmation that no human needs to
 approve it interactively. BHTune:

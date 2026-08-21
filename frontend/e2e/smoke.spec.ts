@@ -23,9 +23,12 @@ test.describe("app shell", () => {
     await expect(page.getByRole("link", { name: "Tune" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Templates" })).toBeVisible();
     await expect(page.getByRole("link", { name: "History" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Reset to defaults" }),
+    ).toBeVisible();
 
     // The health badge polls a real `/api/health` -- confirms this isn't a static mock.
-    await expect(page.getByText(/Server: ok/)).toBeVisible();
+    await expect(page.getByText("Connected", { exact: true })).toBeVisible();
   });
 
   test("lists the seeded templates", async ({ page }) => {
@@ -41,7 +44,7 @@ test.describe("app shell", () => {
     }
   });
 
-  test("navigates between Tune, Templates, and History via the header nav", async ({
+  test("navigates between Tune, History, and Templates via the header nav", async ({
     page,
   }) => {
     await page.goto("/templates");
@@ -53,7 +56,7 @@ test.describe("app shell", () => {
     await page.getByRole("link", { name: "Templates" }).click();
     await expect(page).toHaveURL(/\/templates$/);
 
-    await page.getByRole("link", { name: "Tune" }).click();
+    await page.getByRole("link", { name: "Tune", exact: true }).click();
     await expect(page).toHaveURL(/\/runs\/new$/);
   });
 });

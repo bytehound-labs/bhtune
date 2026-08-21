@@ -43,7 +43,7 @@ unchanged.
    [Safety](safety.md#restoration) for exactly what "restored" guarantees.
 
 Nothing here writes a PID constant. That only happens if you explicitly ask for it
-(`--write-pid <level>` on the CLI, or the Write-back section of the New Run form) — see
+(`--write-pid <level>` on the CLI, or the Automatic PID settings section of the New tune form) — see
 [PID write-back](safety.md#pid-write-back).
 
 ## From oscillation to PID constants

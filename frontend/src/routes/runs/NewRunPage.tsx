@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { useLastRunRequest, useStartRun } from "../../api/runs";
 import type { StartRunRequest } from "../../api/runs";
 import { useTemplates } from "../../api/templates";
+import { userFacingErrorMessage } from "../../api/errors";
 import type { components } from "../../api/schema";
 import {
   CONTROLLER_TYPE_LABELS,
@@ -21,6 +22,7 @@ import {
   NumberField,
   PageHeading,
   SelectField,
+  TextAreaField,
   TextField,
 } from "../../components/ui";
 
@@ -59,7 +61,7 @@ type NumOrBlank = number | "";
 type FormState = {
   driver: TuneDriver;
   template: string;
-  name: string;
+  notes: string;
   tagname: string;
   server: string;
   bridgeHost: string;
@@ -101,7 +103,7 @@ type FormState = {
 const initialForm: FormState = {
   driver: "simulator",
   template: "",
-  name: "",
+  notes: "",
   tagname: "Sim.Loop1.PV",
   server: "",
   bridgeHost: "",
@@ -156,16 +158,17 @@ function toNumOrBlank(value: number | null | undefined): NumOrBlank {
  * timeout, every `sim_*` field, `yes`, `allow_uncertain_quality` — to a concrete value before
  * it's stored, so those are simply copied across; the `?? initialForm...` fallback only ever
  * matters for a foreign/pre-`db-run-request-snapshot` row that somehow lacks the field. Every
- * other optional field (cycles, ranges, direction, connection overrides, the run name) is
+ * other optional field (cycles, ranges, direction, connection overrides) is
  * shown *blank* when absent rather than substituting today's hardcoded default — an absent
  * value there specifically means "the engineer relied on a default last time", which is
- * exactly what should be shown again, not silently overwritten.
+ * exactly what should be shown again, not silently overwritten. Notes are copied too, so a
+ * duplicate run carries its context forward until the engineer edits or clears it.
  */
 function formFromRequest(request: StartRunRequest): FormState {
   return {
     driver: request.driver,
     template: request.template,
-    name: request.name ?? "",
+    notes: request.notes ?? "",
     tagname: request.tagname,
     server: request.server ?? "",
     bridgeHost: request.bridge_host ?? "",
@@ -247,7 +250,7 @@ function buildRequest(form: FormState): StartRunRequest | string {
     }
   }
   if (form.writePid && !form.yes) {
-    return "Confirm the write-back checkbox to enable an automatic PID write, or clear the write-back level.";
+    return "Enable Allow automatic PID write to apply PID settings without a prompt, or clear the automatic PID setting.";
   }
 
   return {
@@ -277,7 +280,7 @@ function buildRequest(form: FormState): StartRunRequest | string {
     direction: form.direction || undefined,
     poll_interval_ms: toOptional(form.pollIntervalMs),
     timeout_secs: toOptional(form.timeoutSecs),
-    name: form.name.trim() || undefined,
+    notes: form.notes.trim() || undefined,
     yes: form.yes,
     write_pid: form.writePid || undefined,
     allow_uncertain_quality: form.allowUncertainQuality,
@@ -332,7 +335,7 @@ export function NewRunPage() {
 
   // Default to the first available template once the list loads, so a first-time visitor
   // doesn't have to know a template name exists before they can start a run at all -- and
-  // so "Start from blank" (which clears `form.template` back to "") gets a sensible default
+  // so "Reset to defaults" (which clears `form.template` back to "") gets a sensible default
   // back rather than an empty dropdown.
   //
   // The gating check reads `prev.template` from inside the *functional* `setForm` updater
@@ -360,7 +363,7 @@ export function NewRunPage() {
   /** Resets every field back to the hardcoded defaults, discarding whatever this page was
    * prefilled with. Marks the last-run seed as already applied so a still-in-flight
    * `useLastRunRequest` fetch that resolves afterward can't silently undo this. */
-  function resetToBlank() {
+  function resetToDefaults() {
     seededFromLastRunRef.current = true;
     setPrefillSource(null);
     setForm(initialForm);
@@ -407,8 +410,7 @@ export function NewRunPage() {
     ? CONTROLLER_TYPES
     : CONTROLLER_TYPES.filter((c) => c !== "pid");
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  function submitTune() {
     setValidationError(null);
     const request = buildRequest(form);
     if (typeof request === "string") {
@@ -420,15 +422,30 @@ export function NewRunPage() {
     });
   }
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submitTune();
+  }
+
   return (
     <div>
       <PageHeading
-        title="New run"
-        description="Starts a tune over HTTP — the same MRFT engine and drivers the CLI uses, driven from the browser."
+        title="New tune"
+        description="Configure and start a tune."
         actions={
           <>
             <Button
-              onClick={resetToBlank}
+              variant="primary"
+              disabled={startRun.isPending}
+              onClick={submitTune}
+            >
+              {startRun.isPending ? "Starting…" : "Start tune"}
+            </Button>
+            <Link to="/runs">
+              <Button>Cancel</Button>
+            </Link>
+            <Button
+              onClick={resetToDefaults}
               disabled={prefillSource === null}
               title={
                 prefillSource === null
@@ -436,11 +453,8 @@ export function NewRunPage() {
                   : undefined
               }
             >
-              Start from blank
+              Reset to defaults
             </Button>
-            <Link to="/runs">
-              <Button>Cancel</Button>
-            </Link>
           </>
         }
       />
@@ -448,9 +462,10 @@ export function NewRunPage() {
       {prefillSource !== null && (
         <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
           {prefillSource.kind === "duplicate"
-            ? `Prefilled from run #${prefillSource.runId}'s settings.`
-            : "Prefilled from the most recent run's settings."}{" "}
-          Change anything below, or "Start from blank" to reset to the defaults.
+            ? `Loaded settings from tune #${prefillSource.runId}.`
+            : "Loaded settings from the most recent tune."}{" "}
+          Change anything below, or "Reset to defaults" to return to the
+          built-in defaults.
         </div>
       )}
 
@@ -461,13 +476,21 @@ export function NewRunPage() {
       )}
       {startRun.isError && (
         <div className="mb-4">
-          <ErrorBanner message={startRun.error.message} />
+          <ErrorBanner
+            message={userFacingErrorMessage(
+              startRun.error,
+              "Unable to start the tune.",
+            )}
+          />
         </div>
       )}
       {templates.isError && (
         <div className="mb-4">
           <ErrorBanner
-            message={`Could not load templates: ${templates.error.message}`}
+            message={userFacingErrorMessage(
+              templates.error,
+              "Unable to load templates.",
+            )}
           />
         </div>
       )}
@@ -490,12 +513,13 @@ export function NewRunPage() {
               templates.isPending ? "Loading templates…" : "Choose a template"
             }
           />
-          <TextField
-            label="Run name"
-            value={form.name}
-            onChange={(v) => set("name", v)}
-            placeholder="Defaults to the tag name"
-            hint="A friendly label recorded as this run's loop name."
+          <TextAreaField
+            label="Notes"
+            value={form.notes}
+            onChange={(v) => set("notes", v)}
+            full
+            placeholder="Optional context, observations, or follow-up actions"
+            hint="Notes can be edited or cleared from the tune history."
           />
           <div>
             <TextField
@@ -635,7 +659,7 @@ export function NewRunPage() {
             hint="Hard cap on this run's total duration."
           />
           <NumberField
-            label="Op timeout (s)"
+            label="Communication timeout (s)"
             value={form.opTimeoutSecs}
             onChange={(v) => set("opTimeoutSecs", v)}
             min={1}
@@ -789,14 +813,14 @@ export function NewRunPage() {
           </FormSection>
         )}
 
-        <FormSection title="Write-back">
+        <FormSection title="Automatic PID settings">
           <SelectField
-            label="Write PID on completion"
+            label="Apply PID settings on completion"
             value={form.writePid}
             onChange={(v) => set("writePid", v)}
             options={RESPONSE_LEVELS}
             displayLabel={(v) => RESPONSE_LEVEL_LABELS[v]}
-            placeholder="Don't write back automatically"
+            placeholder="Do not apply automatically"
             disabled={form.driver === "simulator"}
             hint={
               form.driver === "simulator"
@@ -805,26 +829,17 @@ export function NewRunPage() {
             }
           />
           <CheckboxField
-            label="Confirm unattended write-back"
+            label="Allow automatic PID write"
             checked={form.yes}
             onChange={(v) => set("yes", v)}
             disabled={form.driver === "simulator"}
             hint={
               form.driver === "simulator"
                 ? "Disabled — the simulator has no PID constant tags to write to."
-                : "Required whenever a write-back level is chosen — writing to a live loop with no prompt must be a deliberate choice."
+                : "Required when automatic PID settings are selected — applying changes to a live loop without a prompt must be deliberate."
             }
           />
         </FormSection>
-
-        <div className="flex gap-2">
-          <Button type="submit" variant="primary" disabled={startRun.isPending}>
-            {startRun.isPending ? "Starting…" : "Start tune"}
-          </Button>
-          <Link to="/runs">
-            <Button>Cancel</Button>
-          </Link>
-        </div>
       </form>
 
       {tagBrowserOpen && (

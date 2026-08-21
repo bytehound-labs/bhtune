@@ -1,14 +1,18 @@
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import {
   runExportUrl,
   useCancelRun,
+  useDeleteRunNotes,
   useDeleteRun,
   useRevertRun,
   useRun,
   useRunStream,
+  useUpdateRunNotes,
   useWriteRun,
   type RunDetailResponse,
 } from "../../api/runs";
+import { userFacingErrorMessage } from "../../api/errors";
 import type { DuplicateRunState } from "../runs/NewRunPage";
 import {
   CONTROLLER_TYPE_LABELS,
@@ -26,6 +30,7 @@ import {
   LoadingState,
   PageHeading,
   Section,
+  TextAreaField,
 } from "../../components/ui";
 import { TrendChart } from "../../components/TrendChart";
 
@@ -58,11 +63,11 @@ function dateTime(value: string | null | undefined): string {
 }
 
 /**
- * Whether this run is eligible for a post-hoc PID write/revert, mirroring
+ * Whether this tune is eligible for post-run PID changes, mirroring
  * `routes::runs::require_writable_run`'s checks client-side so the buttons can be disabled
  * with a reason *before* a request is ever made, rather than only discovering ineligibility
  * from a failed call (`api-post-run-write`, `ui-post-run-write`). Both actions share the same
- * eligibility on the server, so one check covers the Write and Revert buttons alike.
+ * eligibility on the server, so one check covers the Apply and Restore buttons alike.
  */
 function writeEligibility(run: RunDetailResponse): {
   eligible: boolean;
@@ -71,25 +76,25 @@ function writeEligibility(run: RunDetailResponse): {
   if (run.outcome === "running") {
     return {
       eligible: false,
-      reason: "This run is still in progress; wait for it to finish.",
+      reason: "This tune is still in progress; wait for it to finish.",
     };
   }
   if (run.driver !== "opcda") {
     return {
       eligible: false,
-      reason: `${DRIVER_LABELS[run.driver]} runs have no live loop to write PID constants to.`,
+      reason: `${DRIVER_LABELS[run.driver]} tunes have no live loop to change PID settings on.`,
     };
   }
   if (!run.pid_constant_tags) {
     return {
       eligible: false,
-      reason: "This run's template has no PID constant tags configured.",
+      reason: "This tune's template has no PID constant tags configured.",
     };
   }
   if (!run.opc_server || !run.bridge_host) {
     return {
       eligible: false,
-      reason: "This run has no recorded OPC server/bridge host connection.",
+      reason: "This tune has no recorded OPC server/bridge host connection.",
     };
   }
   return { eligible: true };
@@ -101,6 +106,8 @@ export function RunDetailPage() {
   const navigate = useNavigate();
   const run = useRun(runId);
   const cancelRun = useCancelRun();
+  const updateNotes = useUpdateRunNotes();
+  const deleteNotes = useDeleteRunNotes();
   const deleteRun = useDeleteRun();
   const writeRun = useWriteRun();
   const revertRun = useRevertRun();
@@ -111,9 +118,9 @@ export function RunDetailPage() {
     : { eligible: false };
   const writes = run.data?.writes ?? [];
   const lastWrite = writes.length > 0 ? writes[writes.length - 1] : undefined;
-  // Revert always targets "the last WriteKind::Write row" server-side (see
+  // Restore always targets "the last WriteKind::Write row" server-side (see
   // `require_writable_run`), so only offer it while that row is still the newest one — once
-  // superseded by a later write or revert, showing Revert here would be misleading.
+  // superseded by a later write or restore, showing Restore here would be misleading.
   const canRevertLastWrite =
     eligibility.eligible &&
     lastWrite !== undefined &&
@@ -125,11 +132,41 @@ export function RunDetailPage() {
   // plain REST `samples`, which is cheaper than keeping a stream open for a run that's
   // already over.
   const trendSamples = isRunning ? stream.samples : (run.data?.samples ?? []);
+  const [notes, setNotes] = useState("");
+  const [notesDirty, setNotesDirty] = useState(false);
+
+  useEffect(() => {
+    if (run.data?.id === runId) {
+      setNotes(run.data.notes ?? "");
+      setNotesDirty(false);
+    }
+  }, [runId, run.data?.id, run.data?.notes]);
+
+  function saveNotes() {
+    updateNotes.mutate(
+      { id: runId, notes },
+      {
+        onSuccess: (data) => {
+          setNotes(data.notes ?? "");
+          setNotesDirty(false);
+        },
+      },
+    );
+  }
+
+  function clearNotes() {
+    deleteNotes.mutate(runId, {
+      onSuccess: (data) => {
+        setNotes(data.notes ?? "");
+        setNotesDirty(false);
+      },
+    });
+  }
 
   return (
     <div>
       <PageHeading
-        title={`Run #${id ?? ""}`}
+        title={`Tune #${id ?? ""}`}
         actions={
           <>
             {isRunning && (
@@ -138,7 +175,7 @@ export function RunDetailPage() {
                 disabled={cancelRun.isPending}
                 onClick={() => cancelRun.mutate(runId)}
               >
-                {cancelRun.isPending ? "Cancelling…" : "Cancel run"}
+                {cancelRun.isPending ? "Cancelling…" : "Cancel tune"}
               </Button>
             )}
             {!isRunning && hasSamples && (
@@ -158,7 +195,7 @@ export function RunDetailPage() {
                 onClick={() => {
                   if (
                     window.confirm(
-                      `Delete run #${runId}? This removes its samples, results, and write-back audit rows and cannot be undone.`,
+                      `Delete tune #${runId}? This removes its recorded measurements and results and cannot be undone.`,
                     )
                   ) {
                     deleteRun.mutate(runId, {
@@ -167,14 +204,14 @@ export function RunDetailPage() {
                   }
                 }}
               >
-                {deleteRun.isPending ? "Deleting…" : "Delete run"}
+                {deleteRun.isPending ? "Deleting…" : "Delete tune"}
               </Button>
             )}
             <Button
               disabled={!run.data?.original_request}
               title={
                 run.isSuccess && !run.data.original_request
-                  ? "This run's original settings weren't recorded and can't be duplicated."
+                  ? "This tune's original settings weren't recorded and can't be duplicated."
                   : undefined
               }
               onClick={() => {
@@ -189,7 +226,7 @@ export function RunDetailPage() {
               Duplicate this run
             </Button>
             <Link to="/runs">
-              <Button>Back to history</Button>
+              <Button>Back to tune history</Button>
             </Link>
           </>
         }
@@ -201,20 +238,73 @@ export function RunDetailPage() {
       {run.isPending && Number.isFinite(runId) && (
         <LoadingState message="Loading run…" />
       )}
-      {run.isError && <ErrorBanner message={run.error.message} />}
-      {cancelRun.isError && <ErrorBanner message={cancelRun.error.message} />}
-      {deleteRun.isError && <ErrorBanner message={deleteRun.error.message} />}
-      {writeRun.isError && <ErrorBanner message={writeRun.error.message} />}
-      {revertRun.isError && <ErrorBanner message={revertRun.error.message} />}
+      {run.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            run.error,
+            "Unable to load tune details.",
+          )}
+        />
+      )}
+      {cancelRun.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            cancelRun.error,
+            "Unable to cancel the tune.",
+          )}
+        />
+      )}
+      {deleteRun.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            deleteRun.error,
+            "Unable to delete the tune.",
+          )}
+        />
+      )}
+      {updateNotes.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            updateNotes.error,
+            "Unable to save notes.",
+          )}
+        />
+      )}
+      {deleteNotes.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            deleteNotes.error,
+            "Unable to clear notes.",
+          )}
+        />
+      )}
+      {writeRun.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            writeRun.error,
+            "Unable to apply PID settings.",
+          )}
+        />
+      )}
+      {revertRun.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            revertRun.error,
+            "Unable to restore the previous PID settings.",
+          )}
+        />
+      )}
 
       {run.isSuccess && (
         <>
           {isRunning && (
             <div className="mb-6 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm">
               <p className="text-slate-300">
-                Run in progress — streaming live via SSE.
+                Tune in progress — collecting live measurements.
                 {stream.reconnecting && (
-                  <span className="ml-2 text-amber-400">Reconnecting…</span>
+                  <span className="ml-2 text-amber-400">
+                    Connection interrupted — retrying…
+                  </span>
                 )}
               </p>
               {stream.samples.length > 0 ? (
@@ -230,7 +320,9 @@ export function RunDetailPage() {
                   );
                 })()
               ) : (
-                <p className="mt-2 text-slate-500">No samples recorded yet.</p>
+                <p className="mt-2 text-slate-500">
+                  No measurements recorded yet.
+                </p>
               )}
             </div>
           )}
@@ -241,7 +333,7 @@ export function RunDetailPage() {
             </h2>
             {trendSamples.length === 0 ? (
               <p className="text-sm text-slate-500">
-                No samples recorded yet for this run.
+                No measurements recorded yet.
               </p>
             ) : (
               <TrendChart samples={trendSamples} />
@@ -249,7 +341,7 @@ export function RunDetailPage() {
           </section>
 
           <Section title="Summary">
-            <Field label="Loop" value={run.data.loop_name} />
+            <Field label="Tag name" value={run.data.tag_name} />
             <Field
               label="Outcome"
               value={
@@ -297,6 +389,44 @@ export function RunDetailPage() {
               />
             )}
           </Section>
+
+          <section className="mb-6">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+              Notes
+            </h2>
+            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
+              <TextAreaField
+                label="Run notes"
+                value={notes}
+                onChange={(value) => {
+                  setNotes(value);
+                  setNotesDirty(true);
+                }}
+                full
+                placeholder="Optional context, observations, or follow-up actions"
+                hint="Notes can be changed while the tune is active or after it finishes."
+              />
+              <div className="mt-3 flex gap-2">
+                <Button
+                  variant="primary"
+                  disabled={!notesDirty || updateNotes.isPending}
+                  onClick={saveNotes}
+                >
+                  {updateNotes.isPending ? "Saving…" : "Save notes"}
+                </Button>
+                <Button
+                  variant="danger"
+                  disabled={
+                    deleteNotes.isPending ||
+                    (!notesDirty && notes.trim().length === 0)
+                  }
+                  onClick={clearNotes}
+                >
+                  {deleteNotes.isPending ? "Clearing…" : "Clear notes"}
+                </Button>
+              </div>
+            </div>
+          </section>
 
           <Section title="Test configuration">
             <Field
@@ -372,7 +502,7 @@ export function RunDetailPage() {
             </h2>
             {run.data.results.length === 0 ? (
               <p className="text-sm text-slate-500">
-                No results were calculated for this run.
+                No results were calculated for this tune.
               </p>
             ) : (
               <div className="overflow-hidden rounded-lg border border-slate-800">
@@ -424,7 +554,7 @@ export function RunDetailPage() {
                               const tags = run.data.pid_constant_tags;
                               if (!eligibility.eligible || !tags) return;
                               const confirmed = window.confirm(
-                                `Write ${RESPONSE_LEVEL_LABELS[result.response_level]} PID constants to loop "${run.data.loop_name}"?\n\n` +
+                                `Apply ${RESPONSE_LEVEL_LABELS[result.response_level]} PID constants to tag "${run.data.tag_name}"?\n\n` +
                                   `${tags.proportional}: ${num(result.proportional)}\n` +
                                   `${tags.integral}: ${num(result.integral)}\n` +
                                   `${tags.derivative}: ${num(result.derivative)}`,
@@ -441,7 +571,7 @@ export function RunDetailPage() {
                             writeRun.variables?.responseLevel ===
                               result.response_level
                               ? "Writing…"
-                              : "Write"}
+                              : "Apply"}
                           </Button>
                         </td>
                       </tr>
@@ -452,33 +582,31 @@ export function RunDetailPage() {
             )}
             {!eligibility.eligible && eligibility.reason && (
               <p className="mt-2 text-xs text-slate-500">
-                Write/revert disabled: {eligibility.reason}
+                PID changes unavailable: {eligibility.reason}
               </p>
             )}
           </section>
 
           <section className="mb-6">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-              Write-back audit
+              PID change history
             </h2>
             {run.data.writes.length === 0 ? (
               <p className="text-sm text-slate-500">
-                No PID constants were written back for this run.
+                No PID settings were applied during this tune.
               </p>
             ) : (
               <div className="overflow-x-auto rounded-lg border border-slate-800">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                     <tr>
-                      <th className="px-4 py-2 font-medium">Kind</th>
+                      <th className="px-4 py-2 font-medium">Action</th>
                       <th className="px-4 py-2 font-medium">Level</th>
-                      <th className="px-4 py-2 font-medium">Written at</th>
+                      <th className="px-4 py-2 font-medium">Changed at</th>
+                      <th className="px-4 py-2 font-medium">Previous values</th>
+                      <th className="px-4 py-2 font-medium">Applied values</th>
                       <th className="px-4 py-2 font-medium">
-                        Previous (P/I/D)
-                      </th>
-                      <th className="px-4 py-2 font-medium">Written (P/I/D)</th>
-                      <th className="px-4 py-2 font-medium">
-                        Readback (P/I/D)
+                        Read-back values
                       </th>
                       <th className="px-4 py-2 font-medium">Success</th>
                       <th className="px-4 py-2 font-medium">Rollback</th>
@@ -488,7 +616,9 @@ export function RunDetailPage() {
                   <tbody className="divide-y divide-slate-800">
                     {run.data.writes.map((write, i) => (
                       <tr key={i}>
-                        <td className="px-4 py-3">{write.kind}</td>
+                        <td className="px-4 py-3">
+                          {write.kind === "write" ? "Apply" : "Restore"}
+                        </td>
                         <td className="px-4 py-3">
                           {RESPONSE_LEVEL_LABELS[write.response_level]}
                         </td>
@@ -512,7 +642,7 @@ export function RunDetailPage() {
                         </td>
                         <td className="px-4 py-3">
                           <Badge tone={write.success ? "success" : "error"}>
-                            {write.success ? "ok" : "failed"}
+                            {write.success ? "Successful" : "Failed"}
                           </Badge>
                         </td>
                         <td className="px-4 py-3">
@@ -524,7 +654,11 @@ export function RunDetailPage() {
                                   : "error"
                               }
                             >
-                              {write.rollback_state}
+                              {write.rollback_state === "succeeded"
+                                ? "Restored"
+                                : write.rollback_state === "failed"
+                                  ? "Could not restore"
+                                  : "Not needed"}
                             </Badge>
                           ) : (
                             <span className="text-slate-500">—</span>
@@ -541,7 +675,7 @@ export function RunDetailPage() {
                                 const tags = run.data.pid_constant_tags;
                                 if (!eligibility.eligible || !tags) return;
                                 const confirmed = window.confirm(
-                                  `Revert loop "${run.data.loop_name}" to its pre-write PID constants?\n\n` +
+                                  `Restore the previous PID values on tag "${run.data.tag_name}"?\n\n` +
                                     `${tags.proportional}: ${num(write.proportional_previous)}\n` +
                                     `${tags.integral}: ${num(write.integral_previous)}\n` +
                                     `${tags.derivative}: ${num(write.derivative_previous)}`,
@@ -551,7 +685,9 @@ export function RunDetailPage() {
                                 }
                               }}
                             >
-                              {revertRun.isPending ? "Reverting…" : "Revert"}
+                              {revertRun.isPending
+                                ? "Restoring…"
+                                : "Restore previous values"}
                             </Button>
                           ) : (
                             <span className="text-slate-500">—</span>
@@ -570,7 +706,11 @@ export function RunDetailPage() {
                   .map((w, i) => (
                     <ErrorBanner
                       key={i}
-                      message={`${RESPONSE_LEVEL_LABELS[w.response_level]}: ${w.error_message}`}
+                      message={`${RESPONSE_LEVEL_LABELS[w.response_level]}: ${
+                        w.kind === "revert"
+                          ? "The previous PID values could not be restored. Check the OPC connection and try again."
+                          : "The PID settings could not be applied. Check the OPC connection and try again."
+                      }`}
                     />
                   ))}
               </div>
@@ -578,8 +718,8 @@ export function RunDetailPage() {
           </section>
 
           <p className="text-sm text-slate-500">
-            {trendSamples.length} per-tick samples{" "}
-            {isRunning ? "recorded so far" : "were recorded"} for this run.
+            {trendSamples.length} measurements{" "}
+            {isRunning ? "recorded so far" : "were recorded"} for this tune.
           </p>
         </>
       )}

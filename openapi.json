@@ -382,7 +382,7 @@
           "runs"
         ],
         "summary": "The most recently started run's original request, if any.",
-        "description": "`GET /api/runs/last-request` -- returns the newest run's `request_json`\n(`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh\ninstall with no runs yet, or if the newest run's stored request isn't usable (see\n[`parse_stored_request`]) (`ui-prefill-last-run`). The New Run form seeds itself from this\nresponse on load, so connection details, tag names, ranges, and every other field an\nengineer typed follow them across browsers and machines instead of resetting to hardcoded\ndefaults on every visit -- deliberately server-side rather than `localStorage` for that\nreason. \"Newest\" means newest by `started_at`, matching `GET /api/runs`'s own ordering,\nregardless of that run's `outcome` -- a still-`running` run is a perfectly good source of\n\"what was just submitted\" to prefill from.",
+        "description": "`GET /api/runs/last-request` -- returns the newest run's `request_json`\n(`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh\ninstall with no runs yet, or if the newest run's stored request isn't usable (see\n[`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form seeds itself from this\nresponse on load, so connection details, tag names, ranges, and every other field an\nengineer typed follow them across browsers and machines instead of resetting to hardcoded\ndefaults on every visit -- deliberately server-side rather than `localStorage` for that\nreason. \"Newest\" means newest by `started_at`, matching `GET /api/runs`'s own ordering,\nregardless of that run's `outcome` -- a still-`running` run is a perfectly good source of\n\"what was just submitted\" to prefill from.",
         "operationId": "last_request",
         "responses": {
           "200": {
@@ -580,13 +580,109 @@
         }
       }
     },
+    "/api/runs/{id}/notes": {
+      "put": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Replace the operator notes attached to a run.",
+        "description": "`PUT /api/runs/{id}/notes` deliberately works for both running and terminal runs. Notes\nare metadata, not a plant mutation, so they do not take the active-run slot.",
+        "operationId": "update_notes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateNotesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The run with its updated notes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Clear a run's operator notes.",
+        "description": "`DELETE /api/runs/{id}/notes` is idempotent and works while a run is active or after it\nfinishes.",
+        "operationId": "delete_notes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run with its notes cleared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No run with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{id}/revert": {
       "post": {
         "tags": [
           "runs"
         ],
         "summary": "Revert a run's most recent PID write-back, restoring the pre-write values it recorded.",
-        "description": "`POST /api/runs/{id}/revert` -- no request body: like `POST /api/runs/{id}/cancel`, the\nGUI's own confirmation dialog (naming the loop, the tags, and the exact values from\n`writes[]`) is the human confirmation step, not a body field. Finds the run's last\n[`WriteKind::Write`] row regardless of whether it succeeded (matching\n`bhtune history revert`'s own semantics exactly), requiring it to have recorded pre-write\nvalues to revert to. A revert never attempts a nested rollback of itself if it fails\npartway through -- see [`WriteKind`]'s doc comment.\n\nAlways `200` once the request itself is valid and no conflicting operation is active; see\n[`reserve_connect_and_write`]'s doc comment for why a physical revert failure is not a\n`4xx`/`5xx`.",
+        "description": "`POST /api/runs/{id}/revert` -- no request body: like `POST /api/runs/{id}/cancel`, the\nGUI's own confirmation dialog (naming the tag, the tags, and the exact values from\n`writes[]`) is the human confirmation step, not a body field. Finds the run's last\n[`WriteKind::Write`] row regardless of whether it succeeded (matching\n`bhtune history revert`'s own semantics exactly), requiring it to have recorded pre-write\nvalues to revert to. A revert never attempts a nested rollback of itself if it fails\npartway through -- see [`WriteKind`]'s doc comment.\n\nAlways `200` once the request itself is valid and no conflicting operation is active; see\n[`reserve_connect_and_write`]'s doc comment for why a physical revert failure is not a\n`4xx`/`5xx`.",
         "operationId": "revert_run",
         "parameters": [
           {
@@ -694,7 +790,7 @@
           "runs"
         ],
         "summary": "Write one of a run's calculated candidate PID parameter sets back to the live loop.",
-        "description": "`POST /api/runs/{id}/write` -- unlike the CLI's `--write-pid`, which can only fire once\nat the end of the run it belongs to, this can be called at any time after the run has\nfinished, letting an engineer compare Sluggish/Moderate/Aggressive on screen before\npicking one. Pre-reads the loop's current P/I/D, writes and verifies each constant in\nturn, and rolls back to the pre-read values if a later constant is rejected\n(`safety-writeback-rollback`) -- recorded as a new write-back audit row exactly like an\nin-run write.\n\nAlways `200` once the request itself is valid and no conflicting operation is active,\nwhether or not the write actually succeeded -- see [`reserve_connect_and_write`]'s doc\ncomment for why a physical write failure is not a `4xx`/`5xx`.",
+        "description": "`POST /api/runs/{id}/write` -- unlike the CLI's `--write-pid`, which can only fire once\nat the end of the run it belongs to, this can be called at any time after the run has\nfinished, letting an engineer compare Sluggish/Moderate/Aggressive on screen before\npicking one. Pre-reads the selected tag's current P/I/D, writes and verifies each constant in\nturn, and rolls back to the pre-read values if a later constant is rejected\n(`safety-writeback-rollback`) -- recorded as a new write-back audit row exactly like an\nin-run write.\n\nAlways `200` once the request itself is valid and no conflicting operation is active,\nwhether or not the write actually succeeded -- see [`reserve_connect_and_write`]'s doc\ncomment for why a physical write failure is not a `4xx`/`5xx`.",
         "operationId": "write_run",
         "parameters": [
           {
@@ -1520,7 +1616,7 @@
         "type": "object",
         "required": [
           "id",
-          "loop_name",
+          "tag_name",
           "driver",
           "outcome",
           "started_at",
@@ -1572,8 +1668,11 @@
               }
             ]
           },
-          "loop_name": {
-            "type": "string"
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "opc_server": {
             "type": [
@@ -1589,7 +1688,7 @@
               },
               {
                 "$ref": "#/components/schemas/StartRunRequest",
-                "description": "This run's own `request_json` (`db-run-request-snapshot`), parsed back into a\n[`StartRunRequest`], or `None` if it isn't usable -- see [`parse_stored_request`].\nPowers the run detail page's \"Duplicate this run\" action (`ui-prefill-last-run`):\nunlike `GET /api/runs/last-request`, which only ever answers for the single newest\nrun, this lets the New Run form seed itself from *this specific* historical run\nregardless of how many later runs exist."
+                "description": "This run's own `request_json` (`db-run-request-snapshot`), parsed back into a\n[`StartRunRequest`], or `None` if it isn't usable -- see [`parse_stored_request`].\nPowers the run detail page's \"Duplicate this run\" action (`ui-prefill-last-run`):\nunlike `GET /api/runs/last-request`, which only ever answers for the single newest\nrun, this lets the New tune form seed itself from *this specific* historical run\nregardless of how many later runs exist."
               }
             ]
           },
@@ -1638,6 +1737,9 @@
           "started_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "tag_name": {
+            "type": "string"
           },
           "template_name": {
             "type": "string",
@@ -1704,7 +1806,7 @@
         "description": "One run in `GET /api/runs`'s `runs` array -- deliberately a subset matching the CLI's own\n`history list` table columns, not the full detail (that's [`RunDetailResponse`], for\n`GET /api/runs/{id}`).",
         "required": [
           "id",
-          "loop_name",
+          "tag_name",
           "driver",
           "outcome",
           "process_type",
@@ -1718,8 +1820,11 @@
             "type": "integer",
             "format": "int64"
           },
-          "loop_name": {
-            "type": "string"
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "outcome": {
             "$ref": "#/components/schemas/TuneOutcome"
@@ -1730,6 +1835,9 @@
           "started_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "tag_name": {
+            "type": "string"
           }
         }
       },
@@ -1848,13 +1956,6 @@
             "format": "float",
             "description": "Fixed MV range low, overriding a live tag read."
           },
-          "name": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "A friendly name for this run, recorded as `loop_name` (default: the PV tag name)."
-          },
           "noise_protection_secs": {
             "type": [
               "integer",
@@ -1863,6 +1964,13 @@
             "format": "int32",
             "description": "Seconds a switch must persist before it's accepted (default: looked up per\n`process_type`).",
             "minimum": 0
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator notes to attach to this run. Notes can be edited or cleared later through\nthe run-history endpoints."
           },
           "op_timeout_secs": {
             "type": "integer",
@@ -2067,6 +2175,19 @@
           "failed",
           "aborted"
         ]
+      },
+      "UpdateNotesRequest": {
+        "type": "object",
+        "description": "The body of `PUT /api/runs/{id}/notes`.",
+        "required": [
+          "notes"
+        ],
+        "properties": {
+          "notes": {
+            "type": "string",
+            "description": "Replacement note text. Blank or whitespace-only text clears the note."
+          }
+        }
       },
       "WriteKind": {
         "type": "string",

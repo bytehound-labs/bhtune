@@ -446,9 +446,10 @@ pub struct TuneArgs {
     #[arg(long, default_value_t = 3600, value_parser = positive_u64)]
     pub timeout_secs: u64,
 
-    /// A friendly name for this run, recorded as `loop_name` (default: the PV tag name).
+    /// Operator notes to attach to this run. Notes can be edited or cleared from the web GUI
+    /// while the run is active or after it finishes.
     #[arg(long)]
-    pub name: Option<String>,
+    pub notes: Option<String>,
 
     /// Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command
     /// refuses to start otherwise -- since writing to a live loop with no human present must
@@ -545,8 +546,9 @@ pub struct SimulateArgs {
     #[arg(long, default_value_t = 3600, value_parser = positive_u64)]
     pub timeout_secs: u64,
 
+    /// Operator notes to attach to this run. See [`TuneArgs::notes`].
     #[arg(long)]
-    pub name: Option<String>,
+    pub notes: Option<String>,
 
     /// See `TuneArgs::yes`.
     #[arg(long)]
@@ -611,7 +613,7 @@ impl SimulateArgs {
             direction: Some(DirectionArg::Reverse),
             poll_interval_ms: self.poll_interval_ms,
             timeout_secs: self.timeout_secs,
-            name: self.name,
+            notes: self.notes,
             yes: self.yes,
             write_pid: self.write_pid,
             allow_uncertain_quality: self.allow_uncertain_quality,

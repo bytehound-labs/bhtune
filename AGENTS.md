@@ -562,7 +562,7 @@ default are always concrete in a real stored request and are copied straight acr
 the genuinely-optional fields — cycles, ranges, direction, connection overrides, name — are
 shown _blank_ when absent rather than substituting today's hardcoded default, since an
 absence there specifically means "the engineer relied on a default last time"), gains a
-"Start from blank" button (disabled with a `title` when there's nothing to reset) that
+"Reset to defaults" button (disabled with a `title` when there's nothing to reset) that
 restores the hardcoded defaults, and shows an explanatory note ("Prefilled from the most
 recent run's settings" / "Prefilled from run #N's settings") whenever the form isn't showing
 blank defaults. `RunDetailPage.tsx` gained a "Duplicate this run" button (disabled with a
@@ -586,7 +586,7 @@ _application_ time against whatever the prior queued update (the prefill) alread
 rather than against a stale snapshot — a general pattern worth remembering for any pair of
 effects in this app that read-then-conditionally-write the same piece of state from two
 independent async sources. Re-verified 4 consecutive green runs of the full scenario (fresh
-defaults → run a tune → reload shows the prefill note and correct values → "Start from blank"
+defaults → run a tune → reload shows the prefill note and correct values → "Reset to defaults"
 resets and disables itself → "Duplicate this run" from the run detail page prefills from that
 specific run) after the fix, with no flakiness. Completes every Phase 7.5 GUI/API todo except
 `driver-list-servers`/`api-opc-browse`/`ui-opc-browser` (the OPC browser trio) and the
@@ -4114,8 +4114,12 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    `revert` and matching Write/Revert buttons on the run detail page, reusing the CLI's
    existing pre-read/verify/rollback/audit path under a new `ActiveRun::reserve`
    exclusive-reservation lock. `ui-prefill-last-run` seeds the New Run form from the newest
-   run's stored request server-side, plus a "Start from blank" reset and a "Duplicate this
-   run" action. `driver-list-servers` adds OPC DA server discovery as a standalone
+   run's stored request server-side, plus a "Reset to defaults" action and a "Duplicate this
+   run" action. Run identity is consistently presented as the **Tag name**; the former
+   user-editable run-name override was removed so history cannot hide the submitted tag.
+   A mutable nullable `notes` field is stored on each run, included in new-run requests, and
+   exposed through `PUT`/`DELETE /api/runs/{id}/notes` for editing or clearing before, during,
+   or after a tune. `driver-list-servers` adds OPC DA server discovery as a standalone
    `bhtune_driver::opcda::list_opcda_servers` free function and a `bhtune opc servers`
    subcommand. `api-opc-browse` adds three read-only `bhtune-server` routes (`GET /api/opc/
 servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded by a

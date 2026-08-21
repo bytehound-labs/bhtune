@@ -137,7 +137,7 @@ export interface paths {
      * @description `GET /api/runs/last-request` -- returns the newest run's `request_json`
      *     (`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh
      *     install with no runs yet, or if the newest run's stored request isn't usable (see
-     *     [`parse_stored_request`]) (`ui-prefill-last-run`). The New Run form seeds itself from this
+     *     [`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form seeds itself from this
      *     response on load, so connection details, tag names, ranges, and every other field an
      *     engineer typed follow them across browsers and machines instead of resetting to hardcoded
      *     defaults on every visit -- deliberately server-side rather than `localStorage` for that
@@ -237,6 +237,32 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/runs/{id}/notes": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Replace the operator notes attached to a run.
+     * @description `PUT /api/runs/{id}/notes` deliberately works for both running and terminal runs. Notes
+     *     are metadata, not a plant mutation, so they do not take the active-run slot.
+     */
+    put: operations["update_notes"];
+    post?: never;
+    /**
+     * Clear a run's operator notes.
+     * @description `DELETE /api/runs/{id}/notes` is idempotent and works while a run is active or after it
+     *     finishes.
+     */
+    delete: operations["delete_notes"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/runs/{id}/revert": {
     parameters: {
       query?: never;
@@ -249,7 +275,7 @@ export interface paths {
     /**
      * Revert a run's most recent PID write-back, restoring the pre-write values it recorded.
      * @description `POST /api/runs/{id}/revert` -- no request body: like `POST /api/runs/{id}/cancel`, the
-     *     GUI's own confirmation dialog (naming the loop, the tags, and the exact values from
+     *     GUI's own confirmation dialog (naming the tag, the tags, and the exact values from
      *     `writes[]`) is the human confirmation step, not a body field. Finds the run's last
      *     [`WriteKind::Write`] row regardless of whether it succeeded (matching
      *     `bhtune history revert`'s own semantics exactly), requiring it to have recorded pre-write
@@ -307,7 +333,7 @@ export interface paths {
      * @description `POST /api/runs/{id}/write` -- unlike the CLI's `--write-pid`, which can only fire once
      *     at the end of the run it belongs to, this can be called at any time after the run has
      *     finished, letting an engineer compare Sluggish/Moderate/Aggressive on screen before
-     *     picking one. Pre-reads the loop's current P/I/D, writes and verifies each constant in
+     *     picking one. Pre-reads the selected tag's current P/I/D, writes and verifies each constant in
      *     turn, and rolls back to the pre-read values if a later constant is rejected
      *     (`safety-writeback-rollback`) -- recorded as a new write-back audit row exactly like an
      *     in-run write.
@@ -687,7 +713,7 @@ export interface components {
       id: number;
       initial_readings?:
         null | components["schemas"]["InitialReadingsResponse"];
-      loop_name: string;
+      notes?: string | null;
       /**
        * @description The resolved OPC DA server ProgID this run actually used, or `None` for a
        *     simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
@@ -704,6 +730,7 @@ export interface components {
       samples: components["schemas"]["SampleResponse"][];
       /** Format: date-time */
       started_at: string;
+      tag_name: string;
       /**
        * @description Name of the template snapshotted onto this run at start time -- not necessarily what
        *     `template_name` currently resolves to in the catalog (`safety-run-snapshot`).
@@ -753,11 +780,12 @@ export interface components {
       driver: components["schemas"]["TuneDriver"];
       /** Format: int64 */
       id: number;
-      loop_name: string;
+      notes?: string | null;
       outcome: components["schemas"]["TuneOutcome"];
       process_type: components["schemas"]["ProcessType"];
       /** Format: date-time */
       started_at: string;
+      tag_name: string;
     };
     /**
      * @description How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the
@@ -849,14 +877,17 @@ export interface components {
        * @description Fixed MV range low, overriding a live tag read.
        */
       mv_range_low?: number | null;
-      /** @description A friendly name for this run, recorded as `loop_name` (default: the PV tag name). */
-      name?: string | null;
       /**
        * Format: int32
        * @description Seconds a switch must persist before it's accepted (default: looked up per
        *     `process_type`).
        */
       noise_protection_secs?: number | null;
+      /**
+       * @description Operator notes to attach to this run. Notes can be edited or cleared later through
+       *     the run-history endpoints.
+       */
+      notes?: string | null;
       /**
        * Format: int64
        * @description Cap on any single driver read/write during the run, in seconds.
@@ -1005,6 +1036,11 @@ export interface components {
      * @enum {string}
      */
     TuneOutcome: "running" | "completed" | "failed" | "aborted";
+    /** @description The body of `PUT /api/runs/{id}/notes`. */
+    UpdateNotesRequest: {
+      /** @description Replacement note text. Blank or whitespace-only text clears the note. */
+      notes: string;
+    };
     /**
      * @description Distinguishes a normal write-back from `bhtune history revert` undoing an earlier one.
      *     Both share [`TuneWriteRow`]'s exact shape -- pre-read, write-and-verify each constant,
@@ -1409,6 +1445,74 @@ export interface operations {
         };
       };
       /** @description No run with that id, or it has no recorded samples. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  update_notes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Run id */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateNotesRequest"];
+      };
+    };
+    responses: {
+      /** @description The run with its updated notes. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunDetailResponse"];
+        };
+      };
+      /** @description No run with that id. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  delete_notes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Run id */
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The run with its notes cleared. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunDetailResponse"];
+        };
+      };
+      /** @description No run with that id. */
       404: {
         headers: {
           [name: string]: unknown;

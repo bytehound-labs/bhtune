@@ -93,7 +93,7 @@ mod tests {
             direction: Some(DirectionArg::Reverse),
             poll_interval_ms: 800,
             timeout_secs: 3600,
-            name: None,
+            notes: None,
             yes: false,
             write_pid: None,
             allow_uncertain_quality: false,

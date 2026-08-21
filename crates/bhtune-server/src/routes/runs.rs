@@ -10,7 +10,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::post;
+use axum::routing::{post, put};
 use axum::{Json, Router};
 use bhtune_cli::args::{DriverKindArg, TuneArgs};
 use bhtune_cli::cancel::CtrlC;
@@ -140,8 +140,10 @@ pub struct StartRunRequest {
     /// [`TuneArgs::timeout_secs`] -- always enforced, exactly as for a CLI-driven run.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
-    /// A friendly name for this run, recorded as `loop_name` (default: the PV tag name).
-    pub name: Option<String>,
+    /// Operator notes to attach to this run. Notes can be edited or cleared later through
+    /// the run-history endpoints.
+    #[serde(default)]
+    pub notes: Option<String>,
     /// Confirm an unattended PID write-back. Required alongside `write_pid` -- the request
     /// is rejected otherwise, identically to `--write-pid` without `--yes` on the CLI.
     #[serde(default)]
@@ -256,7 +258,7 @@ impl StartRunRequest {
             direction: self.direction.map(Into::into),
             poll_interval_ms: self.poll_interval_ms,
             timeout_secs: self.timeout_secs,
-            name: self.name,
+            notes: self.notes,
             yes: self.yes,
             write_pid: self.write_pid.map(Into::into),
             allow_uncertain_quality: self.allow_uncertain_quality,
@@ -380,6 +382,85 @@ pub(crate) async fn cancel_run(
     }
     state.active_run.cancel(run_id).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The body of `PUT /api/runs/{id}/notes`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateNotesRequest {
+    /// Replacement note text. Blank or whitespace-only text clears the note.
+    pub notes: String,
+}
+
+fn normalized_notes(notes: String) -> Option<String> {
+    let trimmed = notes.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Replace the operator notes attached to a run.
+///
+/// `PUT /api/runs/{id}/notes` deliberately works for both running and terminal runs. Notes
+/// are metadata, not a plant mutation, so they do not take the active-run slot.
+#[utoipa::path(
+    put,
+    path = "/api/runs/{id}/notes",
+    tag = "runs",
+    params(
+        ("id" = i64, Path, description = "Run id"),
+    ),
+    request_body = UpdateNotesRequest,
+    responses(
+        (status = 200, description = "The run with its updated notes.", body = RunDetailResponse),
+        (status = 404, description = "No run with that id.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn update_notes(
+    State(state): State<AppState>,
+    Path(run_id): Path<i64>,
+    Json(request): Json<UpdateNotesRequest>,
+) -> Result<Json<RunDetailResponse>, ApiError> {
+    TuneRunRow::get(&state.pool, run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
+    TuneRunRow::update_notes(
+        &state.pool,
+        run_id,
+        normalized_notes(request.notes).as_deref(),
+    )
+    .await?;
+    build_run_detail(&state.pool, run_id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))
+}
+
+/// Clear a run's operator notes.
+///
+/// `DELETE /api/runs/{id}/notes` is idempotent and works while a run is active or after it
+/// finishes.
+#[utoipa::path(
+    delete,
+    path = "/api/runs/{id}/notes",
+    tag = "runs",
+    params(
+        ("id" = i64, Path, description = "Run id"),
+    ),
+    responses(
+        (status = 200, description = "The run with its notes cleared.", body = RunDetailResponse),
+        (status = 404, description = "No run with that id.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn delete_notes(
+    State(state): State<AppState>,
+    Path(run_id): Path<i64>,
+) -> Result<Json<RunDetailResponse>, ApiError> {
+    TuneRunRow::get(&state.pool, run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
+    TuneRunRow::update_notes(&state.pool, run_id, None).await?;
+    build_run_detail(&state.pool, run_id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))
 }
 
 /// The body of `POST /api/runs/{id}/write`.
@@ -519,7 +600,7 @@ async fn reserve_connect_and_write(
 /// `POST /api/runs/{id}/write` -- unlike the CLI's `--write-pid`, which can only fire once
 /// at the end of the run it belongs to, this can be called at any time after the run has
 /// finished, letting an engineer compare Sluggish/Moderate/Aggressive on screen before
-/// picking one. Pre-reads the loop's current P/I/D, writes and verifies each constant in
+/// picking one. Pre-reads the selected tag's current P/I/D, writes and verifies each constant in
 /// turn, and rolls back to the pre-read values if a later constant is rejected
 /// (`safety-writeback-rollback`) -- recorded as a new write-back audit row exactly like an
 /// in-run write.
@@ -599,7 +680,7 @@ pub(crate) async fn write_run(
 /// Revert a run's most recent PID write-back, restoring the pre-write values it recorded.
 ///
 /// `POST /api/runs/{id}/revert` -- no request body: like `POST /api/runs/{id}/cancel`, the
-/// GUI's own confirmation dialog (naming the loop, the tags, and the exact values from
+/// GUI's own confirmation dialog (naming the tag, the tags, and the exact values from
 /// `writes[]`) is the human confirmation step, not a body field. Finds the run's last
 /// [`WriteKind::Write`] row regardless of whether it succeeded (matching
 /// `bhtune history revert`'s own semantics exactly), requiring it to have recorded pre-write
@@ -674,6 +755,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/runs", post(start_run))
         .route("/api/runs/{id}/cancel", post(cancel_run))
+        .route(
+            "/api/runs/{id}/notes",
+            put(update_notes).delete(delete_notes),
+        )
         .route("/api/runs/{id}/write", post(write_run))
         .route("/api/runs/{id}/revert", post(revert_run))
 }
@@ -710,7 +795,7 @@ mod tests {
             "mv_range_low": 0.0,
             "direction": "reverse",
             "poll_interval_ms": 5,
-            "name": "http-test-loop",
+            "notes": "http test note",
         })
     }
 
@@ -768,11 +853,75 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
         let detail = body_json(response).await;
         let run_id = detail["id"].as_i64().expect("response must carry an id");
-        assert_eq!(detail["loop_name"], "http-test-loop");
+        assert_eq!(detail["tag_name"], "ignored-for-simulator");
 
         let final_detail = wait_for_outcome(&state, run_id).await;
         assert_eq!(final_detail["outcome"], "completed");
         assert_eq!(final_detail["results"].as_array().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn notes_can_be_edited_while_running_and_after_completion_then_deleted() {
+        let state = crate::test_support::in_memory_state().await;
+        let mut request = fast_simulator_request_json();
+        request["poll_interval_ms"] = serde_json::json!(1000);
+        request["cycles_count"] = serde_json::json!(50);
+
+        let response = post_json(crate::build_router(state.clone()), "/api/runs", request).await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let run_id = body_json(response).await["id"].as_i64().unwrap();
+
+        let updated = crate::build_router(state.clone())
+            .oneshot(
+                Request::put(format!("/api/runs/{run_id}/notes"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "notes": "edited while running"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status(), StatusCode::OK);
+        assert_eq!(body_json(updated).await["notes"], "edited while running");
+
+        state.active_run.cancel(run_id).await;
+        let final_detail = wait_for_outcome(&state, run_id).await;
+        assert_eq!(final_detail["outcome"], "aborted");
+
+        let replaced = crate::build_router(state.clone())
+            .oneshot(
+                Request::put(format!("/api/runs/{run_id}/notes"))
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "notes": "edited after completion"
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replaced.status(), StatusCode::OK);
+        assert_eq!(
+            body_json(replaced).await["notes"],
+            "edited after completion"
+        );
+
+        let cleared = crate::build_router(state.clone())
+            .oneshot(
+                Request::delete(format!("/api/runs/{run_id}/notes"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cleared.status(), StatusCode::OK);
+        assert!(body_json(cleared).await["notes"].is_null());
     }
 
     #[tokio::test]
@@ -829,9 +978,9 @@ mod tests {
         let state = crate::test_support::in_memory_state().await;
 
         let mut request_a = fast_simulator_request_json();
-        request_a["name"] = serde_json::json!("racer-a");
+        request_a["notes"] = serde_json::json!("racer-a");
         let mut request_b = fast_simulator_request_json();
-        request_b["name"] = serde_json::json!("racer-b");
+        request_b["notes"] = serde_json::json!("racer-b");
 
         let (result_a, result_b) = tokio::join!(
             start_run(

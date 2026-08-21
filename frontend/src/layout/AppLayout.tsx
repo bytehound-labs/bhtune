@@ -30,10 +30,10 @@ function HealthBadge() {
       }`}
     >
       {health.isPending
-        ? "Checking server…"
+        ? "Connecting…"
         : health.isError
-          ? `Server unreachable: ${health.error.message}`
-          : `Server: ${health.data?.status ?? "unknown"}`}
+          ? "Connection unavailable"
+          : "Connected"}
     </div>
   );
 }
@@ -67,14 +67,14 @@ export function AppLayout() {
               <NavLink to="/runs/new" className={navLinkClass}>
                 Tune
               </NavLink>
-              <NavLink to="/templates" className={navLinkClass}>
-                Templates
-              </NavLink>
               <NavLink
                 to="/runs"
                 className={() => navLinkClass({ isActive: isHistoryActive })}
               >
                 History
+              </NavLink>
+              <NavLink to="/templates" className={navLinkClass}>
+                Templates
               </NavLink>
             </nav>
           </div>

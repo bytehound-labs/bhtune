@@ -186,6 +186,9 @@ CREATE TABLE tune_runs (
     -- production caller (`bhtune-cli`'s `prepare()`) overwrites it via `record_connection`
     -- immediately afterwards, before any driver I/O.
     request_json             TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(request_json)),
+    -- Freeform operator notes attached to this run. Unlike `request_json`, this is mutable:
+    -- the GUI can add, edit, or clear it while a run is active or after it finishes.
+    notes                    TEXT,
     -- Whether this run permitted `Quality::Uncertain` OPC readings via
     -- `--allow-uncertain-quality` (`Quality::Bad` is never accepted, flag or
     -- no flag). Defaults to 0/false, set via a follow-up

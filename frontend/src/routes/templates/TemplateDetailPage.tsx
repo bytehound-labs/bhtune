@@ -1,5 +1,6 @@
 import { Link, useNavigate, useParams } from "react-router";
 import { useDeleteTemplate, useTemplate } from "../../api/templates";
+import { userFacingErrorMessage } from "../../api/errors";
 import {
   Badge,
   Button,
@@ -72,10 +73,22 @@ export function TemplateDetailPage() {
       />
 
       {template.isPending && <LoadingState message="Loading template…" />}
-      {template.isError && <ErrorBanner message={template.error.message} />}
+      {template.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            template.error,
+            "Unable to load the template.",
+          )}
+        />
+      )}
       {deleteTemplate.isError && (
         <div className="mb-4">
-          <ErrorBanner message={deleteTemplate.error.message} />
+          <ErrorBanner
+            message={userFacingErrorMessage(
+              deleteTemplate.error,
+              "Unable to delete the template.",
+            )}
+          />
         </div>
       )}
 

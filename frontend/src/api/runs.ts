@@ -231,6 +231,49 @@ export function useCancelRun() {
   });
 }
 
+/** `PUT /api/runs/{id}/notes` — replaces the mutable operator note for a run. */
+export function useUpdateRunNotes() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, notes }: { id: number; notes: string }) => {
+      const { data, error, response } = await apiClient.PUT(
+        "/api/runs/{id}/notes",
+        {
+          params: { path: { id } },
+          body: { notes },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data;
+    },
+    onSuccess: (data, { id }) => {
+      queryClient.setQueryData(runKey(id), data);
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+}
+
+/** `DELETE /api/runs/{id}/notes` — clears the mutable operator note for a run. */
+export function useDeleteRunNotes() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data, error, response } = await apiClient.DELETE(
+        "/api/runs/{id}/notes",
+        {
+          params: { path: { id } },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data;
+    },
+    onSuccess: (data, id) => {
+      queryClient.setQueryData(runKey(id), data);
+      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+}
+
 /**
  * `POST /api/runs/{id}/write` — writes one of the run's calculated candidate PID parameter
  * sets back to the live loop, post-hoc (`api-post-run-write`). The `200` response is the

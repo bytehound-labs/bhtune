@@ -46,3 +46,24 @@ export class ApiError extends Error {
 export function toApiError(error: unknown, response: Response): ApiError {
   return new ApiError(apiErrorMessage(error), response.status);
 }
+
+/**
+ * Converts an API/client failure into concise copy suitable for the UI. The server's
+ * diagnostic message remains on `ApiError` for logs and debugging, but transport, database,
+ * and gateway details should not be the primary message shown to operators.
+ */
+export function userFacingErrorMessage(
+  error: unknown,
+  fallback: string,
+): string {
+  if (error instanceof ApiError) {
+    if (error.status >= 500) {
+      return "The server could not complete the request. Try again.";
+    }
+    if (error.status === 0) {
+      return "Unable to reach the BHTune server. Check the connection and try again.";
+    }
+    return fallback;
+  }
+  return fallback;
+}

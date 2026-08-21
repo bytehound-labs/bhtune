@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { useRuns } from "../../api/runs";
 import type { RunListFilter } from "../../api/runs";
+import { userFacingErrorMessage } from "../../api/errors";
 import {
   DRIVER_LABELS,
   OUTCOME_LABELS,
@@ -64,10 +65,10 @@ export function RunListPage() {
     <div>
       <PageHeading
         title="History"
-        description="Completed and in-progress tune runs, with live per-tick streaming for whichever run is still active."
+        description="Review completed tunes and monitor active tunes."
         actions={
           <Link to="/runs/new">
-            <Button variant="primary">New run</Button>
+            <Button variant="primary">New tune</Button>
           </Link>
         }
       />
@@ -112,9 +113,16 @@ export function RunListPage() {
       </div>
 
       {runs.isPending && <LoadingState message="Loading runs…" />}
-      {runs.isError && <ErrorBanner message={runs.error.message} />}
+      {runs.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            runs.error,
+            "Unable to load tune history.",
+          )}
+        />
+      )}
       {runs.isSuccess && runs.data.runs.length === 0 && (
-        <EmptyState message="No runs match this filter." />
+        <EmptyState message="No tunes match this filter." />
       )}
 
       {runs.isSuccess && runs.data.runs.length > 0 && (
@@ -124,7 +132,7 @@ export function RunListPage() {
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="px-4 py-2 font-medium">ID</th>
-                  <th className="px-4 py-2 font-medium">Loop</th>
+                  <th className="px-4 py-2 font-medium">Tag name</th>
                   <th className="px-4 py-2 font-medium">Process type</th>
                   <th className="px-4 py-2 font-medium">Outcome</th>
                   <th className="px-4 py-2 font-medium">Driver</th>
@@ -141,7 +149,7 @@ export function RunListPage() {
                     </td>
                     <td className="px-4 py-3 font-medium">
                       <Link to={`/runs/${run.id}`} className="hover:underline">
-                        {run.loop_name}
+                        {run.tag_name}
                       </Link>
                     </td>
                     <td className="px-4 py-3 text-slate-400">

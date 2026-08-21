@@ -209,6 +209,53 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
 }
 
 #[tokio::test]
+async fn run_notes_can_be_set_replaced_and_cleared_before_and_after_completion() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+
+    let started = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC103",
+        TuneDriver::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(started.notes, None);
+
+    let while_running = TuneRunRow::update_notes(&pool, started.id, Some("initial context"))
+        .await
+        .unwrap();
+    assert_eq!(while_running.outcome, TuneOutcome::Running);
+    assert_eq!(while_running.notes.as_deref(), Some("initial context"));
+
+    let completed = TuneRunRow::complete(&pool, started.id, now + Duration::minutes(1))
+        .await
+        .unwrap();
+    assert_eq!(completed.notes.as_deref(), Some("initial context"));
+
+    let replaced = TuneRunRow::update_notes(&pool, started.id, Some("final observation"))
+        .await
+        .unwrap();
+    assert_eq!(replaced.outcome, TuneOutcome::Completed);
+    assert_eq!(replaced.notes.as_deref(), Some("final observation"));
+
+    let cleared = TuneRunRow::update_notes(&pool, started.id, None)
+        .await
+        .unwrap();
+    assert_eq!(cleared.notes, None);
+    assert_eq!(
+        TuneRunRow::get(&pool, started.id).await.unwrap(),
+        Some(cleared)
+    );
+}
+
+#[tokio::test]
 async fn run_can_fail_before_initial_readings_are_ever_recorded() {
     let pool = connect_in_memory().await.unwrap();
     let now = Utc::now();

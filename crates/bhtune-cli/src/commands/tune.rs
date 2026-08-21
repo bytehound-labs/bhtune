@@ -244,7 +244,7 @@ struct RequestSnapshot<'a> {
     direction: Option<ControllerDirection>,
     poll_interval_ms: u64,
     timeout_secs: u64,
-    name: Option<&'a str>,
+    notes: Option<&'a str>,
     yes: bool,
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
@@ -313,7 +313,7 @@ pub async fn prepare(
         direction: args.direction.map(Into::into),
         poll_interval_ms: args.poll_interval_ms,
         timeout_secs: args.timeout_secs,
-        name: args.name.as_deref(),
+        notes: args.notes.as_deref(),
         yes: args.yes,
         write_pid: args.write_pid.map(Into::into),
         allow_uncertain_quality: args.allow_uncertain_quality,
@@ -347,12 +347,11 @@ pub async fn prepare(
     let tags = build_loop_tags(&args, &template)?;
     let driver = crate::driver::build(&args).await?;
 
-    let run_name = args.name.clone().unwrap_or_else(|| args.tagname.clone());
     let started_at = Utc::now();
     let run = TuneRunRow::start(
         pool,
         None,
-        &run_name,
+        &args.tagname,
         db_driver,
         config,
         template_origin,
@@ -375,6 +374,12 @@ pub async fn prepare(
         (None, None)
     };
     TuneRunRow::record_connection(pool, run.id, opc_server, bridge_host, &request_json).await?;
+    let notes = args
+        .notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|notes| !notes.is_empty());
+    TuneRunRow::update_notes(pool, run.id, notes).await?;
 
     tracing::info!(
         run_id = run.id,
@@ -2395,7 +2400,7 @@ mod tests {
             timeout_secs: 3600,
             op_timeout_secs: 30,
             restore_timeout_secs: 30,
-            name: Some("test-loop".to_string()),
+            notes: Some("test note".to_string()),
             yes: false,
             write_pid: None,
             allow_uncertain_quality: false,
@@ -2419,7 +2424,8 @@ mod tests {
         .unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].outcome, bhtune_db::models::TuneOutcome::Completed);
-        assert_eq!(runs[0].loop_name, "test-loop");
+        assert_eq!(runs[0].loop_name, "ignored-for-simulator");
+        assert_eq!(runs[0].notes.as_deref(), Some("test note"));
         assert!(runs[0].initial_readings.is_some());
 
         // A simulator run has no OPC DA connection at all -- `db-run-request-snapshot`
@@ -2436,7 +2442,7 @@ mod tests {
         assert_eq!(request["tagname"], "ignored-for-simulator");
         assert_eq!(request["driver"], "simulator");
         assert_eq!(request["server"], serde_json::Value::Null);
-        assert_eq!(request["name"], "test-loop");
+        assert_eq!(request["notes"], "test note");
 
         let results = TuneResultRow::list_for_run(&pool, runs[0].id)
             .await

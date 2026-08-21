@@ -66,7 +66,7 @@ simulator\:"The in-process FOPDT simulator — no external dependency at all"))'
 '--direction=[Fixed controller direction, overriding a live tag read]:DIRECTION:(direct reverse)' \
 '--poll-interval-ms=[How often to poll the driver, in milliseconds (legacy\: the 800 ms WinForms timer)]:POLL_INTERVAL_MS:_default' \
 '--timeout-secs=[Hard wall-clock cap on this run'\''s total duration (including any \`--mrft-delay\` padding), in seconds. If the engine hasn'\''t reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop'\''s expected test duration -- temperature loops in particular can need much longer than the default]:TIMEOUT_SECS:_default' \
-'--name=[A friendly name for this run, recorded as \`loop_name\` (default\: the PV tag name)]:NAME:_default' \
+'--notes=[Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes]:NOTES:_default' \
 '--write-pid=[Non-interactively write this response level'\''s calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires \`--yes\`]:WRITE_PID:(aggressive moderate sluggish)' \
 '--op-timeout-secs=[Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and \`--timeout-secs\` both stay effective even mid-hung-read/write -- see AGENTS.md'\''s \`safety-cancellation\` section. Distinct from \`--timeout-secs\`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration]:OP_TIMEOUT_SECS:_default' \
 '--restore-timeout-secs=[Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of \`--timeout-secs\`, since a restore triggered *by* a timeout would otherwise inherit an already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits \`EXIT_RESTORE_INCOMPLETE\` with a warning naming the loop and its last-written value, instead of hanging indefinitely]:RESTORE_TIMEOUT_SECS:_default' \
@@ -107,7 +107,7 @@ _arguments "${_arguments_options[@]}" : \
 '--sim-initial-mv=[]:SIM_INITIAL_MV:_default' \
 '--poll-interval-ms=[]:POLL_INTERVAL_MS:_default' \
 '--timeout-secs=[See \`TuneArgs\:\:timeout_secs\`]:TIMEOUT_SECS:_default' \
-'--name=[]:NAME:_default' \
+'--notes=[Operator notes to attach to this run. See \[\`TuneArgs\:\:notes\`\]]:NOTES:_default' \
 '--write-pid=[See \`TuneArgs\:\:write_pid\`. Note the built-in FOPDT simulator has no PID constant tags at all (see \`build_loop_tags\`), so write-back is always skipped for \`simulate\` regardless of this flag -- it'\''s accepted here purely so \`simulate\`'\''s flag surface stays a strict defaulted subset of \`tune\`'\''s, matching every other field]:WRITE_PID:(aggressive moderate sluggish)' \
 '--op-timeout-secs=[See \`TuneArgs\:\:op_timeout_secs\`]:OP_TIMEOUT_SECS:_default' \
 '--restore-timeout-secs=[See \`TuneArgs\:\:restore_timeout_secs\`]:RESTORE_TIMEOUT_SECS:_default' \

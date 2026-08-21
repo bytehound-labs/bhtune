@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router";
 import { useCreateTemplate } from "../../api/templates";
+import { userFacingErrorMessage } from "../../api/errors";
 import { Button, ErrorBanner, PageHeading } from "../../components/ui";
 import { TemplateFormFields } from "./TemplateFormFields";
 import {
@@ -44,7 +45,12 @@ export function TemplateCreatePage() {
 
       {createTemplate.isError && (
         <div className="mb-4">
-          <ErrorBanner message={createTemplate.error.message} />
+          <ErrorBanner
+            message={userFacingErrorMessage(
+              createTemplate.error,
+              "Unable to create the template.",
+            )}
+          />
         </div>
       )}
 

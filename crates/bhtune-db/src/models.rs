@@ -497,6 +497,8 @@ pub struct TuneRunRow {
     /// "duplicate this run"; never treat this as the source of truth for connection
     /// facts -- that's `opc_server`/`bridge_host` above.
     pub request_json: String,
+    /// Mutable operator notes for this run. `None` means no note is recorded.
+    pub notes: Option<String>,
     pub initial_readings: Option<TuneRunInitialReadings>,
     /// Whether this run permitted `Quality::Uncertain` OPC readings via
     /// `--allow-uncertain-quality` (finding 5 of the live-plant safety review;
@@ -725,6 +727,31 @@ impl TuneRunRow {
         .bind(opc_server)
         .bind(bridge_host)
         .bind(request_json)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Replaces this run's operator notes. Passing `None` clears the note, which is the
+    /// persistence-layer implementation of the GUI's delete-note action. This deliberately
+    /// has no lifecycle restriction: notes remain editable while a run is active and after it
+    /// reaches a terminal outcome.
+    pub async fn update_notes(
+        pool: &SqlitePool,
+        run_id: i64,
+        notes: Option<&str>,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs SET notes = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(notes)
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -1130,6 +1157,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         template,
         tags,
         request_json,
+        notes: row.try_get("notes").map_err(DbError::Query)?,
         initial_readings,
         allow_uncertain_quality: row
             .try_get("allow_uncertain_quality")

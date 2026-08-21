@@ -76,7 +76,7 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l direction -d 'Fix
 reverse\t''"
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l poll-interval-ms -d 'How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l timeout-secs -d 'Hard wall-clock cap on this run\'s total duration (including any `--mrft-delay` padding), in seconds. If the engine hasn\'t reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop\'s expected test duration -- temperature loops in particular can need much longer than the default' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l name -d 'A friendly name for this run, recorded as `loop_name` (default: the PV tag name)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l notes -d 'Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l write-pid -d 'Non-interactively write this response level\'s calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires `--yes`' -r -f -a "aggressive\t''
 moderate\t''
 sluggish\t''"
@@ -120,7 +120,7 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-initial-p
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-initial-mv -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l poll-interval-ms -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l timeout-secs -d 'See `TuneArgs::timeout_secs`' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l name -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l notes -d 'Operator notes to attach to this run. See [`TuneArgs::notes`]' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l write-pid -d 'See `TuneArgs::write_pid`. Note the built-in FOPDT simulator has no PID constant tags at all (see `build_loop_tags`), so write-back is always skipped for `simulate` regardless of this flag -- it\'s accepted here purely so `simulate`\'s flag surface stays a strict defaulted subset of `tune`\'s, matching every other field' -r -f -a "aggressive\t''
 moderate\t''
 sluggish\t''"

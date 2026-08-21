@@ -74,7 +74,7 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
             // (let alone all 3 required to complete) before the signal arrives.
             "--poll-interval-ms",
             "1000",
-            "--name",
+            "--notes",
             "ctrlc-abort-test",
         ])
         .stdout(Stdio::piped())
@@ -149,7 +149,8 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
     .await
     .unwrap();
     assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].loop_name, "ctrlc-abort-test");
+    assert_eq!(runs[0].loop_name, "ignored-for-simulator");
+    assert_eq!(runs[0].notes.as_deref(), Some("ctrlc-abort-test"));
     assert_eq!(runs[0].outcome, bhtune_db::models::TuneOutcome::Aborted);
     pool.close().await;
 }

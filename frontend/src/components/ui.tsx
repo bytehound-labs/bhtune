@@ -204,6 +204,43 @@ export function TextField({
   );
 }
 
+/** A labeled multiline text control for freeform run metadata such as operator notes. */
+export function TextAreaField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  full = false,
+  hint,
+  rows = 4,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  full?: boolean;
+  hint?: string;
+  rows?: number;
+}) {
+  return (
+    <label className={`block ${full ? "sm:col-span-2" : ""}`}>
+      <span className="text-xs uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      <textarea
+        value={value}
+        placeholder={placeholder}
+        rows={rows}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${fieldControlClass} resize-y`}
+      />
+      {hint && (
+        <span className="mt-1 block text-xs text-slate-500">{hint}</span>
+      )}
+    </label>
+  );
+}
+
 /**
  * A labeled numeric `<input>`, mirroring `<TextField>` but using `type="number"` so the
  * browser offers native validation/steppers and `e.target.valueAsNumber` avoids re-parsing

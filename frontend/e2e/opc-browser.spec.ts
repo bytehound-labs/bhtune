@@ -15,7 +15,7 @@ import { expect, test } from "@playwright/test";
  * `GET /api/opc/browse` request wiring behind "Discover servers"/"Browse tags…", the modal
  * opening/closing, and that a failure renders as a visible error rather than a silent no-op
  * or an unhandled exception -- none of which any other spec in this suite touches. The
- * populated-tree happy path (expand/select/derived-tag preview/"Test read"/"Use this tag")
+ * populated-tree happy path (expand/select/detected-tag preview/"Read selected tag"/"Use this tag")
  * was verified once by hand against a temporary mock gRPC gateway -- see AGENTS.md's
  * `ui-opc-browser` section -- and is deliberately not re-proven here: standing up a second,
  * permanent mock gRPC service just for this suite would be disproportionate to what it
@@ -47,7 +47,9 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .fill("Matrikon.OPC.Simulation");
     await page.getByRole("button", { name: "Discover servers" }).click();
 
-    await expect(page.getByText(/failed to connect/)).toBeVisible();
+    await expect(
+      page.getByText("Unable to discover OPC DA servers."),
+    ).toBeVisible();
   });
 
   test("opens the tag browser modal and shows a connection error at the root level, then closes", async ({
@@ -63,7 +65,9 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         name: "Browse tags on Matrikon.OPC.Simulation",
       }),
     ).toBeVisible();
-    await expect(page.getByText(/failed to connect/)).toBeVisible();
+    await expect(
+      page.getByText("Unable to load tags at this level."),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Close" }).click();
     await expect(

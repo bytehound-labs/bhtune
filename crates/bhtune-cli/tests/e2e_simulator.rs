@@ -96,7 +96,7 @@ fn run_fast_simulator_tune(
             "reverse",
             "--poll-interval-ms",
             "5",
-            "--name",
+            "--notes",
             "e2e-simulator-test",
             "--output",
             "json",

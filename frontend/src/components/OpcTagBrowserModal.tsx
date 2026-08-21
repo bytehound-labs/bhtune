@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOpcBrowseFetcher, useTestOpcConnection } from "../api/opc";
+import { userFacingErrorMessage } from "../api/errors";
 import type { OpcTagNodeResponse } from "../api/opc";
 import type { components } from "../api/schema";
 import { SAMPLE_QUALITY_LABELS, SAMPLE_QUALITY_TONE } from "../lib/enumLabels";
@@ -126,14 +127,15 @@ function TreeLevel({
 
 /**
  * The OPC tag-tree browser modal (`ui-opc-browser`): a lazily-expanding tree fed one level
- * at a time from `GET /api/opc/browse`, a per-node "Test read" backed by `GET /api/opc/read`
+ * at a time from `GET /api/opc/browse`, a per-node "Read selected tag" action backed by
+ * `GET /api/opc/read`
  * (showing the live value and its quality), and a preview of the active template's full
  * derived tag set for whichever node is selected -- the clearest available explanation of
  * how a template's suffixes actually work, since it shows the real tag names that would
  * result from the exact tag just picked (see `derivedTagPreview`'s doc comment for why
  * *any* node under a loop's hierarchy, not just its PV leaf, yields the identical set).
  *
- * A fresh instance is mounted each time the New Run form opens it (see `NewRunPage`'s
+ * A fresh instance is mounted each time the New tune form opens it (see `NewRunPage`'s
  * conditional render), so there's no need to reset internal state on `bridgeHost`/
  * `opcServer` changes -- those can't change while this is open anyway, since the modal's
  * full-viewport backdrop makes the form underneath unreachable.
@@ -170,7 +172,10 @@ export function OpcTagBrowserModal({
         ...prev,
         [path]: {
           status: "error",
-          message: err instanceof Error ? err.message : "browse failed",
+          message: userFacingErrorMessage(
+            err,
+            "Unable to load tags at this level.",
+          ),
         },
       }));
     }
@@ -240,7 +245,7 @@ export function OpcTagBrowserModal({
               {template ? (
                 <>
                   <p className="mt-2 text-xs uppercase tracking-wide text-slate-500">
-                    Derived tag set (template: {template.name})
+                    Detected tags (template: {template.name})
                   </p>
                   <ul className="mt-1 space-y-0.5 font-mono text-xs text-slate-400">
                     {preview?.map((row) => (
@@ -272,7 +277,7 @@ export function OpcTagBrowserModal({
                     })
                   }
                 >
-                  {testConnection.isPending ? "Reading…" : "Test read"}
+                  {testConnection.isPending ? "Reading…" : "Read selected tag"}
                 </Button>
                 {testConnection.isSuccess && (
                   <span className="text-xs text-slate-300">
@@ -286,7 +291,10 @@ export function OpcTagBrowserModal({
                 )}
                 {testConnection.isError && (
                   <span className="text-xs text-red-400">
-                    {testConnection.error.message}
+                    {userFacingErrorMessage(
+                      testConnection.error,
+                      "Unable to read the selected tag.",
+                    )}
                   </span>
                 )}
               </div>

@@ -44,7 +44,8 @@ pub async fn run(
 #[derive(serde::Serialize)]
 struct RunSummaryJson {
     id: i64,
-    loop_name: String,
+    tag_name: String,
+    notes: Option<String>,
     driver: bhtune_db::models::TuneDriver,
     outcome: bhtune_db::models::TuneOutcome,
     process_type: bhtune_core::ProcessType,
@@ -181,7 +182,8 @@ impl From<&TuneWriteRow> for WriteJson {
 #[derive(serde::Serialize)]
 struct RunDetailJson {
     id: i64,
-    loop_name: String,
+    tag_name: String,
+    notes: Option<String>,
     driver: bhtune_db::models::TuneDriver,
     outcome: bhtune_db::models::TuneOutcome,
     failure_reason: Option<String>,
@@ -233,7 +235,7 @@ async fn list(
 
             println!(
                 "{:<5} {:<30} {:<10} {:<10} {:<10} {:<25}",
-                "ID", "LOOP", "DRIVER", "OUTCOME", "PROCESS", "STARTED"
+                "ID", "TAG NAME", "DRIVER", "OUTCOME", "PROCESS", "STARTED"
             );
             for run in &runs {
                 println!(
@@ -256,7 +258,8 @@ async fn list(
                     .iter()
                     .map(|run| RunSummaryJson {
                         id: run.id,
-                        loop_name: run.loop_name.clone(),
+                        tag_name: run.loop_name.clone(),
+                        notes: run.notes.clone(),
                         driver: run.driver,
                         outcome: run.outcome,
                         process_type: run.config.process_type,
@@ -373,7 +376,8 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
 
     match output {
         OutputFormat::Table => {
-            println!("Run #{}: {}", run.id, run.loop_name);
+            println!("Run #{} — Tag name: {}", run.id, run.loop_name);
+            println!("  Notes:           {}", run.notes.as_deref().unwrap_or("—"));
             println!("  Driver:          {:?}", run.driver);
             println!("  Outcome:          {:?}", run.outcome);
             if let Some(reason) = &run.failure_reason {
@@ -494,7 +498,8 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
         OutputFormat::Json => {
             let json = RunDetailJson {
                 id: run.id,
-                loop_name: run.loop_name.clone(),
+                tag_name: run.loop_name.clone(),
+                notes: run.notes.clone(),
                 driver: run.driver,
                 outcome: run.outcome,
                 failure_reason: run.failure_reason.clone(),
@@ -669,7 +674,7 @@ async fn revert(
 
     if output == OutputFormat::Table {
         println!(
-            "Reverting run {run_id}'s {response_level:?} PID write-back on '{}' to \
+            "Reverting run {run_id}'s {response_level:?} PID write-back on tag '{}' to \
              P={:.4} I={:.4} D={:.4}...",
             run.loop_name, target.proportional, target.integral, target.derivative
         );
@@ -677,7 +682,7 @@ async fn revert(
 
     if output == OutputFormat::Table {
         println!(
-            "Reverting run {run_id}'s {response_level:?} PID write-back on '{}' to \
+            "Reverting run {run_id}'s {response_level:?} PID write-back on tag '{}' to \
              P={:.4} I={:.4} D={:.4}...",
             run.loop_name, target.proportional, target.integral, target.derivative
         );

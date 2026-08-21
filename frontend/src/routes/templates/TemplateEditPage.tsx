@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useTemplate, useUpdateTemplate } from "../../api/templates";
+import { userFacingErrorMessage } from "../../api/errors";
 import {
   Button,
   ErrorBanner,
@@ -64,17 +65,27 @@ export function TemplateEditPage() {
       />
 
       {template.isPending && <LoadingState message="Loading template…" />}
-      {template.isError && <ErrorBanner message={template.error.message} />}
+      {template.isError && (
+        <ErrorBanner
+          message={userFacingErrorMessage(
+            template.error,
+            "Unable to load the template.",
+          )}
+        />
+      )}
       {isNotUserOwned && (
         <div className="mb-4">
-          <ErrorBanner
-            message={`This template's origin is '${template.data?.origin}', not 'user' -- it's re-seeded from its source file on every startup, so it can't be edited here. Saving will fail with a 409.`}
-          />
+          <ErrorBanner message="Built-in and catalog templates are managed by BHTune and cannot be edited here." />
         </div>
       )}
       {updateTemplate.isError && (
         <div className="mb-4">
-          <ErrorBanner message={updateTemplate.error.message} />
+          <ErrorBanner
+            message={userFacingErrorMessage(
+              updateTemplate.error,
+              "Unable to save the template.",
+            )}
+          />
         </div>
       )}
 

@@ -28,7 +28,7 @@ function outcomeBadge(page: Page, outcome: "Completed" | "Aborted") {
  */
 async function startTune(page: Page) {
   const startButton = page.getByRole("button", { name: "Start tune" });
-  const alreadyActiveError = page.getByText(/is already active/);
+  const startError = page.getByText("Unable to start the tune.");
   for (let attempt = 0; attempt < 20; attempt++) {
     await startButton.click();
     const navigated = page
@@ -38,11 +38,11 @@ async function startTune(page: Page) {
     if (await navigated) {
       return;
     }
-    if (await alreadyActiveError.isVisible()) {
+    if (await startError.isVisible()) {
       await page.waitForTimeout(250);
       continue;
     }
-    // Neither navigated nor showed the known transient error -- a real failure. Let the
+    // Neither navigated nor showed the generic start error -- a real failure. Let the
     // caller's own `toHaveURL` assertion below report it with a normal Playwright error.
     return;
   }
@@ -50,7 +50,7 @@ async function startTune(page: Page) {
 
 /**
  * Drives a full MRFT tune end-to-end through the real browser UI -- the scenario
- * `e2e-playwright` exists for. Fills in the New Run form, submits it against a real
+ * `e2e-playwright` exists for. Fills in the New tune form, submits it against a real
  * `bhtune-server` running the in-process simulator driver, and asserts the *rendered*
  * results are sane and correctly ordered, not just that the page didn't crash.
  *
@@ -63,7 +63,7 @@ async function startTune(page: Page) {
  * oscillation against this fixed simulator configuration; it's already the form's default
  * whenever `driver=simulator`, so it isn't set explicitly below.
  */
-test.describe("running a tune from the browser", () => {
+test.describe("running a tune", () => {
   // `bhtune-server` allows exactly one active run at a time (`ActiveRun`, `server-start-
   // tune-api`) -- matching the real constraint that only one physical loop can be under
   // test through a given server at once. Both tests below start a real run against the
@@ -142,7 +142,7 @@ test.describe("running a tune from the browser", () => {
     expect(await tdMinutes("aggressive")).toBe(0);
 
     await expect(
-      page.getByText(/\d+ per-tick samples were recorded/),
+      page.getByText(/\d+ measurements were recorded/),
     ).toBeVisible();
   });
 
@@ -207,14 +207,14 @@ test.describe("running a tune from the browser", () => {
     expect(runId).toBeTruthy();
 
     page.once("dialog", (dialog) => void dialog.accept());
-    await page.getByRole("button", { name: "Delete run" }).click();
+    await page.getByRole("button", { name: "Delete tune" }).click();
 
     await expect(page).toHaveURL(/\/runs$/);
 
     // Navigating straight back to the deleted run's own URL now 404s -- proves the row is
     // really gone, not just removed from the list view.
     await page.goto(`/runs/${runId}`);
-    await expect(page.getByText(`no run with id ${runId}`)).toBeVisible();
+    await expect(page.getByText("Unable to load tune details.")).toBeVisible();
   });
 
   test("cancels a running tune from the run detail page", async ({ page }) => {
@@ -225,7 +225,7 @@ test.describe("running a tune from the browser", () => {
     await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
     // Deliberately slower than the completion test above (but still far faster than the
     // form's human-oriented defaults) -- reliably leaves a multi-second window to click
-    // "Cancel run" before the tune would otherwise finish on its own, without wasting CI
+    // "Cancel tune" before the tune would otherwise finish on its own, without wasting CI
     // time waiting on the form's real ~minutes-scale defaults.
     await page.getByLabel("Poll interval (ms)").fill("200");
     await page.getByLabel("Time constant τ (s)").fill("1");
@@ -234,7 +234,7 @@ test.describe("running a tune from the browser", () => {
     await startTune(page);
     await expect(page).toHaveURL(/\/runs\/\d+$/);
 
-    const cancelButton = page.getByRole("button", { name: "Cancel run" });
+    const cancelButton = page.getByRole("button", { name: "Cancel tune" });
     await expect(cancelButton).toBeVisible();
     await cancelButton.click();
 
@@ -242,7 +242,7 @@ test.describe("running a tune from the browser", () => {
       timeout: 30_000,
     });
     await expect(
-      page.getByRole("button", { name: "Cancel run" }),
+      page.getByRole("button", { name: "Cancel tune" }),
     ).not.toBeVisible();
   });
 });

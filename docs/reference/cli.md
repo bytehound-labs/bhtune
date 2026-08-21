@@ -123,7 +123,7 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
 * `--timeout-secs <TIMEOUT_SECS>` — Hard wall-clock cap on this run's total duration (including any `--mrft-delay` padding), in seconds. If the engine hasn't reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop's expected test duration -- temperature loops in particular can need much longer than the default
 
   Default value: `3600`
-* `--name <NAME>` — A friendly name for this run, recorded as `loop_name` (default: the PV tag name)
+* `--notes <NOTES>` — Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes
 * `--yes` — Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without `--write-pid`
 * `--write-pid <WRITE_PID>` — Non-interactively write this response level's calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires `--yes`
 
@@ -211,7 +211,7 @@ Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator
 * `--timeout-secs <TIMEOUT_SECS>` — See `TuneArgs::timeout_secs`
 
   Default value: `3600`
-* `--name <NAME>`
+* `--notes <NOTES>` — Operator notes to attach to this run. See [`TuneArgs::notes`]
 * `--yes` — See `TuneArgs::yes`
 * `--write-pid <WRITE_PID>` — See `TuneArgs::write_pid`. Note the built-in FOPDT simulator has no PID constant tags at all (see `build_loop_tags`), so write-back is always skipped for `simulate` regardless of this flag -- it's accepted here purely so `simulate`'s flag surface stays a strict defaulted subset of `tune`'s, matching every other field
 

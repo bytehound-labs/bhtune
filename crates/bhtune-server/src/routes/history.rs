@@ -101,7 +101,8 @@ fn filter_from_query(query: &RunListQuery) -> TuneRunFilter {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RunSummaryResponse {
     pub id: i64,
-    pub loop_name: String,
+    pub tag_name: String,
+    pub notes: Option<String>,
     pub driver: TuneDriver,
     pub outcome: TuneOutcome,
     pub process_type: ProcessType,
@@ -112,7 +113,8 @@ impl From<&TuneRunRow> for RunSummaryResponse {
     fn from(run: &TuneRunRow) -> Self {
         RunSummaryResponse {
             id: run.id,
-            loop_name: run.loop_name.clone(),
+            tag_name: run.loop_name.clone(),
+            notes: run.notes.clone(),
             driver: run.driver,
             outcome: run.outcome,
             process_type: run.config.process_type,
@@ -166,7 +168,7 @@ pub(crate) async fn list_runs(
 /// `GET /api/runs/last-request` -- returns the newest run's `request_json`
 /// (`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh
 /// install with no runs yet, or if the newest run's stored request isn't usable (see
-/// [`parse_stored_request`]) (`ui-prefill-last-run`). The New Run form seeds itself from this
+/// [`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form seeds itself from this
 /// response on load, so connection details, tag names, ranges, and every other field an
 /// engineer typed follow them across browsers and machines instead of resetting to hardcoded
 /// defaults on every visit -- deliberately server-side rather than `localStorage` for that
@@ -356,7 +358,8 @@ pub struct PidConstantTagsResponse {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RunDetailResponse {
     pub id: i64,
-    pub loop_name: String,
+    pub tag_name: String,
+    pub notes: Option<String>,
     pub driver: TuneDriver,
     pub outcome: TuneOutcome,
     pub failure_reason: Option<String>,
@@ -390,7 +393,7 @@ pub struct RunDetailResponse {
     /// [`StartRunRequest`], or `None` if it isn't usable -- see [`parse_stored_request`].
     /// Powers the run detail page's "Duplicate this run" action (`ui-prefill-last-run`):
     /// unlike `GET /api/runs/last-request`, which only ever answers for the single newest
-    /// run, this lets the New Run form seed itself from *this specific* historical run
+    /// run, this lets the New tune form seed itself from *this specific* historical run
     /// regardless of how many later runs exist.
     pub original_request: Option<StartRunRequest>,
 }
@@ -425,7 +428,8 @@ pub(crate) async fn build_run_detail(
 
     Ok(Some(RunDetailResponse {
         id: run.id,
-        loop_name: run.loop_name,
+        tag_name: run.loop_name,
+        notes: run.notes,
         driver: run.driver,
         outcome: run.outcome,
         failure_reason: run.failure_reason,
@@ -1129,7 +1133,7 @@ mod tests {
             "mv_range_low": 0.0,
             "direction": "reverse",
             "poll_interval_ms": 5,
-            "name": "http-test-loop",
+            "notes": "http-test-loop",
         });
         let request: StartRunRequest = serde_json::from_value(value).unwrap();
         serde_json::to_string(&request).unwrap()
@@ -1185,7 +1189,7 @@ mod tests {
         let body = body_json(response).await;
         assert_eq!(body["original_request"]["tagname"], "ignored-for-simulator");
         assert_eq!(body["original_request"]["driver"], "simulator");
-        assert_eq!(body["original_request"]["name"], "http-test-loop");
+        assert_eq!(body["original_request"]["notes"], "http-test-loop");
     }
 
     #[tokio::test]
@@ -1264,7 +1268,7 @@ mod tests {
         assert_eq!(body["process_type"], "flow");
         assert_eq!(body["controller_type"], "pi");
         assert_eq!(body["driver"], "simulator");
-        assert_eq!(body["name"], "http-test-loop");
+        assert_eq!(body["notes"], "http-test-loop");
         assert_eq!(body["relay_amp"], 10.0);
     }
 
