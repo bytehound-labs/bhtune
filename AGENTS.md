@@ -4103,7 +4103,9 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    existing pre-read/verify/rollback/audit path under a new `ActiveRun::reserve`
    exclusive-reservation lock. `ui-prefill-last-run` seeds the New Run form from the newest
    run's stored request server-side, plus a "Reset to defaults" action and a "Duplicate this
-   run" action. Run identity is consistently presented as the **Tag name**; the former
+   run" action. Configuration fields are remembered, but Notes is intentionally reset to blank
+   for both kinds of prefill so operator context is not copied into a new tune. Run identity is
+   consistently presented as the **Tag name**; the former
    user-editable run-name override was removed so history cannot hide the submitted tag.
    A mutable nullable `notes` field is stored on each run, included in new-run requests, and
    exposed through `PUT`/`DELETE /api/runs/{id}/notes` for editing or clearing before, during,

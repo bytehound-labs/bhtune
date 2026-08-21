@@ -151,7 +151,7 @@ function toNumOrBlank(value: number | null | undefined): NumOrBlank {
 /**
  * Converts a stored [`StartRunRequest`] (from `GET /api/runs/last-request` or a specific
  * run's own `original_request`) into `FormState`, so the form can prefill from a past run's
- * exact settings (`ui-prefill-last-run`).
+ * remembered settings (`ui-prefill-last-run`).
  *
  * `bhtune-cli`'s `RequestSnapshot` (what actually populates `request_json`) always resolves
  * the fields that carry a CLI/server default — `mrft_delay`, `poll_interval_ms`, every
@@ -161,14 +161,15 @@ function toNumOrBlank(value: number | null | undefined): NumOrBlank {
  * other optional field (cycles, ranges, direction, connection overrides) is
  * shown *blank* when absent rather than substituting today's hardcoded default — an absent
  * value there specifically means "the engineer relied on a default last time", which is
- * exactly what should be shown again, not silently overwritten. Notes are copied too, so a
- * duplicate run carries its context forward until the engineer edits or clears it.
+ * exactly what should be shown again, not silently overwritten. Notes are intentionally
+ * excluded from remembered settings, so every new or duplicate tune starts with an empty
+ * notes field for fresh operator context.
  */
 function formFromRequest(request: StartRunRequest): FormState {
   return {
     driver: request.driver,
     template: request.template,
-    notes: request.notes ?? "",
+    notes: "",
     tagname: request.tagname,
     server: request.server ?? "",
     bridgeHost: request.bridge_host ?? "",

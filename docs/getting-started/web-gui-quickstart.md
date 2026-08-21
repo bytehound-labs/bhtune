@@ -82,10 +82,12 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
      page while the run is active or after it finishes.
-   - The form prefills from the newest run's own settings every time you open it fresh (or
+   - The form prefills from the newest run's own tune settings every time you open it fresh (or
      from a specific past run's settings via **Duplicate this run**, below) — remembered
      server-side, so it follows you across browsers and machines rather than living in
-     `localStorage`. A **Reset to defaults** button returns the form to the built-in defaults.
+     `localStorage`. Notes are intentionally left blank for each new tune so operator context
+     is not copied accidentally. A **Reset to defaults** button returns the form to the built-in
+     defaults.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
    in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current
@@ -111,7 +113,7 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      confirmation prompt — deleting a tune also removes its recorded measurements and
      results, and cannot be undone).
    - A **Duplicate this run** button, returning to the New tune form prefilled from this run's
-     exact settings instead of the newest run's.
+     tune settings instead of the newest run's; Notes starts blank.
 3. **History** (`/runs`) — every past tune, shown by **Tag name** and filterable by outcome and
    process type, with the same detail view available for any completed run — not just the one
    you just started.

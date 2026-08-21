@@ -51,6 +51,39 @@ test.describe("app shell", () => {
     }
   });
 
+  test("prefills tune settings without carrying forward notes", async ({
+    page,
+  }) => {
+    await page.route("**/api/runs/last-request", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tagname: "Sim.Loop1.PV",
+          template: "Yokogawa CentumVP",
+          process_type: "flow",
+          controller_type: "pi",
+          relay_amp: 10,
+          driver: "simulator",
+          notes: "Do not copy this note",
+          poll_interval_ms: 5,
+          direction: "reverse",
+          pv_range_high: 100,
+          pv_range_low: 0,
+          mv_range_high: 100,
+          mv_range_low: 0,
+        }),
+      }),
+    );
+
+    await page.goto("/runs/new");
+    await expect(
+      page.getByText("Loaded settings from the most recent tune."),
+    ).toBeVisible();
+    await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("5");
+    await expect(page.getByLabel("Notes")).toHaveValue("");
+  });
+
   test("navigates between Tune, History, and Templates via the header nav", async ({
     page,
   }) => {
