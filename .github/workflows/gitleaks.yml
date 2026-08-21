@@ -32,7 +32,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install Gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.28.0
+
       - name: Scan repository history
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          "$(go env GOPATH)/bin/gitleaks" detect \
+            --source . \
+            --log-opts="--all" \
+            --redact \
+            --verbose
