@@ -8,7 +8,7 @@ export type OpcReadResponse = components["schemas"]["OpcReadResponse"];
 
 /**
  * `GET /api/opc/servers` -- lists every OPC DA server registered on the bridge gateway's own
- * host, powering the New tune form's server-discovery button (`ui-opc-browser`). `enabled`
+ * host, powering the New tune form's "Browse servers" button (`ui-opc-browser`). `enabled`
  * gates the initial fetch: opening the form must not itself make a live network call to a
  * gateway that may not exist yet (or isn't even configured -- a fresh install may still be
  * using the simulator driver) -- the caller flips it on only once the engineer explicitly

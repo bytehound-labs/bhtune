@@ -571,7 +571,7 @@ export function NewRunPage() {
                       : "Enter an OPC DA server ProgID first."
                   }
                 >
-                  Browse tags…
+                  Browse tags
                 </Button>
               </div>
             )}

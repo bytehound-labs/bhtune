@@ -656,11 +656,11 @@ branch, proven without an actual 30-second wait). `openapi.json` and
 Phase 7.5's `ui-opc-browser` is also done — the last GUI/API todo of the eleven, leaving
 only the `phase75-docs` wrap-up. Two new pieces wire `api-opc-browse`'s three routes into
 the New Run form, both rendered only when `form.driver === "opcda"`: `OpcServerDiscovery`
-(`components/OpcServerDiscovery.tsx`), a "Discover servers" button next to the ProgID field
-gated behind an explicit click rather than firing on mount (server discovery is itself a
-live network call), rendering the discovered ProgIDs as clickable buttons that fill the
-field directly, or a clean error/empty state; and `OpcTagBrowserModal`
-(`components/OpcTagBrowserModal.tsx`), opened by a new "Browse tags…" button next to the Tag
+(`components/OpcServerDiscovery.tsx`), a "Browse servers" button next to the ProgID field
+that opens an on-demand modal rather than rendering every discovered server inline (server
+discovery is itself a live network call), with clickable ProgIDs that fill the field directly,
+or a clean error/empty state; and `OpcTagBrowserModal`
+(`components/OpcTagBrowserModal.tsx`), opened by a new "Browse tags" button next to the Tag
 name field (disabled, with an explanatory `title`, until a ProgID is entered) — a
 lazily-expanding tree (one `GET /api/opc/browse` level per node, cached per server/path so
 re-expanding an already-open node doesn't refetch) whose leaf selection renders a **derived
@@ -669,8 +669,9 @@ a new pure `frontend/src/lib/opcTags.ts::deriveTag` — a client-side mirror of
 `bhtune_core::tags::derive_from_pv_tag`'s "replace everything after the last `.`/`!`/`/` with
 the suffix" algorithm, used only for this preview; the server remains the actual source of
 truth once a run starts — plus a "Test read" button (`GET /api/opc/read`, showing value and
-quality) and "Use this tag", which writes the **selected node verbatim** into the Tag name
-field. This is deliberately not "strip the suffix and use the base name": since
+quality) and "Use this tag", which replaces the selected node's final component with the
+active template's process-variable suffix before writing it into the Tag name field. This is
+deliberately not "strip the suffix and use the base name": since
 `deriveTag`/`derive_from_pv_tag` both work by replacing everything after the last separator,
 a full leaf tag (e.g. `FIC101.PV`) is already exactly the right input — the preview panel and
 a real tune's tag derivation agree because they run the identical algorithm, which manual
@@ -705,7 +706,7 @@ total in the suite) exercises the OPC DA path against the suite's real, already-
 action fails at the connection step, which resolves in single-digit milliseconds
 (`ECONNREFUSED`, empirically confirmed, well inside `with_timeout`'s 30s budget) rather than
 hanging. That failure is still real coverage no other spec touches: the driver-switch
-visibility of "Discover servers"/"Browse tags…", the "Browse tags…" button's disabled-until-
+visibility of "Browse servers"/"Browse tags", the "Browse tags" button's disabled-until-
 a-ProgID-is-entered state, both buttons' real HTTP request wiring, the modal opening and
 rendering a visible connection-error message rather than silently swallowing it, and the
 modal closing via both its "Close" button and Escape. It does not attempt to re-prove the
@@ -4143,7 +4144,7 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    subcommand. `api-opc-browse` adds three read-only `bhtune-server` routes (`GET /api/opc/
 servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded by a
    30-second timeout. `ui-opc-browser` wires those routes into the New Run form: a
-   "Discover servers" button/list, and a "Browse tags…" modal with a lazily-expanding tag
+   "Browse servers" modal, and a "Browse tags" modal with a lazily-expanding tag
    tree, a derived-tag-set preview (a client-side mirror of the same suffix-derivation
    algorithm the server uses), a live "Test read", and "Use this tag" — manually verified
    end to end, including against a real populated tag tree served by a temporary,

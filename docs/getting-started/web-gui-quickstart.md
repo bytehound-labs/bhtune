@@ -70,17 +70,18 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      what the simulator doesn't use. Fields the simulator still needs — template, PV/MV
      ranges, controller direction, and every engine parameter — stay enabled, since the
      template's unit conversions and PID type apply to every run regardless of driver.
-   - Switching to **OPC DA** reveals a **Discover servers** button next to the ProgID field,
-     which calls the bridge gateway and lists every OPC DA server registered on it as
-     clickable buttons — no need to already know (or spell correctly) a ProgID like
-     `Matrikon.OPC.Simulation`. A **Browse tags…** button next to the Tag name field (enabled
-     once a ProgID is entered) opens a lazily-expanding tag tree fetched one level at a time
-     from the gateway. Hierarchical servers such as Yokogawa CSHIS can be expanded through
-     nested controller/block levels until their PV leaves; dotted and slash-separated item IDs
-     are supported. Selecting a leaf previews the complete tag set the active template would
-     derive from it (the clearest way to see how a template's suffixes actually work),
-     offers a **Read selected tag** action showing a live value and its quality, and **Use this tag** writes
-     the selection back into the Tag name field.
+   - Switching to **OPC DA** reveals a **Browse servers** button next to the ProgID field.
+     It opens an on-demand picker populated by the bridge gateway, listing every OPC DA server
+     registered on it as clickable buttons — no need to already know (or spell correctly) a
+     ProgID like `Matrikon.OPC.Simulation`. A **Browse tags** button next to the Tag name field
+     (enabled once a ProgID is entered) opens a lazily-expanding tag tree fetched one level at
+     a time from the gateway. Hierarchical servers such as Yokogawa CSHIS can be expanded
+     through nested controller/block levels until their PV leaves; dotted and slash-separated
+     item IDs are supported. Selecting a leaf previews the complete tag set the active template
+     would derive from it (the clearest way to see how a template's suffixes actually work),
+     offers a **Read selected tag** action showing a live value and its quality, and **Use this
+     tag** writes the selected tag with its final component replaced by the active template's
+     process-variable suffix into the Tag name field.
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
      page while the run is active or after it finishes.

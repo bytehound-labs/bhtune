@@ -1,20 +1,17 @@
 import { useState } from "react";
 import { useOpcServers } from "../api/opc";
 import { userFacingErrorMessage } from "../api/errors";
-import { Button } from "./ui";
+import { Button, Modal } from "./ui";
 
 /**
- * A "Discover servers on this bridge" affordance for the OPC DA server ProgID field
- * (`ui-opc-browser`): calls `GET /api/opc/servers` on demand and renders the results as a
- * clickable list the engineer can pick from instead of having to already know (or spell
- * correctly) a ProgID like `Matrikon.OPC.Simulation`.
+ * A "Browse servers on this bridge" affordance for the OPC DA server ProgID field
+ * (`ui-opc-browser`): calls `GET /api/opc/servers` on demand and renders the results in a
+ * modal so the form stays compact instead of permanently showing every registered server.
  *
  * Deliberately does not fetch automatically on mount -- discovery is a live network call to
- * the bridge gateway, and the New tune form must not make one just because the page loaded
- * (a fresh install may have no gateway configured, or may not even be using the opcda driver
- * at all). The first click flips on `useOpcServers`'s `enabled` flag; every click after that
- * calls the same query's own `refetch()`, so pointing at a different bridge host and
- * clicking again always re-queries rather than showing a stale list.
+ * the bridge gateway, and the New tune form must not make one just because the page loaded.
+ * Opening the modal enables the query; closing it removes the list from the form while
+ * retaining TanStack Query's short-lived cache for a quick reopen.
  */
 export function OpcServerDiscovery({
   bridgeHost,
@@ -23,46 +20,43 @@ export function OpcServerDiscovery({
   bridgeHost: string;
   onSelect: (server: string) => void;
 }) {
-  const [requested, setRequested] = useState(false);
-  const servers = useOpcServers(bridgeHost, requested);
-
-  function discover() {
-    if (requested) {
-      void servers.refetch();
-    } else {
-      setRequested(true);
-    }
-  }
+  const [open, setOpen] = useState(false);
+  const servers = useOpcServers(bridgeHost, open);
 
   return (
     <div className="mt-1">
-      <Button onClick={discover} disabled={servers.isFetching}>
-        {servers.isFetching ? "Discovering…" : "Discover servers"}
+      <Button onClick={() => setOpen(true)} disabled={servers.isFetching}>
+        {servers.isFetching ? "Loading servers…" : "Browse servers"}
       </Button>
 
-      {requested && servers.isError && (
-        <p className="mt-1 text-xs text-red-400">
-          {userFacingErrorMessage(
-            servers.error,
-            "Unable to discover OPC DA servers.",
-          )}
-        </p>
-      )}
-
-      {requested && servers.data && (
-        <>
-          {servers.data.servers.length === 0 ? (
-            <p className="mt-1 text-xs text-slate-500">
-              No OPC DA servers found.
+      {open && (
+        <Modal
+          title="Browse OPC DA servers"
+          onClose={() => setOpen(false)}
+          widthClassName="max-w-lg"
+        >
+          {servers.isPending || servers.isFetching ? (
+            <p className="text-sm text-slate-400">Connecting…</p>
+          ) : servers.isError ? (
+            <p className="text-sm text-red-400">
+              {userFacingErrorMessage(
+                servers.error,
+                "Unable to browse OPC DA servers.",
+              )}
             </p>
+          ) : !servers.data || servers.data.servers.length === 0 ? (
+            <p className="text-sm text-slate-500">No OPC DA servers found.</p>
           ) : (
-            <ul className="mt-1 max-h-32 overflow-y-auto rounded-md border border-slate-800 bg-slate-950">
+            <ul className="rounded-md border border-slate-800 bg-slate-950">
               {servers.data.servers.map((server) => (
                 <li key={server}>
                   <button
                     type="button"
-                    onClick={() => onSelect(server)}
-                    className="block w-full truncate px-2 py-1 text-left font-mono text-xs text-slate-300 hover:bg-slate-800"
+                    onClick={() => {
+                      onSelect(server);
+                      setOpen(false);
+                    }}
+                    className="block w-full truncate px-3 py-2 text-left font-mono text-sm text-slate-300 hover:bg-slate-800"
                   >
                     {server}
                   </button>
@@ -70,7 +64,7 @@ export function OpcServerDiscovery({
               ))}
             </ul>
           )}
-        </>
+        </Modal>
       )}
     </div>
   );

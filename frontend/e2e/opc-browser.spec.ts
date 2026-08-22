@@ -12,14 +12,11 @@ import { expect, test } from "@playwright/test";
  *
  * A connection failure is still genuinely useful regression coverage: it exercises the
  * driver-switch visibility of the OPC-only fields, the real `GET /api/opc/servers` and
- * `GET /api/opc/browse` request wiring behind "Discover servers"/"Browse tags…", the modal
+ * `GET /api/opc/browse` request wiring behind "Browse servers"/"Browse tags", the modal
  * opening/closing, and that a failure renders as a visible error rather than a silent no-op
- * or an unhandled exception -- none of which any other spec in this suite touches. The
- * populated-tree happy path (expand/select/detected-tag preview/"Read selected tag"/"Use this tag")
- * was verified once by hand against a temporary mock gRPC gateway -- see AGENTS.md's
- * `ui-opc-browser` section -- and is deliberately not re-proven here: standing up a second,
- * permanent mock gRPC service just for this suite would be disproportionate to what it
- * would additionally prove over that manual pass.
+ * or an unhandled exception. The populated-tree cases below use Playwright route fixtures for
+ * the HTTP responses, keeping the selection and template-specific PV-tag transformation
+ * covered without requiring a second permanent gateway service.
  */
 test.describe("OPC DA server discovery and tag browser (no gateway present)", () => {
   test.beforeEach(async ({ page }) => {
@@ -46,7 +43,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
   test("Browse tags button stays disabled until a ProgID is entered", async ({
     page,
   }) => {
-    const browseButton = page.getByRole("button", { name: "Browse tags…" });
+    const browseButton = page.getByRole("button", { name: "Browse tags" });
     await expect(browseButton).toBeDisabled();
 
     await page
@@ -55,16 +52,43 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(browseButton).toBeEnabled();
   });
 
-  test("shows a connection error when discovering servers with no gateway present", async ({
+  test("opens the server picker and fills the ProgID from a discovered server", async ({
     page,
   }) => {
-    await page
-      .getByLabel("OPC DA server ProgID")
-      .fill("Matrikon.OPC.Simulation");
-    await page.getByRole("button", { name: "Discover servers" }).click();
+    await page.route("**/api/opc/servers**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          servers: ["Kepware.KEPServerEX.V5", "Yokogawa.CSHIS_OPC.1"],
+        }),
+      });
+    });
+
+    const serverField = page.getByLabel("OPC DA server ProgID");
+    await page.getByRole("button", { name: "Browse servers" }).click();
 
     await expect(
-      page.getByText("Unable to discover OPC DA servers."),
+      page.getByRole("heading", { name: "Browse OPC DA servers" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Yokogawa.CSHIS_OPC.1" }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Yokogawa.CSHIS_OPC.1" }).click();
+    await expect(serverField).toHaveValue("Yokogawa.CSHIS_OPC.1");
+    await expect(
+      page.getByRole("heading", { name: "Browse OPC DA servers" }),
+    ).not.toBeVisible();
+  });
+
+  test("shows a connection error when browsing servers with no gateway present", async ({
+    page,
+  }) => {
+    await page.getByRole("button", { name: "Browse servers" }).click();
+
+    await expect(
+      page.getByText("Unable to browse OPC DA servers."),
     ).toBeVisible();
   });
 
@@ -74,7 +98,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page
       .getByLabel("OPC DA server ProgID")
       .fill("Matrikon.OPC.Simulation");
-    await page.getByRole("button", { name: "Browse tags…" }).click();
+    await page.getByRole("button", { name: "Browse tags" }).click();
 
     await expect(
       page.getByRole("heading", {
@@ -97,7 +121,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page
       .getByLabel("OPC DA server ProgID")
       .fill("Matrikon.OPC.Simulation");
-    await page.getByRole("button", { name: "Browse tags…" }).click();
+    await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(
       page.getByRole("heading", {
         name: "Browse tags on Matrikon.OPC.Simulation",
@@ -110,5 +134,61 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         name: "Browse tags on Matrikon.OPC.Simulation",
       }),
     ).not.toBeVisible();
+  });
+
+  test("uses the active template PV suffix when a browse leaf is selected", async ({
+    page,
+  }) => {
+    await page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox")
+      .selectOption("Yokogawa CentumVP");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+
+    await page.route("**/api/opc/browse**", async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.searchParams.get("path");
+      const nodes =
+        path === "Simulink.Device1._System"
+          ? [
+              {
+                tag: "Simulink.Device1._System._DemandPoll",
+                is_branch: false,
+              },
+            ]
+          : [
+              {
+                tag: "Simulink.Device1._System",
+                is_branch: true,
+              },
+            ];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ nodes }),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(
+      page.getByRole("button", { name: "Simulink.Device1._System" }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Expand" }).click();
+    await page
+      .getByRole("button", {
+        name: "Simulink.Device1._System._DemandPoll",
+      })
+      .click();
+
+    await expect(
+      page.getByText("PV tag: Simulink.Device1._System.PV"),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Use this tag" }).click();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(
+      "Simulink.Device1._System.PV",
+    );
   });
 });

@@ -4,7 +4,7 @@ import { userFacingErrorMessage } from "../api/errors";
 import type { OpcTagNodeResponse } from "../api/opc";
 import type { components } from "../api/schema";
 import { SAMPLE_QUALITY_LABELS, SAMPLE_QUALITY_TONE } from "../lib/enumLabels";
-import { derivedTagPreview } from "../lib/opcTags";
+import { deriveTag, derivedTagPreview } from "../lib/opcTags";
 import { Badge, Button, Modal } from "./ui";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
@@ -134,6 +134,8 @@ function TreeLevel({
  * how a template's suffixes actually work, since it shows the real tag names that would
  * result from the exact tag just picked (see `derivedTagPreview`'s doc comment for why
  * *any* node under a loop's hierarchy, not just its PV leaf, yields the identical set).
+ * When the user confirms a selection, the final component is replaced with the active
+ * template's process-variable suffix before the value is written back to the form.
  *
  * A fresh instance is mounted each time the New tune form opens it (see `NewRunPage`'s
  * conditional render), so there's no need to reset internal state on `bridgeHost`/
@@ -211,6 +213,11 @@ export function OpcTagBrowserModal({
 
   const preview =
     selectedTag && template ? derivedTagPreview(selectedTag, template) : null;
+  const selectedPvTag =
+    selectedTag && template
+      ? (deriveTag(selectedTag, template.process_variable_suffix) ??
+        selectedTag)
+      : selectedTag;
 
   return (
     <Modal
@@ -241,6 +248,11 @@ export function OpcTagBrowserModal({
               <p className="text-sm text-slate-200">
                 Selected: <span className="font-mono">{selectedTag}</span>
               </p>
+              {selectedPvTag && selectedPvTag !== selectedTag && (
+                <p className="mt-1 text-xs text-slate-400">
+                  PV tag: <span className="font-mono">{selectedPvTag}</span>
+                </p>
+              )}
 
               {template ? (
                 <>
@@ -304,7 +316,7 @@ export function OpcTagBrowserModal({
                 <Button
                   variant="primary"
                   onClick={() => {
-                    onSelect(selectedTag);
+                    onSelect(selectedPvTag ?? selectedTag);
                     onClose();
                   }}
                 >
