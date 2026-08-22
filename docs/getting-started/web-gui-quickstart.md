@@ -91,7 +91,8 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      selected item (before suffix replacement) and proceeds immediately only for `Good` OPC
      quality; `Uncertain` or `Bad` quality opens a warning with choices to select a different
      tag or proceed anyway. Proceeding only selects the item; tune execution still applies its
-     live-reading quality safeguards.
+     live-reading quality safeguards. Reopening the browser expands the available path to the
+     current Tag name and selects that node; an unavailable tag falls back to the root level.
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
      page while the run is active or after it finishes.

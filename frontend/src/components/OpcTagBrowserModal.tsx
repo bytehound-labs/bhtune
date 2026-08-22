@@ -22,6 +22,21 @@ type PathState =
  * leaf's label lines up under its parent branch's label, not under its chevron. */
 const INDENT_PX = 18;
 
+function namespaceSegments(value: string): string[] {
+  return value.split(/[.!/]/).filter((segment) => segment !== "");
+}
+
+function isNamespaceDescendant(parent: string, candidate: string): boolean {
+  const parentSegments = namespaceSegments(parent);
+  const candidateSegments = namespaceSegments(candidate);
+  return (
+    candidateSegments.length > parentSegments.length &&
+    parentSegments.every(
+      (segment, index) => candidateSegments[index] === segment,
+    )
+  );
+}
+
 /** One tree level -- renders `pathState[path]`'s nodes and recurses into whichever of them
  * are both a branch and currently expanded. Kept as a separate component (rather than a
  * loop inside `OpcTagBrowserModal` itself) purely so the recursion has somewhere to call
@@ -156,6 +171,9 @@ function TreeLevel({
  * open so the tag is never accepted without verification.
  * Double-clicking a leaf performs the same confirmation as the `Select tag` button, while
  * double-clicking a branch expands or collapses it.
+ * Reopening the modal starts from `initialTag` when that tag is present in the browsed tree:
+ * each matching ancestor branch is expanded and the tag is selected automatically. If the
+ * tag is unavailable, the browser keeps its root-level default selection.
  *
  * A fresh instance is mounted each time the New tune form opens it (see `NewRunPage`'s
  * conditional render), so there's no need to reset internal state on `bridgeHost`/
@@ -166,12 +184,14 @@ export function OpcTagBrowserModal({
   bridgeHost,
   opcServer,
   template,
+  initialTag,
   onClose,
   onSelect,
 }: {
   bridgeHost: string;
   opcServer: string;
   template: TemplateResponse | undefined;
+  initialTag: string;
   onClose: () => void;
   onSelect: (tag: string) => void;
 }) {
@@ -188,7 +208,7 @@ export function OpcTagBrowserModal({
     null,
   );
 
-  async function load(path: string) {
+  async function load(path: string): Promise<OpcTagNodeResponse[] | null> {
     setPathState((prev) => ({ ...prev, [path]: { status: "loading" } }));
     try {
       const nodes = await fetchPath(path);
@@ -196,9 +216,7 @@ export function OpcTagBrowserModal({
         ...prev,
         [path]: { status: "loaded", nodes },
       }));
-      if (path === "" && nodes.length > 0) {
-        setSelectedTag((previous) => previous ?? nodes[0].tag);
-      }
+      return nodes;
     } catch (err) {
       setPathState((prev) => ({
         ...prev,
@@ -210,7 +228,40 @@ export function OpcTagBrowserModal({
           ),
         },
       }));
+      return null;
     }
+  }
+
+  async function revealInitialTag(
+    rootNodes: OpcTagNodeResponse[],
+    target: string,
+    isCancelled: () => boolean,
+  ): Promise<boolean> {
+    let nodes = rootNodes;
+    while (!isCancelled()) {
+      const matchingNode = nodes.find((node) => node.tag === target);
+      if (matchingNode) {
+        setSelectedTag(matchingNode.tag);
+        return true;
+      }
+
+      const branch = nodes.find(
+        (node) => node.is_branch && isNamespaceDescendant(node.tag, target),
+      );
+      if (!branch) return false;
+
+      setExpanded((previous) => {
+        if (previous.has(branch.tag)) return previous;
+        const next = new Set(previous);
+        next.add(branch.tag);
+        return next;
+      });
+
+      const childNodes = await load(branch.tag);
+      if (!childNodes) return false;
+      nodes = childNodes;
+    }
+    return false;
   }
 
   // Loads the root level once, as soon as there's a server to browse. `opcServer` is the
@@ -220,13 +271,33 @@ export function OpcTagBrowserModal({
   // path below instead of firing a request that would just 400.
   useEffect(() => {
     if (!opcServer) return;
-    void load("");
-    // Deliberately depends only on `bridgeHost`/`opcServer`: `load`/`fetchPath` are
+    let cancelled = false;
+    async function initialize() {
+      const rootNodes = await load("");
+      if (cancelled || !rootNodes) return;
+
+      const target = initialTag.trim();
+      if (
+        target &&
+        (await revealInitialTag(rootNodes, target, () => cancelled))
+      ) {
+        return;
+      }
+      if (!cancelled) {
+        setExpanded(new Set());
+        setSelectedTag(rootNodes[0]?.tag ?? null);
+      }
+    }
+    void initialize();
+    return () => {
+      cancelled = true;
+    };
+    // Deliberately depends only on `bridgeHost`/`opcServer`/`initialTag`: `load`/`fetchPath` are
     // recreated every render but always call through to the same underlying query-cache
     // fetch, so this intentionally does not list them -- doing so would only cause
     // redundant re-fetches of the root level on every unrelated re-render.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridgeHost, opcServer]);
+  }, [bridgeHost, opcServer, initialTag]);
 
   function toggle(tag: string) {
     setExpanded((prev) => {

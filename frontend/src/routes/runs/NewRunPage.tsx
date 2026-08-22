@@ -1064,6 +1064,7 @@ export function NewRunPage() {
           bridgeHost={form.bridgeHost}
           opcServer={form.server}
           template={activeTemplate}
+          initialTag={form.tagname}
           onClose={() => setTagBrowserOpen(false)}
           onSelect={(tag) => set("tagname", tag)}
         />

@@ -275,6 +275,62 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     expect(readTags).toEqual([originalTag, originalTag]);
   });
 
+  test("reopens the browser at the previously selected tag", async ({
+    page,
+  }) => {
+    const originalTag = "Simulink._Statistics.Inp_PV";
+    await page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox")
+      .selectOption("Allen-Bradley PlantPAx");
+    await page
+      .getByLabel("OPC DA server ProgID")
+      .fill("Kepware.KEPServerEX.V6");
+    await page.getByLabel("Tag name").fill(originalTag);
+
+    await page.route("**/api/opc/read**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: originalTag,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.searchParams.get("path");
+      const nodes =
+        path === "Simulink"
+          ? [{ tag: "Simulink._Statistics", is_branch: true }]
+          : path === "Simulink._Statistics"
+            ? [{ tag: originalTag, is_branch: false }]
+            : [{ tag: "Simulink", is_branch: true }];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ nodes }),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(page.getByRole("button", { name: originalTag })).toBeVisible();
+    await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
+    await page.getByRole("button", { name: originalTag }).click();
+    await page.getByRole("button", { name: "Select tag" }).click();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(originalTag);
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(page.getByRole("button", { name: originalTag })).toBeVisible();
+    await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Collapse" })).toHaveCount(2);
+  });
+
   test("warns before selecting a tag whose OPC quality is not Good", async ({
     page,
   }) => {
