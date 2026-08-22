@@ -185,7 +185,22 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(
       page.getByText("PV tag: Simulink.Device1._System.PV"),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Use this tag" }).click();
+    await page.getByRole("button", { name: "Select tag" }).click();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(
+      "Simulink.Device1._System.PV",
+    );
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(
+      page.getByRole("button", { name: "Simulink.Device1._System" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Expand" }).click();
+    await page
+      .getByRole("button", {
+        name: "Simulink.Device1._System._DemandPoll",
+      })
+      .dblclick();
 
     await expect(page.getByLabel("Tag name")).toHaveValue(
       "Simulink.Device1._System.PV",

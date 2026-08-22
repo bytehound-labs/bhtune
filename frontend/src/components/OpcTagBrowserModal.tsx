@@ -30,6 +30,7 @@ function TreeLevel({
   expanded,
   onToggle,
   onSelect,
+  onConfirm,
   selectedTag,
 }: {
   path: string;
@@ -38,6 +39,7 @@ function TreeLevel({
   expanded: Set<string>;
   onToggle: (tag: string) => void;
   onSelect: (tag: string) => void;
+  onConfirm: (tag: string) => void;
   selectedTag: string | null;
 }) {
   const state = pathState[path];
@@ -99,6 +101,7 @@ function TreeLevel({
             <button
               type="button"
               onClick={() => onSelect(node.tag)}
+              onDoubleClick={() => onConfirm(node.tag)}
               title={node.tag}
               className="flex-1 truncate text-left font-mono text-slate-200"
             >
@@ -116,6 +119,7 @@ function TreeLevel({
               expanded={expanded}
               onToggle={onToggle}
               onSelect={onSelect}
+              onConfirm={onConfirm}
               selectedTag={selectedTag}
             />
           )}
@@ -136,6 +140,7 @@ function TreeLevel({
  * *any* node under a loop's hierarchy, not just its PV leaf, yields the identical set).
  * When the user confirms a selection, the final component is replaced with the active
  * template's process-variable suffix before the value is written back to the form.
+ * Double-clicking a node performs the same confirmation as the `Select tag` button.
  *
  * A fresh instance is mounted each time the New tune form opens it (see `NewRunPage`'s
  * conditional render), so there's no need to reset internal state on `bridgeHost`/
@@ -211,6 +216,14 @@ export function OpcTagBrowserModal({
     });
   }
 
+  function confirmTag(tag: string) {
+    const pvTag = template
+      ? (deriveTag(tag, template.process_variable_suffix) ?? tag)
+      : tag;
+    onSelect(pvTag);
+    onClose();
+  }
+
   const preview =
     selectedTag && template ? derivedTagPreview(selectedTag, template) : null;
   const selectedPvTag =
@@ -239,6 +252,7 @@ export function OpcTagBrowserModal({
               expanded={expanded}
               onToggle={toggle}
               onSelect={setSelectedTag}
+              onConfirm={confirmTag}
               selectedTag={selectedTag}
             />
           </div>
@@ -315,12 +329,9 @@ export function OpcTagBrowserModal({
                 <Button onClick={onClose}>Cancel</Button>
                 <Button
                   variant="primary"
-                  onClick={() => {
-                    onSelect(selectedPvTag ?? selectedTag);
-                    onClose();
-                  }}
+                  onClick={() => confirmTag(selectedTag)}
                 >
-                  Use this tag
+                  Select tag
                 </Button>
               </div>
             </div>

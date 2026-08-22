@@ -669,9 +669,10 @@ a new pure `frontend/src/lib/opcTags.ts::deriveTag` — a client-side mirror of
 `bhtune_core::tags::derive_from_pv_tag`'s "replace everything after the last `.`/`!`/`/` with
 the suffix" algorithm, used only for this preview; the server remains the actual source of
 truth once a run starts — plus a "Test read" button (`GET /api/opc/read`, showing value and
-quality) and "Use this tag", which replaces the selected node's final component with the
-active template's process-variable suffix before writing it into the Tag name field. This is
-deliberately not "strip the suffix and use the base name": since
+quality) and "Select tag", which replaces the selected node's final component with the active
+template's process-variable suffix before writing it into the Tag name field. Double-clicking
+a node performs the same selection. This is deliberately not "strip the suffix and use the
+base name": since
 `deriveTag`/`derive_from_pv_tag` both work by replacing everything after the last separator,
 a full leaf tag (e.g. `FIC101.PV`) is already exactly the right input — the preview panel and
 a real tune's tag derivation agree because they run the identical algorithm, which manual
@@ -686,7 +687,7 @@ request contents and can't demonstrate real recursive tree expansion or a templa
 derived-tag preview. Confirmed: server discovery returning real ProgIDs; recursive branch
 expansion (`FIC101` → `FIC101.PV`/`.MODE`/`.OUT`); the derived tag preview rendering the
 correct Allen-Bradley PlantPAx suffixes for a selected leaf; "Test read" showing a live
-value and `Good` quality; and "Use this tag" writing the selected tag back into the Tag name
+value and `Good` quality; and "Select tag" writing the selected tag back into the Tag name
 field exactly as the preview showed — proving the client-side preview and the server's real
 tag derivation agree, not merely that they're intended to. Also verified structurally before
 the mock gateway existed: driver-switch show/hide of both new affordances, disabled states
@@ -4146,7 +4147,7 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    30-second timeout. `ui-opc-browser` wires those routes into the New Run form: a
    "Browse servers" modal, and a "Browse tags" modal with a lazily-expanding tag
    tree, a derived-tag-set preview (a client-side mirror of the same suffix-derivation
-   algorithm the server uses), a live "Test read", and "Use this tag" — manually verified
+   algorithm the server uses), a live "Test read", and "Select tag" — manually verified
    end to end, including against a real populated tag tree served by a temporary,
    never-committed mock gateway. Remaining: `phase75-docs` (the documentation wrap-up). See
    the Status section above for the full design and verification detail behind each.

@@ -79,9 +79,9 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      through nested controller/block levels until their PV leaves; dotted and slash-separated
      item IDs are supported. Selecting a leaf previews the complete tag set the active template
      would derive from it (the clearest way to see how a template's suffixes actually work),
-     offers a **Read selected tag** action showing a live value and its quality, and **Use this
-     tag** writes the selected tag with its final component replaced by the active template's
-     process-variable suffix into the Tag name field.
+     offers a **Read selected tag** action showing a live value and its quality. Double-clicking
+     a tag or selecting **Select tag** writes the selected tag with its final component replaced
+     by the active template's process-variable suffix into the Tag name field.
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
      page while the run is active or after it finishes.
