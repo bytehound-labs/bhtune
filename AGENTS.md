@@ -671,8 +671,11 @@ the suffix" algorithm, used only for this preview; the server remains the actual
 truth once a run starts — plus a "Test read" button (`GET /api/opc/read`, showing value and
 quality) and "Select tag", which replaces the selected node's final component with the active
 template's process-variable suffix before writing it into the Tag name field. Double-clicking
-a node performs the same selection. This is deliberately not "strip the suffix and use the
-base name": since
+a leaf performs the same selection, while double-clicking a branch expands or collapses it.
+The selection panel is rendered before a node is clicked, and the first loaded node is selected
+automatically. Its detailed template replacement list is inside a native `details` element
+that is collapsed by default.
+This is deliberately not "strip the suffix and use the base name": since
 `deriveTag`/`derive_from_pv_tag` both work by replacing everything after the last separator,
 a full leaf tag (e.g. `FIC101.PV`) is already exactly the right input — the preview panel and
 a real tune's tag derivation agree because they run the identical algorithm, which manual
