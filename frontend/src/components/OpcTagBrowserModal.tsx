@@ -101,7 +101,9 @@ function TreeLevel({
             <button
               type="button"
               onClick={() => onSelect(node.tag)}
-              onDoubleClick={() => onConfirm(node.tag)}
+              onDoubleClick={() =>
+                node.is_branch ? onToggle(node.tag) : onConfirm(node.tag)
+              }
               title={node.tag}
               className="flex-1 truncate text-left font-mono text-slate-200"
             >
@@ -140,7 +142,8 @@ function TreeLevel({
  * *any* node under a loop's hierarchy, not just its PV leaf, yields the identical set).
  * When the user confirms a selection, the final component is replaced with the active
  * template's process-variable suffix before the value is written back to the form.
- * Double-clicking a node performs the same confirmation as the `Select tag` button.
+ * Double-clicking a leaf performs the same confirmation as the `Select tag` button, while
+ * double-clicking a branch expands or collapses it.
  *
  * A fresh instance is mounted each time the New tune form opens it (see `NewRunPage`'s
  * conditional render), so there's no need to reset internal state on `bridgeHost`/
@@ -174,6 +177,9 @@ export function OpcTagBrowserModal({
         ...prev,
         [path]: { status: "loaded", nodes },
       }));
+      if (path === "" && nodes.length > 0) {
+        setSelectedTag((previous) => previous ?? nodes[0].tag);
+      }
     } catch (err) {
       setPathState((prev) => ({
         ...prev,
@@ -257,85 +263,93 @@ export function OpcTagBrowserModal({
             />
           </div>
 
-          {selectedTag && (
-            <div className="mt-4 rounded-md border border-slate-700 bg-slate-900 p-3">
-              <p className="text-sm text-slate-200">
-                Selected: <span className="font-mono">{selectedTag}</span>
+          <div className="mt-4 min-h-[10rem] rounded-md border border-slate-700 bg-slate-900 p-3">
+            {!selectedTag ? (
+              <p className="text-sm text-slate-400">
+                Select a tag to preview its template mapping.
               </p>
-              {selectedPvTag && selectedPvTag !== selectedTag && (
-                <p className="mt-1 text-xs text-slate-400">
-                  PV tag: <span className="font-mono">{selectedPvTag}</span>
+            ) : (
+              <>
+                <p className="text-sm text-slate-200">
+                  Selected: <span className="font-mono">{selectedTag}</span>
                 </p>
-              )}
-
-              {template ? (
-                <>
-                  <p className="mt-2 text-xs uppercase tracking-wide text-slate-500">
-                    Detected tags (template: {template.name})
+                {selectedPvTag && selectedPvTag !== selectedTag && (
+                  <p className="mt-1 text-xs text-slate-400">
+                    PV tag: <span className="font-mono">{selectedPvTag}</span>
                   </p>
-                  <ul className="mt-1 space-y-0.5 font-mono text-xs text-slate-400">
-                    {preview?.map((row) => (
-                      <li key={row.label}>
-                        <span className="text-slate-500">{row.label}:</span>{" "}
-                        {row.tag ?? (
-                          <span className="italic text-slate-600">
-                            not used by this template
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : (
-                <p className="mt-1 text-xs text-slate-500">
-                  Choose a template above to preview its full derived tag set.
-                </p>
-              )}
-
-              <div className="mt-3 flex items-center gap-2">
-                <Button
-                  disabled={testConnection.isPending}
-                  onClick={() =>
-                    testConnection.mutate({
-                      bridgeHost,
-                      opcServer,
-                      tag: selectedTag,
-                    })
-                  }
-                >
-                  {testConnection.isPending ? "Reading…" : "Read selected tag"}
-                </Button>
-                {testConnection.isSuccess && (
-                  <span className="text-xs text-slate-300">
-                    {testConnection.data.value}{" "}
-                    <Badge
-                      tone={SAMPLE_QUALITY_TONE[testConnection.data.quality]}
-                    >
-                      {SAMPLE_QUALITY_LABELS[testConnection.data.quality]}
-                    </Badge>
-                  </span>
                 )}
-                {testConnection.isError && (
-                  <span className="text-xs text-red-400">
-                    {userFacingErrorMessage(
-                      testConnection.error,
-                      "Unable to read the selected tag.",
-                    )}
-                  </span>
-                )}
-              </div>
 
-              <div className="mt-3 flex justify-end gap-2">
-                <Button onClick={onClose}>Cancel</Button>
-                <Button
-                  variant="primary"
-                  onClick={() => confirmTag(selectedTag)}
-                >
-                  Select tag
-                </Button>
-              </div>
-            </div>
-          )}
+                {template ? (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer select-none text-xs uppercase tracking-wide text-slate-500">
+                      Detected tags (template: {template.name})
+                    </summary>
+                    <ul className="mt-2 space-y-0.5 font-mono text-xs text-slate-400">
+                      {preview?.map((row) => (
+                        <li key={row.label}>
+                          <span className="text-slate-500">{row.label}:</span>{" "}
+                          {row.tag ?? (
+                            <span className="italic text-slate-600">
+                              not used by this template
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Choose a template above to preview its full derived tag set.
+                  </p>
+                )}
+
+                <div className="mt-3 flex items-center gap-2">
+                  <Button
+                    disabled={testConnection.isPending}
+                    onClick={() =>
+                      testConnection.mutate({
+                        bridgeHost,
+                        opcServer,
+                        tag: selectedTag,
+                      })
+                    }
+                  >
+                    {testConnection.isPending
+                      ? "Reading…"
+                      : "Read selected tag"}
+                  </Button>
+                  {testConnection.isSuccess && (
+                    <span className="text-xs text-slate-300">
+                      {testConnection.data.value}{" "}
+                      <Badge
+                        tone={SAMPLE_QUALITY_TONE[testConnection.data.quality]}
+                      >
+                        {SAMPLE_QUALITY_LABELS[testConnection.data.quality]}
+                      </Badge>
+                    </span>
+                  )}
+                  {testConnection.isError && (
+                    <span className="text-xs text-red-400">
+                      {userFacingErrorMessage(
+                        testConnection.error,
+                        "Unable to read the selected tag.",
+                      )}
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-3 flex justify-end gap-2">
+                  <Button onClick={onClose}>Cancel</Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => confirmTag(selectedTag)}
+                  >
+                    Select tag
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         </>
       )}
     </Modal>

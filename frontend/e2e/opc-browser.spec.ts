@@ -174,6 +174,15 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(
       page.getByRole("button", { name: "Simulink.Device1._System" }),
     ).toBeVisible();
+    await expect(
+      page.getByText("Selected: Simulink.Device1._System"),
+    ).toBeVisible();
+    const mappingDetails = page.locator("details");
+    await expect(mappingDetails).not.toHaveAttribute("open", "");
+    await mappingDetails.locator("summary").click();
+    await expect(mappingDetails.locator("ul")).toBeVisible();
+    await mappingDetails.locator("summary").click();
+    await expect(mappingDetails).not.toHaveAttribute("open", "");
 
     await page.getByRole("button", { name: "Expand" }).click();
     await page
@@ -195,7 +204,17 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(
       page.getByRole("button", { name: "Simulink.Device1._System" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Expand" }).click();
+
+    await page
+      .getByRole("button", {
+        name: "Simulink.Device1._System",
+      })
+      .dblclick();
+    await expect(
+      page.getByRole("button", {
+        name: "Simulink.Device1._System._DemandPoll",
+      }),
+    ).toBeVisible();
     await page
       .getByRole("button", {
         name: "Simulink.Device1._System._DemandPoll",

@@ -102,11 +102,13 @@ scaffolding workspace intentionally does not declare unused dependencies.
 
 The web form's **Browse servers** button opens an on-demand picker for the OPC DA servers
 registered on the gateway. Its tag browser expands one namespace level at a time and supports
-both dotted and slash-separated OPC item IDs. With a template selected, confirming a tag
-selection replaces its final component with that template's process-variable suffix before
-writing the value into the Tag name field. Use a gateway release with recursive hierarchical
-browsing for servers that expose branch names through `OPC_FLAT` without returning their
-descendants.
+both dotted and slash-separated OPC item IDs. The first node is selected automatically when
+the tree loads, and the selection panel remains in place while browsing. Detailed template
+replacement information is collapsed by default and can be expanded when needed. With a
+template selected, confirming a tag selection replaces its final component with that
+template's process-variable suffix before writing the value into the Tag name field. Use a
+gateway release with recursive hierarchical browsing for servers that expose branch names
+through `OPC_FLAT` without returning their descendants.
 
 ## Installation
 
