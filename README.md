@@ -115,8 +115,9 @@ Confirming a tag selection performs a fresh read of the original item selected i
 and proceeds immediately only when its OPC quality is `Good`. `Uncertain` or `Bad` quality
 requires an explicit choice to select a different tag or proceed anyway. Proceeding only
 selects the item; a tune still applies its live-reading quality safeguards.
-Reopening the browser automatically expands the available path to the current Tag name and
-selects that node; if it is no longer present, browsing falls back to the root level.
+Reopening the browser automatically expands the available path to the current Tag name, selects
+that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
+level.
 
 ## Installation
 

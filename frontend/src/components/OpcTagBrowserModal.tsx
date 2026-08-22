@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useOpcBrowseFetcher, useTestOpcConnection } from "../api/opc";
 import { userFacingErrorMessage } from "../api/errors";
 import type { OpcReadResponse, OpcTagNodeResponse } from "../api/opc";
@@ -51,6 +51,7 @@ function TreeLevel({
   onSelect,
   onConfirm,
   selectedTag,
+  selectedNodeRef,
   disabled,
 }: {
   path: string;
@@ -61,6 +62,7 @@ function TreeLevel({
   onSelect: (tag: string) => void;
   onConfirm: (tag: string) => void;
   selectedTag: string | null;
+  selectedNodeRef: RefObject<HTMLButtonElement | null>;
   disabled: boolean;
 }) {
   const state = pathState[path];
@@ -126,6 +128,7 @@ function TreeLevel({
               onDoubleClick={() =>
                 node.is_branch ? onToggle(node.tag) : onConfirm(node.tag)
               }
+              ref={selectedTag === node.tag ? selectedNodeRef : undefined}
               disabled={disabled}
               title={node.tag}
               className="flex-1 truncate text-left font-mono text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
@@ -146,6 +149,7 @@ function TreeLevel({
               onSelect={onSelect}
               onConfirm={onConfirm}
               selectedTag={selectedTag}
+              selectedNodeRef={selectedNodeRef}
               disabled={disabled}
             />
           )}
@@ -173,7 +177,8 @@ function TreeLevel({
  * double-clicking a branch expands or collapses it.
  * Reopening the modal starts from `initialTag` when that tag is present in the browsed tree:
  * each matching ancestor branch is expanded and the tag is selected automatically. If the
- * tag is unavailable, the browser keeps its root-level default selection.
+ * tag is unavailable, the browser keeps its root-level default selection. The selected node
+ * is scrolled into the tree viewport when it becomes available.
  *
  * A fresh instance is mounted each time the New tune form opens it (see `NewRunPage`'s
  * conditional render), so there's no need to reset internal state on `bridgeHost`/
@@ -200,6 +205,7 @@ export function OpcTagBrowserModal({
   const [pathState, setPathState] = useState<Record<string, PathState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const selectedNodeRef = useRef<HTMLButtonElement | null>(null);
   const [selectionReadError, setSelectionReadError] = useState<string | null>(
     null,
   );
@@ -298,6 +304,10 @@ export function OpcTagBrowserModal({
     // redundant re-fetches of the root level on every unrelated re-render.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [bridgeHost, opcServer, initialTag]);
+
+  useEffect(() => {
+    selectedNodeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selectedTag, pathState, expanded]);
 
   function toggle(tag: string) {
     setExpanded((prev) => {
@@ -438,6 +448,7 @@ export function OpcTagBrowserModal({
               onSelect={selectTag}
               onConfirm={confirmTag}
               selectedTag={selectedTag}
+              selectedNodeRef={selectedNodeRef}
               disabled={testConnection.isPending || selectionCheckPending}
             />
           </div>

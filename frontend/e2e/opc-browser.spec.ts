@@ -304,12 +304,16 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page.route("**/api/opc/browse**", async (route) => {
       const url = new URL(route.request().url());
       const path = url.searchParams.get("path");
+      const fillerNodes = Array.from({ length: 30 }, (_, index) => ({
+        tag: `Filler${index}`,
+        is_branch: false,
+      }));
       const nodes =
         path === "Simulink"
           ? [{ tag: "Simulink._Statistics", is_branch: true }]
           : path === "Simulink._Statistics"
             ? [{ tag: originalTag, is_branch: false }]
-            : [{ tag: "Simulink", is_branch: true }];
+            : [...fillerNodes, { tag: "Simulink", is_branch: true }];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -320,6 +324,10 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(page.getByRole("button", { name: originalTag })).toBeVisible();
     await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
+    const treeViewport = page.locator("div.max-h-64").first();
+    await expect
+      .poll(() => treeViewport.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
     await page.getByRole("button", { name: originalTag }).click();
     await page.getByRole("button", { name: "Select tag" }).click();
 
@@ -328,6 +336,9 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(page.getByRole("button", { name: originalTag })).toBeVisible();
     await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
+    await expect
+      .poll(() => treeViewport.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: "Collapse" })).toHaveCount(2);
   });
 

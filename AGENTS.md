@@ -679,8 +679,8 @@ choice to select another tag or proceed anyway; a read failure leaves the browse
 Double-clicking a leaf performs the same selection, while double-clicking a branch expands or
 collapses it. Reopening the modal passes the current Tag name back in as its initial selection,
 walks the one-level-at-a-time browse results, expands matching ancestor branches, and selects
-the deepest matching node; if the tag is no longer available, it falls back to the root-level
-default.
+the deepest matching node and scrolls it into view; if the tag is no longer available, it falls
+back to the root-level default.
 The selection panel is rendered before a node is clicked, and the first loaded node is selected
 automatically. Its detailed template replacement list is inside a native `details` element
 that is collapsed by default.
