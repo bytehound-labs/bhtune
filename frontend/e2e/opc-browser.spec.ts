@@ -27,6 +27,18 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page.getByLabel("Driver").selectOption("opcda");
   });
 
+  test("places the bridge host before the tag name", async ({ page }) => {
+    const fieldOrder = await page
+      .locator("form label > span:first-child")
+      .allTextContents();
+
+    expect(
+      fieldOrder.findIndex((label) => label.trim() === "Bridge host"),
+    ).toBeLessThan(
+      fieldOrder.findIndex((label) => label.trim().startsWith("Tag name")),
+    );
+  });
+
   test("Browse tags button stays disabled until a ProgID is entered", async ({
     page,
   }) => {

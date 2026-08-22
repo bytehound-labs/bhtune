@@ -39,15 +39,15 @@ function HealthIndicator() {
         };
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 leading-none">
       <div
         role="img"
         aria-label={status.label}
         title={status.detail}
-        className={`h-2.5 w-2.5 rounded-full shadow-[0_0_0_3px_rgba(15,23,42,0.8)] ${status.dot}`}
+        className={`h-2.5 w-2.5 shrink-0 -translate-y-px rounded-full shadow-[0_0_0_3px_rgba(15,23,42,0.8)] ${status.dot}`}
       />
       {health.data && (
-        <span className="font-mono text-xs text-slate-500">
+        <span className="font-mono text-xs leading-none text-slate-500">
           v{health.data.version}
         </span>
       )}

@@ -522,6 +522,18 @@ export function NewRunPage() {
             placeholder="Optional context, observations, or follow-up actions"
             hint="Notes can be edited or cleared from the tune history."
           />
+          <TextField
+            label="Bridge host"
+            disabled={form.driver === "simulator"}
+            value={form.bridgeHost}
+            onChange={(v) => set("bridgeHost", v)}
+            placeholder="Defaults to this server's own configured bridge host"
+            hint={
+              form.driver === "simulator"
+                ? "Disabled — the simulator never contacts a gateway."
+                : "opcda-bridge gateway address (host:port)."
+            }
+          />
           <div>
             <TextField
               label="Tag name"
@@ -572,18 +584,6 @@ export function NewRunPage() {
               />
             )}
           </div>
-          <TextField
-            label="Bridge host"
-            disabled={form.driver === "simulator"}
-            value={form.bridgeHost}
-            onChange={(v) => set("bridgeHost", v)}
-            placeholder="Defaults to this server's own configured bridge host"
-            hint={
-              form.driver === "simulator"
-                ? "Disabled — the simulator never contacts a gateway."
-                : "opcda-bridge gateway address (host:port)."
-            }
-          />
         </FormSection>
 
         <FormSection title="Test parameters">
