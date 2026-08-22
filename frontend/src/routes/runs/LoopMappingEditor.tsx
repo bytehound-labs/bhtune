@@ -18,6 +18,7 @@ import {
   type ValueMappingKey,
   type ValueMappingSource,
   type ValueMappingSources,
+  type ValueTagOverrideFormState,
 } from "./mappingState";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
@@ -26,6 +27,7 @@ type TagRow = {
   key: TagOverrideKey;
   label: string;
   previewLabel: string;
+  description: string;
 };
 
 const TAG_ROWS: readonly TagRow[] = [
@@ -33,41 +35,57 @@ const TAG_ROWS: readonly TagRow[] = [
     key: "processVariable",
     label: "Process variable (PV)",
     previewLabel: "Process variable (PV)",
+    description:
+      "Measured process value read and evaluated during the relay test.",
   },
   {
     key: "manipulatedVariable",
     label: "Manipulated variable (MV)",
     previewLabel: "Manipulated variable (MV)",
+    description:
+      "Manipulated output switched up and down during the relay test.",
   },
   {
     key: "setpointVariable",
     label: "Setpoint",
     previewLabel: "Setpoint",
+    description:
+      "Target captured before the test and restored when the loop starts in Auto.",
   },
   {
     key: "controllerMode",
     label: "Controller mode",
     previewLabel: "Controller mode",
+    description:
+      "Places the loop in Manual for the test, then restores its original mode.",
   },
   {
     key: "modeAttribute",
     label: "Mode attribute",
     previewLabel: "Mode attribute",
+    description:
+      "Places the controller in the required program/computer mode, then restores it.",
   },
   {
     key: "proportionalConstant",
     label: "Proportional constant",
     previewLabel: "Proportional constant",
+    description:
+      "PID proportional setting read for write-back and revert operations.",
   },
   {
     key: "integralConstant",
     label: "Integral constant",
     previewLabel: "Integral constant",
+    description:
+      "PID integral setting read for write-back and revert operations.",
   },
   {
     key: "derivativeConstant",
     label: "Derivative constant",
     previewLabel: "Derivative constant",
+    description:
+      "PID derivative setting read for write-back and revert operations.",
   },
 ];
 
@@ -76,6 +94,7 @@ type ValueRow = {
   label: string;
   previewLabel: string;
   kind: "direction" | "number";
+  description: string;
 };
 
 const VALUE_ROWS: readonly ValueRow[] = [
@@ -84,30 +103,40 @@ const VALUE_ROWS: readonly ValueRow[] = [
     label: "Controller direction",
     previewLabel: "Controller direction",
     kind: "direction",
+    description:
+      "Tells the tuning math whether increasing MV raises or lowers PV.",
   },
   {
     key: "pvRangeHigh",
     label: "PV range high",
     previewLabel: "PV range high",
     kind: "number",
+    description:
+      "Engineering bound used to validate, normalize, and calculate relay amplitude.",
   },
   {
     key: "pvRangeLow",
     label: "PV range low",
     previewLabel: "PV range low",
     kind: "number",
+    description:
+      "Engineering bound used to validate, normalize, and calculate relay amplitude.",
   },
   {
     key: "mvRangeHigh",
     label: "MV range high",
     previewLabel: "MV range high",
     kind: "number",
+    description:
+      "Engineering bound used to validate, normalize, and calculate relay amplitude.",
   },
   {
     key: "mvRangeLow",
     label: "MV range low",
     previewLabel: "MV range low",
     kind: "number",
+    description:
+      "Engineering bound used to validate, normalize, and calculate relay amplitude.",
   },
 ];
 
@@ -115,6 +144,7 @@ type MappingValueState = {
   driver: TuneDriver;
   tagname: string;
   tagOverrides: TagOverrideFormState;
+  valueTagOverrides: ValueTagOverrideFormState;
   tagSources: TagMappingSources;
   valueSources: ValueMappingSources;
   opcDirection: "" | ControllerDirection;
@@ -138,6 +168,7 @@ type Props = {
     key: ValueMappingKey,
     source: ValueMappingSource,
   ) => void;
+  onValueTagChange: (key: ValueMappingKey, value: string) => void;
   onValueChange: (
     key:
       | "opcDirection"
@@ -288,6 +319,7 @@ export function LoopMappingEditor({
   onTagSourceChange,
   onTagChange,
   onValueSourceChange,
+  onValueTagChange,
   onValueChange,
   onResetTag,
   onResetValue,
@@ -339,6 +371,9 @@ export function LoopMappingEditor({
                         ? "Custom tag"
                         : "Template default"}
                   </div>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                    {row.description}
+                  </p>
                 </div>
                 <SourceToggle
                   label={row.label}
@@ -369,7 +404,7 @@ export function LoopMappingEditor({
                       <div className="text-xs uppercase tracking-wide text-slate-500">
                         Effective value
                       </div>
-                      <div className="mt-1 min-h-8 rounded-md border border-slate-800 bg-slate-950 px-3 py-1.5">
+                      <div className="mt-1 min-h-8 cursor-not-allowed rounded-md border border-slate-700 bg-slate-800/70 px-3 py-1.5 text-slate-300">
                         {displayTag(
                           tags.effective,
                           template
@@ -423,10 +458,15 @@ export function LoopMappingEditor({
                   <div className="mt-1 text-xs text-slate-500">
                     {simulator
                       ? "Simulator value"
-                      : fixed
-                        ? "Fixed override"
-                        : "Read from tag"}
+                      : values.source === "custom"
+                        ? "Custom read tag"
+                        : fixed
+                          ? "Fixed override"
+                          : "Read from tag"}
                   </div>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                    {row.description}
+                  </p>
                 </div>
                 <SourceToggle
                   label={row.label}
@@ -437,12 +477,31 @@ export function LoopMappingEditor({
                       label: "Read tag",
                       disabled: simulator,
                     },
+                    {
+                      value: "custom",
+                      label: "Custom tag",
+                      disabled: simulator,
+                    },
                     { value: "fixed", label: "Fixed value" },
                   ]}
                   onChange={(source) => onValueSourceChange(row.key, source)}
                 />
                 <div className="min-w-0">
-                  {fixed ? (
+                  {values.source === "custom" ? (
+                    <TextField
+                      label={`${row.label} custom read tag`}
+                      value={state.valueTagOverrides[row.key]}
+                      onChange={(value) => onValueTagChange(row.key, value)}
+                      placeholder={
+                        values.preview ?? "Enter a custom OPC item ID"
+                      }
+                      hint={
+                        values.preview
+                          ? "Reset returns to the template-derived read tag."
+                          : "This template has no default read tag; enter a site-specific tag."
+                      }
+                    />
+                  ) : fixed ? (
                     row.kind === "direction" ? (
                       <SelectField
                         label={`${row.label} fixed value`}
@@ -495,7 +554,7 @@ export function LoopMappingEditor({
                       <div className="text-xs uppercase tracking-wide text-slate-500">
                         Effective value
                       </div>
-                      <div className="mt-1 min-h-8 rounded-md border border-slate-800 bg-slate-950 px-3 py-1.5">
+                      <div className="mt-1 min-h-8 cursor-not-allowed rounded-md border border-slate-700 bg-slate-800/70 px-3 py-1.5 text-slate-300">
                         {displayTag(
                           values.preview,
                           template
@@ -513,12 +572,12 @@ export function LoopMappingEditor({
                 </div>
                 <Button
                   onClick={() => onResetValue(row.key)}
-                  disabled={simulator || !fixed}
+                  disabled={simulator || values.source === "tag"}
                   title={
                     simulator
                       ? "Simulator values are independent of OPC mapping overrides."
-                      : !fixed
-                        ? "This row already reads its value from the OPC tag."
+                      : values.source === "tag"
+                        ? "This row already reads its value from the template-derived OPC tag."
                         : "Reset this row to read its value from the OPC tag."
                   }
                 >

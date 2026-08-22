@@ -87,8 +87,9 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      mapping** section is the single place to inspect the complete tag set the active template
      derives from the selected PV and the direction/range inputs used for the tune. Each row
      shows its effective value and source: **Template** or **Custom** for OPC item IDs, and
-     **Read tag** or **Fixed value** for direction and ranges. Switching to a custom tag starts
-     with the template-derived value; fixed direction/range values must be entered explicitly.
+     **Read tag**, **Custom tag**, or **Fixed value** for direction and ranges. Switching to a
+     custom tag starts with the template-derived value; fixed direction/range values must be
+     entered explicitly.
      Use a row's **Reset** button or **Reset all mapping overrides** to return to template/live
      values. Simulator direction and ranges are kept separately from OPC fixed overrides. The
      browser itself stays focused on browsing and testing the selected PV tag. It offers a

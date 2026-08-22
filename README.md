@@ -119,8 +119,8 @@ that node, and scrolls it into view; if it is no longer present, browsing falls 
 level.
 
 The New tune form's collapsible **Loop mapping** section is the single place to inspect and
-adjust the effective mapping. Every row shows the value that will be used and its source: **Template** or **Custom** for OPC item IDs, and **Read tag**
-or **Fixed value** for direction and ranges. Switching to a custom tag starts from the
+adjust the effective mapping. Every row shows the value that will be used and its source: **Template** or **Custom** for OPC item IDs, and **Read tag**,
+**Custom tag**, or **Fixed value** for direction and ranges. Switching to a custom tag starts from the
 template-derived value; fixed direction/range values must be entered explicitly. Per-row
 **Reset** actions return to template/live values, and **Reset all mapping overrides** restores
 every row.

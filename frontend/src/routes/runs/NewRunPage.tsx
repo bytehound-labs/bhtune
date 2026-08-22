@@ -35,6 +35,7 @@ import {
   DEFAULT_TAG_MAPPING_SOURCES,
   DEFAULT_VALUE_MAPPING_SOURCES,
   EMPTY_TAG_OVERRIDES,
+  EMPTY_VALUE_TAG_OVERRIDES,
   type NumOrBlank,
   type TagMappingSource,
   type TagOverrideFormState,
@@ -43,6 +44,7 @@ import {
   type ValueMappingKey,
   type ValueMappingSource,
   type ValueMappingSources,
+  type ValueTagOverrideFormState,
 } from "./mappingState";
 
 type TuneDriver = components["schemas"]["TuneDriver"];
@@ -96,6 +98,7 @@ type FormState = {
   allowUncertainQuality: boolean;
   tagSources: TagMappingSources;
   valueSources: ValueMappingSources;
+  valueTagOverrides: ValueTagOverrideFormState;
   opcDirection: "" | ControllerDirection;
   opcPvRangeHigh: NumOrBlank;
   opcPvRangeLow: NumOrBlank;
@@ -169,6 +172,7 @@ const initialForm: FormState = {
   simInitialPv: 50,
   simInitialMv: 50,
   tagOverrides: { ...EMPTY_TAG_OVERRIDES },
+  valueTagOverrides: { ...EMPTY_VALUE_TAG_OVERRIDES },
   writePid: "",
   yes: false,
 };
@@ -197,6 +201,18 @@ function formTagOverrides(
     proportionalConstant: overrides?.proportional_constant ?? "",
     integralConstant: overrides?.integral_constant ?? "",
     derivativeConstant: overrides?.derivative_constant ?? "",
+  };
+}
+
+function formValueTagOverrides(
+  overrides: TagOverrides | null | undefined,
+): ValueTagOverrideFormState {
+  return {
+    direction: overrides?.controller_direction ?? "",
+    pvRangeHigh: overrides?.upper_pv_range ?? "",
+    pvRangeLow: overrides?.lower_pv_range ?? "",
+    mvRangeHigh: overrides?.upper_mv_range ?? "",
+    mvRangeLow: overrides?.lower_mv_range ?? "",
   };
 }
 
@@ -234,6 +250,26 @@ function tagOverridesFromForm(form: FormState): TagOverrides | undefined {
       form.tagSources.derivativeConstant === "custom"
         ? form.tagOverrides.derivativeConstant.trim() || undefined
         : undefined,
+    controller_direction:
+      form.valueSources.direction === "custom"
+        ? form.valueTagOverrides.direction.trim() || undefined
+        : undefined,
+    upper_pv_range:
+      form.valueSources.pvRangeHigh === "custom"
+        ? form.valueTagOverrides.pvRangeHigh.trim() || undefined
+        : undefined,
+    lower_pv_range:
+      form.valueSources.pvRangeLow === "custom"
+        ? form.valueTagOverrides.pvRangeLow.trim() || undefined
+        : undefined,
+    upper_mv_range:
+      form.valueSources.mvRangeHigh === "custom"
+        ? form.valueTagOverrides.mvRangeHigh.trim() || undefined
+        : undefined,
+    lower_mv_range:
+      form.valueSources.mvRangeLow === "custom"
+        ? form.valueTagOverrides.mvRangeLow.trim() || undefined
+        : undefined,
   };
   return Object.values(overrides).some((value) => value !== undefined)
     ? overrides
@@ -270,11 +306,36 @@ function inferRequestValueSources(
     return { ...DEFAULT_VALUE_MAPPING_SOURCES };
   }
   return {
-    direction: request.direction === undefined ? "tag" : "fixed",
-    pvRangeHigh: request.pv_range_high === undefined ? "tag" : "fixed",
-    pvRangeLow: request.pv_range_low === undefined ? "tag" : "fixed",
-    mvRangeHigh: request.mv_range_high === undefined ? "tag" : "fixed",
-    mvRangeLow: request.mv_range_low === undefined ? "tag" : "fixed",
+    direction:
+      request.direction !== undefined
+        ? "fixed"
+        : request.tag_overrides?.controller_direction?.trim()
+          ? "custom"
+          : "tag",
+    pvRangeHigh:
+      request.pv_range_high !== undefined
+        ? "fixed"
+        : request.tag_overrides?.upper_pv_range?.trim()
+          ? "custom"
+          : "tag",
+    pvRangeLow:
+      request.pv_range_low !== undefined
+        ? "fixed"
+        : request.tag_overrides?.lower_pv_range?.trim()
+          ? "custom"
+          : "tag",
+    mvRangeHigh:
+      request.mv_range_high !== undefined
+        ? "fixed"
+        : request.tag_overrides?.upper_mv_range?.trim()
+          ? "custom"
+          : "tag",
+    mvRangeLow:
+      request.mv_range_low !== undefined
+        ? "fixed"
+        : request.tag_overrides?.lower_mv_range?.trim()
+          ? "custom"
+          : "tag",
   };
 }
 
@@ -296,31 +357,41 @@ function inferDraftValueSources(draft: NewRunDraft): ValueMappingSources {
     direction:
       legacyOpc && draft.direction !== null && draft.direction !== undefined
         ? "fixed"
-        : "tag",
+        : draft.tag_overrides?.controller_direction?.trim()
+          ? "custom"
+          : "tag",
     pvRangeHigh:
       legacyOpc &&
       draft.pv_range_high !== null &&
       draft.pv_range_high !== undefined
         ? "fixed"
-        : "tag",
+        : draft.tag_overrides?.upper_pv_range?.trim()
+          ? "custom"
+          : "tag",
     pvRangeLow:
       legacyOpc &&
       draft.pv_range_low !== null &&
       draft.pv_range_low !== undefined
         ? "fixed"
-        : "tag",
+        : draft.tag_overrides?.lower_pv_range?.trim()
+          ? "custom"
+          : "tag",
     mvRangeHigh:
       legacyOpc &&
       draft.mv_range_high !== null &&
       draft.mv_range_high !== undefined
         ? "fixed"
-        : "tag",
+        : draft.tag_overrides?.upper_mv_range?.trim()
+          ? "custom"
+          : "tag",
     mvRangeLow:
       legacyOpc &&
       draft.mv_range_low !== null &&
       draft.mv_range_low !== undefined
         ? "fixed"
-        : "tag",
+        : draft.tag_overrides?.lower_mv_range?.trim()
+          ? "custom"
+          : "tag",
   };
 }
 
@@ -379,6 +450,7 @@ function formFromRequest(request: StartRunRequest): FormState {
     allowUncertainQuality: request.allow_uncertain_quality ?? false,
     tagSources: inferTagSources(request.tag_overrides),
     valueSources: inferRequestValueSources(request),
+    valueTagOverrides: formValueTagOverrides(request.tag_overrides),
     opcDirection: request.driver === "opcda" ? (request.direction ?? "") : "",
     opcPvRangeHigh:
       request.driver === "opcda" ? toNumOrBlank(request.pv_range_high) : "",
@@ -486,6 +558,7 @@ function formFromDraft(draft: NewRunDraft): FormState {
       draft.allow_uncertain_quality ?? initialForm.allowUncertainQuality,
     tagSources: draftTagSources(draft),
     valueSources,
+    valueTagOverrides: formValueTagOverrides(draft.tag_overrides),
     opcDirection: restoreOpcValues ? (draft.direction ?? "") : "",
     opcPvRangeHigh: restoreOpcValues ? toNumOrBlank(draft.pv_range_high) : "",
     opcPvRangeLow: restoreOpcValues ? toNumOrBlank(draft.pv_range_low) : "",
@@ -659,6 +732,12 @@ function buildRequest(form: FormState): StartRunRequest | string {
       return "Controller direction is required when Fixed value is selected.";
     }
     if (
+      form.valueSources.direction === "custom" &&
+      !form.valueTagOverrides.direction.trim()
+    ) {
+      return "Controller direction read tag is required when Custom tag is selected.";
+    }
+    if (
       form.valueSources.pvRangeHigh === "fixed" &&
       form.opcPvRangeHigh === ""
     ) {
@@ -668,6 +747,18 @@ function buildRequest(form: FormState): StartRunRequest | string {
       return "PV range low is required when Fixed value is selected.";
     }
     if (
+      form.valueSources.pvRangeHigh === "custom" &&
+      !form.valueTagOverrides.pvRangeHigh.trim()
+    ) {
+      return "PV range high read tag is required when Custom tag is selected.";
+    }
+    if (
+      form.valueSources.pvRangeLow === "custom" &&
+      !form.valueTagOverrides.pvRangeLow.trim()
+    ) {
+      return "PV range low read tag is required when Custom tag is selected.";
+    }
+    if (
       form.valueSources.mvRangeHigh === "fixed" &&
       form.opcMvRangeHigh === ""
     ) {
@@ -675,6 +766,18 @@ function buildRequest(form: FormState): StartRunRequest | string {
     }
     if (form.valueSources.mvRangeLow === "fixed" && form.opcMvRangeLow === "") {
       return "MV range low is required when Fixed value is selected.";
+    }
+    if (
+      form.valueSources.mvRangeHigh === "custom" &&
+      !form.valueTagOverrides.mvRangeHigh.trim()
+    ) {
+      return "MV range high read tag is required when Custom tag is selected.";
+    }
+    if (
+      form.valueSources.mvRangeLow === "custom" &&
+      !form.valueTagOverrides.mvRangeLow.trim()
+    ) {
+      return "MV range low read tag is required when Custom tag is selected.";
     }
   }
   if (form.writePid && !form.yes) {
@@ -913,6 +1016,29 @@ export function NewRunPage() {
     );
   }
 
+  const valuePreviewLabels: Record<ValueMappingKey, string> = {
+    direction: "Controller direction",
+    pvRangeHigh: "PV range high",
+    pvRangeLow: "PV range low",
+    mvRangeHigh: "MV range high",
+    mvRangeLow: "MV range low",
+  };
+
+  function templateValueTagFor(
+    key: ValueMappingKey,
+    tagname: string,
+    templateName: string,
+  ): string {
+    const template = templates.data?.find((item) => item.name === templateName);
+    return (
+      (template &&
+        derivedTagPreview(tagname, template).find(
+          (row) => row.label === valuePreviewLabels[key],
+        )?.tag) ??
+      ""
+    );
+  }
+
   function setTagSource(key: TagOverrideKey, source: TagMappingSource) {
     setForm((prev) => {
       const value =
@@ -937,11 +1063,26 @@ export function NewRunPage() {
   function setValueSource(key: ValueMappingKey, source: ValueMappingSource) {
     setForm((prev) => {
       if (prev.driver === "simulator") return prev;
+      const customTag =
+        source === "custom" && !prev.valueTagOverrides[key].trim()
+          ? templateValueTagFor(key, prev.tagname, prev.template)
+          : prev.valueTagOverrides[key];
       return {
         ...prev,
         valueSources: { ...prev.valueSources, [key]: source },
+        valueTagOverrides: {
+          ...prev.valueTagOverrides,
+          [key]: customTag,
+        },
       };
     });
+  }
+
+  function setValueTag(key: ValueMappingKey, value: string) {
+    setForm((prev) => ({
+      ...prev,
+      valueTagOverrides: { ...prev.valueTagOverrides, [key]: value },
+    }));
   }
 
   function setMappingValue<
@@ -984,6 +1125,7 @@ export function NewRunPage() {
       return {
         ...prev,
         valueSources: { ...prev.valueSources, [key]: "tag" },
+        valueTagOverrides: { ...prev.valueTagOverrides, [key]: "" },
         [valueKey]: "",
       };
     });
@@ -995,6 +1137,7 @@ export function NewRunPage() {
       tagSources: { ...DEFAULT_TAG_MAPPING_SOURCES },
       valueSources: { ...DEFAULT_VALUE_MAPPING_SOURCES },
       tagOverrides: { ...EMPTY_TAG_OVERRIDES },
+      valueTagOverrides: { ...EMPTY_VALUE_TAG_OVERRIDES },
       opcDirection: "",
       opcPvRangeHigh: "",
       opcPvRangeLow: "",
@@ -1348,6 +1491,7 @@ export function NewRunPage() {
             onTagSourceChange={setTagSource}
             onTagChange={setTagValue}
             onValueSourceChange={setValueSource}
+            onValueTagChange={setValueTag}
             onValueChange={setMappingValue}
             onResetTag={resetTag}
             onResetValue={resetValue}

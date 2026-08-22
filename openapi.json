@@ -1381,6 +1381,7 @@
         "description": "The source selector state used only by the mutable New Tune draft.",
         "enum": [
           "tag",
+          "custom",
           "fixed"
         ]
       },
@@ -2588,8 +2589,14 @@
       },
       "TagOverrides": {
         "type": "object",
-        "description": "Per-tune replacements for template-derived OPC tag names.\n\nA missing or blank field keeps the active template's derived tag. Overrides are applied\nonly to tag names; fixed range and direction values remain separate `LoopTags` inputs.",
+        "description": "Per-tune replacements for template-derived OPC tag names.\n\nA missing or blank field keeps the active template's derived tag. The first eight fields\nreplace template-derived tag names; the final five replace the tags used to read direction\nand range values. Fixed direction and range values remain separate `LoopTags` inputs and are\napplied after these read-tag overrides.",
         "properties": {
+          "controller_direction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "controller_mode": {
             "type": [
               "string",
@@ -2603,6 +2610,18 @@
             ]
           },
           "integral_constant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lower_mv_range": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lower_pv_range": {
             "type": [
               "string",
               "null"
@@ -2633,6 +2652,18 @@
             ]
           },
           "setpoint_variable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upper_mv_range": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upper_pv_range": {
             "type": [
               "string",
               "null"

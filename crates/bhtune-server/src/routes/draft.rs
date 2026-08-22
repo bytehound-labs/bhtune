@@ -30,6 +30,7 @@ pub enum DraftTagSource {
 #[serde(rename_all = "snake_case")]
 pub enum DraftValueSource {
     Tag,
+    Custom,
     Fixed,
 }
 

@@ -146,6 +146,29 @@ test.describe("app shell", () => {
     }
   });
 
+  test("opens every New Tune section by default and toggles each section", async ({
+    page,
+  }) => {
+    await page.goto("/runs/new");
+
+    for (const title of [
+      "Connection",
+      "Test parameters",
+      "Loop mapping",
+      "Simulator parameters",
+      "Automatic PID settings",
+    ]) {
+      const section = page.locator("details").filter({
+        has: page.locator("summary", { hasText: title }),
+      });
+      await expect(section).toHaveAttribute("open", "");
+      await section.locator("summary").click();
+      await expect(section).not.toHaveAttribute("open", "");
+      await section.locator("summary").click();
+      await expect(section).toHaveAttribute("open", "");
+    }
+  });
+
   test("toggles and persists the light/dark theme", async ({ page }) => {
     await page.goto("/");
 

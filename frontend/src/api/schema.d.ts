@@ -535,7 +535,7 @@ export interface components {
      * @description The source selector state used only by the mutable New Tune draft.
      * @enum {string}
      */
-    DraftValueSource: "tag" | "fixed";
+    DraftValueSource: "tag" | "custom" | "fixed";
     /** @description Per-direction/range source choices in the New Tune mapping editor. */
     DraftValueSources: {
       direction: components["schemas"]["DraftValueSource"];
@@ -1097,18 +1097,25 @@ export interface components {
     /**
      * @description Per-tune replacements for template-derived OPC tag names.
      *
-     *     A missing or blank field keeps the active template's derived tag. Overrides are applied
-     *     only to tag names; fixed range and direction values remain separate `LoopTags` inputs.
+     *     A missing or blank field keeps the active template's derived tag. The first eight fields
+     *     replace template-derived tag names; the final five replace the tags used to read direction
+     *     and range values. Fixed direction and range values remain separate `LoopTags` inputs and are
+     *     applied after these read-tag overrides.
      */
     TagOverrides: {
+      controller_direction?: string | null;
       controller_mode?: string | null;
       derivative_constant?: string | null;
       integral_constant?: string | null;
+      lower_mv_range?: string | null;
+      lower_pv_range?: string | null;
       manipulated_variable?: string | null;
       mode_attribute?: string | null;
       process_variable?: string | null;
       proportional_constant?: string | null;
       setpoint_variable?: string | null;
+      upper_mv_range?: string | null;
+      upper_pv_range?: string | null;
     };
     /**
      * @description Where a `dcs_templates` row came from, and -- since [`TuneRunRow`] snapshots a copy of one

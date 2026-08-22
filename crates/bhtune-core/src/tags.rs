@@ -7,8 +7,10 @@ use crate::{direction::ControllerDirection, template::DcsTemplate};
 
 /// Per-tune replacements for template-derived OPC tag names.
 ///
-/// A missing or blank field keeps the active template's derived tag. Overrides are applied
-/// only to tag names; fixed range and direction values remain separate `LoopTags` inputs.
+/// A missing or blank field keeps the active template's derived tag. The first eight fields
+/// replace template-derived tag names; the final five replace the tags used to read direction
+/// and range values. Fixed direction and range values remain separate `LoopTags` inputs and are
+/// applied after these read-tag overrides.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct TagOverrides {
@@ -28,6 +30,16 @@ pub struct TagOverrides {
     pub integral_constant: Option<String>,
     #[serde(default)]
     pub derivative_constant: Option<String>,
+    #[serde(default)]
+    pub controller_direction: Option<String>,
+    #[serde(default)]
+    pub upper_pv_range: Option<String>,
+    #[serde(default)]
+    pub lower_pv_range: Option<String>,
+    #[serde(default)]
+    pub upper_mv_range: Option<String>,
+    #[serde(default)]
+    pub lower_mv_range: Option<String>,
 }
 
 /// An invalid per-tune tag override.
@@ -64,6 +76,11 @@ impl TagOverrides {
             self.proportional_constant.as_deref(),
             self.integral_constant.as_deref(),
             self.derivative_constant.as_deref(),
+            self.controller_direction.as_deref(),
+            self.upper_pv_range.as_deref(),
+            self.lower_pv_range.as_deref(),
+            self.upper_mv_range.as_deref(),
+            self.lower_mv_range.as_deref(),
         ]
         .into_iter()
         .all(|value| value.is_none_or(|value| value.trim().is_empty()))
@@ -83,6 +100,11 @@ impl TagOverrides {
             ),
             ("integral_constant", self.integral_constant.as_deref()),
             ("derivative_constant", self.derivative_constant.as_deref()),
+            ("controller_direction", self.controller_direction.as_deref()),
+            ("upper_pv_range", self.upper_pv_range.as_deref()),
+            ("lower_pv_range", self.lower_pv_range.as_deref()),
+            ("upper_mv_range", self.upper_mv_range.as_deref()),
+            ("lower_mv_range", self.lower_mv_range.as_deref()),
         ];
         for (field, value) in fields {
             if value.is_some_and(|value| value.chars().any(char::is_control)) {
@@ -117,6 +139,14 @@ impl TagOverrides {
             &mut tags.derivative_constant,
             self.derivative_constant.as_deref(),
         );
+        apply_tag_override(
+            &mut tags.controller_direction,
+            self.controller_direction.as_deref(),
+        );
+        apply_tag_override(&mut tags.upper_pv_range, self.upper_pv_range.as_deref());
+        apply_tag_override(&mut tags.lower_pv_range, self.lower_pv_range.as_deref());
+        apply_tag_override(&mut tags.upper_mv_range, self.upper_mv_range.as_deref());
+        apply_tag_override(&mut tags.lower_mv_range, self.lower_mv_range.as_deref());
     }
 }
 
@@ -129,6 +159,12 @@ fn apply_string_override(target: &mut String, value: Option<&str>) {
 fn apply_optional_string_override(target: &mut Option<String>, value: Option<&str>) {
     if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
         *target = Some(value.trim().to_string());
+    }
+}
+
+fn apply_tag_override<T>(target: &mut TagOrValue<T>, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        *target = TagOrValue::Tag(value.trim().to_string());
     }
 }
 
@@ -372,6 +408,11 @@ mod tests {
             proportional_constant: None,
             integral_constant: Some("Unit1.LIC101.IY".to_string()),
             derivative_constant: None,
+            controller_direction: None,
+            upper_pv_range: None,
+            lower_pv_range: None,
+            upper_mv_range: None,
+            lower_mv_range: None,
         };
 
         overrides.validate().unwrap();
@@ -382,6 +423,47 @@ mod tests {
         assert_eq!(tags.setpoint_variable, Some("Unit1.LIC101.SP".to_string()));
         assert_eq!(tags.mode_attribute, Some("Unit1.LIC101.MA".to_string()));
         assert_eq!(tags.integral_constant, Some("Unit1.LIC101.IY".to_string()));
+    }
+
+    #[test]
+    fn tag_overrides_apply_custom_value_read_tags() {
+        let template = built_in_templates()
+            .into_iter()
+            .find(|template| template.name == "Honeywell Experion")
+            .unwrap();
+        let mut tags = LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &template);
+        let overrides = TagOverrides {
+            controller_direction: Some("Unit1.LIC101.ACTION".to_string()),
+            upper_pv_range: Some("Unit1.LIC101.PV_HIGH".to_string()),
+            lower_pv_range: Some("Unit1.LIC101.PV_LOW".to_string()),
+            upper_mv_range: Some("Unit1.LIC101.MV_HIGH".to_string()),
+            lower_mv_range: Some("Unit1.LIC101.MV_LOW".to_string()),
+            ..TagOverrides::default()
+        };
+
+        overrides.validate().unwrap();
+        overrides.apply_to(&mut tags);
+
+        assert_eq!(
+            tags.controller_direction,
+            TagOrValue::Tag("Unit1.LIC101.ACTION".to_string())
+        );
+        assert_eq!(
+            tags.upper_pv_range,
+            TagOrValue::Tag("Unit1.LIC101.PV_HIGH".to_string())
+        );
+        assert_eq!(
+            tags.lower_pv_range,
+            TagOrValue::Tag("Unit1.LIC101.PV_LOW".to_string())
+        );
+        assert_eq!(
+            tags.upper_mv_range,
+            TagOrValue::Tag("Unit1.LIC101.MV_HIGH".to_string())
+        );
+        assert_eq!(
+            tags.lower_mv_range,
+            TagOrValue::Tag("Unit1.LIC101.MV_LOW".to_string())
+        );
     }
 
     #[test]

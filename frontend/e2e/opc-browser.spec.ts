@@ -246,6 +246,67 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     );
   });
 
+  test("submits custom read tags and fixed values as active OPC overrides", async ({
+    page,
+  }) => {
+    const templateField = page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox");
+    await templateField.selectOption("Yokogawa CentumVP");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByLabel("Tag name").fill("Loop101.PV");
+
+    const directionRow = mappingRow(page, "Controller direction");
+    await directionRow
+      .getByRole("button", { name: "Custom tag", exact: true })
+      .click();
+    await directionRow
+      .getByLabel("Controller direction custom read tag")
+      .fill("Loop101.ACTION");
+
+    const pvHighRow = mappingRow(page, "PV range high");
+    await pvHighRow
+      .getByRole("button", { name: "Fixed value", exact: true })
+      .click();
+    await pvHighRow.getByLabel("PV range high fixed value").fill("90");
+
+    await page.route("**/api/runs", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "request captured by the test" }),
+      });
+    });
+
+    const requestPromise = page.waitForRequest(
+      (request) =>
+        request.url().endsWith("/api/runs") && request.method() === "POST",
+    );
+    await page.getByRole("button", { name: "Start tune" }).click();
+    const request = await requestPromise;
+    const body = request.postDataJSON() as {
+      direction?: string;
+      pv_range_high?: number;
+      pv_range_low?: number;
+      tag_overrides?: Record<string, string>;
+    };
+
+    expect(body.direction).toBeUndefined();
+    expect(body.pv_range_high).toBe(90);
+    expect(body.pv_range_low).toBeUndefined();
+    expect(body.tag_overrides).toEqual({
+      controller_direction: "Loop101.ACTION",
+    });
+    await expect(
+      page.getByText("Unable to start the tune.", { exact: true }),
+    ).toBeVisible();
+  });
+
   test("Browse tags button stays disabled until a ProgID is entered", async ({
     page,
   }) => {

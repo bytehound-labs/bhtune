@@ -747,6 +747,8 @@ fn build_loop_tags(args: &TuneArgs, template: &DcsTemplate) -> anyhow::Result<Lo
             if let Some(overrides) = &args.tag_overrides {
                 overrides.apply_to(&mut tags);
             }
+            // Fixed values are applied after custom read-tag overrides, so an explicit fixed
+            // request remains authoritative when input contains both.
             if let Some(v) = args.pv_range_high {
                 tags.upper_pv_range = TagOrValue::Value(v);
             }

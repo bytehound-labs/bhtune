@@ -148,11 +148,11 @@ test.describe("New Tune draft persistence", () => {
     await setCustomTag(page, "Manipulated variable (MV)", "FIC101.PY");
     const directionRow = mappingRow(page, "Controller direction");
     await directionRow
-      .getByRole("button", { name: "Fixed value", exact: true })
+      .getByRole("button", { name: "Custom tag", exact: true })
       .click();
     await directionRow
-      .getByLabel("Controller direction fixed value")
-      .selectOption("direct");
+      .getByLabel("Controller direction custom read tag")
+      .fill("FIC101.ACTION");
     const pvHighRow = mappingRow(page, "PV range high");
     await pvHighRow
       .getByRole("button", { name: "Fixed value", exact: true })
@@ -178,6 +178,17 @@ test.describe("New Tune draft persistence", () => {
         "Manipulated variable (MV) custom tag",
       ),
     ).toHaveValue("FIC101.PY");
+    await expect(
+      mappingRow(page, "Controller direction").getByRole("button", {
+        name: "Custom tag",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      mappingRow(page, "Controller direction").getByLabel(
+        "Controller direction custom read tag",
+      ),
+    ).toHaveValue("FIC101.ACTION");
     await expect(page.getByLabel("Notes")).toHaveValue("");
     await expect(page.getByText("Loaded your saved Tune draft.")).toBeVisible();
 
@@ -185,13 +196,20 @@ test.describe("New Tune draft persistence", () => {
       .getByRole("combobox", { name: "Driver", exact: true })
       .selectOption("opcda");
     await expect(
-      mappingRow(page, "Controller direction").getByLabel(
-        "Controller direction fixed value",
-      ),
-    ).toHaveValue("direct");
+      mappingRow(page, "Controller direction").getByRole("button", {
+        name: "Custom tag",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
     await expect(
       mappingRow(page, "PV range high").getByLabel("PV range high fixed value"),
     ).toHaveValue("90");
+    await expect(
+      mappingRow(page, "PV range low").getByRole("button", {
+        name: "Read tag",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   test("retains OPC connection values when switching to Simulator", async ({

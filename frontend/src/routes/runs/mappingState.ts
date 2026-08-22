@@ -14,7 +14,7 @@ export type TagOverrideKey =
 
 export type NumOrBlank = number | "";
 export type TagMappingSource = "template" | "custom";
-export type ValueMappingSource = "tag" | "fixed";
+export type ValueMappingSource = "tag" | "custom" | "fixed";
 
 export type TagOverrideFormState = Record<TagOverrideKey, string>;
 
@@ -24,6 +24,9 @@ export type ValueMappingKey =
   "direction" | "pvRangeHigh" | "pvRangeLow" | "mvRangeHigh" | "mvRangeLow";
 
 export type ValueMappingSources = Record<ValueMappingKey, ValueMappingSource>;
+
+/** Custom OPC read tags for direction and range values. */
+export type ValueTagOverrideFormState = Record<ValueMappingKey, string>;
 
 export const EMPTY_TAG_OVERRIDES: TagOverrideFormState = {
   processVariable: "",
@@ -53,4 +56,12 @@ export const DEFAULT_VALUE_MAPPING_SOURCES: ValueMappingSources = {
   pvRangeLow: "tag",
   mvRangeHigh: "tag",
   mvRangeLow: "tag",
+};
+
+export const EMPTY_VALUE_TAG_OVERRIDES: ValueTagOverrideFormState = {
+  direction: "",
+  pvRangeHigh: "",
+  pvRangeLow: "",
+  mvRangeHigh: "",
+  mvRangeLow: "",
 };
