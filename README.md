@@ -109,8 +109,8 @@ template selected, confirming a tag selection replaces its final component with 
 template's process-variable suffix before writing the value into the Tag name field. Use a
 gateway release with recursive hierarchical browsing for servers that expose branch names
 through `OPC_FLAT` without returning their descendants.
-Changing templates also updates a tag's final component when it matches the previous
-template's process-variable suffix, preserving the tag path.
+Changing templates replaces a tag's final component with the new template's process-variable
+suffix, regardless of what the previous component was, while preserving the tag path.
 Confirming a tag selection performs a fresh read of the original item selected in the browser
 and proceeds immediately only when its OPC quality is `Good`. `Uncertain` or `Bad` quality
 requires an explicit choice to select a different tag or proceed anyway. Proceeding only

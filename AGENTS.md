@@ -689,7 +689,7 @@ This is deliberately not "strip the suffix and use the base name": since
 a full leaf tag (e.g. `FIC101.PV`) is already exactly the right input — the preview panel and
 a real tune's tag derivation agree because they run the identical algorithm, which manual
 verification confirmed end-to-end (below). Template changes reuse the same separator-aware
-logic to replace a matching previous PV suffix while preserving the tag path. A new shared
+logic to replace any final component while preserving the tag path. A new shared
 `Modal` component (`components/
 ui.tsx`) backs the tag browser and is reusable for future modals: closes on Escape, a
 backdrop click, or an explicit close button.

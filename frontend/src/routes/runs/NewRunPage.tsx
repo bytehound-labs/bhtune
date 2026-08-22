@@ -592,20 +592,12 @@ export function NewRunPage() {
 
   function setTemplate(value: string) {
     setForm((prev) => {
-      const previousTemplate = templates.data?.find(
-        (template) => template.name === prev.template,
-      );
       const nextTemplate = templates.data?.find(
         (template) => template.name === value,
       );
-      const tagname =
-        previousTemplate && nextTemplate
-          ? replaceTagSuffix(
-              prev.tagname,
-              previousTemplate.process_variable_suffix,
-              nextTemplate.process_variable_suffix,
-            )
-          : prev.tagname;
+      const tagname = nextTemplate
+        ? replaceTagSuffix(prev.tagname, nextTemplate.process_variable_suffix)
+        : prev.tagname;
       return { ...prev, template: value, tagname };
     });
   }

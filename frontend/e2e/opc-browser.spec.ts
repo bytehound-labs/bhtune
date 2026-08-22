@@ -71,6 +71,22 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(tagField).toHaveValue("Simulink.Device1._System.PV");
   });
 
+  test("replaces an incorrect existing suffix when the template changes", async ({
+    page,
+  }) => {
+    const templateField = page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox");
+    const tagField = page.getByLabel("Tag name");
+
+    await templateField.selectOption("Yokogawa CentumVP");
+    await tagField.fill("Simulink.Device1.Python.MV");
+    await templateField.selectOption("Allen-Bradley PlantPAx");
+
+    await expect(tagField).toHaveValue("Simulink.Device1.Python.Inp_PV");
+  });
+
   test("Browse tags button stays disabled until a ProgID is entered", async ({
     page,
   }) => {
