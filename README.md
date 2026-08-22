@@ -111,6 +111,10 @@ gateway release with recursive hierarchical browsing for servers that expose bra
 through `OPC_FLAT` without returning their descendants.
 Changing templates also updates a tag's final component when it matches the previous
 template's process-variable suffix, preserving the tag path.
+Confirming a tag selection performs a fresh read of the original item selected in the browser
+and proceeds immediately only when its OPC quality is `Good`. `Uncertain` or `Bad` quality
+requires an explicit choice to select a different tag or proceed anyway. Proceeding only
+selects the item; a tune still applies its live-reading quality safeguards.
 
 ## Installation
 

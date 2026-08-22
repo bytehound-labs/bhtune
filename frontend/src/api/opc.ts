@@ -66,10 +66,11 @@ export function useOpcBrowseFetcher(bridgeHost: string, opcServer: string) {
 }
 
 /**
- * `GET /api/opc/read` -- backs the "Test connection" button in the OPC tag-tree browser.
- * Modeled as a mutation even though it's a read-only `GET`: it's fired on demand against a
- * *different* tag on every click rather than representing one cacheable resource, exactly
- * like `useWriteRun`/`useRevertRun` (`api/runs.ts`) model their own on-demand server calls.
+ * `GET /api/opc/read` -- backs the "Read selected tag" diagnostic action and the final
+ * selection quality check in the OPC tag-tree browser. Modeled as a mutation even though it's
+ * a read-only `GET`: it's fired on demand against a *different* tag on every click rather than
+ * representing one cacheable resource, exactly like `useWriteRun`/`useRevertRun` (`api/runs.ts`)
+ * model their own on-demand server calls.
  */
 export function useTestOpcConnection() {
   return useMutation({

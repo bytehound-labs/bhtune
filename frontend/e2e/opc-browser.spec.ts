@@ -170,6 +170,8 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
   test("uses the active template PV suffix when a browse leaf is selected", async ({
     page,
   }) => {
+    const originalTag = "Simulink.Device1._System._DemandPoll";
+    const readTags: string[] = [];
     await page
       .locator("label")
       .filter({ hasText: /^Template/ })
@@ -177,6 +179,20 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .selectOption("Yokogawa CentumVP");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
 
+    await page.route("**/api/opc/read**", async (route) => {
+      const url = new URL(route.request().url());
+      readTags.push(url.searchParams.get("tag") ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: originalTag,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
     await page.route("**/api/opc/browse**", async (route) => {
       const url = new URL(route.request().url());
       const path = url.searchParams.get("path");
@@ -184,7 +200,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         path === "Simulink.Device1._System"
           ? [
               {
-                tag: "Simulink.Device1._System._DemandPoll",
+                tag: originalTag,
                 is_branch: false,
               },
             ]
@@ -230,6 +246,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(page.getByLabel("Tag name")).toHaveValue(
       "Simulink.Device1._System.PV",
     );
+    expect(readTags).toEqual([originalTag]);
 
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(
@@ -255,5 +272,80 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(page.getByLabel("Tag name")).toHaveValue(
       "Simulink.Device1._System.PV",
     );
+    expect(readTags).toEqual([originalTag, originalTag]);
+  });
+
+  test("warns before selecting a tag whose OPC quality is not Good", async ({
+    page,
+  }) => {
+    const originalTag = "Simulink.Device1._System._DemandPoll";
+    const readTags: string[] = [];
+    await page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox")
+      .selectOption("Yokogawa CentumVP");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+
+    await page.route("**/api/opc/read**", async (route) => {
+      const url = new URL(route.request().url());
+      readTags.push(url.searchParams.get("tag") ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: originalTag,
+          value: "42.0",
+          quality: "uncertain",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.searchParams.get("path");
+      const nodes =
+        path === "Simulink.Device1._System"
+          ? [{ tag: originalTag, is_branch: false }]
+          : [{ tag: "Simulink.Device1._System", is_branch: true }];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ nodes }),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(
+      page.getByRole("button", { name: "Simulink.Device1._System" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Expand" }).click();
+    await page.getByRole("button", { name: originalTag }).click();
+    await page.getByRole("button", { name: "Select tag" }).click();
+
+    await expect(
+      page.getByRole("heading", { name: "OPC quality warning" }),
+    ).toBeVisible();
+    await expect(page.getByText("Uncertain", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Tag name")).toHaveValue("Sim.Loop1.PV");
+    expect(readTags).toEqual([originalTag]);
+
+    await page.getByRole("button", { name: "Choose a different tag" }).click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Browse tags on Yokogawa.CSHIS_OPC.1",
+      }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Select tag" }).click();
+    await expect(
+      page.getByRole("heading", { name: "OPC quality warning" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Proceed anyway" }).click();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(
+      "Simulink.Device1._System.PV",
+    );
+    expect(readTags).toEqual([originalTag, originalTag]);
   });
 });

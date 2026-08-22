@@ -673,8 +673,11 @@ a new pure `frontend/src/lib/opcTags.ts::deriveTag` — a client-side mirror of
 the suffix" algorithm, used only for this preview; the server remains the actual source of
 truth once a run starts — plus a "Test read" button (`GET /api/opc/read`, showing value and
 quality) and "Select tag", which replaces the selected node's final component with the active
-template's process-variable suffix before writing it into the Tag name field. Double-clicking
-a leaf performs the same selection, while double-clicking a branch expands or collapses it.
+template's process-variable suffix before writing it into the Tag name field, after a fresh read
+of the original selected item confirms `Good` quality. A non-Good result requires an explicit
+choice to select another tag or proceed anyway; a read failure leaves the browser open.
+Double-clicking a leaf performs the same selection, while double-clicking a branch expands or
+collapses it.
 The selection panel is rendered before a node is clicked, and the first loaded node is selected
 automatically. Its detailed template replacement list is inside a native `details` element
 that is collapsed by default.

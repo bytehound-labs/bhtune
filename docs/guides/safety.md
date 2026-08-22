@@ -59,6 +59,10 @@ enforces `Good` by default everywhere quality matters:
   triggering sample is still recorded (with its real quality) before the abort.
 - **During write-back confirmation**: a non-`Good` readback is treated as an unconfirmed write,
   which triggers rollback (see [PID write-back](#pid-write-back) below).
+- **When selecting a tag in the web browser**: BHTune re-reads the exact item selected in the
+  tree before applying the template's PV suffix. `Good` quality proceeds normally; `Uncertain`
+  or `Bad` quality requires an explicit choice to select another tag or proceed anyway. This
+  only accepts the item into the form; tune execution still enforces the quality rules above.
 
 `Bad` quality is never accepted under any flag. Sites whose gateway reports `Uncertain` as a
 matter of course can pass `--allow-uncertain-quality` to accept `Uncertain` (never `Bad`) —
