@@ -3,7 +3,7 @@
  * the `frontend-shell` health indicator (slate = pending/neutral, red = error, emerald =
  * success) stays consistent across every screen rather than being re-invented per file.
  */
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 export function PageHeading({
   title,
@@ -392,20 +392,50 @@ export function CheckboxField({
 export function FormSection({
   title,
   children,
+  collapsible = false,
+  defaultOpen = false,
 }: {
   title: string;
   children: ReactNode;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
 }) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const content = (
+    <Card>
+      <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+        {children}
+      </div>
+    </Card>
+  );
+
+  if (collapsible) {
+    return (
+      <details
+        className="group mb-6"
+        open={isOpen}
+        onToggle={(event) => setIsOpen(event.currentTarget.open)}
+      >
+        <summary className="mb-3 flex cursor-pointer list-none items-center justify-between text-sm font-semibold uppercase tracking-wide text-slate-400">
+          <span>{title}</span>
+          <span
+            aria-hidden="true"
+            className="text-base transition-transform group-open:rotate-90"
+          >
+            ▸
+          </span>
+        </summary>
+        {content}
+      </details>
+    );
+  }
+
   return (
     <section className="mb-6">
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
         {title}
       </h2>
-      <Card>
-        <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
-          {children}
-        </div>
-      </Card>
+      {content}
     </section>
   );
 }

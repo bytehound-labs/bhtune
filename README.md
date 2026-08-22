@@ -103,10 +103,9 @@ scaffolding workspace intentionally does not declare unused dependencies.
 The web form's **Browse servers** button opens an on-demand picker for the OPC DA servers
 registered on the gateway. Its tag browser expands one namespace level at a time and supports
 both dotted and slash-separated OPC item IDs. The first node is selected automatically when
-the tree loads, and the selection panel remains in place while browsing. Detailed template
-replacement information is collapsed by default and can be expanded when needed. With a
-template selected, confirming a tag selection replaces its final component with that
-template's process-variable suffix before writing the value into the Tag name field. Use a
+the tree loads, and the selection panel remains in place while browsing. With a template
+selected, confirming a tag selection replaces its final component with that template's
+process-variable suffix before writing the value into the Tag name field. Use a
 gateway release with recursive hierarchical browsing for servers that expose branch names
 through `OPC_FLAT` without returning their descendants.
 Changing templates replaces a tag's final component with the new template's process-variable
@@ -118,6 +117,18 @@ selects the item; a tune still applies its live-reading quality safeguards.
 Reopening the browser automatically expands the available path to the current Tag name, selects
 that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
 level.
+
+The New tune form's collapsed **Tag mapping overrides** section is the single place to inspect
+the template-derived mapping. Blank fields preserve those defaults; a nonblank field replaces
+that OPC item ID for the tune (for example, an MV/output tag can use a `PY` suffix instead of a
+template's `PC` suffix). Overrides are retained in the saved draft and the run request snapshot.
+
+In **Simulator** mode, the form disables the OPC DA connection, tag, quality, timeout, and
+automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
+template remains selectable: the simulator ignores its tag mappings, but its PID type and unit
+conventions still format the calculated results (for example, Yokogawa uses proportional band
+while the other built-in templates use gain). PV/MV ranges and controller direction remain
+editable because the simulator has no live tags from which to read them.
 
 ## Installation
 

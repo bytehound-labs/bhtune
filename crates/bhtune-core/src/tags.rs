@@ -5,6 +5,133 @@ use serde::{Deserialize, Serialize};
 
 use crate::{direction::ControllerDirection, template::DcsTemplate};
 
+/// Per-tune replacements for template-derived OPC tag names.
+///
+/// A missing or blank field keeps the active template's derived tag. Overrides are applied
+/// only to tag names; fixed range and direction values remain separate `LoopTags` inputs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct TagOverrides {
+    #[serde(default)]
+    pub process_variable: Option<String>,
+    #[serde(default)]
+    pub manipulated_variable: Option<String>,
+    #[serde(default)]
+    pub setpoint_variable: Option<String>,
+    #[serde(default)]
+    pub controller_mode: Option<String>,
+    #[serde(default)]
+    pub mode_attribute: Option<String>,
+    #[serde(default)]
+    pub proportional_constant: Option<String>,
+    #[serde(default)]
+    pub integral_constant: Option<String>,
+    #[serde(default)]
+    pub derivative_constant: Option<String>,
+}
+
+/// An invalid per-tune tag override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TagOverridesError {
+    /// A tag contains a control character that cannot be a valid OPC item identifier.
+    ControlCharacter { field: &'static str },
+}
+
+impl std::fmt::Display for TagOverridesError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ControlCharacter { field } => {
+                write!(
+                    formatter,
+                    "tag override '{field}' contains a control character"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for TagOverridesError {}
+
+impl TagOverrides {
+    /// Returns whether every override is missing or blank.
+    pub fn is_empty(&self) -> bool {
+        [
+            self.process_variable.as_deref(),
+            self.manipulated_variable.as_deref(),
+            self.setpoint_variable.as_deref(),
+            self.controller_mode.as_deref(),
+            self.mode_attribute.as_deref(),
+            self.proportional_constant.as_deref(),
+            self.integral_constant.as_deref(),
+            self.derivative_constant.as_deref(),
+        ]
+        .into_iter()
+        .all(|value| value.is_none_or(|value| value.trim().is_empty()))
+    }
+
+    /// Validates override strings before any driver connection or live loop mutation.
+    pub fn validate(&self) -> Result<(), TagOverridesError> {
+        let fields = [
+            ("process_variable", self.process_variable.as_deref()),
+            ("manipulated_variable", self.manipulated_variable.as_deref()),
+            ("setpoint_variable", self.setpoint_variable.as_deref()),
+            ("controller_mode", self.controller_mode.as_deref()),
+            ("mode_attribute", self.mode_attribute.as_deref()),
+            (
+                "proportional_constant",
+                self.proportional_constant.as_deref(),
+            ),
+            ("integral_constant", self.integral_constant.as_deref()),
+            ("derivative_constant", self.derivative_constant.as_deref()),
+        ];
+        for (field, value) in fields {
+            if value.is_some_and(|value| value.chars().any(char::is_control)) {
+                return Err(TagOverridesError::ControlCharacter { field });
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies every non-blank override to an already-derived tag set.
+    pub fn apply_to(&self, tags: &mut LoopTags) {
+        apply_string_override(&mut tags.process_variable, self.process_variable.as_deref());
+        apply_string_override(
+            &mut tags.manipulated_variable,
+            self.manipulated_variable.as_deref(),
+        );
+        apply_optional_string_override(
+            &mut tags.setpoint_variable,
+            self.setpoint_variable.as_deref(),
+        );
+        apply_optional_string_override(&mut tags.controller_mode, self.controller_mode.as_deref());
+        apply_optional_string_override(&mut tags.mode_attribute, self.mode_attribute.as_deref());
+        apply_optional_string_override(
+            &mut tags.proportional_constant,
+            self.proportional_constant.as_deref(),
+        );
+        apply_optional_string_override(
+            &mut tags.integral_constant,
+            self.integral_constant.as_deref(),
+        );
+        apply_optional_string_override(
+            &mut tags.derivative_constant,
+            self.derivative_constant.as_deref(),
+        );
+    }
+}
+
+fn apply_string_override(target: &mut String, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        *target = value.trim().to_string();
+    }
+}
+
+fn apply_optional_string_override(target: &mut Option<String>, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        *target = Some(value.trim().to_string());
+    }
+}
+
 /// A per-loop input that is either read live from an OPC tag, or supplied as a fixed value
 /// set once by the user (e.g. a range limit that has no corresponding DCS tag).
 ///
@@ -227,5 +354,60 @@ mod tests {
         let json = serde_json::to_string(&tags).unwrap();
         let back: LoopTags = serde_json::from_str(&json).unwrap();
         assert_eq!(tags, back);
+    }
+
+    #[test]
+    fn tag_overrides_apply_non_blank_values_and_leave_blank_values_alone() {
+        let template = built_in_templates()
+            .into_iter()
+            .find(|template| template.name == "Honeywell Experion")
+            .unwrap();
+        let mut tags = LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &template);
+        let overrides = TagOverrides {
+            process_variable: Some("  Unit1.LIC101.PY  ".to_string()),
+            manipulated_variable: Some("Unit1.LIC101.MY".to_string()),
+            setpoint_variable: Some("".to_string()),
+            controller_mode: None,
+            mode_attribute: Some("Unit1.LIC101.MA".to_string()),
+            proportional_constant: None,
+            integral_constant: Some("Unit1.LIC101.IY".to_string()),
+            derivative_constant: None,
+        };
+
+        overrides.validate().unwrap();
+        overrides.apply_to(&mut tags);
+
+        assert_eq!(tags.process_variable, "Unit1.LIC101.PY");
+        assert_eq!(tags.manipulated_variable, "Unit1.LIC101.MY");
+        assert_eq!(tags.setpoint_variable, Some("Unit1.LIC101.SP".to_string()));
+        assert_eq!(tags.mode_attribute, Some("Unit1.LIC101.MA".to_string()));
+        assert_eq!(tags.integral_constant, Some("Unit1.LIC101.IY".to_string()));
+    }
+
+    #[test]
+    fn tag_overrides_validate_control_characters() {
+        let overrides = TagOverrides {
+            process_variable: Some("Unit1.LIC101\nPY".to_string()),
+            ..TagOverrides::default()
+        };
+        assert_eq!(
+            overrides.validate(),
+            Err(TagOverridesError::ControlCharacter {
+                field: "process_variable"
+            })
+        );
+        assert_eq!(
+            overrides.validate().unwrap_err().to_string(),
+            "tag override 'process_variable' contains a control character"
+        );
+    }
+
+    #[test]
+    fn empty_tag_overrides_round_trip_and_report_empty() {
+        let overrides = TagOverrides::default();
+        assert!(overrides.is_empty());
+        let json = serde_json::to_string(&overrides).unwrap();
+        let back: TagOverrides = serde_json::from_str(&json).unwrap();
+        assert_eq!(overrides, back);
     }
 }

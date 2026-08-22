@@ -17,7 +17,7 @@ use bhtune_cli::cancel::CtrlC;
 use bhtune_cli::commands::tune::{PidWriteOutcome, drive, prepare, write_pid_values};
 use bhtune_cli::output::OutputFormat;
 use bhtune_core::{
-    ControllerDirection, ControllerType, PidParameters, ProcessType, ResponseLevel,
+    ControllerDirection, ControllerType, PidParameters, ProcessType, ResponseLevel, TagOverrides,
     opc_write_values,
 };
 use bhtune_db::models::{
@@ -133,6 +133,9 @@ pub struct StartRunRequest {
     pub mv_range_low: Option<f32>,
     /// Fixed controller direction, overriding a live tag read.
     pub direction: Option<ControllerDirection>,
+    /// Per-tune replacements for template-derived OPC tag names. Blank or missing fields use
+    /// the template-derived tag.
+    pub tag_overrides: Option<TagOverrides>,
     /// How often to poll the driver, in milliseconds.
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
@@ -227,6 +230,11 @@ impl StartRunRequest {
         require_positive("timeout_secs", self.timeout_secs)?;
         require_positive("op_timeout_secs", self.op_timeout_secs)?;
         require_positive("restore_timeout_secs", self.restore_timeout_secs)?;
+        if let Some(tag_overrides) = &self.tag_overrides {
+            tag_overrides
+                .validate()
+                .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+        }
 
         let driver = DriverKindArg::try_from(self.driver)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
@@ -256,6 +264,7 @@ impl StartRunRequest {
             mv_range_high: self.mv_range_high,
             mv_range_low: self.mv_range_low,
             direction: self.direction.map(Into::into),
+            tag_overrides: self.tag_overrides,
             poll_interval_ms: self.poll_interval_ms,
             timeout_secs: self.timeout_secs,
             notes: self.notes,

@@ -19,7 +19,7 @@ import {
 } from "../../lib/enumLabels";
 import { OpcServerDiscovery } from "../../components/OpcServerDiscovery";
 import { OpcTagBrowserModal } from "../../components/OpcTagBrowserModal";
-import { replaceTagSuffix } from "../../lib/opcTags";
+import { derivedTagPreview, replaceTagSuffix } from "../../lib/opcTags";
 import {
   Button,
   CheckboxField,
@@ -37,6 +37,7 @@ type ProcessType = components["schemas"]["ProcessType"];
 type ControllerType = components["schemas"]["ControllerType"];
 type ControllerDirection = components["schemas"]["ControllerDirection"];
 type ResponseLevel = components["schemas"]["ResponseLevel"];
+type TagOverrides = components["schemas"]["TagOverrides"];
 
 const DRIVERS: readonly TuneDriver[] = ["simulator", "opcda"];
 const PROCESS_TYPES: readonly ProcessType[] = [
@@ -63,6 +64,71 @@ const TEMPERATURE_PROCESS_TYPES = new Set<ProcessType>([
 ]);
 
 type NumOrBlank = number | "";
+
+type TagOverrideFormState = {
+  processVariable: string;
+  manipulatedVariable: string;
+  setpointVariable: string;
+  controllerMode: string;
+  modeAttribute: string;
+  proportionalConstant: string;
+  integralConstant: string;
+  derivativeConstant: string;
+};
+
+const EMPTY_TAG_OVERRIDES: TagOverrideFormState = {
+  processVariable: "",
+  manipulatedVariable: "",
+  setpointVariable: "",
+  controllerMode: "",
+  modeAttribute: "",
+  proportionalConstant: "",
+  integralConstant: "",
+  derivativeConstant: "",
+};
+
+const TAG_OVERRIDE_FIELDS = [
+  {
+    key: "processVariable",
+    label: "PV tag override",
+    previewLabel: "Process variable (PV)",
+  },
+  {
+    key: "manipulatedVariable",
+    label: "MV/output tag override",
+    previewLabel: "Manipulated variable (MV)",
+  },
+  {
+    key: "setpointVariable",
+    label: "Setpoint tag override",
+    previewLabel: "Setpoint",
+  },
+  {
+    key: "controllerMode",
+    label: "Controller mode tag override",
+    previewLabel: "Controller mode",
+  },
+  {
+    key: "modeAttribute",
+    label: "Mode attribute tag override",
+    previewLabel: "Mode attribute",
+  },
+  {
+    key: "proportionalConstant",
+    label: "Proportional constant tag override",
+    previewLabel: "Proportional constant",
+  },
+  {
+    key: "integralConstant",
+    label: "Integral constant tag override",
+    previewLabel: "Integral constant",
+  },
+  {
+    key: "derivativeConstant",
+    label: "Derivative constant tag override",
+    previewLabel: "Derivative constant",
+  },
+] as const;
 
 type FormState = {
   driver: TuneDriver;
@@ -95,6 +161,7 @@ type FormState = {
   simSeed: NumOrBlank;
   simInitialPv: NumOrBlank;
   simInitialMv: NumOrBlank;
+  tagOverrides: TagOverrideFormState;
   writePid: "" | ResponseLevel;
   yes: boolean;
 };
@@ -142,6 +209,7 @@ const initialForm: FormState = {
   simSeed: 0,
   simInitialPv: 50,
   simInitialMv: 50,
+  tagOverrides: { ...EMPTY_TAG_OVERRIDES },
   writePid: "",
   yes: false,
 };
@@ -156,6 +224,87 @@ function toNumOrBlank(value: number | null | undefined): NumOrBlank {
 
 function toNullable(value: NumOrBlank): number | null {
   return value === "" ? null : value;
+}
+
+function formTagOverrides(
+  overrides: TagOverrides | null | undefined,
+): TagOverrideFormState {
+  return {
+    processVariable: overrides?.process_variable ?? "",
+    manipulatedVariable: overrides?.manipulated_variable ?? "",
+    setpointVariable: overrides?.setpoint_variable ?? "",
+    controllerMode: overrides?.controller_mode ?? "",
+    modeAttribute: overrides?.mode_attribute ?? "",
+    proportionalConstant: overrides?.proportional_constant ?? "",
+    integralConstant: overrides?.integral_constant ?? "",
+    derivativeConstant: overrides?.derivative_constant ?? "",
+  };
+}
+
+function tagOverridesFromForm(form: FormState): TagOverrides | undefined {
+  const overrides: TagOverrides = {
+    process_variable: form.tagOverrides.processVariable.trim() || undefined,
+    manipulated_variable:
+      form.tagOverrides.manipulatedVariable.trim() || undefined,
+    setpoint_variable: form.tagOverrides.setpointVariable.trim() || undefined,
+    controller_mode: form.tagOverrides.controllerMode.trim() || undefined,
+    mode_attribute: form.tagOverrides.modeAttribute.trim() || undefined,
+    proportional_constant:
+      form.tagOverrides.proportionalConstant.trim() || undefined,
+    integral_constant: form.tagOverrides.integralConstant.trim() || undefined,
+    derivative_constant:
+      form.tagOverrides.derivativeConstant.trim() || undefined,
+  };
+  return Object.values(overrides).some((value) => value !== undefined)
+    ? overrides
+    : undefined;
+}
+
+function fixedPreviewValue(label: string, form: FormState): string | undefined {
+  switch (label) {
+    case "Controller direction":
+      return form.direction
+        ? `Fixed value: ${DIRECTION_LABELS[form.direction]}`
+        : undefined;
+    case "PV range high":
+      return form.pvRangeHigh === ""
+        ? undefined
+        : `Fixed value: ${form.pvRangeHigh}`;
+    case "PV range low":
+      return form.pvRangeLow === ""
+        ? undefined
+        : `Fixed value: ${form.pvRangeLow}`;
+    case "MV range high":
+      return form.mvRangeHigh === ""
+        ? undefined
+        : `Fixed value: ${form.mvRangeHigh}`;
+    case "MV range low":
+      return form.mvRangeLow === ""
+        ? undefined
+        : `Fixed value: ${form.mvRangeLow}`;
+    default:
+      return undefined;
+  }
+}
+
+function effectiveTagPreview(
+  form: FormState,
+  template: components["schemas"]["TemplateResponse"],
+) {
+  return derivedTagPreview(form.tagname, template).map((row) => {
+    const overrideField = TAG_OVERRIDE_FIELDS.find(
+      (field) => field.previewLabel === row.label,
+    );
+    const override = overrideField
+      ? form.tagOverrides[overrideField.key].trim()
+      : "";
+    const fixed = fixedPreviewValue(row.label, form);
+    return {
+      ...row,
+      effectiveTag: override || fixed || row.tag,
+      overridden: Boolean(override || fixed),
+    };
+  });
 }
 
 /**
@@ -207,6 +356,7 @@ function formFromRequest(request: StartRunRequest): FormState {
     simSeed: request.sim_seed ?? initialForm.simSeed,
     simInitialPv: request.sim_initial_pv ?? initialForm.simInitialPv,
     simInitialMv: request.sim_initial_mv ?? initialForm.simInitialMv,
+    tagOverrides: formTagOverrides(request.tag_overrides),
     writePid: request.write_pid ?? "",
     yes: request.yes ?? false,
   };
@@ -293,6 +443,7 @@ function formFromDraft(draft: NewRunDraft): FormState {
       draft.sim_initial_mv === undefined
         ? initialForm.simInitialMv
         : toNumOrBlank(draft.sim_initial_mv),
+    tagOverrides: formTagOverrides(draft.tag_overrides),
     writePid: draft.write_pid ?? "",
     yes: draft.yes ?? initialForm.yes,
   };
@@ -330,6 +481,7 @@ function draftFromForm(form: FormState): NewRunDraft {
     sim_seed: toNullable(form.simSeed),
     sim_initial_pv: toNullable(form.simInitialPv),
     sim_initial_mv: toNullable(form.simInitialMv),
+    tag_overrides: tagOverridesFromForm(form) ?? null,
     write_pid: form.writePid || null,
     yes: form.yes,
   };
@@ -412,6 +564,7 @@ function buildRequest(form: FormState): StartRunRequest | string {
     mv_range_high: toOptional(form.mvRangeHigh),
     mv_range_low: toOptional(form.mvRangeLow),
     direction: form.direction || undefined,
+    tag_overrides: tagOverridesFromForm(form),
     poll_interval_ms: toOptional(form.pollIntervalMs),
     timeout_secs: toOptional(form.timeoutSecs),
     notes: form.notes.trim() || undefined,
@@ -571,6 +724,13 @@ export function NewRunPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function setTagOverride(key: keyof TagOverrideFormState, value: string) {
+    setForm((prev) => ({
+      ...prev,
+      tagOverrides: { ...prev.tagOverrides, [key]: value },
+    }));
+  }
+
   function setDriver(value: TuneDriver) {
     setForm((prev) => {
       if (value !== "simulator") return { ...prev, driver: value };
@@ -713,15 +873,22 @@ export function NewRunPage() {
             options={DRIVERS}
             displayLabel={(v) => DRIVER_LABELS[v]}
           />
-          <SelectField
-            label="Template"
-            value={form.template}
-            onChange={setTemplate}
-            options={(templates.data ?? []).map((t) => t.name)}
-            placeholder={
-              templates.isPending ? "Loading templates…" : "Choose a template"
-            }
-          />
+          <div>
+            <SelectField
+              label="Template"
+              value={form.template}
+              onChange={setTemplate}
+              options={(templates.data ?? []).map((t) => t.name)}
+              placeholder={
+                templates.isPending ? "Loading templates…" : "Choose a template"
+              }
+            />
+            <span className="mt-1 block text-xs text-slate-500">
+              {form.driver === "simulator"
+                ? "The simulator ignores DCS tag mappings, but the template still formats calculated PID values (for example, gain versus proportional band)."
+                : "Maps the connected DCS/PLC's item IDs and PID conventions."}
+            </span>
+          </div>
           <TextField
             label="Bridge host"
             disabled={form.driver === "simulator"}
@@ -906,7 +1073,81 @@ export function NewRunPage() {
           />
         </FormSection>
 
-        <FormSection title="Tag mapping overrides">
+        <FormSection title="Tag mapping overrides" collapsible>
+          <p className="text-sm text-slate-500 sm:col-span-2">
+            Blank tag fields use the active template&apos;s derived defaults.
+            Explicit values apply only to this tune and are retained in the
+            saved draft.
+            {form.driver === "simulator" &&
+              " Simulator mode ignores OPC tag mappings, but retains these values for OPC DA."}
+          </p>
+          {TAG_OVERRIDE_FIELDS.map((field) => (
+            <TextField
+              key={field.key}
+              label={field.label}
+              value={form.tagOverrides[field.key]}
+              onChange={(value) => setTagOverride(field.key, value)}
+              disabled={form.driver === "simulator"}
+              hint={
+                form.driver === "simulator"
+                  ? "Disabled — the simulator ignores OPC tag mappings; the value is retained for OPC DA."
+                  : "Blank uses the template-derived tag."
+              }
+            />
+          ))}
+          <div className="sm:col-span-2">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Effective mapping
+            </h3>
+            {activeTemplate ? (
+              <div className="overflow-x-auto rounded-md border border-slate-800">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="bg-slate-950 text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Tag</th>
+                      <th className="px-3 py-2 font-medium">
+                        Template default
+                      </th>
+                      <th className="px-3 py-2 font-medium">Effective</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {effectiveTagPreview(form, activeTemplate).map((row) => (
+                      <tr key={row.label}>
+                        <td className="whitespace-nowrap px-3 py-2 text-slate-400">
+                          {row.label}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-slate-300">
+                          {row.tag ?? (
+                            <span className="italic text-slate-600">
+                              not used by this template
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-slate-200">
+                          {row.effectiveTag ?? (
+                            <span className="italic text-slate-600">
+                              not used by this template
+                            </span>
+                          )}
+                          {row.overridden && (
+                            <span className="ml-2 font-sans text-amber-400">
+                              override
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">
+                Choose a template to see its derived tag defaults and effective
+                mapping.
+              </p>
+            )}
+          </div>
           <SelectField
             label="Controller direction"
             value={form.direction}

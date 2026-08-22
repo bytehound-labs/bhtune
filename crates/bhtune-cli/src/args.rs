@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use bhtune_core::TagOverrides;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// `value_parser` for every `f32` CLI flag that can reach `bhtune-core` unvalidated. A
@@ -110,6 +111,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Run an MRFT tune against a real OPC DA loop or the in-process simulator.
     Tune(TuneArgs),
@@ -432,6 +434,11 @@ pub struct TuneArgs {
     #[arg(long, value_enum)]
     pub direction: Option<DirectionArg>,
 
+    /// Per-tune replacements for template-derived tag names. This is populated by the HTTP
+    /// API/UI; the CLI has no separate flags for the nested object.
+    #[arg(skip)]
+    pub tag_overrides: Option<TagOverrides>,
+
     /// How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer).
     #[arg(long, default_value_t = 800, value_parser = positive_u64)]
     pub poll_interval_ms: u64,
@@ -611,6 +618,7 @@ impl SimulateArgs {
             mv_range_high: Some(100.0),
             mv_range_low: Some(0.0),
             direction: Some(DirectionArg::Reverse),
+            tag_overrides: None,
             poll_interval_ms: self.poll_interval_ms,
             timeout_secs: self.timeout_secs,
             notes: self.notes,

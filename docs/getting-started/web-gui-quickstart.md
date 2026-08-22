@@ -68,11 +68,13 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    the tune.
 
    - Switching the driver to **Simulator** greys out every field the simulator genuinely
-     ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, quality/timeout options)
-     rather than hiding them, so the form doesn't reflow and the greyed field itself explains
-     what the simulator doesn't use. Fields the simulator still needs — template, PV/MV
-     ranges, controller direction, and every engine parameter — stay enabled, since the
-     template's unit conversions and PID type apply to every run regardless of driver.
+     ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, quality/timeout
+     options) rather than hiding them, so the form doesn't reflow and the greyed field itself
+     explains what the simulator doesn't use. The template stays enabled intentionally: the
+     simulator ignores its DCS tag mappings, but its PID type and unit conventions still format
+     calculated results (for example, Yokogawa uses proportional band while the other built-in
+     templates use gain). PV/MV ranges, controller direction, and every engine parameter also
+     stay enabled because the simulator needs them.
    - Switching to **OPC DA** reveals a **Browse servers** button next to the ProgID field.
      It opens an on-demand picker populated by the bridge gateway, listing every OPC DA server
      registered on it as clickable buttons — no need to already know (or spell correctly) a
@@ -81,22 +83,23 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      a time from the gateway. Hierarchical servers such as Yokogawa CSHIS can be expanded
      through nested controller/block levels until their PV leaves; dotted and slash-separated
      item IDs are supported. The first node is selected automatically when the tree loads, and
-     the selection panel stays in place while browsing. Selecting a leaf previews the complete
-     tag set the active template would derive from it in a collapsed details section (expand it
-     to inspect the mapping), which keeps the browser compact while preserving the full
-     explanation of how a template's suffixes work.
-     offers a **Read selected tag** action showing a live value and its quality. Double-clicking
-     a leaf selects it; double-clicking a branch expands or collapses it. Selecting **Select tag**
-     writes the selected tag with its final component replaced by the active template's
-     process-variable suffix into the Tag name field. Changing templates likewise replaces the
-     final component with the new template's process-variable suffix, regardless of what the
-     previous component was, preserving the rest of the tag path. Clicking **Select tag** performs
-     a fresh read of the original selected item (before suffix replacement) and proceeds immediately only for `Good` OPC
-     quality; `Uncertain` or `Bad` quality opens a warning with choices to select a different
-     tag or proceed anyway. Proceeding only selects the item; tune execution still applies its
-     live-reading quality safeguards. Reopening the browser expands the available path to the
-     current Tag name, selects that node, and scrolls it into view; an unavailable tag falls back
-     to the root level.
+     the selection panel stays in place while browsing. The main form's collapsed **Tag mapping
+     overrides** section is the single place to inspect the complete tag set the active template
+     derives from the selected PV. Blank fields keep those defaults; fill in one or more fields
+     to replace the corresponding OPC item IDs for this tune, such as changing an MV/output tag
+     from a template's `PC` suffix to `PY`. The browser itself stays focused on browsing and
+     testing the selected PV tag. It offers a **Read selected tag** action showing a live value
+     and its quality. Double-clicking a leaf selects it; double-clicking a branch expands or
+     collapses it. Selecting **Select tag** writes the selected tag with its final component
+     replaced by the active template's process-variable suffix into the Tag name field. Changing
+     templates likewise replaces the final component with the new template's process-variable
+     suffix, regardless of what the previous component was, preserving the rest of the tag path.
+     Clicking **Select tag** performs a fresh read of the original selected item (before suffix
+     replacement) and proceeds immediately only for `Good` OPC quality; `Uncertain` or `Bad`
+     quality opens a warning with choices to select a different tag or proceed anyway. Proceeding
+     only selects the item; tune execution still applies its live-reading quality safeguards.
+     Reopening the browser expands the available path to the current Tag name, selects that node,
+     and scrolls it into view; an unavailable tag falls back to the root level.
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
      page while the run is active or after it finishes.

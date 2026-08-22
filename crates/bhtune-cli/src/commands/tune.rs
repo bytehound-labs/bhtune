@@ -15,7 +15,7 @@ use std::time::Duration;
 use bhtune_core::{
     Action, ControllerDirection, ControllerType, DcsTemplate, InitialReadings, LoopConfig,
     LoopTags, MrftCompat, MrftEngine, MvRange, PidParameters, ProcessType, PvRange, ResponseLevel,
-    TagOrValue, Tick, TuningMathCompat, calculate_all, lookup, opc_write_values,
+    TagOrValue, TagOverrides, Tick, TuningMathCompat, calculate_all, lookup, opc_write_values,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
@@ -242,6 +242,7 @@ struct RequestSnapshot<'a> {
     mv_range_high: Option<f32>,
     mv_range_low: Option<f32>,
     direction: Option<ControllerDirection>,
+    tag_overrides: Option<&'a TagOverrides>,
     poll_interval_ms: u64,
     timeout_secs: u64,
     notes: Option<&'a str>,
@@ -275,6 +276,9 @@ pub async fn prepare(
             "--write-pid requires --yes: writing PID constants back to the DCS with no \
              human present to confirm must be an explicit, deliberate choice"
         );
+    }
+    if let Some(tag_overrides) = &args.tag_overrides {
+        tag_overrides.validate()?;
     }
 
     let db_driver = match args.driver {
@@ -311,6 +315,7 @@ pub async fn prepare(
         mv_range_high: args.mv_range_high,
         mv_range_low: args.mv_range_low,
         direction: args.direction.map(Into::into),
+        tag_overrides: args.tag_overrides.as_ref(),
         poll_interval_ms: args.poll_interval_ms,
         timeout_secs: args.timeout_secs,
         notes: args.notes.as_deref(),
@@ -739,6 +744,9 @@ fn build_loop_tags(args: &TuneArgs, template: &DcsTemplate) -> anyhow::Result<Lo
     match args.driver {
         DriverKindArg::Opcda => {
             let mut tags = LoopTags::derive_from_pv_tag(&args.tagname, template);
+            if let Some(overrides) = &args.tag_overrides {
+                overrides.apply_to(&mut tags);
+            }
             if let Some(v) = args.pv_range_high {
                 tags.upper_pv_range = TagOrValue::Value(v);
             }
@@ -2396,6 +2404,7 @@ mod tests {
             mv_range_high: Some(100.0),
             mv_range_low: Some(0.0),
             direction: Some(DirectionArg::Reverse),
+            tag_overrides: None,
             poll_interval_ms: 5,
             timeout_secs: 3600,
             op_timeout_secs: 30,
@@ -2759,8 +2768,18 @@ mod tests {
         args.driver = DriverKindArg::Opcda;
         args.tagname = "Unit1.LIC101.PV".to_string();
         args.direction = Some(DirectionArg::Direct);
+        args.tag_overrides = Some(TagOverrides {
+            manipulated_variable: Some("Unit1.LIC101.PY".to_string()),
+            proportional_constant: Some("Unit1.LIC101.PB".to_string()),
+            ..TagOverrides::default()
+        });
         let tags = build_loop_tags(&args, &template).unwrap();
         assert!(tags.process_variable.starts_with("Unit1.LIC101"));
+        assert_eq!(tags.manipulated_variable, "Unit1.LIC101.PY");
+        assert_eq!(
+            tags.proportional_constant,
+            Some("Unit1.LIC101.PB".to_string())
+        );
         assert_eq!(
             tags.controller_direction,
             TagOrValue::Value(ControllerDirection::Direct)

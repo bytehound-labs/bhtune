@@ -91,6 +91,7 @@ mod tests {
             mv_range_high: Some(100.0),
             mv_range_low: Some(0.0),
             direction: Some(DirectionArg::Reverse),
+            tag_overrides: None,
             poll_interval_ms: 800,
             timeout_secs: 3600,
             notes: None,

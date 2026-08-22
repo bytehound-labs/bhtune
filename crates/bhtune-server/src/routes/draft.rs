@@ -6,7 +6,7 @@
 
 use axum::routing::get;
 use axum::{Json, Router};
-use bhtune_core::{ControllerDirection, ControllerType, ProcessType, ResponseLevel};
+use bhtune_core::{ControllerDirection, ControllerType, ProcessType, ResponseLevel, TagOverrides};
 use bhtune_db::models::{SettingRow, TuneDriver};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,7 @@ pub struct NewRunDraft {
     pub restore_timeout_secs: Option<u64>,
     pub allow_uncertain_quality: Option<bool>,
     pub direction: Option<ControllerDirection>,
+    pub tag_overrides: Option<TagOverrides>,
     pub pv_range_high: Option<f32>,
     pub pv_range_low: Option<f32>,
     pub mv_range_high: Option<f32>,

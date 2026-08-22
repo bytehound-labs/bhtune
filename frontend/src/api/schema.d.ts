@@ -661,6 +661,7 @@ export interface components {
       sim_seed?: number | null;
       /** Format: float */
       sim_tau?: number | null;
+      tag_overrides?: null | components["schemas"]["TagOverrides"];
       tagname?: string | null;
       template?: string | null;
       /** Format: int64 */
@@ -1034,6 +1035,7 @@ export interface components {
        * @description Simulator process time constant, in seconds (`driver: "simulator"` only).
        */
       sim_tau?: number;
+      tag_overrides?: null | components["schemas"]["TagOverrides"];
       /** @description PV tag prefix; ignored for `driver: "simulator"`. See [`TuneArgs::tagname`]. */
       tagname: string;
       /** @description DCS/PLC template name (see `GET /api/templates`). */
@@ -1050,6 +1052,22 @@ export interface components {
        *     is rejected otherwise, identically to `--write-pid` without `--yes` on the CLI.
        */
       yes?: boolean;
+    };
+    /**
+     * @description Per-tune replacements for template-derived OPC tag names.
+     *
+     *     A missing or blank field keeps the active template's derived tag. Overrides are applied
+     *     only to tag names; fixed range and direction values remain separate `LoopTags` inputs.
+     */
+    TagOverrides: {
+      controller_mode?: string | null;
+      derivative_constant?: string | null;
+      integral_constant?: string | null;
+      manipulated_variable?: string | null;
+      mode_attribute?: string | null;
+      process_variable?: string | null;
+      proportional_constant?: string | null;
+      setpoint_variable?: string | null;
     };
     /**
      * @description Where a `dcs_templates` row came from, and -- since [`TuneRunRow`] snapshots a copy of one

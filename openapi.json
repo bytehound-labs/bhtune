@@ -1715,6 +1715,16 @@
             ],
             "format": "float"
           },
+          "tag_overrides": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TagOverrides"
+              }
+            ]
+          },
           "tagname": {
             "type": [
               "string",
@@ -2379,6 +2389,17 @@
             "format": "float",
             "description": "Simulator process time constant, in seconds (`driver: \"simulator\"` only)."
           },
+          "tag_overrides": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TagOverrides",
+                "description": "Per-tune replacements for template-derived OPC tag names. Blank or missing fields use\nthe template-derived tag."
+              }
+            ]
+          },
           "tagname": {
             "type": "string",
             "description": "PV tag prefix; ignored for `driver: \"simulator\"`. See [`TuneArgs::tagname`]."
@@ -2407,6 +2428,60 @@
           "yes": {
             "type": "boolean",
             "description": "Confirm an unattended PID write-back. Required alongside `write_pid` -- the request\nis rejected otherwise, identically to `--write-pid` without `--yes` on the CLI."
+          }
+        }
+      },
+      "TagOverrides": {
+        "type": "object",
+        "description": "Per-tune replacements for template-derived OPC tag names.\n\nA missing or blank field keeps the active template's derived tag. Overrides are applied\nonly to tag names; fixed range and direction values remain separate `LoopTags` inputs.",
+        "properties": {
+          "controller_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "derivative_constant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "integral_constant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "manipulated_variable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode_attribute": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process_variable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proportional_constant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "setpoint_variable": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

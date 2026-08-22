@@ -15,8 +15,9 @@ import { expect, test } from "@playwright/test";
  * `GET /api/opc/browse` request wiring behind "Browse servers"/"Browse tags", the modal
  * opening/closing, and that a failure renders as a visible error rather than a silent no-op
  * or an unhandled exception. The populated-tree cases below use Playwright route fixtures for
- * the HTTP responses, keeping the selection and template-specific PV-tag transformation
- * covered without requiring a second permanent gateway service.
+ * the HTTP responses, keeping selection and template-specific PV-tag transformation covered
+ * without requiring a second permanent gateway service. The main form's collapsed mapping
+ * section covers the default/effective tag preview and per-tune overrides.
  */
 test.describe("OPC DA server discovery and tag browser (no gateway present)", () => {
   test.beforeEach(async ({ page }) => {
@@ -85,6 +86,32 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await templateField.selectOption("Allen-Bradley PlantPAx");
 
     await expect(tagField).toHaveValue("Simulink.Device1.Python.Inp_PV");
+  });
+
+  test("shows template defaults and applies a per-tune MV tag override", async ({
+    page,
+  }) => {
+    const templateField = page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox");
+    await templateField.selectOption("Yokogawa CentumVP");
+    await page.getByLabel("Tag name").fill("Loop101.PV");
+
+    const mapping = page
+      .locator("details")
+      .filter({ hasText: "Tag mapping overrides" });
+    await expect(mapping).not.toHaveAttribute("open", "");
+    await mapping.locator("summary").click();
+
+    await page.getByLabel("MV/output tag override").fill("Loop101.PY");
+
+    const mvRow = mapping
+      .getByRole("row")
+      .filter({ hasText: "Manipulated variable (MV)" });
+    await expect(mvRow).toContainText("Loop101.MV");
+    await expect(mvRow).toContainText("Loop101.PY");
+    await expect(mvRow).toContainText("override");
   });
 
   test("Browse tags button stays disabled until a ProgID is entered", async ({
@@ -240,12 +267,6 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(
       page.getByText("Selected: Simulink.Device1._System"),
     ).toBeVisible();
-    const mappingDetails = page.locator("details");
-    await expect(mappingDetails).not.toHaveAttribute("open", "");
-    await mappingDetails.locator("summary").click();
-    await expect(mappingDetails.locator("ul")).toBeVisible();
-    await mappingDetails.locator("summary").click();
-    await expect(mappingDetails).not.toHaveAttribute("open", "");
 
     await page.getByRole("button", { name: "Expand" }).click();
     await page
@@ -254,9 +275,6 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       })
       .click();
 
-    await expect(
-      page.getByText("PV tag: Simulink.Device1._System.PV"),
-    ).toBeVisible();
     await page.getByRole("button", { name: "Select tag" }).click();
 
     await expect(page.getByLabel("Tag name")).toHaveValue(

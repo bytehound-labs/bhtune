@@ -22,3 +22,11 @@ openapi.json
 # formatting conventions, and Prettier reformatting this output desyncs it from what the
 # generator actually produces, tripping the drift gate on the very next regeneration.
 docs/reference/
+
+# Playwright output is ignored by git and is not source formatting.
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+playwright-report/
+test-results/
+blob-report/

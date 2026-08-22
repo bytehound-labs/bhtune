@@ -30,6 +30,7 @@ const defaultDraft = {
   sim_seed: 0,
   sim_initial_pv: 50,
   sim_initial_mv: 50,
+  tag_overrides: null,
   write_pid: null,
   yes: false,
 };
@@ -42,6 +43,10 @@ async function waitForDraftSave(page: Page) {
       response.ok(),
     { timeout: 5_000 },
   );
+}
+
+async function waitForDraftHydration(page: Page) {
+  await expect(page.getByText("Loaded your saved Tune draft.")).toBeVisible();
 }
 
 test.describe("New Tune draft persistence", () => {
@@ -93,12 +98,18 @@ test.describe("New Tune draft persistence", () => {
     page,
   }) => {
     await page.goto("/runs/new");
+    await waitForDraftHydration(page);
     await page
       .getByRole("combobox", { name: "Driver", exact: true })
       .selectOption("opcda");
     await page.getByLabel("Bridge host").fill("gateway.example:7600");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.getByLabel("Tag name").fill("FIC101");
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    await page.getByLabel("MV/output tag override").fill("FIC101.PY");
     await page.getByLabel("Notes").fill("do not persist this");
     await waitForDraftSave(page);
 
@@ -114,6 +125,13 @@ test.describe("New Tune draft persistence", () => {
       "Yokogawa.CSHIS_OPC.1",
     );
     await expect(page.getByLabel("Tag name")).toHaveValue("FIC101");
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    await expect(page.getByLabel("MV/output tag override")).toHaveValue(
+      "FIC101.PY",
+    );
     await expect(page.getByLabel("Notes")).toHaveValue("");
     await expect(page.getByText("Loaded your saved Tune draft.")).toBeVisible();
   });
@@ -122,12 +140,18 @@ test.describe("New Tune draft persistence", () => {
     page,
   }) => {
     await page.goto("/runs/new");
+    await waitForDraftHydration(page);
     await page
       .getByRole("combobox", { name: "Driver", exact: true })
       .selectOption("opcda");
     await page.getByLabel("Bridge host").fill("gateway.example:7600");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.getByLabel("Tag name").fill("FIC101");
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    await page.getByLabel("MV/output tag override").fill("FIC101.PY");
     await waitForDraftSave(page);
 
     await page
@@ -146,6 +170,13 @@ test.describe("New Tune draft persistence", () => {
       "Yokogawa.CSHIS_OPC.1",
     );
     await expect(page.getByLabel("Tag name")).toHaveValue("FIC101");
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    await expect(page.getByLabel("MV/output tag override")).toHaveValue(
+      "FIC101.PY",
+    );
   });
 
   test("persists Duplicate this run through a browser reload", async ({
@@ -177,6 +208,9 @@ test.describe("New Tune draft persistence", () => {
         mv_range_high: 100,
         mv_range_low: 0,
         direction: "reverse",
+        tag_overrides: {
+          manipulated_variable: "Duplicate.Loop.PY",
+        },
         poll_interval_ms: 5,
         timeout_secs: 30,
         op_timeout_secs: 30,
@@ -203,6 +237,13 @@ test.describe("New Tune draft persistence", () => {
     await page.getByRole("button", { name: "Duplicate this run" }).click();
     await expect(page).toHaveURL(/\/runs\/new$/);
     await expect(page.getByLabel("Tag name")).toHaveValue("Duplicate.Loop.PV");
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    await expect(page.getByLabel("MV/output tag override")).toHaveValue(
+      "Duplicate.Loop.PY",
+    );
     await waitForDraftSave(page);
 
     // Leave the location state used by Duplicate this run before opening the form again;
@@ -211,14 +252,31 @@ test.describe("New Tune draft persistence", () => {
     await page.goto("/runs");
     await page.goto("/runs/new");
 
+    await waitForDraftHydration(page);
     await expect(page.getByLabel("Tag name")).toHaveValue("Duplicate.Loop.PV");
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    await expect(page.getByLabel("MV/output tag override")).toHaveValue(
+      "Duplicate.Loop.PY",
+    );
     await expect(page.getByLabel("Notes")).toHaveValue("");
     await expect(page.getByText("Loaded your saved Tune draft.")).toBeVisible();
   });
 
   test("persists Reset to defaults", async ({ page }) => {
     await page.goto("/runs/new");
+    await waitForDraftHydration(page);
+    await page
+      .getByRole("combobox", { name: "Driver", exact: true })
+      .selectOption("opcda");
     await page.getByLabel("Poll interval (ms)").fill("123");
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    await page.getByLabel("MV/output tag override").fill("Loop.PY");
     await waitForDraftSave(page);
     await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("123");
 
@@ -230,6 +288,11 @@ test.describe("New Tune draft persistence", () => {
       page.getByRole("combobox", { name: "Driver", exact: true }),
     ).toHaveValue("simulator");
     await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("800");
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    await expect(page.getByLabel("MV/output tag override")).toHaveValue("");
     await expect(page.getByLabel("Notes")).toHaveValue("");
   });
 

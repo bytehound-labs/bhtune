@@ -63,6 +63,85 @@ test.describe("app shell", () => {
     ).toBeVisible();
   });
 
+  test("disables only driver-inert controls in Simulator mode", async ({
+    page,
+  }) => {
+    await page.route("**/api/runs/last-request", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "null",
+      }),
+    );
+
+    await page.goto("/runs/new");
+    await expect(page.getByLabel("Driver")).toHaveValue("simulator");
+
+    const template = page.getByLabel("Template");
+    await expect(template).not.toHaveValue("");
+    await expect(template).toBeEnabled();
+    await expect(
+      page.getByText(
+        "The simulator ignores DCS tag mappings, but the template still formats calculated PID values (for example, gain versus proportional band).",
+      ),
+    ).toBeVisible();
+
+    const startsWithLabel = (label: string) =>
+      new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+
+    for (const label of ["Bridge host", "OPC DA server ProgID", "Tag name"]) {
+      await expect(
+        page.getByRole("textbox", { name: startsWithLabel(label) }),
+      ).toBeDisabled();
+    }
+    for (const label of ["Communication timeout (s)", "Restore timeout (s)"]) {
+      await expect(
+        page.getByRole("spinbutton", { name: startsWithLabel(label) }),
+      ).toBeDisabled();
+    }
+    for (const label of [
+      "Allow uncertain quality",
+      "Allow automatic PID write",
+    ]) {
+      await expect(
+        page.getByRole("checkbox", { name: startsWithLabel(label) }),
+      ).toBeDisabled();
+    }
+    await expect(
+      page.getByRole("combobox", {
+        name: startsWithLabel("Apply PID settings on completion"),
+      }),
+    ).toBeDisabled();
+
+    await page
+      .locator("summary")
+      .filter({ hasText: "Tag mapping overrides" })
+      .click();
+    for (const label of [
+      "Process type",
+      "Controller type",
+      "Controller direction",
+    ]) {
+      await expect(
+        page.getByRole("combobox", { name: startsWithLabel(label) }),
+      ).toBeEnabled();
+    }
+    for (const label of [
+      "Relay amplitude (%)",
+      "Cycles to count",
+      "Poll interval (ms)",
+      "Run timeout (s)",
+      "PV range high",
+      "MV range high",
+      "Process gain",
+      "Time constant τ (s)",
+    ]) {
+      await expect(
+        page.getByRole("spinbutton", { name: startsWithLabel(label) }),
+      ).toBeEnabled();
+    }
+  });
+
   test("toggles and persists the light/dark theme", async ({ page }) => {
     await page.goto("/");
 

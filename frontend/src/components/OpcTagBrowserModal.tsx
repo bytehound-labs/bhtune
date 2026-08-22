@@ -4,7 +4,7 @@ import { userFacingErrorMessage } from "../api/errors";
 import type { OpcReadResponse, OpcTagNodeResponse } from "../api/opc";
 import type { components } from "../api/schema";
 import { SAMPLE_QUALITY_LABELS, SAMPLE_QUALITY_TONE } from "../lib/enumLabels";
-import { deriveTag, derivedTagPreview } from "../lib/opcTags";
+import { deriveTag } from "../lib/opcTags";
 import { Badge, Button, ErrorBanner, Modal } from "./ui";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
@@ -163,16 +163,13 @@ function TreeLevel({
  * The OPC tag-tree browser modal (`ui-opc-browser`): a lazily-expanding tree fed one level
  * at a time from `GET /api/opc/browse`, a per-node "Read selected tag" action backed by
  * `GET /api/opc/read`
- * (showing the live value and its quality), and a preview of the active template's full
- * derived tag set for whichever node is selected -- the clearest available explanation of
- * how a template's suffixes actually work, since it shows the real tag names that would
- * result from the exact tag just picked (see `derivedTagPreview`'s doc comment for why
- * *any* node under a loop's hierarchy, not just its PV leaf, yields the identical set).
- * When the user confirms a selection, the final component is replaced with the active
- * template's process-variable suffix before the value is written back to the form, but only
- * after a fresh read of the originally selected tag confirms `Good` OPC quality. A non-Good
- * result pauses selection behind an explicit warning, while a read failure leaves the browser
- * open so the tag is never accepted without verification.
+ * (showing the live value and its quality). When the user confirms a selection, the final
+ * component is replaced with the active template's process-variable suffix before the value
+ * is written back to the form, but only after a fresh read of the originally selected tag
+ * confirms `Good` OPC quality. A non-Good result pauses selection behind an explicit warning,
+ * while a read failure leaves the browser open so the tag is never accepted without
+ * verification. The main form's collapsed Tag mapping overrides section is the single place
+ * for reviewing template defaults and changing any other tag.
  * Double-clicking a leaf performs the same confirmation as the `Select tag` button, while
  * double-clicking a branch expands or collapses it.
  * Reopening the modal starts from `initialTag` when that tag is present in the browsed tree:
@@ -372,14 +369,6 @@ export function OpcTagBrowserModal({
     });
   }
 
-  const preview =
-    selectedTag && template ? derivedTagPreview(selectedTag, template) : null;
-  const selectedPvTag =
-    selectedTag && template
-      ? (deriveTag(selectedTag, template.process_variable_suffix) ??
-        selectedTag)
-      : selectedTag;
-
   return (
     <Modal
       title={
@@ -456,42 +445,18 @@ export function OpcTagBrowserModal({
           <div className="mt-4 min-h-[10rem] rounded-md border border-slate-700 bg-slate-900 p-3">
             {!selectedTag ? (
               <p className="text-sm text-slate-400">
-                Select a tag to preview its template mapping.
+                Select a tag to test its live value and quality.
               </p>
             ) : (
               <>
                 <p className="text-sm text-slate-200">
                   Selected: <span className="font-mono">{selectedTag}</span>
                 </p>
-                {selectedPvTag && selectedPvTag !== selectedTag && (
-                  <p className="mt-1 text-xs text-slate-400">
-                    PV tag: <span className="font-mono">{selectedPvTag}</span>
-                  </p>
-                )}
-
-                {template ? (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer select-none text-xs uppercase tracking-wide text-slate-500">
-                      Detected tags (template: {template.name})
-                    </summary>
-                    <ul className="mt-2 space-y-0.5 font-mono text-xs text-slate-400">
-                      {preview?.map((row) => (
-                        <li key={row.label}>
-                          <span className="text-slate-500">{row.label}:</span>{" "}
-                          {row.tag ?? (
-                            <span className="italic text-slate-600">
-                              not used by this template
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                ) : (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Choose a template above to preview its full derived tag set.
-                  </p>
-                )}
+                <p className="mt-1 text-xs text-slate-500">
+                  Select tag applies the active template&apos;s process-variable
+                  suffix. Review or override the rest of the mapping in the
+                  collapsed section on the main tune form.
+                </p>
 
                 <div className="mt-3 flex items-center gap-2">
                   <Button

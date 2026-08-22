@@ -3,10 +3,10 @@ import type { components } from "../api/schema";
 type TemplateResponse = components["schemas"]["TemplateResponse"];
 
 /**
- * A client-side mirror of `bhtune_core::tags::derive_tag` (Rust), used only to *preview* the
- * derived tag set in the OPC tag-tree browser (`ui-opc-browser`) before the user commits to
- * a selection -- `bhtune-core` itself is always the source of truth once a run actually
- * starts, this never replaces a server round trip.
+ * A client-side mirror of `bhtune_core::tags::derive_tag` (Rust), used only to preview the
+ * derived tag set in the tune form and OPC tag browser (`ui-opc-browser`) -- `bhtune-core`
+ * itself is always the source of truth once a run actually starts, this never replaces a
+ * server round trip.
  *
  * Replaces everything after the last `.` in `tag` with `suffix`; falls back to the last `!`,
  * then the last `/` if no earlier separator is present; replaces the whole string if none
@@ -40,10 +40,10 @@ export interface DerivedTagPreviewRow {
 }
 
 /**
- * Builds the "what would this template derive from this tag?" preview shown when a node is
- * selected in the OPC tag-tree browser -- the clearest available explanation of how a
- * template's suffixes work, since it shows the *actual* tag names that would result from the
- * exact tag just picked, not an abstract description.
+ * Builds the "what would this template derive from this tag?" preview shown in the tune form
+ * and when a node is selected in the OPC tag-tree browser -- the clearest available
+ * explanation of how a template's suffixes work, since it shows the *actual* tag names that
+ * would result from the exact tag just picked, not an abstract description.
  *
  * `tag` need not already end in the template's PV suffix: `deriveTag` only looks at the
  * shared prefix up to the last `.`/`!`/`/`, so picking any tag under a loop's hierarchy (its PV,
