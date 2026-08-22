@@ -54,6 +54,41 @@ test.describe("New Tune draft persistence", () => {
     expect(response.ok()).toBeTruthy();
   });
 
+  test("quietly falls back when the saved-draft endpoint is unavailable", async ({
+    page,
+  }) => {
+    await page.route("**/api/runs/draft", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: "Invalid URL: Cannot parse `draft` to a `i64`",
+          }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+    await page.route("**/api/runs/last-request", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "null",
+      }),
+    );
+
+    await page.goto("/runs/new");
+
+    await expect(page.getByLabel("Tag name")).toHaveValue("Sim.Loop1.PV");
+    await expect(
+      page.getByText(
+        "Unable to load the saved Tune draft; using the available fallback.",
+        { exact: true },
+      ),
+    ).toHaveCount(0);
+  });
+
   test("restores connection values after reload and keeps Notes blank", async ({
     page,
   }) => {

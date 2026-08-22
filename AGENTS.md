@@ -586,7 +586,9 @@ resets to defaults → "Duplicate this run" from the run detail page prefills fr
 specific run) after the fix, with no flakiness. Completes every Phase 7.5 GUI/API todo except
 `driver-list-servers`/`api-opc-browse`/`ui-opc-browser` (the OPC browser trio) and the
 `phase75-docs` wrap-up. The later draft-persistence work is complete: it stores all editable
-fields except Notes in SQLite and restores them across reloads.
+fields except Notes in SQLite and restores them across reloads. The frontend treats 400/404/405
+responses from a server without the draft route as an empty draft during upgrades, while
+unexpected storage failures remain visible.
 
 Phase 7.5's `driver-list-servers` is also done: a new `bhtune_driver::opcda::list_opcda_servers
 (bridge_host)` free function, re-exported at the crate root. It is deliberately **not** a

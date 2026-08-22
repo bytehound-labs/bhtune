@@ -93,8 +93,9 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      including OPC values that are temporarily inactive while **Simulator** is selected. The
      draft follows you across browsers and machines rather than living in `localStorage`.
      Notes are intentionally left blank after a reload so one run's operator context is not
-     copied into another. On an installation without a saved draft, the form falls back once to
-     the newest run's settings. **Duplicate this run** takes precedence over both sources, and
+     copied into another. On an installation without a saved draft, the form quietly falls back
+     once to the newest run's settings or the built-in defaults; this normal first-use state
+     does not display an error. **Duplicate this run** takes precedence over both sources, and
      **Reset to defaults** replaces the saved draft with the built-in defaults.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates

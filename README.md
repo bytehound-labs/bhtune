@@ -188,7 +188,8 @@ and `GET`/`PUT`/`DELETE /api/templates/{name}`;
 per-tick Server-Sent Events feed of an in-progress run, `GET`/`PUT /api/runs/draft` for the
 app-wide autosaved New tune form draft (all fields except Notes), and
 `GET /api/runs/last-request` for the newest run's settings as a one-time fallback when no draft
-exists; `POST /api/runs`/
+exists. A missing draft is a normal first-use state and quietly falls back to the newest run or
+built-in defaults; `POST /api/runs`/
 `POST /api/runs/{id}/cancel` to start and cancel a tune, plus `POST /api/runs/{id}/write`/
 `POST /api/runs/{id}/revert` to write or roll back PID constants after a run has finished;
 `PUT`/`DELETE /api/runs/{id}/notes` to edit or clear operator notes while a run is active or

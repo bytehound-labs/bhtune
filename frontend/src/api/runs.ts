@@ -87,13 +87,30 @@ export function useLastRunRequest() {
   });
 }
 
-/** `GET /api/runs/draft` — the mutable app-wide New Tune form draft, if one exists. */
+/**
+ * `GET /api/runs/draft` — the mutable app-wide New Tune form draft, if one exists.
+ *
+ * A missing draft is a normal first-use state. Older server builds that predate this route
+ * may instead return 400 (the legacy `/api/runs/{id}` route tries to parse `draft` as an ID),
+ * 404, or 405; treat those responses as an empty draft so an upgrade does not start with a
+ * misleading error banner. Unexpected server/database failures still surface normally.
+ */
 export function useRunDraft() {
   return useQuery({
     queryKey: runDraftKey,
     queryFn: async () => {
       const { data, error, response } = await apiClient.GET("/api/runs/draft");
-      if (error) throw toApiError(error, response);
+      if (error) {
+        const apiError = toApiError(error, response);
+        if (
+          apiError.status === 400 ||
+          apiError.status === 404 ||
+          apiError.status === 405
+        ) {
+          return null;
+        }
+        throw apiError;
+      }
       return data;
     },
   });
