@@ -20,21 +20,23 @@ pub enum TagOrValue<T> {
 }
 
 /// Replaces everything after the last `.` in `pv_tag` with `suffix`. If no `.` is present,
-/// falls back to the last `!`. If neither separator is present, the whole tag is replaced.
-/// Returns `None` if `suffix` is blank — the convention for "this tag is not applicable
-/// for the active DCS template" (e.g. Mode Attribute on a DCS with no such concept).
+/// falls back to the last `!`, then the last `/`. If no separator is present, the whole tag is
+/// replaced. Returns `None` if `suffix` is blank — the convention for "this tag is not
+/// applicable for the active DCS template" (e.g. Mode Attribute on a DCS with no such concept).
 ///
 /// A `.` anywhere in `pv_tag` always wins over `!`, even if the `!` appears later in the
-/// string. This deliberately mirrors how site tag hierarchies are named in practice: `.`
-/// separates hierarchy levels in most DCS/PLC naming schemes, while `!` shows up only as
-/// an occasional alternate separator deeper in a path — so a `.` present anywhere is the
-/// stronger signal for where the hierarchy prefix actually ends.
+/// string. The same precedence is retained when `/` is present so existing dotted and
+/// exclamation-separated tag mappings remain unchanged, while slash-only namespaces such as
+/// `FCS0201/Control/PV` derive correctly.
 pub fn derive_tag(pv_tag: &str, suffix: &str) -> Option<String> {
     if suffix.trim().is_empty() {
         return None;
     }
 
-    let cut = pv_tag.rfind('.').or_else(|| pv_tag.rfind('!'));
+    let cut = pv_tag
+        .rfind('.')
+        .or_else(|| pv_tag.rfind('!'))
+        .or_else(|| pv_tag.rfind('/'));
     Some(match cut {
         Some(idx) => format!("{}{}", &pv_tag[..=idx], suffix),
         None => suffix.to_string(),
@@ -116,6 +118,14 @@ mod tests {
         assert_eq!(
             derive_tag("Unit1!LIC101!PV", "OP"),
             Some("Unit1!LIC101!OP".to_string())
+        );
+    }
+
+    #[test]
+    fn falls_back_to_last_slash_when_no_dot_or_exclamation_present() {
+        assert_eq!(
+            derive_tag("FCS0201/Control/PV", "MV"),
+            Some("FCS0201/Control/MV".to_string())
         );
     }
 

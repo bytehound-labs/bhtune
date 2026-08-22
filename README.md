@@ -100,6 +100,10 @@ The library communicates with the separate Windows-side
 The dependency is added to `bhtune-driver` when its OPC DA implementation is introduced; the
 scaffolding workspace intentionally does not declare unused dependencies.
 
+The web tag browser expands one namespace level at a time and supports both dotted and
+slash-separated OPC item IDs. Use a gateway release with recursive hierarchical browsing for
+servers that expose branch names through `OPC_FLAT` without returning their descendants.
+
 ## Installation
 
 No `v0.1.0` tag has been cut yet, so there are no versioned release archives. Two ways to run

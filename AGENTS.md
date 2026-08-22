@@ -666,9 +666,9 @@ lazily-expanding tree (one `GET /api/opc/browse` level per node, cached per serv
 re-expanding an already-open node doesn't refetch) whose leaf selection renders a **derived
 tag set preview**: the exact tags the active template would derive from that selection, via
 a new pure `frontend/src/lib/opcTags.ts::deriveTag` — a client-side mirror of
-`bhtune_core::tags::derive_from_pv_tag`'s "replace everything after the last `.`/`!` with the
-suffix" algorithm, used only for this preview; the server remains the actual source of truth
-once a run starts — plus a "Test read" button (`GET /api/opc/read`, showing value and
+`bhtune_core::tags::derive_from_pv_tag`'s "replace everything after the last `.`/`!`/`/` with
+the suffix" algorithm, used only for this preview; the server remains the actual source of
+truth once a run starts — plus a "Test read" button (`GET /api/opc/read`, showing value and
 quality) and "Use this tag", which writes the **selected node verbatim** into the Tag name
 field. This is deliberately not "strip the suffix and use the base name": since
 `deriveTag`/`derive_from_pv_tag` both work by replacing everything after the last separator,
@@ -1415,6 +1415,9 @@ Integration rules, as implemented in `OpcDaDriver`:
 - `browse` hardcodes `flat: false` (one level, matching `Driver::browse`'s own contract) and a
   `max_tags` of `1000`, matching `opcda-bridge-client`'s own CLI default
   (`DEFAULT_MAX_TAGS` in that crate's `config.rs`) for consistency with the reference CLI.
+  The gateway must use recursive hierarchical browsing for servers whose `OPC_FLAT` response
+  contains only top-level branches (for example, Yokogawa CSHIS); its tree adapter accepts both
+  dotted and slash-separated fully-qualified item IDs.
   `BrowseNode.node_type` is mapped via an exact `"Branch"` string match (the gateway's own
   `NODE_TYPE_BRANCH` constant); anything else — including an unrecognized value — is treated as
   a leaf, the conservative choice (a wrongly-leaf-tagged branch just returns a clear error on

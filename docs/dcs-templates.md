@@ -102,10 +102,11 @@ generating an editor with autocomplete, and guaranteed to never drift from what
 ### Tag suffixes
 
 BHTune derives a loop's full tag set from a single process-variable (PV) tag plus these
-suffixes: it replaces everything after the last `.` or `!` in the PV tag's path with each
-suffix in turn. For a PV tag of `Unit1.LIC101.PV`, the Yokogawa template above derives the
-manipulated-variable tag as `Unit1.LIC101.MV`, the setpoint tag as `Unit1.LIC101.SV`, and so
-on for every non-empty suffix field.
+suffixes: it replaces everything after the last `.`, `!`, or `/` in the PV tag's path with
+each suffix in turn. For a PV tag of `Unit1.LIC101.PV`, the Yokogawa template above derives
+the manipulated-variable tag as `Unit1.LIC101.MV`, the setpoint tag as `Unit1.LIC101.SV`, and
+so on for every non-empty suffix field. Slash-separated namespaces such as
+`FCS0201/Control/PV` preserve their slash separator when deriving `FCS0201/Control/MV`.
 
 | Field                                                                                      | Meaning                                                                                                                                                      |
 | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |

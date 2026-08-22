@@ -75,8 +75,10 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      clickable buttons — no need to already know (or spell correctly) a ProgID like
      `Matrikon.OPC.Simulation`. A **Browse tags…** button next to the Tag name field (enabled
      once a ProgID is entered) opens a lazily-expanding tag tree fetched one level at a time
-     from the gateway; selecting a leaf previews the complete tag set the active template
-     would derive from it (the clearest way to see how a template's suffixes actually work),
+     from the gateway. Hierarchical servers such as Yokogawa CSHIS can be expanded through
+     nested controller/block levels until their PV leaves; dotted and slash-separated item IDs
+     are supported. Selecting a leaf previews the complete tag set the active template would
+     derive from it (the clearest way to see how a template's suffixes actually work),
      offers a **Read selected tag** action showing a live value and its quality, and **Use this tag** writes
      the selection back into the Tag name field.
    - A **Notes** field records optional operator context, observations, or follow-up actions.

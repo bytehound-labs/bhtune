@@ -8,16 +8,18 @@ type TemplateResponse = components["schemas"]["TemplateResponse"];
  * a selection -- `bhtune-core` itself is always the source of truth once a run actually
  * starts, this never replaces a server round trip.
  *
- * Replaces everything after the last `.` in `tag` with `suffix`; falls back to the last `!`
- * if no `.` is present; replaces the whole string if neither separator exists. Returns
- * `null` for a blank `suffix` -- the convention for "not applicable to this template" (e.g.
- * Mode Attribute on a DCS with no such concept).
+ * Replaces everything after the last `.` in `tag` with `suffix`; falls back to the last `!`,
+ * then the last `/` if no earlier separator is present; replaces the whole string if none
+ * exists. Returns `null` for a blank `suffix` -- the convention for "not applicable to this
+ * template" (e.g. Mode Attribute on a DCS with no such concept).
  */
 export function deriveTag(tag: string, suffix: string): string | null {
   if (suffix.trim() === "") return null;
   const dotIndex = tag.lastIndexOf(".");
   const bangIndex = tag.lastIndexOf("!");
-  const cut = dotIndex >= 0 ? dotIndex : bangIndex;
+  const slashIndex = tag.lastIndexOf("/");
+  const cut =
+    dotIndex >= 0 ? dotIndex : bangIndex >= 0 ? bangIndex : slashIndex;
   if (cut < 0) return suffix;
   return `${tag.slice(0, cut + 1)}${suffix}`;
 }
@@ -34,7 +36,7 @@ export interface DerivedTagPreviewRow {
  * exact tag just picked, not an abstract description.
  *
  * `tag` need not already end in the template's PV suffix: `deriveTag` only looks at the
- * shared prefix up to the last `.`/`!`, so picking any tag under a loop's hierarchy (its PV,
+ * shared prefix up to the last `.`/`!`/`/`, so picking any tag under a loop's hierarchy (its PV,
  * its mode, even a branch node) yields the identical derived set -- matching
  * `bhtune_core::tags::LoopTags::derive_from_pv_tag`'s own behavior, which is why bhtune's
  * "Tag name" field stores a full suffixed tag (e.g. `"Unit1.LIC101.PV"`), not a bare loop
