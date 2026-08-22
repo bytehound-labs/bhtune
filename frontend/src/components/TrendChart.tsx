@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import type { SampleResponse } from "../api/runs";
+import { useTheme } from "../useTheme";
 
 export interface TrendChartProps {
   samples: SampleResponse[];
@@ -33,13 +34,23 @@ function toAlignedData(samples: SampleResponse[]): uPlot.AlignedData {
 export function TrendChart({ samples, height = 320 }: TrendChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
+  const { theme } = useTheme();
 
-  // Creates (and tears down) the uPlot instance once per mount -- uPlot owns its own canvas
-  // and redraw loop, so React's job is only to supply the container element, not to render
-  // the chart's own output.
+  // Creates (and tears down) the uPlot instance once per size/theme combination -- uPlot
+  // owns its own canvas and redraw loop, so React's job is only to supply the container
+  // element, not to render the chart's own output.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    const styles =
+      container.ownerDocument.defaultView?.getComputedStyle(container);
+    const chartColor = (name: string) =>
+      styles?.getPropertyValue(name).trim() ?? "";
+    const pvColor = chartColor("--bhtune-chart-pv");
+    const mvColor = chartColor("--bhtune-chart-mv");
+    const axisColor = chartColor("--bhtune-chart-axis");
+    const gridColor = chartColor("--bhtune-chart-grid");
 
     const options: uPlot.Options = {
       width: container.clientWidth || 600,
@@ -50,13 +61,13 @@ export function TrendChart({ samples, height = 320 }: TrendChartProps) {
       },
       series: [
         {},
-        { label: "PV", stroke: "#34d399", width: 2, scale: "y" },
-        { label: "MV", stroke: "#38bdf8", width: 2, scale: "mv" },
+        { label: "PV", stroke: pvColor, width: 2, scale: "y" },
+        { label: "MV", stroke: mvColor, width: 2, scale: "mv" },
       ],
       axes: [
-        { stroke: "#94a3b8", grid: { stroke: "#1e293b" } },
-        { stroke: "#34d399", grid: { stroke: "#1e293b" }, scale: "y" },
-        { stroke: "#38bdf8", side: 1, grid: { show: false }, scale: "mv" },
+        { stroke: axisColor, grid: { stroke: gridColor } },
+        { stroke: pvColor, grid: { stroke: gridColor }, scale: "y" },
+        { stroke: mvColor, side: 1, grid: { show: false }, scale: "mv" },
       ],
       legend: { show: true },
     };
@@ -74,12 +85,12 @@ export function TrendChart({ samples, height = 320 }: TrendChartProps) {
       plot.destroy();
       plotRef.current = null;
     };
-    // Only `height` from props feeds the initial `options`; `samples` is deliberately not
+    // Only `height` and `theme` feed the initial `options`; `samples` is deliberately not
     // a dependency here -- the second effect below owns feeding new data into the
     // already-created instance via `setData`, so recreating the whole plot on every new
     // sample isn't needed.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [height]);
+  }, [height, theme]);
 
   // Feeds new samples into the already-created instance rather than recreating the plot --
   // `setData` is uPlot's own incremental-update path, and is what makes multiple updates

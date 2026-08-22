@@ -1,1 +1,70 @@
 @import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  --bhtune-page-background: #020617;
+  --bhtune-modal-backdrop: rgb(2 6 23 / 70%);
+  --bhtune-chart-pv: #34d399;
+  --bhtune-chart-mv: #38bdf8;
+  --bhtune-chart-axis: #94a3b8;
+  --bhtune-chart-grid: #1e293b;
+  --color-slate-950: #020617;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bhtune-page-background: #f8fafc;
+  --bhtune-modal-backdrop: rgb(15 23 42 / 35%);
+  --bhtune-chart-pv: #059669;
+  --bhtune-chart-mv: #0284c7;
+  --bhtune-chart-axis: #64748b;
+  --bhtune-chart-grid: #cbd5e1;
+
+  --color-slate-950: #f8fafc;
+  --color-slate-900: #ffffff;
+  --color-slate-800: #e2e8f0;
+  --color-slate-700: #cbd5e1;
+  --color-slate-600: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-400: #475569;
+  --color-slate-300: #334155;
+  --color-slate-200: #1e293b;
+  --color-slate-100: #0f172a;
+
+  --color-emerald-950: #f0fdf4;
+  --color-emerald-900: #dcfce7;
+  --color-emerald-800: #86efac;
+  --color-emerald-400: #16a34a;
+  --color-emerald-300: #166534;
+
+  --color-red-950: #fef2f2;
+  --color-red-900: #fee2e2;
+  --color-red-800: #fca5a5;
+  --color-red-400: #dc2626;
+  --color-red-300: #b91c1c;
+
+  --color-amber-950: #fffbeb;
+  --color-amber-800: #fcd34d;
+  --color-amber-400: #d97706;
+  --color-amber-200: #92400e;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bhtune-page-background);
+  color: var(--color-slate-100);
+}
+
+.health-indicator-dot {
+  box-shadow: 0 0 0 3px var(--bhtune-page-background);
+}
+
+.modal-backdrop {
+  background-color: var(--bhtune-modal-backdrop);
+}

@@ -2,6 +2,7 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
 import { toApiError } from "../api/errors";
+import { useTheme } from "../useTheme";
 
 /**
  * Polls the server liveness endpoint and exposes its state as a compact, hoverable indicator.
@@ -44,7 +45,7 @@ function HealthIndicator() {
         role="img"
         aria-label={status.label}
         title={status.detail}
-        className={`h-2.5 w-2.5 shrink-0 -translate-y-px rounded-full shadow-[0_0_0_3px_rgba(15,23,42,0.8)] ${status.dot}`}
+        className={`health-indicator-dot h-2.5 w-2.5 shrink-0 -translate-y-px rounded-full ${status.dot}`}
       />
       {health.data && (
         <span className="font-mono text-xs leading-none text-slate-500">
@@ -52,6 +53,53 @@ function HealthIndicator() {
         </span>
       )}
     </div>
+  );
+}
+
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme();
+  const nextTheme = theme === "dark" ? "light" : "dark";
+
+  return (
+    <button
+      type="button"
+      onClick={toggleTheme}
+      aria-label={`Switch to ${nextTheme} theme`}
+      title={`Switch to ${nextTheme} theme`}
+      className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-slate-300 transition-colors hover:bg-slate-800 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-500"
+    >
+      {theme === "dark" ? (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          className="h-4 w-4"
+        >
+          <circle cx="12" cy="12" r="3.5" />
+          <path
+            strokeLinecap="round"
+            d="M12 2.5v2M12 19.5v2M4.58 4.58l1.42 1.42M18 18l1.42 1.42M2.5 12h2M19.5 12h2M4.58 19.42 6 18M18 6l1.42-1.42"
+          />
+        </svg>
+      ) : (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          className="h-4 w-4"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M20.5 15.2A8.5 8.5 0 0 1 8.8 3.5 8.5 8.5 0 1 0 20.5 15.2Z"
+          />
+        </svg>
+      )}
+    </button>
   );
 }
 
@@ -95,7 +143,10 @@ export function AppLayout() {
               </NavLink>
             </nav>
           </div>
-          <HealthIndicator />
+          <div className="flex items-center gap-4">
+            <ThemeToggle />
+            <HealthIndicator />
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-6 py-8">

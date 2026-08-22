@@ -4168,7 +4168,9 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    tree, a derived-tag-set preview (a client-side mirror of the same suffix-derivation
    algorithm the server uses), a live "Test read", and "Select tag" — manually verified
    end to end, including against a real populated tag tree served by a temporary,
-   never-committed mock gateway. Remaining: `phase75-docs` (the documentation wrap-up). See
+   never-committed mock gateway. The header also provides a persistent light/dark theme toggle
+   whose palette is shared across the full SPA. Remaining: `phase75-docs` (the documentation
+   wrap-up). See
    the Status section above for the full design and verification detail behind each.
 
 8. **End-to-end testing and CI** — `e2e-simulator` is done: a genuine subprocess-level test

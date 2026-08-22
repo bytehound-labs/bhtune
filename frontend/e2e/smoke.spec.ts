@@ -63,6 +63,42 @@ test.describe("app shell", () => {
     ).toBeVisible();
   });
 
+  test("toggles and persists the light/dark theme", async ({ page }) => {
+    await page.goto("/");
+
+    const appShell = page.locator("#root > div").first();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect
+      .poll(() =>
+        appShell.evaluate(
+          (element) =>
+            element.ownerDocument.defaultView?.getComputedStyle(element)
+              .backgroundColor,
+        ),
+      )
+      .toBe("rgb(2, 6, 23)");
+    await page.getByRole("button", { name: "Switch to light theme" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect
+      .poll(() =>
+        appShell.evaluate(
+          (element) =>
+            element.ownerDocument.defaultView?.getComputedStyle(element)
+              .backgroundColor,
+        ),
+      )
+      .toBe("rgb(248, 250, 252)");
+    await expect(
+      page.getByRole("button", { name: "Switch to dark theme" }),
+    ).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(
+      page.getByRole("button", { name: "Switch to dark theme" }),
+    ).toBeVisible();
+  });
+
   test("lists the seeded templates", async ({ page }) => {
     await page.goto("/templates");
 
