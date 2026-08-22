@@ -109,6 +109,8 @@ template selected, confirming a tag selection replaces its final component with 
 template's process-variable suffix before writing the value into the Tag name field. Use a
 gateway release with recursive hierarchical browsing for servers that expose branch names
 through `OPC_FLAT` without returning their descendants.
+Changing templates also updates a tag's final component when it matches the previous
+template's process-variable suffix, preserving the tag path.
 
 ## Installation
 

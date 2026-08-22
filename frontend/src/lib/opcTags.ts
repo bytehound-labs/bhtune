@@ -24,6 +24,26 @@ export function deriveTag(tag: string, suffix: string): string | null {
   return `${tag.slice(0, cut + 1)}${suffix}`;
 }
 
+/**
+ * Replaces a tag's final component only when it is the process-variable suffix belonging to
+ * the previous template. This preserves manually entered or non-PV tag names instead of
+ * blindly replacing every tag's last component when the template changes.
+ */
+export function replaceTagSuffix(
+  tag: string,
+  previousSuffix: string,
+  nextSuffix: string,
+): string {
+  if (
+    previousSuffix.trim() === "" ||
+    nextSuffix.trim() === "" ||
+    deriveTag(tag, previousSuffix) !== tag
+  ) {
+    return tag;
+  }
+  return deriveTag(tag, nextSuffix) ?? tag;
+}
+
 export interface DerivedTagPreviewRow {
   label: string;
   tag: string | null;

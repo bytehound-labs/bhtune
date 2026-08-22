@@ -19,6 +19,7 @@ import {
 } from "../../lib/enumLabels";
 import { OpcServerDiscovery } from "../../components/OpcServerDiscovery";
 import { OpcTagBrowserModal } from "../../components/OpcTagBrowserModal";
+import { replaceTagSuffix } from "../../lib/opcTags";
 import {
   Button,
   CheckboxField,
@@ -589,6 +590,26 @@ export function NewRunPage() {
     });
   }
 
+  function setTemplate(value: string) {
+    setForm((prev) => {
+      const previousTemplate = templates.data?.find(
+        (template) => template.name === prev.template,
+      );
+      const nextTemplate = templates.data?.find(
+        (template) => template.name === value,
+      );
+      const tagname =
+        previousTemplate && nextTemplate
+          ? replaceTagSuffix(
+              prev.tagname,
+              previousTemplate.process_variable_suffix,
+              nextTemplate.process_variable_suffix,
+            )
+          : prev.tagname;
+      return { ...prev, template: value, tagname };
+    });
+  }
+
   function setProcessType(value: ProcessType) {
     setForm((prev) => ({
       ...prev,
@@ -703,7 +724,7 @@ export function NewRunPage() {
           <SelectField
             label="Template"
             value={form.template}
-            onChange={(v) => set("template", v)}
+            onChange={setTemplate}
             options={(templates.data ?? []).map((t) => t.name)}
             placeholder={
               templates.isPending ? "Loading templates…" : "Choose a template"
