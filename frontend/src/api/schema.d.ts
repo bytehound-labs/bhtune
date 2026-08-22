@@ -125,6 +125,24 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/runs/draft": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Returns the saved New Tune draft, or `null` when no draft has been saved yet. */
+    get: operations["get_draft"];
+    /** Replaces the saved New Tune draft and returns the stored value. */
+    put: operations["put_draft"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/runs/last-request": {
     parameters: {
       query?: never;
@@ -137,13 +155,11 @@ export interface paths {
      * @description `GET /api/runs/last-request` -- returns the newest run's `request_json`
      *     (`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh
      *     install with no runs yet, or if the newest run's stored request isn't usable (see
-     *     [`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form seeds itself from this
-     *     response on load, so connection details, tag names, ranges, and every other field an
-     *     engineer typed follow them across browsers and machines instead of resetting to hardcoded
-     *     defaults on every visit -- deliberately server-side rather than `localStorage` for that
-     *     reason. "Newest" means newest by `started_at`, matching `GET /api/runs`'s own ordering,
-     *     regardless of that run's `outcome` -- a still-`running` run is a perfectly good source of
-     *     "what was just submitted" to prefill from.
+     *     [`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form uses this only as a
+     *     one-time fallback when no mutable `/api/runs/draft` exists, which lets older installations
+     *     upgrade without losing their previous run settings while keeping future edits independent of
+     *     immutable history. "Newest" means newest by `started_at`, matching `GET /api/runs`'s own
+     *     ordering, regardless of that run's `outcome`.
      */
     get: operations["last_request"];
     put?: never;
@@ -591,6 +607,66 @@ export interface components {
       mv_sign_next_step: number;
       /** Format: float */
       mv_value_current: number;
+    };
+    /**
+     * @description The editable state of the New Tune form.
+     *
+     *     Fields are optional because the form is allowed to be incomplete while it is being edited.
+     *     The frontend sends the complete shape on each save, using `null` for a cleared numeric or
+     *     enum field. Notes are intentionally absent: they describe one run, not a reusable draft.
+     */
+    NewRunDraft: {
+      allow_uncertain_quality?: boolean | null;
+      bridge_host?: string | null;
+      controller_type?: null | components["schemas"]["ControllerType"];
+      /** Format: int32 */
+      cycles_count?: number | null;
+      /** Format: int32 */
+      cycles_skip?: number | null;
+      direction?: null | components["schemas"]["ControllerDirection"];
+      driver?: null | components["schemas"]["TuneDriver"];
+      /** Format: int32 */
+      mrft_delay?: number | null;
+      /** Format: float */
+      mv_range_high?: number | null;
+      /** Format: float */
+      mv_range_low?: number | null;
+      /** Format: int32 */
+      noise_protection_secs?: number | null;
+      /** Format: int64 */
+      op_timeout_secs?: number | null;
+      /** Format: int64 */
+      poll_interval_ms?: number | null;
+      process_type?: null | components["schemas"]["ProcessType"];
+      /** Format: float */
+      pv_range_high?: number | null;
+      /** Format: float */
+      pv_range_low?: number | null;
+      /** Format: float */
+      relay_amp?: number | null;
+      /** Format: int64 */
+      restore_timeout_secs?: number | null;
+      server?: string | null;
+      /** Format: float */
+      sim_dead_time?: number | null;
+      /** Format: float */
+      sim_gain?: number | null;
+      /** Format: float */
+      sim_initial_mv?: number | null;
+      /** Format: float */
+      sim_initial_pv?: number | null;
+      /** Format: float */
+      sim_noise?: number | null;
+      /** Format: int64 */
+      sim_seed?: number | null;
+      /** Format: float */
+      sim_tau?: number | null;
+      tagname?: string | null;
+      template?: string | null;
+      /** Format: int64 */
+      timeout_secs?: number | null;
+      write_pid?: null | components["schemas"]["ResponseLevel"];
+      yes?: boolean | null;
     };
     /** @description Response body of `GET /api/opc/browse`. */
     OpcBrowseResponse: {
@@ -1291,6 +1367,68 @@ export interface operations {
       };
       /** @description An exclusive PID write/revert is already active. */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  get_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The saved New Tune draft, or null when none exists. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": null | components["schemas"]["NewRunDraft"];
+        };
+      };
+      /** @description The stored draft is malformed or the database failed. */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  put_draft: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["NewRunDraft"];
+      };
+    };
+    responses: {
+      /** @description The draft was saved. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["NewRunDraft"];
+        };
+      };
+      /** @description The database failed or the draft could not be stored. */
+      500: {
         headers: {
           [name: string]: unknown;
         };

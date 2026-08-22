@@ -376,13 +376,90 @@
         }
       }
     },
+    "/api/runs/draft": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Returns the saved New Tune draft, or `null` when no draft has been saved yet.",
+        "operationId": "get_draft",
+        "responses": {
+          "200": {
+            "description": "The saved New Tune draft, or null when none exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/NewRunDraft"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The stored draft is malformed or the database failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Replaces the saved New Tune draft and returns the stored value.",
+        "operationId": "put_draft",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRunDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The draft was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewRunDraft"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The database failed or the draft could not be stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/last-request": {
       "get": {
         "tags": [
           "runs"
         ],
         "summary": "The most recently started run's original request, if any.",
-        "description": "`GET /api/runs/last-request` -- returns the newest run's `request_json`\n(`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh\ninstall with no runs yet, or if the newest run's stored request isn't usable (see\n[`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form seeds itself from this\nresponse on load, so connection details, tag names, ranges, and every other field an\nengineer typed follow them across browsers and machines instead of resetting to hardcoded\ndefaults on every visit -- deliberately server-side rather than `localStorage` for that\nreason. \"Newest\" means newest by `started_at`, matching `GET /api/runs`'s own ordering,\nregardless of that run's `outcome` -- a still-`running` run is a perfectly good source of\n\"what was just submitted\" to prefill from.",
+        "description": "`GET /api/runs/last-request` -- returns the newest run's `request_json`\n(`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh\ninstall with no runs yet, or if the newest run's stored request isn't usable (see\n[`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form uses this only as a\none-time fallback when no mutable `/api/runs/draft` exists, which lets older installations\nupgrade without losing their previous run settings while keeping future edits independent of\nimmutable history. \"Newest\" means newest by `started_at`, matching `GET /api/runs`'s own\nordering, regardless of that run's `outcome`.",
         "operationId": "last_request",
         "responses": {
           "200": {
@@ -1432,6 +1509,247 @@
           "mv_value_current": {
             "type": "number",
             "format": "float"
+          }
+        }
+      },
+      "NewRunDraft": {
+        "type": "object",
+        "description": "The editable state of the New Tune form.\n\nFields are optional because the form is allowed to be incomplete while it is being edited.\nThe frontend sends the complete shape on each save, using `null` for a cleared numeric or\nenum field. Notes are intentionally absent: they describe one run, not a reusable draft.",
+        "properties": {
+          "allow_uncertain_quality": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "bridge_host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "controller_type": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ControllerType"
+              }
+            ]
+          },
+          "cycles_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "cycles_skip": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "direction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ControllerDirection"
+              }
+            ]
+          },
+          "driver": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TuneDriver"
+              }
+            ]
+          },
+          "mrft_delay": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "mv_range_high": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "mv_range_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "noise_protection_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "op_timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "poll_interval_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "process_type": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProcessType"
+              }
+            ]
+          },
+          "pv_range_high": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "pv_range_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "relay_amp": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "restore_timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "server": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sim_dead_time": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "sim_gain": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "sim_initial_mv": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "sim_initial_pv": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "sim_noise": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "sim_seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "sim_tau": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "tagname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "template": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "write_pid": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseLevel"
+              }
+            ]
+          },
+          "yes": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         }
       },

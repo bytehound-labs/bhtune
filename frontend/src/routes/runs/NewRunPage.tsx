@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { useLastRunRequest, useStartRun } from "../../api/runs";
-import type { StartRunRequest } from "../../api/runs";
+import {
+  useLastRunRequest,
+  useRunDraft,
+  useSaveRunDraft,
+  useStartRun,
+} from "../../api/runs";
+import type { NewRunDraft, StartRunRequest } from "../../api/runs";
 import { useTemplates } from "../../api/templates";
 import { userFacingErrorMessage } from "../../api/errors";
 import type { components } from "../../api/schema";
@@ -148,10 +153,13 @@ function toNumOrBlank(value: number | null | undefined): NumOrBlank {
   return value ?? "";
 }
 
+function toNullable(value: NumOrBlank): number | null {
+  return value === "" ? null : value;
+}
+
 /**
- * Converts a stored [`StartRunRequest`] (from `GET /api/runs/last-request` or a specific
- * run's own `original_request`) into `FormState`, so the form can prefill from a past run's
- * remembered settings (`ui-prefill-last-run`).
+ * Converts a stored [`StartRunRequest`] (from a specific run's `original_request`, or the
+ * newest-run fallback at `GET /api/runs/last-request`) into `FormState`.
  *
  * `bhtune-cli`'s `RequestSnapshot` (what actually populates `request_json`) always resolves
  * the fields that carry a CLI/server default — `mrft_delay`, `poll_interval_ms`, every
@@ -204,11 +212,135 @@ function formFromRequest(request: StartRunRequest): FormState {
 }
 
 /**
+ * Converts the mutable saved draft into the form state. `undefined` means an older or
+ * hand-written partial draft omitted a field and should use the built-in default; `null` is
+ * the explicit representation of a field the engineer cleared while editing.
+ */
+function formFromDraft(draft: NewRunDraft): FormState {
+  return {
+    driver: draft.driver ?? initialForm.driver,
+    template:
+      draft.template === undefined
+        ? initialForm.template
+        : (draft.template ?? ""),
+    notes: "",
+    tagname:
+      draft.tagname === undefined ? initialForm.tagname : (draft.tagname ?? ""),
+    server: draft.server ?? "",
+    bridgeHost: draft.bridge_host ?? "",
+    processType: draft.process_type ?? initialForm.processType,
+    controllerType: draft.controller_type ?? initialForm.controllerType,
+    relayAmp: toNumOrBlank(draft.relay_amp),
+    cyclesSkip: toNumOrBlank(draft.cycles_skip),
+    cyclesCount: toNumOrBlank(draft.cycles_count),
+    noiseProtectionSecs: toNumOrBlank(draft.noise_protection_secs),
+    mrftDelay:
+      draft.mrft_delay === undefined
+        ? initialForm.mrftDelay
+        : toNumOrBlank(draft.mrft_delay),
+    pollIntervalMs:
+      draft.poll_interval_ms === undefined
+        ? initialForm.pollIntervalMs
+        : toNumOrBlank(draft.poll_interval_ms),
+    timeoutSecs:
+      draft.timeout_secs === undefined
+        ? initialForm.timeoutSecs
+        : toNumOrBlank(draft.timeout_secs),
+    opTimeoutSecs:
+      draft.op_timeout_secs === undefined
+        ? initialForm.opTimeoutSecs
+        : toNumOrBlank(draft.op_timeout_secs),
+    restoreTimeoutSecs:
+      draft.restore_timeout_secs === undefined
+        ? initialForm.restoreTimeoutSecs
+        : toNumOrBlank(draft.restore_timeout_secs),
+    allowUncertainQuality:
+      draft.allow_uncertain_quality ?? initialForm.allowUncertainQuality,
+    direction:
+      draft.direction === undefined
+        ? initialForm.direction
+        : (draft.direction ?? ""),
+    pvRangeHigh: toNumOrBlank(draft.pv_range_high),
+    pvRangeLow: toNumOrBlank(draft.pv_range_low),
+    mvRangeHigh: toNumOrBlank(draft.mv_range_high),
+    mvRangeLow: toNumOrBlank(draft.mv_range_low),
+    simGain:
+      draft.sim_gain === undefined
+        ? initialForm.simGain
+        : toNumOrBlank(draft.sim_gain),
+    simTau:
+      draft.sim_tau === undefined
+        ? initialForm.simTau
+        : toNumOrBlank(draft.sim_tau),
+    simDeadTime:
+      draft.sim_dead_time === undefined
+        ? initialForm.simDeadTime
+        : toNumOrBlank(draft.sim_dead_time),
+    simNoise:
+      draft.sim_noise === undefined
+        ? initialForm.simNoise
+        : toNumOrBlank(draft.sim_noise),
+    simSeed:
+      draft.sim_seed === undefined
+        ? initialForm.simSeed
+        : toNumOrBlank(draft.sim_seed),
+    simInitialPv:
+      draft.sim_initial_pv === undefined
+        ? initialForm.simInitialPv
+        : toNumOrBlank(draft.sim_initial_pv),
+    simInitialMv:
+      draft.sim_initial_mv === undefined
+        ? initialForm.simInitialMv
+        : toNumOrBlank(draft.sim_initial_mv),
+    writePid: draft.write_pid ?? "",
+    yes: draft.yes ?? initialForm.yes,
+  };
+}
+
+/** Serializes every editable form field except Notes for the server-side draft. */
+function draftFromForm(form: FormState): NewRunDraft {
+  return {
+    driver: form.driver,
+    template: form.template,
+    tagname: form.tagname,
+    server: form.server,
+    bridge_host: form.bridgeHost,
+    process_type: form.processType,
+    controller_type: form.controllerType,
+    relay_amp: toNullable(form.relayAmp),
+    cycles_skip: toNullable(form.cyclesSkip),
+    cycles_count: toNullable(form.cyclesCount),
+    noise_protection_secs: toNullable(form.noiseProtectionSecs),
+    mrft_delay: toNullable(form.mrftDelay),
+    poll_interval_ms: toNullable(form.pollIntervalMs),
+    timeout_secs: toNullable(form.timeoutSecs),
+    op_timeout_secs: toNullable(form.opTimeoutSecs),
+    restore_timeout_secs: toNullable(form.restoreTimeoutSecs),
+    allow_uncertain_quality: form.allowUncertainQuality,
+    direction: form.direction || null,
+    pv_range_high: toNullable(form.pvRangeHigh),
+    pv_range_low: toNullable(form.pvRangeLow),
+    mv_range_high: toNullable(form.mvRangeHigh),
+    mv_range_low: toNullable(form.mvRangeLow),
+    sim_gain: toNullable(form.simGain),
+    sim_tau: toNullable(form.simTau),
+    sim_dead_time: toNullable(form.simDeadTime),
+    sim_noise: toNullable(form.simNoise),
+    sim_seed: toNullable(form.simSeed),
+    sim_initial_pv: toNullable(form.simInitialPv),
+    sim_initial_mv: toNullable(form.simInitialMv),
+    write_pid: form.writePid || null,
+    yes: form.yes,
+  };
+}
+
+/**
  * Router `state` shape for navigating to this page to duplicate a specific historical run
  * (`RunDetailPage`'s "Duplicate this run" button) — as opposed to a plain visit to
- * `/runs/new`, which prefills from `GET /api/runs/last-request` (the *newest* run)
- * instead. Exported so `RunDetailPage` constructs it with type safety rather than an
- * untyped object literal that could silently drift from what this page reads.
+ * `/runs/new`, which uses the saved draft and falls back to
+ * `GET /api/runs/last-request` (the *newest* run). Exported so `RunDetailPage` constructs it
+ * with type safety rather than an untyped object literal that could silently drift from what
+ * this page reads.
  */
 export interface DuplicateRunState {
   duplicateRequest: StartRunRequest;
@@ -296,9 +428,11 @@ export function NewRunPage() {
   const templates = useTemplates();
   const startRun = useStartRun();
   const lastRunRequest = useLastRunRequest();
+  const runDraft = useRunDraft();
+  const saveRunDraft = useSaveRunDraft();
 
   // Set only by `RunDetailPage`'s "Duplicate this run" button -- a plain visit to
-  // `/runs/new` has no location state and falls through to the last-run prefill below.
+  // `/runs/new` has no location state and uses the saved-draft/newest-run fallback below.
   const duplicateState = location.state as DuplicateRunState | null | undefined;
 
   const [form, setForm] = useState<FormState>(() =>
@@ -310,29 +444,91 @@ export function NewRunPage() {
   // Tracks *why* the form currently looks the way it does, purely to show an explanatory
   // note -- not read anywhere else. `null` means "still the hardcoded defaults".
   const [prefillSource, setPrefillSource] = useState<
-    { kind: "duplicate"; runId: number } | { kind: "last-run" } | null
+    | { kind: "duplicate"; runId: number }
+    | { kind: "draft" }
+    | { kind: "last-run" }
+    | null
   >(() =>
     duplicateState
       ? { kind: "duplicate", runId: duplicateState.duplicateFromRunId }
       : null,
   );
-  const seededFromLastRunRef = useRef(false);
+  const [hydrated, setHydrated] = useState(Boolean(duplicateState));
+  const hydratedRef = useRef(Boolean(duplicateState));
+  const preserveBlankTemplateRef = useRef(false);
+  const [draftLoadError, setDraftLoadError] = useState<string | null>(null);
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
+  const draftSaveChainRef = useRef(Promise.resolve());
+  const saveDraftAsync = saveRunDraft.mutateAsync;
   const [tagBrowserOpen, setTagBrowserOpen] = useState(false);
   const activeTemplate = templates.data?.find((t) => t.name === form.template);
 
-  // Prefill from the newest run's own settings on a plain visit -- a "Duplicate this run"
-  // navigation already seeded the lazy `useState` initializer above from a *specific* run's
-  // request instead, so this must not run in that case. Guarded to run at most once: a
-  // background refetch of `useLastRunRequest` later (e.g. on window refocus) must never
-  // clobber whatever the engineer has since typed.
+  // Hydrate exactly once. A duplicate is already present in the lazy state initializer;
+  // otherwise prefer the mutable draft and only use the newest run's immutable snapshot as a
+  // one-time fallback for installations that predate draft persistence.
   useEffect(() => {
-    if (duplicateState) return;
-    if (seededFromLastRunRef.current) return;
-    if (!lastRunRequest.data) return;
-    seededFromLastRunRef.current = true;
-    setForm(formFromRequest(lastRunRequest.data));
-    setPrefillSource({ kind: "last-run" });
-  }, [duplicateState, lastRunRequest.data]);
+    if (hydratedRef.current || duplicateState || runDraft.isPending) return;
+    if (runDraft.data === undefined && !runDraft.isError) return;
+    if (
+      (runDraft.data === null || runDraft.isError) &&
+      lastRunRequest.isPending
+    ) {
+      return;
+    }
+
+    hydratedRef.current = true;
+    setHydrated(true);
+    if (runDraft.isError) {
+      setDraftLoadError(
+        userFacingErrorMessage(
+          runDraft.error,
+          "Unable to load the saved Tune draft; using the available fallback.",
+        ),
+      );
+    }
+    if (runDraft.data) {
+      preserveBlankTemplateRef.current = runDraft.data.template === null;
+      setForm(formFromDraft(runDraft.data));
+      setPrefillSource({ kind: "draft" });
+    } else if (lastRunRequest.data) {
+      preserveBlankTemplateRef.current = false;
+      setForm(formFromRequest(lastRunRequest.data));
+      setPrefillSource({ kind: "last-run" });
+    } else {
+      preserveBlankTemplateRef.current = false;
+    }
+  }, [
+    duplicateState,
+    lastRunRequest.data,
+    lastRunRequest.isPending,
+    runDraft.data,
+    runDraft.error,
+    runDraft.isError,
+    runDraft.isPending,
+  ]);
+
+  // Save the complete form, except Notes, after a short idle period. Each request is chained
+  // behind the previous one so a slow older PUT can never finish after a newer PUT and
+  // overwrite the latest form state in SQLite.
+  useEffect(() => {
+    if (!hydrated) return;
+    const payload = draftFromForm(form);
+    const timer = window.setTimeout(() => {
+      draftSaveChainRef.current = draftSaveChainRef.current
+        .catch(() => undefined)
+        .then(() => saveDraftAsync(payload))
+        .then(() => setDraftSaveError(null))
+        .catch((error: unknown) => {
+          setDraftSaveError(
+            userFacingErrorMessage(
+              error,
+              "Unable to save the Tune draft. Changes will remain in this page until the server is available.",
+            ),
+          );
+        });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [form, hydrated, saveDraftAsync]);
 
   // Default to the first available template once the list loads, so a first-time visitor
   // doesn't have to know a template name exists before they can start a run at all -- and
@@ -341,8 +537,8 @@ export function NewRunPage() {
   //
   // The gating check reads `prev.template` from inside the *functional* `setForm` updater
   // rather than this effect's own `form.template` closure. That distinction is load-bearing:
-  // when `templates.data` and `lastRunRequest.data` resolve in the same React batch, this
-  // effect and the prefill effect above both run in the *same* commit, and both see that
+  // when `templates.data` and a saved draft resolve in the same React batch, this
+  // effect and the hydration effect above both run in the *same* commit, and both see that
   // render's stale, pre-update `form.template` ("") -- reading it directly here would then
   // unconditionally queue an update that clobbers the prefill's own just-queued update with
   // the alphabetically-first template. The functional updater instead evaluates `prev` at
@@ -352,21 +548,21 @@ export function NewRunPage() {
   // `prev` unchanged when there's nothing to do also means this never schedules a wasted
   // re-render on the (common) already-templated path.
   useEffect(() => {
-    if (duplicateState) return;
+    if (duplicateState || !hydrated || preserveBlankTemplateRef.current) {
+      return;
+    }
     setForm((prev) => {
       if (prev.template || !templates.data || templates.data.length === 0) {
         return prev;
       }
       return { ...prev, template: templates.data[0].name };
     });
-  }, [duplicateState, templates.data, form.template]);
+  }, [duplicateState, hydrated, templates.data, form.template]);
 
-  /** Resets every field back to the hardcoded defaults, discarding whatever this page was
-   * prefilled with. Marks the last-run seed as already applied so a still-in-flight
-   * `useLastRunRequest` fetch that resolves afterward can't silently undo this. */
+  /** Resets every field back to the hardcoded defaults and persists that choice as the draft. */
   function resetToDefaults() {
-    seededFromLastRunRef.current = true;
     setPrefillSource(null);
+    preserveBlankTemplateRef.current = false;
     setForm(initialForm);
   }
 
@@ -445,17 +641,7 @@ export function NewRunPage() {
             <Link to="/runs">
               <Button>Cancel</Button>
             </Link>
-            <Button
-              onClick={resetToDefaults}
-              disabled={prefillSource === null}
-              title={
-                prefillSource === null
-                  ? "Already using the default settings."
-                  : undefined
-              }
-            >
-              Reset to defaults
-            </Button>
+            <Button onClick={resetToDefaults}>Reset to defaults</Button>
           </>
         }
       />
@@ -464,9 +650,18 @@ export function NewRunPage() {
         <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
           {prefillSource.kind === "duplicate"
             ? `Loaded settings from tune #${prefillSource.runId}.`
-            : "Loaded settings from the most recent tune."}{" "}
+            : prefillSource.kind === "draft"
+              ? "Loaded your saved Tune draft."
+              : "Loaded settings from the most recent tune."}{" "}
           Change anything below, or "Reset to defaults" to return to the
           built-in defaults.
+        </div>
+      )}
+
+      {(draftLoadError || draftSaveError) && (
+        <div className="mb-4 space-y-2">
+          {draftLoadError && <ErrorBanner message={draftLoadError} />}
+          {draftSaveError && <ErrorBanner message={draftSaveError} />}
         </div>
       )}
 

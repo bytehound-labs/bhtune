@@ -168,13 +168,11 @@ pub(crate) async fn list_runs(
 /// `GET /api/runs/last-request` -- returns the newest run's `request_json`
 /// (`db-run-request-snapshot`), parsed back into a [`StartRunRequest`], or `null` on a fresh
 /// install with no runs yet, or if the newest run's stored request isn't usable (see
-/// [`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form seeds itself from this
-/// response on load, so connection details, tag names, ranges, and every other field an
-/// engineer typed follow them across browsers and machines instead of resetting to hardcoded
-/// defaults on every visit -- deliberately server-side rather than `localStorage` for that
-/// reason. "Newest" means newest by `started_at`, matching `GET /api/runs`'s own ordering,
-/// regardless of that run's `outcome` -- a still-`running` run is a perfectly good source of
-/// "what was just submitted" to prefill from.
+/// [`parse_stored_request`]) (`ui-prefill-last-run`). The New tune form uses this only as a
+/// one-time fallback when no mutable `/api/runs/draft` exists, which lets older installations
+/// upgrade without losing their previous run settings while keeping future edits independent of
+/// immutable history. "Newest" means newest by `started_at`, matching `GET /api/runs`'s own
+/// ordering, regardless of that run's `outcome`.
 #[utoipa::path(
     get,
     path = "/api/runs/last-request",

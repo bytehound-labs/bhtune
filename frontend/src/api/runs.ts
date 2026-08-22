@@ -10,6 +10,7 @@ export type SampleResponse = components["schemas"]["SampleResponse"];
 export type ResultResponse = components["schemas"]["ResultResponse"];
 export type WriteResponse = components["schemas"]["WriteResponse"];
 export type StartRunRequest = components["schemas"]["StartRunRequest"];
+export type NewRunDraft = components["schemas"]["NewRunDraft"];
 export type TuneOutcome = components["schemas"]["TuneOutcome"];
 export type ResponseLevel = components["schemas"]["ResponseLevel"];
 
@@ -21,6 +22,7 @@ export type RunListFilter = NonNullable<
 const runsKey = (filter: RunListFilter) => ["runs", filter] as const;
 const runKey = (id: number) => ["runs", id] as const;
 const lastRunRequestKey = ["runs", "last-request"] as const;
+const runDraftKey = ["runs", "draft"] as const;
 
 /** `GET /api/runs` — a filtered, paginated page of run summaries, newest-started-first. */
 export function useRuns(filter: RunListFilter = {}) {
@@ -66,12 +68,11 @@ export function useRun(id: number) {
 
 /**
  * `GET /api/runs/last-request` — the newest run's own original request, or `null` on a
- * fresh install with no runs yet (`ui-prefill-last-run`). `NewRunPage` seeds its form from
- * this on load so an engineer's connection details, tag names, ranges, and every other
- * field they typed follow them across browsers and machines instead of resetting to
- * hardcoded defaults on every visit. A stable query key with no arguments (there's nothing
- * to filter by) and default `staleTime`/no polling — this is a one-shot seed read for a
- * form's initial state, not a live view of anything.
+ * fresh install with no runs yet (`ui-prefill-last-run`). `NewRunPage` uses this only as a
+ * one-time fallback when no mutable draft exists, preserving upgrade behavior without making
+ * immutable run history double as editable form preferences. A stable query key with no
+ * arguments (there's nothing to filter by) and default `staleTime`/no polling — this is a
+ * one-shot seed read for a form's initial state, not a live view of anything.
  */
 export function useLastRunRequest() {
   return useQuery({
@@ -82,6 +83,35 @@ export function useLastRunRequest() {
       );
       if (error) throw toApiError(error, response);
       return data;
+    },
+  });
+}
+
+/** `GET /api/runs/draft` — the mutable app-wide New Tune form draft, if one exists. */
+export function useRunDraft() {
+  return useQuery({
+    queryKey: runDraftKey,
+    queryFn: async () => {
+      const { data, error, response } = await apiClient.GET("/api/runs/draft");
+      if (error) throw toApiError(error, response);
+      return data;
+    },
+  });
+}
+
+/** `PUT /api/runs/draft` — replaces the saved New Tune form draft. */
+export function useSaveRunDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (draft: NewRunDraft) => {
+      const { data, error, response } = await apiClient.PUT("/api/runs/draft", {
+        body: draft,
+      });
+      if (error) throw toApiError(error, response);
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(runDraftKey, data);
     },
   });
 }

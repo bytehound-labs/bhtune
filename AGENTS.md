@@ -536,8 +536,7 @@ buttons disabled with the correct tooltip and note; and the Revert button was co
 appear on a seeded successful write row and correctly disappear once a newer row supersedes
 it. Completes Phase 7.5's GUI gap list alongside `ui-simulator-greyout`/
 `ui-friendly-process-names`/`ui-tune-nav`; remaining Phase 7.5 work is
-`ui-prefill-last-run`, `driver-list-servers`, `api-opc-browse`, `ui-opc-browser`, and
-`phase75-docs`.
+`driver-list-servers`, `api-opc-browse`, `ui-opc-browser`, and `phase75-docs`.
 
 Phase 7.5's `ui-prefill-last-run` is also done. `GET /api/runs/last-request`
 (`routes/history.rs`) returns the newest run's own stored request as a `StartRunRequest`, or
@@ -557,14 +556,15 @@ default are always concrete in a real stored request and are copied straight acr
 the genuinely-optional fields — cycles, ranges, direction, connection overrides, name — are
 shown _blank_ when absent rather than substituting today's hardcoded default, since an
 absence there specifically means "the engineer relied on a default last time"), gains a
-"Reset to defaults" button (disabled with a `title` when there's nothing to reset) that
-restores the hardcoded defaults, and shows an explanatory note ("Prefilled from the most
+"Reset to defaults" button that restores the hardcoded defaults, and shows an explanatory
+note ("Prefilled from the most
 recent run's settings" / "Prefilled from run #N's settings") whenever the form isn't showing
 blank defaults. `RunDetailPage.tsx` gained a "Duplicate this run" button (disabled with a
 `title` when the run has no usable `original_request`) that navigates to `/runs/new` with a
 new exported `DuplicateRunState` in router state, which the New Run page's lazy `useState`
 initializer seeds from synchronously — taking priority over the async last-run prefill,
-which must not fire in that case.
+which must not fire in that case. This historical prefill is now a fallback only: the separate
+New Tune draft store takes precedence and is described below.
 
 Manual browser verification (Playwright driven from a standalone throwaway spec, per the
 same `chrome-devtools-*` MCP timeout noted under `ui-post-run-write` above) caught a real
@@ -582,10 +582,11 @@ rather than against a stale snapshot — a general pattern worth remembering for
 effects in this app that read-then-conditionally-write the same piece of state from two
 independent async sources. Re-verified 4 consecutive green runs of the full scenario (fresh
 defaults → run a tune → reload shows the prefill note and correct values → "Reset to defaults"
-resets and disables itself → "Duplicate this run" from the run detail page prefills from that
+resets to defaults → "Duplicate this run" from the run detail page prefills from that
 specific run) after the fix, with no flakiness. Completes every Phase 7.5 GUI/API todo except
 `driver-list-servers`/`api-opc-browse`/`ui-opc-browser` (the OPC browser trio) and the
-`phase75-docs` wrap-up.
+`phase75-docs` wrap-up. The later draft-persistence work is complete: it stores all editable
+fields except Notes in SQLite and restores them across reloads.
 
 Phase 7.5's `driver-list-servers` is also done: a new `bhtune_driver::opcda::list_opcda_servers
 (bridge_host)` free function, re-exported at the crate root. It is deliberately **not** a
@@ -4136,9 +4137,14 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    `revert` and matching Write/Revert buttons on the run detail page, reusing the CLI's
    existing pre-read/verify/rollback/audit path under a new `ActiveRun::reserve`
    exclusive-reservation lock. `ui-prefill-last-run` seeds the New Run form from the newest
-   run's stored request server-side, plus a "Reset to defaults" action and a "Duplicate this
-   run" action. Configuration fields are remembered, but Notes is intentionally reset to blank
-   for both kinds of prefill so operator context is not copied into a new tune. Run identity is
+   run's stored request server-side as a compatibility fallback, plus a "Reset to defaults"
+   action and a "Duplicate this run" action. The follow-on New Tune draft flow stores every
+   editable field except Notes in the app-wide `settings` row at `new_run_draft`, autosaves
+   with debounced, serialized `PUT /api/runs/draft` requests, preserves inactive-driver
+   values, and gives the explicit precedence `Duplicate this run` → saved draft → newest-run
+   snapshot → built-in defaults. Configuration fields are remembered, but Notes is intentionally
+   reset to blank for both kinds of prefill so operator context is not copied into a new tune.
+   Run identity is
    consistently presented as the **Tag name**; the former
    user-editable run-name override was removed so history cannot hide the submitted tag.
    A mutable nullable `notes` field is stored on each run, included in new-run requests, and

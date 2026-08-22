@@ -12,7 +12,7 @@
 use utoipa::OpenApi;
 
 use crate::error::ErrorBody;
-use crate::routes::{health, history, opc, runs, stream, templates};
+use crate::routes::{draft, health, history, opc, runs, stream, templates};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -30,6 +30,8 @@ use crate::routes::{health, history, opc, runs, stream, templates};
         templates::delete_template,
         history::list_runs,
         history::last_request,
+        draft::get_draft,
+        draft::put_draft,
         history::show_run,
         history::export_run,
         history::delete_run,
@@ -57,6 +59,7 @@ use crate::routes::{health, history, opc, runs, stream, templates};
         history::RunDetailResponse,
         history::RunExportFormat,
         runs::StartRunRequest,
+        draft::NewRunDraft,
         runs::UpdateNotesRequest,
         runs::WriteRunRequest,
         stream::RunStreamDone,

@@ -185,9 +185,10 @@ Binds `127.0.0.1:8787` by default (see the `bind` setting below) and exposes a J
 and `GET`/`PUT`/`DELETE /api/templates/{name}`;
 `GET /api/runs`/`GET /api/runs/{id}`/`DELETE /api/runs/{id}` for run history,
 `GET /api/runs/{id}/export` for CSV/JSON sample export, `GET /api/runs/{id}/stream` for a live
-per-tick Server-Sent Events feed of an in-progress run, and `GET /api/runs/last-request` for the
-newest run's remembered tune settings (the New tune form prefills configuration fields from it;
-notes intentionally remain blank); `POST /api/runs`/
+per-tick Server-Sent Events feed of an in-progress run, `GET`/`PUT /api/runs/draft` for the
+app-wide autosaved New tune form draft (all fields except Notes), and
+`GET /api/runs/last-request` for the newest run's settings as a one-time fallback when no draft
+exists; `POST /api/runs`/
 `POST /api/runs/{id}/cancel` to start and cancel a tune, plus `POST /api/runs/{id}/write`/
 `POST /api/runs/{id}/revert` to write or roll back PID constants after a run has finished;
 `PUT`/`DELETE /api/runs/{id}/notes` to edit or clear operator notes while a run is active or

@@ -89,12 +89,13 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
      page while the run is active or after it finishes.
-   - The form prefills from the newest run's own tune settings every time you open it fresh (or
-     from a specific past run's settings via **Duplicate this run**, below) — remembered
-     server-side, so it follows you across browsers and machines rather than living in
-     `localStorage`. Notes are intentionally left blank for each new tune so operator context
-     is not copied accidentally. A **Reset to defaults** button returns the form to the built-in
-     defaults.
+   - Every field except **Notes** is autosaved to the server as the app-wide New tune draft,
+     including OPC values that are temporarily inactive while **Simulator** is selected. The
+     draft follows you across browsers and machines rather than living in `localStorage`.
+     Notes are intentionally left blank after a reload so one run's operator context is not
+     copied into another. On an installation without a saved draft, the form falls back once to
+     the newest run's settings. **Duplicate this run** takes precedence over both sources, and
+     **Reset to defaults** replaces the saved draft with the built-in defaults.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
    in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current

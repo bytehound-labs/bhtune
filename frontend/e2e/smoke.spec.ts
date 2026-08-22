@@ -8,6 +8,24 @@ import { expect, test } from "@playwright/test";
  * tune/write-back flows here -- that's `tune.spec.ts`'s job.
  */
 test.describe("app shell", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route("**/api/runs/draft", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "null",
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: route.request().postData() ?? "{}",
+        });
+      }
+    });
+  });
+
   test("loads, reaches a healthy driver, and lands on the Tune screen", async ({
     page,
   }) => {

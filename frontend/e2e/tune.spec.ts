@@ -56,6 +56,24 @@ async function startTune(page: Page) {
  * whenever `driver=simulator`, so it isn't set explicitly below.
  */
 test.describe("running a tune", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route("**/api/runs/draft", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "null",
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: route.request().postData() ?? "{}",
+        });
+      }
+    });
+  });
+
   test("completes a full simulator tune and renders sane, ordered results", async ({
     page,
   }) => {

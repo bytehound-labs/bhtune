@@ -20,6 +20,21 @@ import { expect, test } from "@playwright/test";
  */
 test.describe("OPC DA server discovery and tag browser (no gateway present)", () => {
   test.beforeEach(async ({ page }) => {
+    await page.route("**/api/runs/draft", async (route) => {
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "null",
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: route.request().postData() ?? "{}",
+        });
+      }
+    });
     await page.goto("/runs/new");
     await page.getByLabel("Driver").selectOption("opcda");
   });
