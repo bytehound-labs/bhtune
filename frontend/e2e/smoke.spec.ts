@@ -113,19 +113,23 @@ test.describe("app shell", () => {
       }),
     ).toBeDisabled();
 
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
-      .click();
-    for (const label of [
-      "Process type",
-      "Controller type",
-      "Controller direction",
-    ]) {
+    const mapping = page
+      .locator("details")
+      .filter({ has: page.locator("summary", { hasText: "Loop mapping" }) });
+    await expect(mapping).toHaveAttribute("open", "");
+    await expect(
+      mapping.getByRole("group", { name: "Controller direction", exact: true }),
+    ).toBeVisible();
+    for (const label of ["Process type", "Controller type"]) {
       await expect(
         page.getByRole("combobox", { name: startsWithLabel(label) }),
       ).toBeEnabled();
     }
+    await expect(
+      mapping.getByRole("combobox", {
+        name: startsWithLabel("Controller direction fixed value"),
+      }),
+    ).toBeEnabled();
     for (const label of [
       "Relay amplitude (%)",
       "Cycles to count",

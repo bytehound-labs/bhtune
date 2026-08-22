@@ -31,6 +31,29 @@ const defaultDraft = {
   sim_initial_pv: 50,
   sim_initial_mv: 50,
   tag_overrides: null,
+  source_driver: "simulator",
+  source_direction: "reverse",
+  source_pv_range_high: 100,
+  source_pv_range_low: 0,
+  source_mv_range_high: 100,
+  source_mv_range_low: 0,
+  tag_sources: {
+    process_variable: "template",
+    manipulated_variable: "template",
+    setpoint_variable: "template",
+    controller_mode: "template",
+    mode_attribute: "template",
+    proportional_constant: "template",
+    integral_constant: "template",
+    derivative_constant: "template",
+  },
+  value_sources: {
+    direction: "tag",
+    pv_range_high: "tag",
+    pv_range_low: "tag",
+    mv_range_high: "tag",
+    mv_range_low: "tag",
+  },
   write_pid: null,
   yes: false,
 };
@@ -47,6 +70,22 @@ async function waitForDraftSave(page: Page) {
 
 async function waitForDraftHydration(page: Page) {
   await expect(page.getByText("Loaded your saved Tune draft.")).toBeVisible();
+}
+
+function loopMapping(page: Page) {
+  return page
+    .locator("details")
+    .filter({ has: page.locator("summary", { hasText: "Loop mapping" }) });
+}
+
+function mappingRow(page: Page, label: string) {
+  return loopMapping(page).getByRole("group", { name: label, exact: true });
+}
+
+async function setCustomTag(page: Page, label: string, value: string) {
+  const row = mappingRow(page, label);
+  await row.getByRole("button", { name: "Custom", exact: true }).click();
+  await row.getByLabel(`${label} custom tag`).fill(value);
 }
 
 test.describe("New Tune draft persistence", () => {
@@ -102,14 +141,23 @@ test.describe("New Tune draft persistence", () => {
     await page
       .getByRole("combobox", { name: "Driver", exact: true })
       .selectOption("opcda");
+    await expect(page.getByLabel("Bridge host")).toBeEnabled();
     await page.getByLabel("Bridge host").fill("gateway.example:7600");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.getByLabel("Tag name").fill("FIC101");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
+    await setCustomTag(page, "Manipulated variable (MV)", "FIC101.PY");
+    const directionRow = mappingRow(page, "Controller direction");
+    await directionRow
+      .getByRole("button", { name: "Fixed value", exact: true })
       .click();
-    await page.getByLabel("MV/output tag override").fill("FIC101.PY");
+    await directionRow
+      .getByLabel("Controller direction fixed value")
+      .selectOption("direct");
+    const pvHighRow = mappingRow(page, "PV range high");
+    await pvHighRow
+      .getByRole("button", { name: "Fixed value", exact: true })
+      .click();
+    await pvHighRow.getByLabel("PV range high fixed value").fill("90");
     await page.getByLabel("Notes").fill("do not persist this");
     await waitForDraftSave(page);
 
@@ -125,15 +173,25 @@ test.describe("New Tune draft persistence", () => {
       "Yokogawa.CSHIS_OPC.1",
     );
     await expect(page.getByLabel("Tag name")).toHaveValue("FIC101");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
-      .click();
-    await expect(page.getByLabel("MV/output tag override")).toHaveValue(
-      "FIC101.PY",
-    );
+    await expect(
+      mappingRow(page, "Manipulated variable (MV)").getByLabel(
+        "Manipulated variable (MV) custom tag",
+      ),
+    ).toHaveValue("FIC101.PY");
     await expect(page.getByLabel("Notes")).toHaveValue("");
     await expect(page.getByText("Loaded your saved Tune draft.")).toBeVisible();
+
+    await page
+      .getByRole("combobox", { name: "Driver", exact: true })
+      .selectOption("opcda");
+    await expect(
+      mappingRow(page, "Controller direction").getByLabel(
+        "Controller direction fixed value",
+      ),
+    ).toHaveValue("direct");
+    await expect(
+      mappingRow(page, "PV range high").getByLabel("PV range high fixed value"),
+    ).toHaveValue("90");
   });
 
   test("retains OPC connection values when switching to Simulator", async ({
@@ -144,14 +202,11 @@ test.describe("New Tune draft persistence", () => {
     await page
       .getByRole("combobox", { name: "Driver", exact: true })
       .selectOption("opcda");
+    await expect(page.getByLabel("Bridge host")).toBeEnabled();
     await page.getByLabel("Bridge host").fill("gateway.example:7600");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.getByLabel("Tag name").fill("FIC101");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
-      .click();
-    await page.getByLabel("MV/output tag override").fill("FIC101.PY");
+    await setCustomTag(page, "Manipulated variable (MV)", "FIC101.PY");
     await waitForDraftSave(page);
 
     await page
@@ -170,13 +225,11 @@ test.describe("New Tune draft persistence", () => {
       "Yokogawa.CSHIS_OPC.1",
     );
     await expect(page.getByLabel("Tag name")).toHaveValue("FIC101");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
-      .click();
-    await expect(page.getByLabel("MV/output tag override")).toHaveValue(
-      "FIC101.PY",
-    );
+    await expect(
+      mappingRow(page, "Manipulated variable (MV)").getByLabel(
+        "Manipulated variable (MV) custom tag",
+      ),
+    ).toHaveValue("FIC101.PY");
   });
 
   test("persists Duplicate this run through a browser reload", async ({
@@ -237,13 +290,11 @@ test.describe("New Tune draft persistence", () => {
     await page.getByRole("button", { name: "Duplicate this run" }).click();
     await expect(page).toHaveURL(/\/runs\/new$/);
     await expect(page.getByLabel("Tag name")).toHaveValue("Duplicate.Loop.PV");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
-      .click();
-    await expect(page.getByLabel("MV/output tag override")).toHaveValue(
-      "Duplicate.Loop.PY",
-    );
+    await expect(
+      mappingRow(page, "Manipulated variable (MV)").getByLabel(
+        "Manipulated variable (MV) custom tag",
+      ),
+    ).toHaveValue("Duplicate.Loop.PY");
     await waitForDraftSave(page);
 
     // Leave the location state used by Duplicate this run before opening the form again;
@@ -254,13 +305,11 @@ test.describe("New Tune draft persistence", () => {
 
     await waitForDraftHydration(page);
     await expect(page.getByLabel("Tag name")).toHaveValue("Duplicate.Loop.PV");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
-      .click();
-    await expect(page.getByLabel("MV/output tag override")).toHaveValue(
-      "Duplicate.Loop.PY",
-    );
+    await expect(
+      mappingRow(page, "Manipulated variable (MV)").getByLabel(
+        "Manipulated variable (MV) custom tag",
+      ),
+    ).toHaveValue("Duplicate.Loop.PY");
     await expect(page.getByLabel("Notes")).toHaveValue("");
     await expect(page.getByText("Loaded your saved Tune draft.")).toBeVisible();
   });
@@ -271,12 +320,9 @@ test.describe("New Tune draft persistence", () => {
     await page
       .getByRole("combobox", { name: "Driver", exact: true })
       .selectOption("opcda");
+    await expect(page.getByLabel("Bridge host")).toBeEnabled();
     await page.getByLabel("Poll interval (ms)").fill("123");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
-      .click();
-    await page.getByLabel("MV/output tag override").fill("Loop.PY");
+    await setCustomTag(page, "Manipulated variable (MV)", "Loop.PY");
     await waitForDraftSave(page);
     await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("123");
 
@@ -288,11 +334,13 @@ test.describe("New Tune draft persistence", () => {
       page.getByRole("combobox", { name: "Driver", exact: true }),
     ).toHaveValue("simulator");
     await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("800");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Tag mapping overrides" })
-      .click();
-    await expect(page.getByLabel("MV/output tag override")).toHaveValue("");
+    const mvRow = mappingRow(page, "Manipulated variable (MV)");
+    await expect(
+      mvRow.getByRole("button", { name: "Template", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      mvRow.getByText("Inactive for Simulator", { exact: true }),
+    ).toBeVisible();
     await expect(page.getByLabel("Notes")).toHaveValue("");
   });
 

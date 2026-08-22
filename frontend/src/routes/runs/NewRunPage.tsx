@@ -12,7 +12,6 @@ import { userFacingErrorMessage } from "../../api/errors";
 import type { components } from "../../api/schema";
 import {
   CONTROLLER_TYPE_LABELS,
-  DIRECTION_LABELS,
   DRIVER_LABELS,
   PROCESS_TYPE_LABELS,
   RESPONSE_LEVEL_LABELS,
@@ -31,6 +30,20 @@ import {
   TextAreaField,
   TextField,
 } from "../../components/ui";
+import { LoopMappingEditor } from "./LoopMappingEditor";
+import {
+  DEFAULT_TAG_MAPPING_SOURCES,
+  DEFAULT_VALUE_MAPPING_SOURCES,
+  EMPTY_TAG_OVERRIDES,
+  type NumOrBlank,
+  type TagMappingSource,
+  type TagOverrideFormState,
+  type TagOverrideKey,
+  type TagMappingSources,
+  type ValueMappingKey,
+  type ValueMappingSource,
+  type ValueMappingSources,
+} from "./mappingState";
 
 type TuneDriver = components["schemas"]["TuneDriver"];
 type ProcessType = components["schemas"]["ProcessType"];
@@ -49,7 +62,6 @@ const PROCESS_TYPES: readonly ProcessType[] = [
   "temperature_heat_exchange",
 ];
 const CONTROLLER_TYPES: readonly ControllerType[] = ["p", "pi", "pid"];
-const DIRECTIONS: readonly ControllerDirection[] = ["direct", "reverse"];
 const RESPONSE_LEVELS: readonly ResponseLevel[] = [
   "aggressive",
   "moderate",
@@ -62,73 +74,6 @@ const TEMPERATURE_PROCESS_TYPES = new Set<ProcessType>([
   "temperature_mixing",
   "temperature_heat_exchange",
 ]);
-
-type NumOrBlank = number | "";
-
-type TagOverrideFormState = {
-  processVariable: string;
-  manipulatedVariable: string;
-  setpointVariable: string;
-  controllerMode: string;
-  modeAttribute: string;
-  proportionalConstant: string;
-  integralConstant: string;
-  derivativeConstant: string;
-};
-
-const EMPTY_TAG_OVERRIDES: TagOverrideFormState = {
-  processVariable: "",
-  manipulatedVariable: "",
-  setpointVariable: "",
-  controllerMode: "",
-  modeAttribute: "",
-  proportionalConstant: "",
-  integralConstant: "",
-  derivativeConstant: "",
-};
-
-const TAG_OVERRIDE_FIELDS = [
-  {
-    key: "processVariable",
-    label: "PV tag override",
-    previewLabel: "Process variable (PV)",
-  },
-  {
-    key: "manipulatedVariable",
-    label: "MV/output tag override",
-    previewLabel: "Manipulated variable (MV)",
-  },
-  {
-    key: "setpointVariable",
-    label: "Setpoint tag override",
-    previewLabel: "Setpoint",
-  },
-  {
-    key: "controllerMode",
-    label: "Controller mode tag override",
-    previewLabel: "Controller mode",
-  },
-  {
-    key: "modeAttribute",
-    label: "Mode attribute tag override",
-    previewLabel: "Mode attribute",
-  },
-  {
-    key: "proportionalConstant",
-    label: "Proportional constant tag override",
-    previewLabel: "Proportional constant",
-  },
-  {
-    key: "integralConstant",
-    label: "Integral constant tag override",
-    previewLabel: "Integral constant",
-  },
-  {
-    key: "derivativeConstant",
-    label: "Derivative constant tag override",
-    previewLabel: "Derivative constant",
-  },
-] as const;
 
 type FormState = {
   driver: TuneDriver;
@@ -149,11 +94,18 @@ type FormState = {
   opTimeoutSecs: NumOrBlank;
   restoreTimeoutSecs: NumOrBlank;
   allowUncertainQuality: boolean;
-  direction: "" | ControllerDirection;
-  pvRangeHigh: NumOrBlank;
-  pvRangeLow: NumOrBlank;
-  mvRangeHigh: NumOrBlank;
-  mvRangeLow: NumOrBlank;
+  tagSources: TagMappingSources;
+  valueSources: ValueMappingSources;
+  opcDirection: "" | ControllerDirection;
+  opcPvRangeHigh: NumOrBlank;
+  opcPvRangeLow: NumOrBlank;
+  opcMvRangeHigh: NumOrBlank;
+  opcMvRangeLow: NumOrBlank;
+  simDirection: "" | ControllerDirection;
+  simPvRangeHigh: NumOrBlank;
+  simPvRangeLow: NumOrBlank;
+  simMvRangeHigh: NumOrBlank;
+  simMvRangeLow: NumOrBlank;
   simGain: NumOrBlank;
   simTau: NumOrBlank;
   simDeadTime: NumOrBlank;
@@ -192,16 +144,23 @@ const initialForm: FormState = {
   opTimeoutSecs: 30,
   restoreTimeoutSecs: 30,
   allowUncertainQuality: false,
-  // The simulator has no range/direction tags at all, so these four are hard-required
+  tagSources: { ...DEFAULT_TAG_MAPPING_SOURCES },
+  valueSources: { ...DEFAULT_VALUE_MAPPING_SOURCES },
+  // The simulator has no range/direction tags at all, so these five are hard-required
   // whenever `driver` is "simulator" (see `build_loop_tags` in `bhtune-cli`). Defaulted to
   // exactly the same 0-100% span and direction `bhtune simulate`'s CLI convenience path
   // uses, matching the default `driver: "simulator"` above so a first-time visitor can
   // submit immediately.
-  direction: "reverse",
-  pvRangeHigh: 100,
-  pvRangeLow: 0,
-  mvRangeHigh: 100,
-  mvRangeLow: 0,
+  opcDirection: "",
+  opcPvRangeHigh: "",
+  opcPvRangeLow: "",
+  opcMvRangeHigh: "",
+  opcMvRangeLow: "",
+  simDirection: "reverse",
+  simPvRangeHigh: 100,
+  simPvRangeLow: 0,
+  simMvRangeHigh: 100,
+  simMvRangeLow: 0,
   simGain: 1,
   simTau: 2,
   simDeadTime: 5,
@@ -243,68 +202,142 @@ function formTagOverrides(
 
 function tagOverridesFromForm(form: FormState): TagOverrides | undefined {
   const overrides: TagOverrides = {
-    process_variable: form.tagOverrides.processVariable.trim() || undefined,
+    process_variable:
+      form.tagSources.processVariable === "custom"
+        ? form.tagOverrides.processVariable.trim() || undefined
+        : undefined,
     manipulated_variable:
-      form.tagOverrides.manipulatedVariable.trim() || undefined,
-    setpoint_variable: form.tagOverrides.setpointVariable.trim() || undefined,
-    controller_mode: form.tagOverrides.controllerMode.trim() || undefined,
-    mode_attribute: form.tagOverrides.modeAttribute.trim() || undefined,
+      form.tagSources.manipulatedVariable === "custom"
+        ? form.tagOverrides.manipulatedVariable.trim() || undefined
+        : undefined,
+    setpoint_variable:
+      form.tagSources.setpointVariable === "custom"
+        ? form.tagOverrides.setpointVariable.trim() || undefined
+        : undefined,
+    controller_mode:
+      form.tagSources.controllerMode === "custom"
+        ? form.tagOverrides.controllerMode.trim() || undefined
+        : undefined,
+    mode_attribute:
+      form.tagSources.modeAttribute === "custom"
+        ? form.tagOverrides.modeAttribute.trim() || undefined
+        : undefined,
     proportional_constant:
-      form.tagOverrides.proportionalConstant.trim() || undefined,
-    integral_constant: form.tagOverrides.integralConstant.trim() || undefined,
+      form.tagSources.proportionalConstant === "custom"
+        ? form.tagOverrides.proportionalConstant.trim() || undefined
+        : undefined,
+    integral_constant:
+      form.tagSources.integralConstant === "custom"
+        ? form.tagOverrides.integralConstant.trim() || undefined
+        : undefined,
     derivative_constant:
-      form.tagOverrides.derivativeConstant.trim() || undefined,
+      form.tagSources.derivativeConstant === "custom"
+        ? form.tagOverrides.derivativeConstant.trim() || undefined
+        : undefined,
   };
   return Object.values(overrides).some((value) => value !== undefined)
     ? overrides
     : undefined;
 }
 
-function fixedPreviewValue(label: string, form: FormState): string | undefined {
-  switch (label) {
-    case "Controller direction":
-      return form.direction
-        ? `Fixed value: ${DIRECTION_LABELS[form.direction]}`
-        : undefined;
-    case "PV range high":
-      return form.pvRangeHigh === ""
-        ? undefined
-        : `Fixed value: ${form.pvRangeHigh}`;
-    case "PV range low":
-      return form.pvRangeLow === ""
-        ? undefined
-        : `Fixed value: ${form.pvRangeLow}`;
-    case "MV range high":
-      return form.mvRangeHigh === ""
-        ? undefined
-        : `Fixed value: ${form.mvRangeHigh}`;
-    case "MV range low":
-      return form.mvRangeLow === ""
-        ? undefined
-        : `Fixed value: ${form.mvRangeLow}`;
-    default:
-      return undefined;
+const TAG_SOURCE_FIELDS: readonly [TagOverrideKey, keyof TagOverrides][] = [
+  ["processVariable", "process_variable"],
+  ["manipulatedVariable", "manipulated_variable"],
+  ["setpointVariable", "setpoint_variable"],
+  ["controllerMode", "controller_mode"],
+  ["modeAttribute", "mode_attribute"],
+  ["proportionalConstant", "proportional_constant"],
+  ["integralConstant", "integral_constant"],
+  ["derivativeConstant", "derivative_constant"],
+];
+
+function inferTagSources(
+  overrides: TagOverrides | null | undefined,
+): TagMappingSources {
+  const sources = { ...DEFAULT_TAG_MAPPING_SOURCES };
+  for (const [formKey, apiKey] of TAG_SOURCE_FIELDS) {
+    if (overrides?.[apiKey]?.trim()) {
+      sources[formKey] = "custom";
+    }
   }
+  return sources;
 }
 
-function effectiveTagPreview(
-  form: FormState,
-  template: components["schemas"]["TemplateResponse"],
-) {
-  return derivedTagPreview(form.tagname, template).map((row) => {
-    const overrideField = TAG_OVERRIDE_FIELDS.find(
-      (field) => field.previewLabel === row.label,
-    );
-    const override = overrideField
-      ? form.tagOverrides[overrideField.key].trim()
-      : "";
-    const fixed = fixedPreviewValue(row.label, form);
+function inferRequestValueSources(
+  request: StartRunRequest,
+): ValueMappingSources {
+  if (request.driver === "simulator") {
+    return { ...DEFAULT_VALUE_MAPPING_SOURCES };
+  }
+  return {
+    direction: request.direction === undefined ? "tag" : "fixed",
+    pvRangeHigh: request.pv_range_high === undefined ? "tag" : "fixed",
+    pvRangeLow: request.pv_range_low === undefined ? "tag" : "fixed",
+    mvRangeHigh: request.mv_range_high === undefined ? "tag" : "fixed",
+    mvRangeLow: request.mv_range_low === undefined ? "tag" : "fixed",
+  };
+}
+
+function inferDraftValueSources(draft: NewRunDraft): ValueMappingSources {
+  if (draft.value_sources) {
     return {
-      ...row,
-      effectiveTag: override || fixed || row.tag,
-      overridden: Boolean(override || fixed),
+      direction: draft.value_sources.direction,
+      pvRangeHigh: draft.value_sources.pv_range_high,
+      pvRangeLow: draft.value_sources.pv_range_low,
+      mvRangeHigh: draft.value_sources.mv_range_high,
+      mvRangeLow: draft.value_sources.mv_range_low,
     };
-  });
+  }
+
+  const legacyOpc =
+    draft.source_driver === "opcda" ||
+    (draft.source_driver === undefined && draft.driver === "opcda");
+  return {
+    direction:
+      legacyOpc && draft.direction !== null && draft.direction !== undefined
+        ? "fixed"
+        : "tag",
+    pvRangeHigh:
+      legacyOpc &&
+      draft.pv_range_high !== null &&
+      draft.pv_range_high !== undefined
+        ? "fixed"
+        : "tag",
+    pvRangeLow:
+      legacyOpc &&
+      draft.pv_range_low !== null &&
+      draft.pv_range_low !== undefined
+        ? "fixed"
+        : "tag",
+    mvRangeHigh:
+      legacyOpc &&
+      draft.mv_range_high !== null &&
+      draft.mv_range_high !== undefined
+        ? "fixed"
+        : "tag",
+    mvRangeLow:
+      legacyOpc &&
+      draft.mv_range_low !== null &&
+      draft.mv_range_low !== undefined
+        ? "fixed"
+        : "tag",
+  };
+}
+
+function draftTagSources(draft: NewRunDraft): TagMappingSources {
+  if (draft.tag_sources) {
+    return {
+      processVariable: draft.tag_sources.process_variable,
+      manipulatedVariable: draft.tag_sources.manipulated_variable,
+      setpointVariable: draft.tag_sources.setpoint_variable,
+      controllerMode: draft.tag_sources.controller_mode,
+      modeAttribute: draft.tag_sources.mode_attribute,
+      proportionalConstant: draft.tag_sources.proportional_constant,
+      integralConstant: draft.tag_sources.integral_constant,
+      derivativeConstant: draft.tag_sources.derivative_constant,
+    };
+  }
+  return inferTagSources(draft.tag_overrides);
 }
 
 /**
@@ -344,11 +377,37 @@ function formFromRequest(request: StartRunRequest): FormState {
     restoreTimeoutSecs:
       request.restore_timeout_secs ?? initialForm.restoreTimeoutSecs,
     allowUncertainQuality: request.allow_uncertain_quality ?? false,
-    direction: request.direction ?? "",
-    pvRangeHigh: toNumOrBlank(request.pv_range_high),
-    pvRangeLow: toNumOrBlank(request.pv_range_low),
-    mvRangeHigh: toNumOrBlank(request.mv_range_high),
-    mvRangeLow: toNumOrBlank(request.mv_range_low),
+    tagSources: inferTagSources(request.tag_overrides),
+    valueSources: inferRequestValueSources(request),
+    opcDirection: request.driver === "opcda" ? (request.direction ?? "") : "",
+    opcPvRangeHigh:
+      request.driver === "opcda" ? toNumOrBlank(request.pv_range_high) : "",
+    opcPvRangeLow:
+      request.driver === "opcda" ? toNumOrBlank(request.pv_range_low) : "",
+    opcMvRangeHigh:
+      request.driver === "opcda" ? toNumOrBlank(request.mv_range_high) : "",
+    opcMvRangeLow:
+      request.driver === "opcda" ? toNumOrBlank(request.mv_range_low) : "",
+    simDirection:
+      request.driver === "simulator"
+        ? (request.direction ?? initialForm.simDirection)
+        : initialForm.simDirection,
+    simPvRangeHigh:
+      request.driver === "simulator"
+        ? toNumOrBlank(request.pv_range_high)
+        : initialForm.simPvRangeHigh,
+    simPvRangeLow:
+      request.driver === "simulator"
+        ? toNumOrBlank(request.pv_range_low)
+        : initialForm.simPvRangeLow,
+    simMvRangeHigh:
+      request.driver === "simulator"
+        ? toNumOrBlank(request.mv_range_high)
+        : initialForm.simMvRangeHigh,
+    simMvRangeLow:
+      request.driver === "simulator"
+        ? toNumOrBlank(request.mv_range_low)
+        : initialForm.simMvRangeLow,
     simGain: request.sim_gain ?? initialForm.simGain,
     simTau: request.sim_tau ?? initialForm.simTau,
     simDeadTime: request.sim_dead_time ?? initialForm.simDeadTime,
@@ -368,8 +427,26 @@ function formFromRequest(request: StartRunRequest): FormState {
  * the explicit representation of a field the engineer cleared while editing.
  */
 function formFromDraft(draft: NewRunDraft): FormState {
+  const driver = draft.driver ?? initialForm.driver;
+  const valueSources = inferDraftValueSources(draft);
+  const legacyOpc =
+    draft.source_driver === "opcda" ||
+    (draft.source_driver === undefined && driver === "opcda");
+  const simulatorValuesPresent =
+    draft.source_direction !== undefined ||
+    draft.source_pv_range_high !== undefined ||
+    draft.source_pv_range_low !== undefined ||
+    draft.source_mv_range_high !== undefined ||
+    draft.source_mv_range_low !== undefined;
+  const separatedMappingState =
+    draft.source_driver !== undefined ||
+    simulatorValuesPresent ||
+    draft.tag_sources !== undefined ||
+    draft.value_sources !== undefined;
+  const restoreOpcValues =
+    separatedMappingState || legacyOpc || driver === "opcda";
   return {
-    driver: draft.driver ?? initialForm.driver,
+    driver,
     template:
       draft.template === undefined
         ? initialForm.template
@@ -407,14 +484,38 @@ function formFromDraft(draft: NewRunDraft): FormState {
         : toNumOrBlank(draft.restore_timeout_secs),
     allowUncertainQuality:
       draft.allow_uncertain_quality ?? initialForm.allowUncertainQuality,
-    direction:
-      draft.direction === undefined
-        ? initialForm.direction
-        : (draft.direction ?? ""),
-    pvRangeHigh: toNumOrBlank(draft.pv_range_high),
-    pvRangeLow: toNumOrBlank(draft.pv_range_low),
-    mvRangeHigh: toNumOrBlank(draft.mv_range_high),
-    mvRangeLow: toNumOrBlank(draft.mv_range_low),
+    tagSources: draftTagSources(draft),
+    valueSources,
+    opcDirection: restoreOpcValues ? (draft.direction ?? "") : "",
+    opcPvRangeHigh: restoreOpcValues ? toNumOrBlank(draft.pv_range_high) : "",
+    opcPvRangeLow: restoreOpcValues ? toNumOrBlank(draft.pv_range_low) : "",
+    opcMvRangeHigh: restoreOpcValues ? toNumOrBlank(draft.mv_range_high) : "",
+    opcMvRangeLow: restoreOpcValues ? toNumOrBlank(draft.mv_range_low) : "",
+    simDirection: simulatorValuesPresent
+      ? (draft.source_direction ?? "")
+      : legacyOpc
+        ? initialForm.simDirection
+        : (draft.direction ?? initialForm.simDirection),
+    simPvRangeHigh: simulatorValuesPresent
+      ? toNumOrBlank(draft.source_pv_range_high)
+      : legacyOpc
+        ? initialForm.simPvRangeHigh
+        : toNumOrBlank(draft.pv_range_high),
+    simPvRangeLow: simulatorValuesPresent
+      ? toNumOrBlank(draft.source_pv_range_low)
+      : legacyOpc
+        ? initialForm.simPvRangeLow
+        : toNumOrBlank(draft.pv_range_low),
+    simMvRangeHigh: simulatorValuesPresent
+      ? toNumOrBlank(draft.source_mv_range_high)
+      : legacyOpc
+        ? initialForm.simMvRangeHigh
+        : toNumOrBlank(draft.mv_range_high),
+    simMvRangeLow: simulatorValuesPresent
+      ? toNumOrBlank(draft.source_mv_range_low)
+      : legacyOpc
+        ? initialForm.simMvRangeLow
+        : toNumOrBlank(draft.mv_range_low),
     simGain:
       draft.sim_gain === undefined
         ? initialForm.simGain
@@ -469,11 +570,34 @@ function draftFromForm(form: FormState): NewRunDraft {
     op_timeout_secs: toNullable(form.opTimeoutSecs),
     restore_timeout_secs: toNullable(form.restoreTimeoutSecs),
     allow_uncertain_quality: form.allowUncertainQuality,
-    direction: form.direction || null,
-    pv_range_high: toNullable(form.pvRangeHigh),
-    pv_range_low: toNullable(form.pvRangeLow),
-    mv_range_high: toNullable(form.mvRangeHigh),
-    mv_range_low: toNullable(form.mvRangeLow),
+    direction: form.opcDirection || null,
+    pv_range_high: toNullable(form.opcPvRangeHigh),
+    pv_range_low: toNullable(form.opcPvRangeLow),
+    mv_range_high: toNullable(form.opcMvRangeHigh),
+    mv_range_low: toNullable(form.opcMvRangeLow),
+    source_driver: form.driver,
+    source_direction: form.simDirection || null,
+    source_pv_range_high: toNullable(form.simPvRangeHigh),
+    source_pv_range_low: toNullable(form.simPvRangeLow),
+    source_mv_range_high: toNullable(form.simMvRangeHigh),
+    source_mv_range_low: toNullable(form.simMvRangeLow),
+    tag_sources: {
+      process_variable: form.tagSources.processVariable,
+      manipulated_variable: form.tagSources.manipulatedVariable,
+      setpoint_variable: form.tagSources.setpointVariable,
+      controller_mode: form.tagSources.controllerMode,
+      mode_attribute: form.tagSources.modeAttribute,
+      proportional_constant: form.tagSources.proportionalConstant,
+      integral_constant: form.tagSources.integralConstant,
+      derivative_constant: form.tagSources.derivativeConstant,
+    },
+    value_sources: {
+      direction: form.valueSources.direction,
+      pv_range_high: form.valueSources.pvRangeHigh,
+      pv_range_low: form.valueSources.pvRangeLow,
+      mv_range_high: form.valueSources.mvRangeHigh,
+      mv_range_low: form.valueSources.mvRangeLow,
+    },
     sim_gain: toNullable(form.simGain),
     sim_tau: toNullable(form.simTau),
     sim_dead_time: toNullable(form.simDeadTime),
@@ -515,24 +639,42 @@ function buildRequest(form: FormState): StartRunRequest | string {
   }
   if (form.relayAmp === "") return "Relay amplitude is required.";
   if (form.driver === "simulator") {
-    // The simulator has no range/direction tags to read at all, so `bhtune-cli`'s
-    // `build_loop_tags` hard-requires all four of these plus `direction` — mirrored here
-    // verbatim so a missing field is caught before the round trip, not as a 400 from the
-    // server after the run has already been attempted.
-    if (form.pvRangeHigh === "") {
+    if (form.simPvRangeHigh === "") {
       return "PV range high is required for the simulator driver (it has no range tags to read).";
     }
-    if (form.pvRangeLow === "") {
+    if (form.simPvRangeLow === "") {
       return "PV range low is required for the simulator driver (it has no range tags to read).";
     }
-    if (form.mvRangeHigh === "") {
+    if (form.simMvRangeHigh === "") {
       return "MV range high is required for the simulator driver (it has no range tags to read).";
     }
-    if (form.mvRangeLow === "") {
+    if (form.simMvRangeLow === "") {
       return "MV range low is required for the simulator driver (it has no range tags to read).";
     }
-    if (!form.direction) {
+    if (!form.simDirection) {
       return "Controller direction is required for the simulator driver (it has no direction tag to read).";
+    }
+  } else {
+    if (form.valueSources.direction === "fixed" && !form.opcDirection) {
+      return "Controller direction is required when Fixed value is selected.";
+    }
+    if (
+      form.valueSources.pvRangeHigh === "fixed" &&
+      form.opcPvRangeHigh === ""
+    ) {
+      return "PV range high is required when Fixed value is selected.";
+    }
+    if (form.valueSources.pvRangeLow === "fixed" && form.opcPvRangeLow === "") {
+      return "PV range low is required when Fixed value is selected.";
+    }
+    if (
+      form.valueSources.mvRangeHigh === "fixed" &&
+      form.opcMvRangeHigh === ""
+    ) {
+      return "MV range high is required when Fixed value is selected.";
+    }
+    if (form.valueSources.mvRangeLow === "fixed" && form.opcMvRangeLow === "") {
+      return "MV range low is required when Fixed value is selected.";
     }
   }
   if (form.writePid && !form.yes) {
@@ -559,12 +701,38 @@ function buildRequest(form: FormState): StartRunRequest | string {
     sim_seed: toOptional(form.simSeed),
     sim_initial_pv: toOptional(form.simInitialPv),
     sim_initial_mv: toOptional(form.simInitialMv),
-    pv_range_high: toOptional(form.pvRangeHigh),
-    pv_range_low: toOptional(form.pvRangeLow),
-    mv_range_high: toOptional(form.mvRangeHigh),
-    mv_range_low: toOptional(form.mvRangeLow),
-    direction: form.direction || undefined,
-    tag_overrides: tagOverridesFromForm(form),
+    pv_range_high:
+      form.driver === "simulator"
+        ? toOptional(form.simPvRangeHigh)
+        : form.valueSources.pvRangeHigh === "fixed"
+          ? toOptional(form.opcPvRangeHigh)
+          : undefined,
+    pv_range_low:
+      form.driver === "simulator"
+        ? toOptional(form.simPvRangeLow)
+        : form.valueSources.pvRangeLow === "fixed"
+          ? toOptional(form.opcPvRangeLow)
+          : undefined,
+    mv_range_high:
+      form.driver === "simulator"
+        ? toOptional(form.simMvRangeHigh)
+        : form.valueSources.mvRangeHigh === "fixed"
+          ? toOptional(form.opcMvRangeHigh)
+          : undefined,
+    mv_range_low:
+      form.driver === "simulator"
+        ? toOptional(form.simMvRangeLow)
+        : form.valueSources.mvRangeLow === "fixed"
+          ? toOptional(form.opcMvRangeLow)
+          : undefined,
+    direction:
+      form.driver === "simulator"
+        ? form.simDirection || undefined
+        : form.valueSources.direction === "fixed"
+          ? form.opcDirection || undefined
+          : undefined,
+    tag_overrides:
+      form.driver === "opcda" ? tagOverridesFromForm(form) : undefined,
     poll_interval_ms: toOptional(form.pollIntervalMs),
     timeout_secs: toOptional(form.timeoutSecs),
     notes: form.notes.trim() || undefined,
@@ -724,28 +892,128 @@ export function NewRunPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function setTagOverride(key: keyof TagOverrideFormState, value: string) {
+  const tagPreviewLabels: Record<TagOverrideKey, string> = {
+    processVariable: "Process variable (PV)",
+    manipulatedVariable: "Manipulated variable (MV)",
+    setpointVariable: "Setpoint",
+    controllerMode: "Controller mode",
+    modeAttribute: "Mode attribute",
+    proportionalConstant: "Proportional constant",
+    integralConstant: "Integral constant",
+    derivativeConstant: "Derivative constant",
+  };
+
+  function templateTagFor(key: TagOverrideKey, tagname = form.tagname): string {
+    return (
+      (activeTemplate &&
+        derivedTagPreview(tagname, activeTemplate).find(
+          (row) => row.label === tagPreviewLabels[key],
+        )?.tag) ??
+      ""
+    );
+  }
+
+  function setTagSource(key: TagOverrideKey, source: TagMappingSource) {
+    setForm((prev) => {
+      const value =
+        source === "custom" && !prev.tagOverrides[key].trim()
+          ? templateTagFor(key, prev.tagname)
+          : prev.tagOverrides[key];
+      return {
+        ...prev,
+        tagSources: { ...prev.tagSources, [key]: source },
+        tagOverrides: { ...prev.tagOverrides, [key]: value },
+      };
+    });
+  }
+
+  function setTagValue(key: TagOverrideKey, value: string) {
     setForm((prev) => ({
       ...prev,
       tagOverrides: { ...prev.tagOverrides, [key]: value },
     }));
   }
 
+  function setValueSource(key: ValueMappingKey, source: ValueMappingSource) {
+    setForm((prev) => {
+      if (prev.driver === "simulator") return prev;
+      return {
+        ...prev,
+        valueSources: { ...prev.valueSources, [key]: source },
+      };
+    });
+  }
+
+  function setMappingValue<
+    K extends
+      | "opcDirection"
+      | "opcPvRangeHigh"
+      | "opcPvRangeLow"
+      | "opcMvRangeHigh"
+      | "opcMvRangeLow"
+      | "simDirection"
+      | "simPvRangeHigh"
+      | "simPvRangeLow"
+      | "simMvRangeHigh"
+      | "simMvRangeLow",
+  >(key: K, value: FormState[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function resetTag(key: TagOverrideKey) {
+    setForm((prev) => ({
+      ...prev,
+      tagSources: { ...prev.tagSources, [key]: "template" },
+      tagOverrides: { ...prev.tagOverrides, [key]: "" },
+    }));
+  }
+
+  function resetValue(key: ValueMappingKey) {
+    setForm((prev) => {
+      if (prev.driver === "simulator") return prev;
+      const valueKey =
+        key === "direction"
+          ? "opcDirection"
+          : key === "pvRangeHigh"
+            ? "opcPvRangeHigh"
+            : key === "pvRangeLow"
+              ? "opcPvRangeLow"
+              : key === "mvRangeHigh"
+                ? "opcMvRangeHigh"
+                : "opcMvRangeLow";
+      return {
+        ...prev,
+        valueSources: { ...prev.valueSources, [key]: "tag" },
+        [valueKey]: "",
+      };
+    });
+  }
+
+  function resetMapping() {
+    setForm((prev) => ({
+      ...prev,
+      tagSources: { ...DEFAULT_TAG_MAPPING_SOURCES },
+      valueSources: { ...DEFAULT_VALUE_MAPPING_SOURCES },
+      tagOverrides: { ...EMPTY_TAG_OVERRIDES },
+      opcDirection: "",
+      opcPvRangeHigh: "",
+      opcPvRangeLow: "",
+      opcMvRangeHigh: "",
+      opcMvRangeLow: "",
+    }));
+  }
+
   function setDriver(value: TuneDriver) {
     setForm((prev) => {
       if (value !== "simulator") return { ...prev, driver: value };
-      // Switching to the simulator driver makes the range/direction fields hard-required
-      // (see `buildRequest`); fill in any still left blank with the same defaults
-      // `bhtune simulate`'s CLI convenience path uses, without touching a value the user
-      // already set for a reason.
       return {
         ...prev,
         driver: value,
-        pvRangeHigh: prev.pvRangeHigh === "" ? 100 : prev.pvRangeHigh,
-        pvRangeLow: prev.pvRangeLow === "" ? 0 : prev.pvRangeLow,
-        mvRangeHigh: prev.mvRangeHigh === "" ? 100 : prev.mvRangeHigh,
-        mvRangeLow: prev.mvRangeLow === "" ? 0 : prev.mvRangeLow,
-        direction: prev.direction === "" ? "reverse" : prev.direction,
+        simPvRangeHigh: prev.simPvRangeHigh === "" ? 100 : prev.simPvRangeHigh,
+        simPvRangeLow: prev.simPvRangeLow === "" ? 0 : prev.simPvRangeLow,
+        simMvRangeHigh: prev.simMvRangeHigh === "" ? 100 : prev.simMvRangeHigh,
+        simMvRangeLow: prev.simMvRangeLow === "" ? 0 : prev.simMvRangeLow,
+        simDirection: prev.simDirection === "" ? "reverse" : prev.simDirection,
       };
     });
   }
@@ -865,7 +1133,7 @@ export function NewRunPage() {
       )}
 
       <form onSubmit={handleSubmit}>
-        <FormSection title="Connection">
+        <FormSection title="Connection" collapsible defaultOpen>
           <SelectField
             label="Driver"
             value={form.driver}
@@ -961,7 +1229,7 @@ export function NewRunPage() {
           />
         </FormSection>
 
-        <FormSection title="Test parameters">
+        <FormSection title="Test parameters" collapsible defaultOpen>
           <SelectField
             label="Process type"
             value={form.processType}
@@ -1073,148 +1341,22 @@ export function NewRunPage() {
           />
         </FormSection>
 
-        <FormSection title="Tag mapping overrides" collapsible>
-          <p className="text-sm text-slate-500 sm:col-span-2">
-            Blank tag fields use the active template&apos;s derived defaults.
-            Explicit values apply only to this tune and are retained in the
-            saved draft.
-            {form.driver === "simulator" &&
-              " Simulator mode ignores OPC tag mappings, but retains these values for OPC DA."}
-          </p>
-          {TAG_OVERRIDE_FIELDS.map((field) => (
-            <TextField
-              key={field.key}
-              label={field.label}
-              value={form.tagOverrides[field.key]}
-              onChange={(value) => setTagOverride(field.key, value)}
-              disabled={form.driver === "simulator"}
-              hint={
-                form.driver === "simulator"
-                  ? "Disabled — the simulator ignores OPC tag mappings; the value is retained for OPC DA."
-                  : "Blank uses the template-derived tag."
-              }
-            />
-          ))}
-          <div className="sm:col-span-2">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Effective mapping
-            </h3>
-            {activeTemplate ? (
-              <div className="overflow-x-auto rounded-md border border-slate-800">
-                <table className="min-w-full text-left text-xs">
-                  <thead className="bg-slate-950 text-slate-500">
-                    <tr>
-                      <th className="px-3 py-2 font-medium">Tag</th>
-                      <th className="px-3 py-2 font-medium">
-                        Template default
-                      </th>
-                      <th className="px-3 py-2 font-medium">Effective</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800">
-                    {effectiveTagPreview(form, activeTemplate).map((row) => (
-                      <tr key={row.label}>
-                        <td className="whitespace-nowrap px-3 py-2 text-slate-400">
-                          {row.label}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-slate-300">
-                          {row.tag ?? (
-                            <span className="italic text-slate-600">
-                              not used by this template
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 font-mono text-slate-200">
-                          {row.effectiveTag ?? (
-                            <span className="italic text-slate-600">
-                              not used by this template
-                            </span>
-                          )}
-                          {row.overridden && (
-                            <span className="ml-2 font-sans text-amber-400">
-                              override
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="text-sm text-slate-500">
-                Choose a template to see its derived tag defaults and effective
-                mapping.
-              </p>
-            )}
-          </div>
-          <SelectField
-            label="Controller direction"
-            value={form.direction}
-            onChange={(v) => set("direction", v)}
-            options={DIRECTIONS}
-            displayLabel={(v) => DIRECTION_LABELS[v]}
-            placeholder="Auto-detect (read live tag)"
-            required={form.driver === "simulator"}
-            hint={
-              form.driver === "simulator"
-                ? "Required — the simulator has no direction tag to read."
-                : undefined
-            }
-          />
-          <div />
-          <NumberField
-            label="PV range high"
-            required={form.driver === "simulator"}
-            value={form.pvRangeHigh}
-            onChange={(v) => set("pvRangeHigh", v)}
-            step="any"
-            hint={
-              form.driver === "simulator"
-                ? "Required — the simulator has no range tags to read."
-                : "Overrides a live tag read."
-            }
-          />
-          <NumberField
-            label="PV range low"
-            required={form.driver === "simulator"}
-            value={form.pvRangeLow}
-            onChange={(v) => set("pvRangeLow", v)}
-            step="any"
-            hint={
-              form.driver === "simulator"
-                ? "Required — the simulator has no range tags to read."
-                : "Overrides a live tag read."
-            }
-          />
-          <NumberField
-            label="MV range high"
-            required={form.driver === "simulator"}
-            value={form.mvRangeHigh}
-            onChange={(v) => set("mvRangeHigh", v)}
-            step="any"
-            hint={
-              form.driver === "simulator"
-                ? "Required — the simulator has no range tags to read."
-                : "Overrides a live tag read."
-            }
-          />
-          <NumberField
-            label="MV range low"
-            required={form.driver === "simulator"}
-            value={form.mvRangeLow}
-            onChange={(v) => set("mvRangeLow", v)}
-            step="any"
-            hint={
-              form.driver === "simulator"
-                ? "Required — the simulator has no range tags to read."
-                : "Overrides a live tag read."
-            }
+        <FormSection title="Loop mapping" collapsible defaultOpen>
+          <LoopMappingEditor
+            state={form}
+            template={activeTemplate}
+            onTagSourceChange={setTagSource}
+            onTagChange={setTagValue}
+            onValueSourceChange={setValueSource}
+            onValueChange={setMappingValue}
+            onResetTag={resetTag}
+            onResetValue={resetValue}
+            onResetAll={resetMapping}
           />
         </FormSection>
 
         {form.driver === "simulator" && (
-          <FormSection title="Simulator parameters">
+          <FormSection title="Simulator parameters" collapsible defaultOpen>
             <NumberField
               label="Process gain"
               value={form.simGain}
@@ -1263,7 +1405,7 @@ export function NewRunPage() {
           </FormSection>
         )}
 
-        <FormSection title="Automatic PID settings">
+        <FormSection title="Automatic PID settings" collapsible defaultOpen>
           <SelectField
             label="Apply PID settings on completion"
             value={form.writePid}

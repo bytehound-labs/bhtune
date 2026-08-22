@@ -83,12 +83,16 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      a time from the gateway. Hierarchical servers such as Yokogawa CSHIS can be expanded
      through nested controller/block levels until their PV leaves; dotted and slash-separated
      item IDs are supported. The first node is selected automatically when the tree loads, and
-     the selection panel stays in place while browsing. The main form's collapsed **Tag mapping
-     overrides** section is the single place to inspect the complete tag set the active template
-     derives from the selected PV. Blank fields keep those defaults; fill in one or more fields
-     to replace the corresponding OPC item IDs for this tune, such as changing an MV/output tag
-     from a template's `PC` suffix to `PY`. The browser itself stays focused on browsing and
-     testing the selected PV tag. It offers a **Read selected tag** action showing a live value
+     the selection panel stays in place while browsing. The main form's collapsible **Loop
+     mapping** section is the single place to inspect the complete tag set the active template
+     derives from the selected PV and the direction/range inputs used for the tune. Each row
+     shows its effective value and source: **Template** or **Custom** for OPC item IDs, and
+     **Read tag** or **Fixed value** for direction and ranges. Switching to a custom tag starts
+     with the template-derived value; fixed direction/range values must be entered explicitly.
+     Use a row's **Reset** button or **Reset all mapping overrides** to return to template/live
+     values. Simulator direction and ranges are kept separately from OPC fixed overrides. The
+     browser itself stays focused on browsing and testing the selected PV tag. It offers a
+     **Read selected tag** action showing a live value
      and its quality. Double-clicking a leaf selects it; double-clicking a branch expands or
      collapses it. Selecting **Select tag** writes the selected tag with its final component
      replaced by the active template's process-variable suffix into the Tag name field. Changing
@@ -110,7 +114,9 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      copied into another. On an installation without a saved draft, the form quietly falls back
      once to the newest run's settings or the built-in defaults; this normal first-use state
      does not display an error. **Duplicate this run** takes precedence over both sources, and
-     **Reset to defaults** replaces the saved draft with the built-in defaults.
+     **Reset to defaults** replaces the saved draft with the built-in defaults. Connection, Test
+     parameters, Loop mapping, Simulator parameters, and Automatic PID settings are independently
+     collapsible and open by default.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
    in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current

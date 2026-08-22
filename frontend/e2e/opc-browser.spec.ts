@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /**
  * Regression coverage for the OPC DA server-discovery and tag-browser affordances
@@ -19,6 +19,16 @@ import { expect, test } from "@playwright/test";
  * without requiring a second permanent gateway service. The main form's collapsed mapping
  * section covers the default/effective tag preview and per-tune overrides.
  */
+function loopMapping(page: Page) {
+  return page
+    .locator("details")
+    .filter({ has: page.locator("summary", { hasText: "Loop mapping" }) });
+}
+
+function mappingRow(page: Page, label: string) {
+  return loopMapping(page).getByRole("group", { name: label, exact: true });
+}
+
 test.describe("OPC DA server discovery and tag browser (no gateway present)", () => {
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/runs/draft", async (route) => {
@@ -98,20 +108,142 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await templateField.selectOption("Yokogawa CentumVP");
     await page.getByLabel("Tag name").fill("Loop101.PV");
 
-    const mapping = page
-      .locator("details")
-      .filter({ hasText: "Tag mapping overrides" });
-    await expect(mapping).not.toHaveAttribute("open", "");
-    await mapping.locator("summary").click();
+    const mapping = loopMapping(page);
+    await expect(mapping).toHaveAttribute("open", "");
 
-    await page.getByLabel("MV/output tag override").fill("Loop101.PY");
+    const mvRow = mappingRow(page, "Manipulated variable (MV)");
+    await expect(mvRow.getByText("Loop101.MV", { exact: true })).toBeVisible();
+    await mvRow.getByRole("button", { name: "Custom", exact: true }).click();
+    await mvRow
+      .getByLabel("Manipulated variable (MV) custom tag")
+      .fill("Loop101.PY");
+    await expect(
+      mvRow.getByLabel("Manipulated variable (MV) custom tag"),
+    ).toHaveValue("Loop101.PY");
+    await expect(mvRow.getByText("Custom tag", { exact: true })).toBeVisible();
+  });
 
-    const mvRow = mapping
-      .getByRole("row")
-      .filter({ hasText: "Manipulated variable (MV)" });
-    await expect(mvRow).toContainText("Loop101.MV");
-    await expect(mvRow).toContainText("Loop101.PY");
-    await expect(mvRow).toContainText("override");
+  test("keeps custom tags pinned while the template and base tag change", async ({
+    page,
+  }) => {
+    const templateField = page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox");
+    const mvRow = mappingRow(page, "Manipulated variable (MV)");
+
+    await templateField.selectOption("Yokogawa CentumVP");
+    await page.getByLabel("Tag name").fill("Loop101.PV");
+    await mvRow.getByRole("button", { name: "Custom", exact: true }).click();
+    await mvRow
+      .getByLabel("Manipulated variable (MV) custom tag")
+      .fill("Loop101.PY");
+
+    await page.getByLabel("Tag name").fill("Loop202.PV");
+    await templateField.selectOption("Allen-Bradley PlantPAx");
+
+    await expect(page.getByLabel("Tag name")).toHaveValue("Loop202.Inp_PV");
+    await expect(
+      mvRow.getByLabel("Manipulated variable (MV) custom tag"),
+    ).toHaveValue("Loop101.PY");
+  });
+
+  test("resets one mapping row or all mapping overrides", async ({ page }) => {
+    const templateField = page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox");
+    await templateField.selectOption("Yokogawa CentumVP");
+    await page.getByLabel("Tag name").fill("Loop101.PV");
+
+    const mapping = loopMapping(page);
+    const mvRow = mappingRow(page, "Manipulated variable (MV)");
+    const setpointRow = mappingRow(page, "Setpoint");
+    await mvRow.getByRole("button", { name: "Custom", exact: true }).click();
+    await mvRow
+      .getByLabel("Manipulated variable (MV) custom tag")
+      .fill("Loop101.PY");
+    await setpointRow
+      .getByRole("button", { name: "Custom", exact: true })
+      .click();
+    await setpointRow
+      .getByLabel("Setpoint custom tag")
+      .fill("Loop101.SP_CUSTOM");
+
+    await mvRow.getByRole("button", { name: "Reset", exact: true }).click();
+    await expect(
+      mvRow.getByRole("button", { name: "Template", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(mvRow.getByText("Loop101.MV", { exact: true })).toBeVisible();
+    await expect(
+      mvRow.getByLabel("Manipulated variable (MV) custom tag"),
+    ).toHaveCount(0);
+    await expect(setpointRow.getByLabel("Setpoint custom tag")).toHaveValue(
+      "Loop101.SP_CUSTOM",
+    );
+
+    await mapping
+      .getByRole("button", { name: "Reset all mapping overrides" })
+      .click();
+    await expect(
+      setpointRow.getByRole("button", { name: "Template", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      setpointRow.getByText("Loop101.SV", { exact: true }),
+    ).toBeVisible();
+  });
+
+  test("keeps fixed direction and ranges separate from simulator values", async ({
+    page,
+  }) => {
+    const templateField = page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox");
+    await templateField.selectOption("Yokogawa CentumVP");
+
+    const directionRow = mappingRow(page, "Controller direction");
+    await directionRow
+      .getByRole("button", { name: "Fixed value", exact: true })
+      .click();
+    await directionRow
+      .getByLabel("Controller direction fixed value")
+      .selectOption("direct");
+
+    const pvHighRow = mappingRow(page, "PV range high");
+    await pvHighRow
+      .getByRole("button", { name: "Fixed value", exact: true })
+      .click();
+    await pvHighRow.getByLabel("PV range high fixed value").fill("90");
+
+    await page
+      .getByRole("combobox", { name: "Driver", exact: true })
+      .selectOption("simulator");
+    await expect(
+      directionRow.getByRole("button", { name: "Read tag", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      directionRow.getByRole("button", { name: "Fixed value", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByLabel("Controller direction fixed value"),
+    ).toHaveValue("reverse");
+    await expect(page.getByLabel("PV range high fixed value")).toHaveValue(
+      "100",
+    );
+
+    await page
+      .getByRole("combobox", { name: "Driver", exact: true })
+      .selectOption("opcda");
+    await expect(
+      directionRow.getByRole("button", { name: "Fixed value", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      directionRow.getByLabel("Controller direction fixed value"),
+    ).toHaveValue("direct");
+    await expect(pvHighRow.getByLabel("PV range high fixed value")).toHaveValue(
+      "90",
+    );
   });
 
   test("Browse tags button stays disabled until a ProgID is entered", async ({

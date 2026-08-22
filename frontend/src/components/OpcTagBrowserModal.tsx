@@ -168,8 +168,8 @@ function TreeLevel({
  * is written back to the form, but only after a fresh read of the originally selected tag
  * confirms `Good` OPC quality. A non-Good result pauses selection behind an explicit warning,
  * while a read failure leaves the browser open so the tag is never accepted without
- * verification. The main form's collapsed Tag mapping overrides section is the single place
- * for reviewing template defaults and changing any other tag.
+ * verification. The main form's collapsed Loop mapping section is the single place for
+ * reviewing template defaults and changing any other tag.
  * Double-clicking a leaf performs the same confirmation as the `Select tag` button, while
  * double-clicking a branch expands or collapses it.
  * Reopening the modal starts from `initialTag` when that tag is present in the browsed tree:

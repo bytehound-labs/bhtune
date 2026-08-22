@@ -118,10 +118,15 @@ Reopening the browser automatically expands the available path to the current Ta
 that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
 level.
 
-The New tune form's collapsed **Tag mapping overrides** section is the single place to inspect
-the template-derived mapping. Blank fields preserve those defaults; a nonblank field replaces
-that OPC item ID for the tune (for example, an MV/output tag can use a `PY` suffix instead of a
-template's `PC` suffix). Overrides are retained in the saved draft and the run request snapshot.
+The New tune form's collapsible **Loop mapping** section is the single place to inspect and
+adjust the effective mapping. Every row shows the value that will be used and its source: **Template** or **Custom** for OPC item IDs, and **Read tag**
+or **Fixed value** for direction and ranges. Switching to a custom tag starts from the
+template-derived value; fixed direction/range values must be entered explicitly. Per-row
+**Reset** actions return to template/live values, and **Reset all mapping overrides** restores
+every row.
+The selected source and values are retained in the saved draft. Simulator direction and ranges
+are stored separately from OPC fixed overrides, so changing drivers cannot turn simulator
+settings into live OPC overrides.
 
 In **Simulator** mode, the form disables the OPC DA connection, tag, quality, timeout, and
 automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC

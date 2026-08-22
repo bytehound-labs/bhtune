@@ -1328,6 +1328,90 @@
           "derivative_gain"
         ]
       },
+      "DraftTagSource": {
+        "type": "string",
+        "description": "The source selector state used only by the mutable New Tune draft.",
+        "enum": [
+          "template",
+          "custom"
+        ]
+      },
+      "DraftTagSources": {
+        "type": "object",
+        "description": "Per-tag source choices in the New Tune mapping editor.",
+        "required": [
+          "process_variable",
+          "manipulated_variable",
+          "setpoint_variable",
+          "controller_mode",
+          "mode_attribute",
+          "proportional_constant",
+          "integral_constant",
+          "derivative_constant"
+        ],
+        "properties": {
+          "controller_mode": {
+            "$ref": "#/components/schemas/DraftTagSource"
+          },
+          "derivative_constant": {
+            "$ref": "#/components/schemas/DraftTagSource"
+          },
+          "integral_constant": {
+            "$ref": "#/components/schemas/DraftTagSource"
+          },
+          "manipulated_variable": {
+            "$ref": "#/components/schemas/DraftTagSource"
+          },
+          "mode_attribute": {
+            "$ref": "#/components/schemas/DraftTagSource"
+          },
+          "process_variable": {
+            "$ref": "#/components/schemas/DraftTagSource"
+          },
+          "proportional_constant": {
+            "$ref": "#/components/schemas/DraftTagSource"
+          },
+          "setpoint_variable": {
+            "$ref": "#/components/schemas/DraftTagSource"
+          }
+        }
+      },
+      "DraftValueSource": {
+        "type": "string",
+        "description": "The source selector state used only by the mutable New Tune draft.",
+        "enum": [
+          "tag",
+          "fixed"
+        ]
+      },
+      "DraftValueSources": {
+        "type": "object",
+        "description": "Per-direction/range source choices in the New Tune mapping editor.",
+        "required": [
+          "direction",
+          "pv_range_high",
+          "pv_range_low",
+          "mv_range_high",
+          "mv_range_low"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/DraftValueSource"
+          },
+          "mv_range_high": {
+            "$ref": "#/components/schemas/DraftValueSource"
+          },
+          "mv_range_low": {
+            "$ref": "#/components/schemas/DraftValueSource"
+          },
+          "pv_range_high": {
+            "$ref": "#/components/schemas/DraftValueSource"
+          },
+          "pv_range_low": {
+            "$ref": "#/components/schemas/DraftValueSource"
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "description": "The JSON body of every non-2xx response: `{\"error\": \"<message>\"}`. `pub`/`ToSchema` so\nevery fallible `#[utoipa::path]` response can reference it (`body = ErrorBody`) and the\ngenerated OpenAPI spec -- and therefore the generated frontend TS client -- accurately\ntypes error bodies instead of `content?: never`.",
@@ -1715,6 +1799,56 @@
             ],
             "format": "float"
           },
+          "source_direction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ControllerDirection",
+                "description": "Simulator-specific direction/range values. These are draft-only and never go into a\nrun request when the OPC DA driver is active."
+              }
+            ]
+          },
+          "source_driver": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TuneDriver",
+                "description": "Driver context for the saved direction/range values. New drafts keep this alongside\nsource metadata; older drafts use it to infer whether legacy values are OPC fixed\noverrides or simulator values."
+              }
+            ]
+          },
+          "source_mv_range_high": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "source_mv_range_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "source_pv_range_high": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "source_pv_range_low": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
           "tag_overrides": {
             "oneOf": [
               {
@@ -1722,6 +1856,17 @@
               },
               {
                 "$ref": "#/components/schemas/TagOverrides"
+              }
+            ]
+          },
+          "tag_sources": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DraftTagSources",
+                "description": "Draft-only source selectors for tag names and direction/range values."
               }
             ]
           },
@@ -1744,6 +1889,16 @@
             ],
             "format": "int64",
             "minimum": 0
+          },
+          "value_sources": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DraftValueSources"
+              }
+            ]
           },
           "write_pid": {
             "oneOf": [

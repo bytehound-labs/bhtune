@@ -516,6 +516,35 @@ export interface components {
      */
     DerivativeType: "derivative_time" | "derivative_gain";
     /**
+     * @description The source selector state used only by the mutable New Tune draft.
+     * @enum {string}
+     */
+    DraftTagSource: "template" | "custom";
+    /** @description Per-tag source choices in the New Tune mapping editor. */
+    DraftTagSources: {
+      controller_mode: components["schemas"]["DraftTagSource"];
+      derivative_constant: components["schemas"]["DraftTagSource"];
+      integral_constant: components["schemas"]["DraftTagSource"];
+      manipulated_variable: components["schemas"]["DraftTagSource"];
+      mode_attribute: components["schemas"]["DraftTagSource"];
+      process_variable: components["schemas"]["DraftTagSource"];
+      proportional_constant: components["schemas"]["DraftTagSource"];
+      setpoint_variable: components["schemas"]["DraftTagSource"];
+    };
+    /**
+     * @description The source selector state used only by the mutable New Tune draft.
+     * @enum {string}
+     */
+    DraftValueSource: "tag" | "fixed";
+    /** @description Per-direction/range source choices in the New Tune mapping editor. */
+    DraftValueSources: {
+      direction: components["schemas"]["DraftValueSource"];
+      mv_range_high: components["schemas"]["DraftValueSource"];
+      mv_range_low: components["schemas"]["DraftValueSource"];
+      pv_range_high: components["schemas"]["DraftValueSource"];
+      pv_range_low: components["schemas"]["DraftValueSource"];
+    };
+    /**
      * @description The JSON body of every non-2xx response: `{"error": "<message>"}`. `pub`/`ToSchema` so
      *     every fallible `#[utoipa::path]` response can reference it (`body = ErrorBody`) and the
      *     generated OpenAPI spec -- and therefore the generated frontend TS client -- accurately
@@ -661,11 +690,23 @@ export interface components {
       sim_seed?: number | null;
       /** Format: float */
       sim_tau?: number | null;
+      source_direction?: null | components["schemas"]["ControllerDirection"];
+      source_driver?: null | components["schemas"]["TuneDriver"];
+      /** Format: float */
+      source_mv_range_high?: number | null;
+      /** Format: float */
+      source_mv_range_low?: number | null;
+      /** Format: float */
+      source_pv_range_high?: number | null;
+      /** Format: float */
+      source_pv_range_low?: number | null;
       tag_overrides?: null | components["schemas"]["TagOverrides"];
+      tag_sources?: null | components["schemas"]["DraftTagSources"];
       tagname?: string | null;
       template?: string | null;
       /** Format: int64 */
       timeout_secs?: number | null;
+      value_sources?: null | components["schemas"]["DraftValueSources"];
       write_pid?: null | components["schemas"]["ResponseLevel"];
       yes?: boolean | null;
     };
