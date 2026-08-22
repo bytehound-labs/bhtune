@@ -514,14 +514,6 @@ export function NewRunPage() {
               templates.isPending ? "Loading templates…" : "Choose a template"
             }
           />
-          <TextAreaField
-            label="Notes"
-            value={form.notes}
-            onChange={(v) => set("notes", v)}
-            full
-            placeholder="Optional context, observations, or follow-up actions"
-            hint="Notes can be edited or cleared from the tune history."
-          />
           <TextField
             label="Bridge host"
             disabled={form.driver === "simulator"}
@@ -534,6 +526,27 @@ export function NewRunPage() {
                 : "opcda-bridge gateway address (host:port)."
             }
           />
+          <div>
+            <TextField
+              label="OPC DA server ProgID"
+              required={form.driver === "opcda"}
+              disabled={form.driver === "simulator"}
+              value={form.server}
+              onChange={(v) => set("server", v)}
+              placeholder="e.g. Matrikon.OPC.Simulation"
+              hint={
+                form.driver === "simulator"
+                  ? "Disabled — the simulator never contacts a gateway."
+                  : undefined
+              }
+            />
+            {form.driver === "opcda" && (
+              <OpcServerDiscovery
+                bridgeHost={form.bridgeHost}
+                onSelect={(v) => set("server", v)}
+              />
+            )}
+          </div>
           <div>
             <TextField
               label="Tag name"
@@ -563,27 +576,14 @@ export function NewRunPage() {
               </div>
             )}
           </div>
-          <div>
-            <TextField
-              label="OPC DA server ProgID"
-              required={form.driver === "opcda"}
-              disabled={form.driver === "simulator"}
-              value={form.server}
-              onChange={(v) => set("server", v)}
-              placeholder="e.g. Matrikon.OPC.Simulation"
-              hint={
-                form.driver === "simulator"
-                  ? "Disabled — the simulator never contacts a gateway."
-                  : undefined
-              }
-            />
-            {form.driver === "opcda" && (
-              <OpcServerDiscovery
-                bridgeHost={form.bridgeHost}
-                onSelect={(v) => set("server", v)}
-              />
-            )}
-          </div>
+          <TextAreaField
+            label="Notes"
+            value={form.notes}
+            onChange={(v) => set("notes", v)}
+            full
+            placeholder="Optional context, observations, or follow-up actions"
+            hint="Notes can be edited or cleared from the tune history."
+          />
         </FormSection>
 
         <FormSection title="Test parameters">

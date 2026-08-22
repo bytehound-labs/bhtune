@@ -58,6 +58,9 @@ can never merge.
 | `/runs/new`             | Start a tune: connection, tag mapping, test parameters, simulator parameters, and write-back, all in one form.                                                        |
 | `/runs/:id`             | Run detail: configuration, initial readings, calculated results, write-back audit trail, and (while running) a live-streaming PV/MV trend chart with a cancel button. |
 
+For the OPC DA driver, the connection fields are presented in this order: Bridge host, OPC DA
+server ProgID, Tag name, then Notes.
+
 Built-in and catalog templates can't be edited through the UI — they're re-seeded from
 their source file on every server startup, so an edit would just be discarded — but they
 can still be viewed, and deleting one to make room for a customized replacement works the
