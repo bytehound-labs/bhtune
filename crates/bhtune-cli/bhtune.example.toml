@@ -38,6 +38,15 @@ bridge_host = "localhost:7600"
 # CLI flag: --server
 server = "Kepware.KepServerEX.V5"
 
+# Global OPC sample-quality policy. Uncertain readings are accepted by default;
+# set this to false to reject them for tuning-critical operations. Bad readings
+# are always rejected.
+allow_uncertain_quality = true
+
+# Optional automatic history retention. Omit this key to retain runs forever;
+# when present, it must be a positive whole number of days.
+retention_days = 30
+
 # Structured logging. Every key here is optional and falls back to its own
 # CLI flag / built-in default independently -- e.g. you can set only
 # log.format here and still pass --log-level on the command line. Logs

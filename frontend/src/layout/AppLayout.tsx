@@ -141,6 +141,9 @@ export function AppLayout() {
               <NavLink to="/templates" className={navLinkClass}>
                 Templates
               </NavLink>
+              <NavLink to="/config" className={navLinkClass}>
+                Config
+              </NavLink>
             </nav>
           </div>
           <div className="flex items-center gap-4">

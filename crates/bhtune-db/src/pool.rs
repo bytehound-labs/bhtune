@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_upgrades_a_pre_index_database_without_losing_data() {
+    async fn connect_upgrades_a_pre_index_database_and_backfills_write_quality_policy() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("before-history-indexes.db");
         let options = SqliteConnectOptions::new()
@@ -183,6 +183,44 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+
+        let started_at = chrono::Utc::now();
+        for allow_uncertain_quality in [1_i64, 0] {
+            sqlx::query(
+                r#"
+                INSERT INTO tune_runs (
+                    loop_name, template_name, template_origin, template_snapshot_json,
+                    tags_json, driver, started_at, outcome, process_type, controller_type,
+                    relay_amp_percent, num_cycles_skip, num_cycles_count,
+                    noise_protection_secs, mrft_delay_secs, allow_uncertain_quality, created_at
+                ) VALUES ('migration-fixture', 'fixture', 'builtin', '{}', '{}', 'simulator',
+                          ?, 'completed', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
+                "#,
+            )
+            .bind(started_at)
+            .bind(allow_uncertain_quality)
+            .bind(started_at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let run_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM tune_runs WHERE loop_name = 'migration-fixture' ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        for (run_id, response_level) in run_ids.iter().zip(["moderate", "aggressive"]) {
+            sqlx::query(
+                "INSERT INTO tune_writes (run_id, response_level, written_at, kind, success) VALUES (?, ?, ?, 'write', 1)",
+            )
+            .bind(run_id)
+            .bind(response_level)
+            .bind(started_at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
         pool.close().await;
 
         let upgraded = connect(&path).await.unwrap();
@@ -212,6 +250,24 @@ mod tests {
             indexes
                 .iter()
                 .any(|name| name == "idx_tune_writes_run_written")
+        );
+
+        let policies: Vec<i64> = sqlx::query_scalar(
+            r#"
+            SELECT tw.allow_uncertain_quality
+            FROM tune_writes tw
+            JOIN tune_runs tr ON tr.id = tw.run_id
+            WHERE tr.loop_name = 'migration-fixture'
+            ORDER BY tw.id
+            "#,
+        )
+        .fetch_all(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(
+            policies,
+            vec![1, 0],
+            "legacy writes inherit the global true default unless their parent run explicitly disabled it"
         );
     }
 }

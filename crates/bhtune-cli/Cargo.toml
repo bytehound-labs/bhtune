@@ -35,6 +35,9 @@ serde_json = "1"
 # `[workspace.dependencies]` once `bhtune-core` became a second consumer (parsing the
 # embedded DCS/PLC template catalog, `template-catalog`).
 toml.workspace = true
+# Formatting-preserving config editing for the server config page: patch only the keys being
+# changed while leaving comments, unknown keys, and unrelated formatting intact.
+toml_edit = "0.22"
 # `rt-multi-thread`/`macros` to run as an async binary; `time` for the tune command's
 # polling-interval ticker; `signal` for Ctrl+C-triggered graceful abort (the CLI's one
 # concession to interactivity — see AGENTS.md's `cli-commands`/`cli-safety` scope split);

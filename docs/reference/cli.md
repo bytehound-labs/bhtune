@@ -129,7 +129,6 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
 
   Possible values: `aggressive`, `moderate`, `sluggish`
 
-* `--allow-uncertain-quality` — Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. Off by default: a stale/held value is indistinguishable from a live one to the MRFT engine, so tolerating it can silently corrupt the switch-period measurement the whole test depends on. Only for sites whose gateway reports `Uncertain` as a matter of course -- `Quality::Bad` is never accepted, with or without this flag. Logged loudly when used and recorded on the run (`tune_runs.allow_uncertain_quality`), so history shows a run executed under relaxed rules
 * `--op-timeout-secs <OP_TIMEOUT_SECS>` — Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even mid-hung-read/write -- see AGENTS.md's `safety-cancellation` section. Distinct from `--timeout-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration
 
   Default value: `30`
@@ -217,7 +216,6 @@ Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator
 
   Possible values: `aggressive`, `moderate`, `sluggish`
 
-* `--allow-uncertain-quality` — See `TuneArgs::allow_uncertain_quality`
 * `--op-timeout-secs <OP_TIMEOUT_SECS>` — See `TuneArgs::op_timeout_secs`
 
   Default value: `30`

@@ -100,7 +100,10 @@ jobs:
         if: steps.token-check.outputs.has_token == 'true'
         with:
           ref: ${{ needs.guard.outputs.ref }}
-          token: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          # COPILOT_GITHUB_TOKEN authenticates Copilot CLI, but is not necessarily a GitHub
+          # repository token. Use the workflow token for checkout/push, whose permissions are
+          # declared on this job.
+          token: ${{ github.token }}
 
       - name: Install GitHub Copilot CLI
         if: steps.token-check.outputs.has_token == 'true'
@@ -185,7 +188,7 @@ jobs:
       - name: Post summary comment
         if: steps.token-check.outputs.has_token == 'true' && always()
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
           # GUARDRAIL 3 (AGENTS.md): the agent is told (and --deny-tool enforced) to never

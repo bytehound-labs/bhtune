@@ -1290,7 +1290,7 @@ _bhtune() {
             return 0
             ;;
         bhtune__subcmd__simulate)
-            opts="-t -h --tagname --template --process-type --controller-type --relay-amp --cycles-skip --cycles-count --noise-protection-secs --mrft-delay --sim-gain --sim-tau --sim-dead-time --sim-noise --sim-seed --sim-initial-pv --sim-initial-mv --poll-interval-ms --timeout-secs --notes --yes --write-pid --allow-uncertain-quality --op-timeout-secs --restore-timeout-secs --output --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help"
+            opts="-t -h --tagname --template --process-type --controller-type --relay-amp --cycles-skip --cycles-count --noise-protection-secs --mrft-delay --sim-gain --sim-tau --sim-dead-time --sim-noise --sim-seed --sim-initial-pv --sim-initial-mv --poll-interval-ms --timeout-secs --notes --yes --write-pid --op-timeout-secs --restore-timeout-secs --output --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1810,7 +1810,7 @@ _bhtune() {
             return 0
             ;;
         bhtune__subcmd__tune)
-            opts="-t -h --tagname --template --process-type --controller-type --relay-amp --cycles-skip --cycles-count --noise-protection-secs --mrft-delay --driver --bridge-host --server --sim-gain --sim-tau --sim-dead-time --sim-noise --sim-seed --sim-initial-pv --sim-initial-mv --pv-range-high --pv-range-low --mv-range-high --mv-range-low --direction --poll-interval-ms --timeout-secs --notes --yes --write-pid --allow-uncertain-quality --op-timeout-secs --restore-timeout-secs --output --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help"
+            opts="-t -h --tagname --template --process-type --controller-type --relay-amp --cycles-skip --cycles-count --noise-protection-secs --mrft-delay --driver --bridge-host --server --sim-gain --sim-tau --sim-dead-time --sim-noise --sim-seed --sim-initial-pv --sim-initial-mv --pv-range-high --pv-range-low --mv-range-high --mv-range-low --direction --poll-interval-ms --timeout-secs --notes --yes --write-pid --op-timeout-secs --restore-timeout-secs --output --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

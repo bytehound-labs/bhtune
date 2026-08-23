@@ -41,6 +41,7 @@ test.describe("app shell", () => {
     await expect(page.getByRole("link", { name: "Tune" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Templates" })).toBeVisible();
     await expect(page.getByRole("link", { name: "History" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Config" })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Reset to defaults" }),
     ).toBeVisible();
@@ -99,10 +100,7 @@ test.describe("app shell", () => {
         page.getByRole("spinbutton", { name: startsWithLabel(label) }),
       ).toBeDisabled();
     }
-    for (const label of [
-      "Allow uncertain quality",
-      "Allow automatic PID write",
-    ]) {
+    for (const label of ["Allow automatic PID write"]) {
       await expect(
         page.getByRole("checkbox", { name: startsWithLabel(label) }),
       ).toBeDisabled();
@@ -251,7 +249,7 @@ test.describe("app shell", () => {
     await expect(page.getByLabel("Notes")).toHaveValue("");
   });
 
-  test("navigates between Tune, History, and Templates via the header nav", async ({
+  test("navigates between Tune, History, Templates, and Config via the header nav", async ({
     page,
   }) => {
     await page.goto("/templates");
@@ -265,5 +263,11 @@ test.describe("app shell", () => {
 
     await page.getByRole("link", { name: "Tune", exact: true }).click();
     await expect(page).toHaveURL(/\/runs\/new$/);
+
+    await page.getByRole("link", { name: "Config" }).click();
+    await expect(page).toHaveURL(/\/config$/);
+    await expect(
+      page.getByRole("heading", { name: "Configuration", exact: true }),
+    ).toBeVisible();
   });
 });

@@ -470,16 +470,6 @@ pub struct TuneArgs {
     #[arg(long, value_enum)]
     pub write_pid: Option<ResponseLevelArg>,
 
-    /// Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. Off by
-    /// default: a stale/held value is indistinguishable from a live one to the MRFT engine,
-    /// so tolerating it can silently corrupt the switch-period measurement the whole test
-    /// depends on. Only for sites whose gateway reports `Uncertain` as a matter of course --
-    /// `Quality::Bad` is never accepted, with or without this flag. Logged loudly when used
-    /// and recorded on the run (`tune_runs.allow_uncertain_quality`), so history shows a run
-    /// executed under relaxed rules.
-    #[arg(long)]
-    pub allow_uncertain_quality: bool,
-
     /// Cap on any single driver read/write during the run, in seconds. A stalled call
     /// (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited
     /// forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even
@@ -568,10 +558,6 @@ pub struct SimulateArgs {
     #[arg(long, value_enum)]
     pub write_pid: Option<ResponseLevelArg>,
 
-    /// See `TuneArgs::allow_uncertain_quality`.
-    #[arg(long)]
-    pub allow_uncertain_quality: bool,
-
     /// See `TuneArgs::op_timeout_secs`.
     #[arg(long, default_value_t = 30, value_parser = positive_u64)]
     pub op_timeout_secs: u64,
@@ -624,7 +610,6 @@ impl SimulateArgs {
             notes: self.notes,
             yes: self.yes,
             write_pid: self.write_pid,
-            allow_uncertain_quality: self.allow_uncertain_quality,
             op_timeout_secs: self.op_timeout_secs,
             restore_timeout_secs: self.restore_timeout_secs,
             output: self.output,

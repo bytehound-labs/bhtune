@@ -4,7 +4,7 @@
 .SH NAME
 bhtune\-simulate \- Run a zero\-configuration demo MRFT tune against the built\-in FOPDT simulator
 .SH SYNOPSIS
-\fBbhtune\-simulate\fR [\fB\-t\fR|\fB\-\-tagname\fR] [\fB\-\-template\fR] [\fB\-\-process\-type\fR] [\fB\-\-controller\-type\fR] [\fB\-\-relay\-amp\fR] [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-allow\-uncertain\-quality\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbhtune\-simulate\fR [\fB\-t\fR|\fB\-\-tagname\fR] [\fB\-\-template\fR] [\fB\-\-process\-type\fR] [\fB\-\-controller\-type\fR] [\fB\-\-relay\-amp\fR] [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Run a zero\-configuration demo MRFT tune against the built\-in FOPDT simulator
 .SH OPTIONS
@@ -109,9 +109,6 @@ moderate
 .IP \(bu 2
 sluggish
 .RE
-.TP
-\fB\-\-allow\-uncertain\-quality\fR
-See `TuneArgs::allow_uncertain_quality`
 .TP
 \fB\-\-op\-timeout\-secs\fR \fI<OP_TIMEOUT_SECS>\fR [default: 30]
 See `TuneArgs::op_timeout_secs`

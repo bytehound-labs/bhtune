@@ -81,11 +81,11 @@ bhtune export 1 --format csv > run-1-samples.csv
 ```
 
 By default nothing is ever deleted automatically — BHTune retains every run forever until you
-opt in to a retention policy. Set `--retention-days`/`BHTUNE_RETENTION_DAYS`/`retention_days` in
-`bhtune.toml` (see [Configuration reference](../reference/config.md)) to delete runs older than
-that many days automatically on every startup, or run `bhtune history prune --older-than-days
-<N>` to prune on demand without waiting for the next startup — add `--dry-run` to see how many
-runs would be deleted first.
+opt in to a retention policy. Set `--retention-days`/`BHTUNE_RETENTION_DAYS`/`retention_days` to
+a positive whole number in `bhtune.toml` (see [Configuration reference](../reference/config.md))
+to delete runs older than that many days automatically on every startup, or run `bhtune history
+prune --older-than-days <N>` to prune on demand without waiting for the next startup — add
+`--dry-run` to see how many runs would be deleted first.
 
 ## Try different loop and controller types
 

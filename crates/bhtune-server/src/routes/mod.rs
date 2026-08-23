@@ -1,6 +1,7 @@
 //! HTTP route modules, one per resource. Each exposes a plain `pub fn router() ->
 //! axum::Router<AppState>`, merged together in [`crate::build_router`].
 
+pub mod config;
 pub mod draft;
 pub mod health;
 pub mod history;

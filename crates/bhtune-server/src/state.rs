@@ -1,7 +1,7 @@
 //! [`AppState`]: the shared state every route handler receives via `axum::extract::State`.
 
-use bhtune_cli::config::BhtuneConfig;
 use bhtune_db::SqlitePool;
+use std::sync::{Arc, RwLock};
 
 use crate::active_run::ActiveRun;
 
@@ -14,10 +14,16 @@ pub struct AppState {
     /// The in-flight tune registry and exclusive post-hoc write/revert reservation -- see
     /// [`ActiveRun`]'s own doc comment for the concurrency and shutdown behavior.
     pub active_run: ActiveRun,
-    /// Resolved once at process startup (`main.rs`'s `config::load_config`) and shared by
-    /// every `POST /api/runs` call, exactly mirroring how `bhtune-cli` resolves the same
-    /// `BhtuneConfig` once per process invocation -- so `--bridge-host`/`--server`
-    /// resolution (`bhtune_cli::commands::tune::prepare`) behaves identically whether a run
-    /// was started by the CLI or over HTTP.
-    pub app_config: BhtuneConfig,
+    /// The live, revisioned TOML configuration. Route handlers take a fresh snapshot for
+    /// every operation so a configuration-page save is visible without restarting the server.
+    pub config_store: Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
+}
+
+impl AppState {
+    pub fn config_snapshot(&self) -> anyhow::Result<bhtune_cli::config::BhtuneConfig> {
+        self.config_store
+            .read()
+            .map(|store| store.config.clone())
+            .map_err(|_| anyhow::anyhow!("configuration store lock is poisoned"))
+    }
 }

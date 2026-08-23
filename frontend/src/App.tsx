@@ -7,6 +7,7 @@ import { TemplateEditPage } from "./routes/templates/TemplateEditPage";
 import { RunListPage } from "./routes/history/RunListPage";
 import { RunDetailPage } from "./routes/history/RunDetailPage";
 import { NewRunPage } from "./routes/runs/NewRunPage";
+import { ConfigPage } from "./routes/config/ConfigPage";
 
 // Route table for the web GUI (`frontend-screens`). Declarative-mode react-router: no
 // loaders, since TanStack Query (wired up in `frontend-shell`) is this project's sole
@@ -23,6 +24,7 @@ function App() {
         <Route path="runs" element={<RunListPage />} />
         <Route path="runs/new" element={<NewRunPage />} />
         <Route path="runs/:id" element={<RunDetailPage />} />
+        <Route path="config" element={<ConfigPage />} />
       </Route>
     </Routes>
   );

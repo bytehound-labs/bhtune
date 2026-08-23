@@ -29,7 +29,7 @@ pub async fn run(
             server,
             yes,
             output,
-        } => revert(pool, run_id, bridge_host, server, yes, output).await,
+        } => revert(pool, run_id, bridge_host, server, yes, output, config).await,
         HistoryCommand::Prune {
             older_than_days,
             dry_run,
@@ -629,7 +629,9 @@ async fn revert(
     server: Option<String>,
     yes: bool,
     output: OutputFormat,
+    config: &crate::config::BhtuneConfig,
 ) -> anyhow::Result<()> {
+    let allow_uncertain_quality = config.allow_uncertain_quality;
     let run = TuneRunRow::get(pool, run_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("no run with id {run_id}"))?;
@@ -680,14 +682,6 @@ async fn revert(
         );
     }
 
-    if output == OutputFormat::Table {
-        println!(
-            "Reverting run {run_id}'s {response_level:?} PID write-back on tag '{}' to \
-             P={:.4} I={:.4} D={:.4}...",
-            run.loop_name, target.proportional, target.integral, target.derivative
-        );
-    }
-
     let outcome = crate::commands::tune::write_pid_values(
         pool,
         run_id,
@@ -698,7 +692,7 @@ async fn revert(
         response_level,
         target,
         WriteKind::Revert,
-        run.allow_uncertain_quality,
+        allow_uncertain_quality,
     )
     .await?;
 
@@ -1083,9 +1077,17 @@ mod tests {
     #[tokio::test]
     async fn revert_errors_when_no_such_run_exists() {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
-        let err = revert(&pool, 999, None, None, true, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            999,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("no run with id 999"));
     }
 
@@ -1106,18 +1108,34 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = revert(&pool, run.id, None, None, true, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            run.id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("Simulator"));
     }
 
     #[tokio::test]
     async fn revert_errors_when_no_write_back_is_recorded() {
         let (pool, run_id) = opcda_run_with_no_writes("bridge:1", "Sim.Server").await;
-        let err = revert(&pool, run_id, None, None, true, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            run_id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("no recorded PID write-back"));
     }
 
@@ -1132,9 +1150,17 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(&pool, run_id, None, None, true, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            run_id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("nothing to revert to"));
     }
 
@@ -1154,9 +1180,17 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(&pool, run_id, None, None, false, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            run_id,
+            None,
+            None,
+            false,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("--yes"));
     }
 
@@ -1194,9 +1228,17 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(&pool, run.id, None, None, true, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            run.id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("no PID constant tags"));
     }
 
@@ -1220,9 +1262,17 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(&pool, run_id, None, None, true, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            run_id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(!err.to_string().is_empty());
     }
 
@@ -1259,9 +1309,17 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(&pool, run.id, None, None, true, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            run.id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("recorded OPC server is missing"));
     }
 
@@ -1288,6 +1346,7 @@ mod tests {
             Some("Different.Server".to_string()),
             true,
             OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
         )
         .await
         .unwrap_err();
@@ -1319,6 +1378,7 @@ mod tests {
             None,
             true,
             OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
         )
         .await
         .unwrap_err();
@@ -1380,6 +1440,7 @@ mod tests {
             Some("Sim.Server".to_string()),
             true,
             OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
         )
         .await
         .unwrap();
@@ -1453,9 +1514,17 @@ mod tests {
             .await
             .unwrap();
 
-        let err = revert(&pool, run_id, None, None, true, OutputFormat::Table)
-            .await
-            .unwrap_err();
+        let err = revert(
+            &pool,
+            run_id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("revert failed partway through"));
 
         let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
@@ -1522,9 +1591,17 @@ mod tests {
             .await
             .unwrap();
 
-        revert(&pool, run_id, None, None, true, OutputFormat::Json)
-            .await
-            .unwrap();
+        revert(
+            &pool,
+            run_id,
+            None,
+            None,
+            true,
+            OutputFormat::Json,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .unwrap();
 
         server.shutdown().await;
     }

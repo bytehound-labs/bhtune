@@ -48,7 +48,8 @@ pub enum TuneOutcome {
     TimedOut,
     /// A driver reported a non-`Good` OPC quality for a tuning-critical reading -- an
     /// initial reading (including the setpoint capture, when the loop starts in Auto) or an
-    /// in-flight PV poll sample without `--allow-uncertain-quality` (or with it, but the
+    /// in-flight PV poll sample when Config > OPC quality policy rejects Uncertain (or with
+    /// the policy enabled, but the
     /// quality was `Bad` rather than merely `Uncertain`) -- and the run was aborted and the
     /// loop restored before returning, exactly like
     /// [`TuneOutcome::Aborted`]/[`TuneOutcome::TimedOut`] but distinguished so a scheduler's
@@ -129,6 +130,7 @@ pub(crate) async fn run_with_ctrl_c(
         config,
         started_at,
         write_pid,
+        allow_uncertain_quality,
     } = prepared;
 
     let outcome = execute(
@@ -141,6 +143,7 @@ pub(crate) async fn run_with_ctrl_c(
         config,
         started_at,
         write_pid,
+        allow_uncertain_quality,
         ctrl_c,
         &mut std::io::stdin().lock(),
     )
@@ -190,6 +193,7 @@ pub struct PreparedTune {
     config: LoopConfig,
     started_at: DateTime<Utc>,
     write_pid: Option<ResponseLevel>,
+    allow_uncertain_quality: bool,
 }
 
 impl PreparedTune {
@@ -248,7 +252,6 @@ struct RequestSnapshot<'a> {
     notes: Option<&'a str>,
     yes: bool,
     write_pid: Option<ResponseLevel>,
-    allow_uncertain_quality: bool,
     op_timeout_secs: u64,
     restore_timeout_secs: u64,
 }
@@ -280,6 +283,7 @@ pub async fn prepare(
     if let Some(tag_overrides) = &args.tag_overrides {
         tag_overrides.validate()?;
     }
+    let allow_uncertain_quality = app_config.allow_uncertain_quality;
 
     let db_driver = match args.driver {
         DriverKindArg::Opcda => TuneDriver::Opcda,
@@ -321,7 +325,6 @@ pub async fn prepare(
         notes: args.notes.as_deref(),
         yes: args.yes,
         write_pid: args.write_pid.map(Into::into),
-        allow_uncertain_quality: args.allow_uncertain_quality,
         op_timeout_secs: args.op_timeout_secs,
         restore_timeout_secs: args.restore_timeout_secs,
     })
@@ -365,7 +368,7 @@ pub async fn prepare(
         started_at,
     )
     .await?;
-    TuneRunRow::record_allow_uncertain_quality(pool, run.id, args.allow_uncertain_quality).await?;
+    TuneRunRow::record_allow_uncertain_quality(pool, run.id, allow_uncertain_quality).await?;
 
     // The *resolved, effective* connection this run actually used -- `None`/`None` for a
     // non-opcda run even though `args.bridge_host` was just unconditionally resolved to a
@@ -392,7 +395,7 @@ pub async fn prepare(
         process_type = ?config.process_type,
         controller_type = ?config.controller_type,
         driver = ?db_driver,
-        allow_uncertain_quality = args.allow_uncertain_quality,
+        allow_uncertain_quality,
         "starting tune run"
     );
 
@@ -407,6 +410,7 @@ pub async fn prepare(
         config,
         started_at,
         write_pid,
+        allow_uncertain_quality,
     })
 }
 
@@ -452,6 +456,7 @@ pub async fn drive(
         config,
         started_at,
         write_pid,
+        allow_uncertain_quality,
     } = prepared;
 
     let outcome = execute(
@@ -464,6 +469,7 @@ pub async fn drive(
         config,
         started_at,
         write_pid,
+        allow_uncertain_quality,
         ctrl_c,
         &mut std::io::empty(),
     )
@@ -526,7 +532,8 @@ enum AbortReason {
     /// out.
     OperationTimedOut { tag: String, op_timeout_secs: u64 },
     /// An in-flight PV poll sample's quality was `Bad`, or `Uncertain` without
-    /// `--allow-uncertain-quality` set (finding 5 of the live-plant safety review). Unlike
+    /// Config > OPC quality policy set to reject Uncertain (finding 5 of the live-plant
+    /// safety review). Unlike
     /// the two variants above, this is checked and constructed from inside
     /// [`run_polling_loop`] itself rather than from [`execute`]'s outer `tokio::select!`,
     /// since it depends on the value just read, not an independent timer/signal. A poor
@@ -905,11 +912,11 @@ async fn execute<R: std::io::BufRead>(
     config: LoopConfig,
     started_at: DateTime<Utc>,
     write_pid: Option<ResponseLevel>,
+    allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     reader: &mut R,
 ) -> anyhow::Result<RunOutcome> {
-    let allow_uncertain = args.allow_uncertain_quality;
-    let initial = read_initial_values(driver, tags, template, allow_uncertain).await?;
+    let initial = read_initial_values(driver, tags, template, allow_uncertain_quality).await?;
     validate_initial_state(&initial)?;
 
     // Persisted before any mutation is attempted (`safety-restore-guard`): a crash between
@@ -982,6 +989,7 @@ async fn execute<R: std::io::BufRead>(
         started_at,
         ctrl_c,
         &mut guard,
+        allow_uncertain_quality,
     )
     .await;
 
@@ -1039,7 +1047,7 @@ async fn execute<R: std::io::BufRead>(
                         config,
                         write_pid,
                         args.output,
-                        allow_uncertain,
+                        allow_uncertain_quality,
                         reader,
                     )
                     .await?;
@@ -1099,9 +1107,9 @@ async fn execute<R: std::io::BufRead>(
 
 /// The single choke point enforcing finding 5 of the live-plant safety review
 /// ("`Quality::is_trustworthy()` exists and is documented as the rule; nothing in the tune
-/// path calls it"): `Quality::Bad` is never accepted, flag or no flag; `Quality::Uncertain`
-/// is accepted only when `allow_uncertain` is set (`--allow-uncertain-quality`), and each use
-/// of it is logged loudly so a run executed under relaxed rules is never silently
+/// path calls it"): `Quality::Bad` is never accepted; `Quality::Uncertain`
+/// is accepted only when the global Config > OPC quality policy
+/// (`allow_uncertain_quality` in TOML) permits it, and each use of it is logged loudly so a run executed under relaxed rules is never silently
 /// indistinguishable from a normal one; `Quality::Good` always passes.
 fn check_quality(
     tag: &str,
@@ -1113,15 +1121,17 @@ fn check_quality(
         bhtune_driver::Quality::Uncertain if allow_uncertain => {
             tracing::warn!(
                 tag,
-                "accepting Uncertain-quality reading because --allow-uncertain-quality is set"
+                "accepting Uncertain-quality reading because Config > OPC quality policy \
+                 (allow_uncertain_quality) permits it"
             );
             Ok(())
         }
         bhtune_driver::Quality::Uncertain => {
             anyhow::bail!(
                 "tag '{tag}' reported OPC quality Uncertain; refusing to trust it for a \
-                 tuning-critical reading (pass --allow-uncertain-quality to accept Uncertain \
-                 readings; Bad is never accepted)"
+                 tuning-critical reading (set Config > OPC quality policy \
+                 `allow_uncertain_quality = true` to accept Uncertain readings; Bad is never \
+                 accepted)"
             )
         }
         bhtune_driver::Quality::Bad => {
@@ -1211,7 +1221,7 @@ async fn resolve_direction(
 /// deciding whether to abort -- finding 5 requires "the sample that triggered it is
 /// recorded", which a propagated `anyhow::Error` from a `check_quality`-enforcing read would
 /// lose. Still hard-fails on a non-numeric/non-finite value regardless of quality, exactly
-/// like [`read_f32`], since that's a data-shape problem no quality flag can excuse.
+/// like [`read_f32`], since that's a data-shape problem no quality policy can excuse.
 async fn read_pv_sample(
     driver: &dyn Driver,
     tag: &str,
@@ -1715,6 +1725,7 @@ async fn run_polling_loop(
     start_time: DateTime<Utc>,
     ctrl_c: &mut CtrlC,
     guard: &mut MutationGuard,
+    allow_uncertain_quality: bool,
 ) -> anyhow::Result<PollOutcome> {
     let mut interval = tokio::time::interval(Duration::from_millis(args.poll_interval_ms.max(1)));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1765,7 +1776,7 @@ async fn run_polling_loop(
                 let tick = Tick { time: now, pv };
                 let sample_quality = sample_quality_from_driver(quality);
 
-                if let Err(e) = check_quality(&tags.process_variable, quality, args.allow_uncertain_quality) {
+                if let Err(e) = check_quality(&tags.process_variable, quality, allow_uncertain_quality) {
                     tracing::warn!(
                         run_id,
                         tick_index,
@@ -2062,6 +2073,7 @@ pub async fn write_pid_values(
     let written_at = Utc::now();
     let mut new_write = NewTuneWrite::new(response_level, written_at);
     new_write.kind = kind;
+    new_write.allow_uncertain_quality = allow_uncertain;
 
     let previous =
         match read_previous_pid_values(driver, p_tag, i_tag, d_tag, allow_uncertain).await {
@@ -2414,7 +2426,6 @@ mod tests {
             notes: Some("test note".to_string()),
             yes: false,
             write_pid: None,
-            allow_uncertain_quality: false,
             output: OutputFormat::Table,
         }
     }
@@ -2902,6 +2913,7 @@ mod tests {
             started_at,
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
+            false,
         )
         .await
         .unwrap();
@@ -3016,6 +3028,7 @@ mod tests {
             started_at,
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
+            false,
         )
         .await
         .unwrap();
@@ -3114,6 +3127,7 @@ mod tests {
             started_at,
             &mut ctrl_c,
             &mut MutationGuard::default(),
+            true,
         )
         .await
         .unwrap();
@@ -3448,13 +3462,13 @@ mod tests {
     // --- `check_quality`: finding 5's single enforcement choke point ------------------------
 
     #[test]
-    fn check_quality_accepts_good_regardless_of_the_allow_uncertain_flag() {
+    fn check_quality_accepts_good_regardless_of_the_quality_policy() {
         assert!(check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Good, false).is_ok());
         assert!(check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Good, true).is_ok());
     }
 
     #[test]
-    fn check_quality_rejects_uncertain_unless_the_flag_is_set() {
+    fn check_quality_rejects_uncertain_unless_the_policy_allows_it() {
         let err =
             check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Uncertain, false).unwrap_err();
         assert!(err.to_string().contains("Uncertain"));
@@ -3463,7 +3477,7 @@ mod tests {
     }
 
     #[test]
-    fn check_quality_never_accepts_bad_regardless_of_the_flag() {
+    fn check_quality_never_accepts_bad_regardless_of_the_policy() {
         let err_without_flag =
             check_quality("Unit1.LIC101.PV", bhtune_driver::Quality::Bad, false).unwrap_err();
         assert!(err_without_flag.to_string().contains("Bad"));
@@ -3676,6 +3690,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            true,
             &mut CtrlC::never(),
             &mut std::io::empty(),
         )
@@ -3690,7 +3705,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_hard_fails_when_the_pv_tag_reports_uncertain_quality_without_the_flag() {
+    async fn execute_hard_fails_when_the_pv_tag_reports_uncertain_quality_policy_rejects_it() {
         let pool = seeded_pool().await;
         let template = honeywell_template();
         let tags = honeywell_tags();
@@ -3721,6 +3736,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            false,
             &mut CtrlC::never(),
             &mut std::io::empty(),
         )
@@ -3733,7 +3749,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_initial_values_and_transition_accept_uncertain_pv_quality_when_the_flag_is_set() {
+    async fn read_initial_values_and_transition_accept_uncertain_pv_quality_when_policy_allows_it()
+    {
         let template = honeywell_template();
         let tags = honeywell_tags();
         let driver = honeywell_driver_auto()
@@ -3750,7 +3767,7 @@ mod tests {
             .unwrap();
         // Proves the run actually proceeded to mutate the loop (the mode/mode-attribute
         // writes `transition_to_manual` performs), not just that `read_initial_values`
-        // alone returned `Ok` -- the real proof `--allow-uncertain-quality` has an effect,
+        // alone returned `Ok` -- the real proof the global quality policy has an effect,
         // not just that this specific error string disappeared.
         assert!(!driver.write_log().is_empty());
     }
@@ -3814,6 +3831,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            true,
             &mut CtrlC::never(),
             &mut std::io::empty(),
         )
@@ -3863,6 +3881,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            true,
             &mut CtrlC::never(),
             &mut std::io::empty(),
         )
@@ -3972,6 +3991,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            true,
             &mut CtrlC::never(),
             &mut std::io::empty(),
         )
@@ -4038,6 +4058,7 @@ mod tests {
             config,
             Utc::now(),
             None,
+            true,
             &mut CtrlC::never(),
             &mut std::io::empty(),
         )

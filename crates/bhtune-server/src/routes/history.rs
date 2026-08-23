@@ -303,6 +303,7 @@ impl From<&TuneResultRow> for ResultResponse {
 pub struct WriteResponse {
     pub kind: WriteKind,
     pub response_level: ResponseLevel,
+    pub allow_uncertain_quality: bool,
     pub written_at: DateTime<Utc>,
     pub proportional_previous: Option<f32>,
     pub integral_previous: Option<f32>,
@@ -324,6 +325,7 @@ impl From<&TuneWriteRow> for WriteResponse {
         WriteResponse {
             kind: w.kind,
             response_level: w.response_level,
+            allow_uncertain_quality: w.allow_uncertain_quality,
             written_at: w.written_at,
             proportional_previous: w.previous.map(|p| p.proportional),
             integral_previous: w.previous.map(|p| p.integral),
@@ -367,6 +369,8 @@ pub struct RunDetailResponse {
     /// `template_name` currently resolves to in the catalog (`safety-run-snapshot`).
     pub template_name: String,
     pub template_origin: TemplateOrigin,
+    /// Whether this run accepted `Uncertain` OPC quality, captured when the run started.
+    pub allow_uncertain_quality: bool,
     pub config: LoopConfig,
     /// The resolved OPC DA server ProgID this run actually used, or `None` for a
     /// simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
@@ -435,6 +439,7 @@ pub(crate) async fn build_run_detail(
         completed_at: run.completed_at,
         template_name: run.template.name,
         template_origin: run.template_origin,
+        allow_uncertain_quality: run.allow_uncertain_quality,
         config: run.config,
         opc_server: run.opc_server,
         bridge_host: run.bridge_host,

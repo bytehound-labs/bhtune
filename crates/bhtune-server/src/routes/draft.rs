@@ -80,7 +80,6 @@ pub struct NewRunDraft {
     pub timeout_secs: Option<u64>,
     pub op_timeout_secs: Option<u64>,
     pub restore_timeout_secs: Option<u64>,
-    pub allow_uncertain_quality: Option<bool>,
     pub direction: Option<ControllerDirection>,
     pub tag_overrides: Option<TagOverrides>,
     /// Driver context for the saved direction/range values. New drafts keep this alongside

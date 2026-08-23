@@ -113,7 +113,8 @@ suffix, regardless of what the previous component was, while preserving the tag 
 Confirming a tag selection performs a fresh read of the original item selected in the browser
 and proceeds immediately only when its OPC quality is `Good`. `Uncertain` or `Bad` quality
 requires an explicit choice to select a different tag or proceed anyway. Proceeding only
-selects the item; a tune still applies its live-reading quality safeguards.
+selects the item; a tune still applies its live-reading quality safeguards. The global Config
+page controls whether `Uncertain` readings are accepted during tuning; `Bad` is always rejected.
 Reopening the browser automatically expands the available path to the current Tag name, selects
 that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
 level.
@@ -295,17 +296,25 @@ the parse problem. See
 available key, or [`docs/reference/config.md`](docs/reference/config.md) for the generated
 JSON Schema (also covers one DCS/PLC template catalog entry — see below).
 
-| Setting                                  | CLI flag         | Env var              | Config key     | Default                                                                                                                                                                     |
-| ---------------------------------------- | ---------------- | -------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Database path                            | `--db`           | `BHTUNE_DB`          | `db`           | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (or `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db`                                            |
-| opcda-bridge gateway                     | `--bridge-host`  | `BHTUNE_BRIDGE_HOST` | `bridge_host`  | `localhost:7600`                                                                                                                                                            |
-| Default OPC DA server                    | `--server`       | —                    | `server`       | none — must be set one way or another                                                                                                                                       |
-| User template catalog                    | `--templates`    | `BHTUNE_TEMPLATES`   | `templates`    | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (or `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error here |
-| Log level                                | `--log-level`    | `RUST_LOG`           | `log.level`    | `info`                                                                                                                                                                      |
-| Log directory                            | `--log-dir`      | —                    | `log.dir`      | Linux/macOS: `$XDG_DATA_HOME/bhtune/logs` (or `$HOME/.local/share/bhtune/logs`); Windows: `%APPDATA%\bhtune\logs`                                                           |
-| Log format                               | `--log-format`   | —                    | `log.format`   | `pretty`                                                                                                                                                                    |
-| Log rotation                             | `--log-rotation` | —                    | `log.rotation` | `daily`                                                                                                                                                                     |
-| HTTP bind address (`bhtune-server` only) | —                | `BHTUNE_BIND`        | `bind`         | `127.0.0.1:8787`                                                                                                                                                            |
+| Setting                                  | CLI flag           | Env var                 | Config key                | Default                                                                                                                                                                     |
+| ---------------------------------------- | ------------------ | ----------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database path                            | `--db`             | `BHTUNE_DB`             | `db`                      | Linux/macOS: `$XDG_DATA_HOME/bhtune/bhtune.db` (or `$HOME/.local/share/bhtune/bhtune.db`); Windows: `%APPDATA%\bhtune\bhtune.db`                                            |
+| opcda-bridge gateway                     | `--bridge-host`    | `BHTUNE_BRIDGE_HOST`    | `bridge_host`             | `localhost:7600`                                                                                                                                                            |
+| Default OPC DA server                    | `--server`         | —                       | `server`                  | none — must be set one way or another                                                                                                                                       |
+| User template catalog                    | `--templates`      | `BHTUNE_TEMPLATES`      | `templates`               | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (or `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error here |
+| Log level                                | `--log-level`      | `RUST_LOG`              | `log.level`               | `info`                                                                                                                                                                      |
+| Log directory                            | `--log-dir`        | —                       | `log.dir`                 | Linux/macOS: `$XDG_DATA_HOME/bhtune/logs` (or `$HOME/.local/share/bhtune/logs`); Windows: `%APPDATA%\bhtune\logs`                                                           |
+| Log format                               | `--log-format`     | —                       | `log.format`              | `pretty`                                                                                                                                                                    |
+| Log rotation                             | `--log-rotation`   | —                       | `log.rotation`            | `daily`                                                                                                                                                                     |
+| HTTP bind address (`bhtune-server` only) | —                  | `BHTUNE_BIND`           | `bind`                    | `127.0.0.1:8787`                                                                                                                                                            |
+| Allow Uncertain OPC quality              | —                  | —                       | `allow_uncertain_quality` | `true`                                                                                                                                                                      |
+| History retention                        | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days`          | unset — retain forever; a configured value must be a positive whole number                                                                                                  |
+
+The web GUI's **Config** page reads and updates the two global policy keys in the selected
+TOML file. Updates preserve unrelated comments and keys, create a timestamped sibling backup
+for an existing file, and take effect for new server operations without a restart. A revision
+token prevents overwriting a file changed by another process; command-line and environment
+overrides remain higher precedence than TOML values.
 
 ## DCS/PLC templates
 
@@ -396,10 +405,11 @@ language, including exactly what happens on the first and second Ctrl+C:
   (`bhtune history show <run>`) stays interpretable even after the template it was configured
   against is later edited, re-versioned, or deleted from the catalog.
 - **OPC quality is enforced on every tuning-critical read** — a tag reporting bad quality is
-  never trusted for tuning, and a tag reporting uncertain quality is rejected unless
-  `--allow-uncertain-quality` is explicitly passed (logged and recorded on the run either way).
-  A poor-quality reading during the in-flight test aborts and restores the loop just like a
-  Ctrl+C, and the exit code (`5`) is distinct from every other abort reason.
+  never trusted for tuning, and a tag reporting uncertain quality follows the global
+  `allow_uncertain_quality` policy in the TOML configuration (enabled by default, logged and
+  recorded on the run either way). Disable it on the Config page when uncertain readings must
+  be rejected. A poor-quality reading during the in-flight test aborts and restores the loop
+  just like a Ctrl+C, and the exit code (`5`) is distinct from every other abort reason.
 - **PID write-back is pre-read, verified, audited, and rolled back on partial failure.** Before
   any constant is written, the loop's current P/I/D values are read and recorded — if that
   pre-read fails, nothing is written at all. Each constant is then written and immediately read

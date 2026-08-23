@@ -5,6 +5,7 @@
 #![cfg(test)]
 
 use chrono::Utc;
+use std::sync::{Arc, RwLock};
 
 use crate::active_run::ActiveRun;
 use crate::state::AppState;
@@ -21,10 +22,12 @@ pub(crate) async fn in_memory_state() -> AppState {
     bhtune_db::seed_builtin_templates(&pool, Utc::now())
         .await
         .expect("seeding the built-in templates into a fresh in-memory db should never fail");
+    let config_store = bhtune_cli::config::load_config_store_from(None, None, None, None, false)
+        .expect("default test config store should load");
     AppState {
         pool,
         active_run: ActiveRun::default(),
-        app_config: bhtune_cli::config::BhtuneConfig::default(),
+        config_store: Arc::new(RwLock::new(config_store)),
     }
 }
 

@@ -189,14 +189,10 @@ CREATE TABLE tune_runs (
     -- Freeform operator notes attached to this run. Unlike `request_json`, this is mutable:
     -- the GUI can add, edit, or clear it while a run is active or after it finishes.
     notes                    TEXT,
-    -- Whether this run permitted `Quality::Uncertain` OPC readings via
-    -- `--allow-uncertain-quality` (`Quality::Bad` is never accepted, flag or
-    -- no flag). Defaults to 0/false, set via a follow-up
-    -- `record_allow_uncertain_quality` call rather than a `start()`
-    -- parameter -- see that method's doc comment -- so history can show a
-    -- run was executed under relaxed rules instead of silently looking
-    -- identical to a normal one.
-    allow_uncertain_quality  INTEGER NOT NULL DEFAULT 0 CHECK (allow_uncertain_quality IN (0, 1)),
+    -- Historical per-run snapshot of the global TOML quality policy. The pre-Config schema
+    -- default remains false so rows inserted by older binaries retain their original meaning;
+    -- new production runs record the live global default explicitly.
+    allow_uncertain_quality       INTEGER NOT NULL DEFAULT 0 CHECK (allow_uncertain_quality IN (0, 1)),
 
     started_at               TEXT NOT NULL,
     completed_at             TEXT,
@@ -267,8 +263,8 @@ CREATE TABLE tune_samples (
     time                    TEXT NOT NULL,
     pv                      REAL NOT NULL,
     -- Driver-reported quality of this tick's `pv` reading (finding 5 of the
-    -- live-plant safety review). A non-`Good` sample (unless the run set
-    -- `allow_uncertain_quality` and this is merely `uncertain`) aborts the
+    -- live-plant safety review). A non-`Good` sample (unless the global
+    -- `allow_uncertain_quality` policy permits this `uncertain` reading) aborts the
     -- run before this row is even the last one written -- see
     -- `run_polling_loop` in bhtune-cli -- so most rows here are `good`, and
     -- a non-`good` row is always the final sample of an aborted run.
