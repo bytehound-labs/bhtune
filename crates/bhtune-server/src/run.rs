@@ -269,11 +269,23 @@ mod tests {
         let path = dir.path().join("bhtune.toml");
         std::fs::write(&path, "retention_days = [not valid toml").unwrap();
 
-        let error = match build_server(Some(&path)).await {
-            Ok(_) => panic!("malformed config should fail startup"),
-            Err(error) => error,
-        };
+        let result = build_server(Some(&path)).await;
+        assert!(result.is_err());
+        let error = result.err().unwrap();
         assert!(error.to_string().contains("failed to parse config file"));
+    }
+
+    #[tokio::test]
+    async fn build_server_propagates_a_missing_explicit_template_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bhtune.toml");
+        let templates_path = dir.path().join("missing-templates.toml");
+        std::fs::write(&config_path, format!("templates = {:?}\n", templates_path)).unwrap();
+
+        let result = build_server(Some(&config_path)).await;
+        assert!(result.is_err());
+        let error = result.err().unwrap();
+        assert!(error.to_string().contains("templates file not found"));
     }
 
     #[tokio::test]
@@ -319,5 +331,120 @@ mod tests {
         // Nothing to delete, and no way for this to fail -- just confirms the helper
         // returns cleanly rather than panicking on an empty database.
         retention_tick(&pool, 30).await;
+    }
+
+    #[tokio::test]
+    async fn build_server_completes_startup_and_can_serve_until_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bhtune.toml");
+        let db_path = dir.path().join("bhtune.db");
+        let log_dir = dir.path().join("logs");
+        std::fs::write(
+            &config_path,
+            format!(
+                "db = {:?}\nbind = \"127.0.0.1:0\"\n[log]\ndir = {:?}\n",
+                db_path, log_dir
+            ),
+        )
+        .unwrap();
+
+        let server = build_server(Some(&config_path)).await.unwrap();
+        serve(server, async {}).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retention_tick_live_runs_when_retention_is_configured() {
+        let pool = connect_in_memory().await.unwrap();
+        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+            path: None,
+            missing_is_allowed: true,
+            original_raw: None,
+            config: bhtune_cli::config::BhtuneConfig {
+                retention_days: Some(30),
+                ..Default::default()
+            },
+            revision: "revision".to_string(),
+            toml_allow_uncertain_quality: None,
+        }));
+
+        retention_tick_live(&pool, &store).await;
+    }
+
+    #[tokio::test]
+    async fn retention_tick_live_skips_when_retention_is_disabled() {
+        let pool = connect_in_memory().await.unwrap();
+        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+            path: None,
+            missing_is_allowed: true,
+            original_raw: None,
+            config: Default::default(),
+            revision: "revision".to_string(),
+            toml_allow_uncertain_quality: None,
+        }));
+
+        retention_tick_live(&pool, &store).await;
+    }
+
+    #[tokio::test]
+    async fn retention_tick_live_skips_when_config_store_lock_is_poisoned() {
+        let pool = connect_in_memory().await.unwrap();
+        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+            path: None,
+            missing_is_allowed: true,
+            original_raw: None,
+            config: Default::default(),
+            revision: "revision".to_string(),
+            toml_allow_uncertain_quality: None,
+        }));
+        let poisoned = Arc::clone(&store);
+        std::thread::spawn(move || {
+            let _guard = poisoned.write().unwrap();
+            panic!("poison configuration store");
+        })
+        .join()
+        .unwrap_err();
+
+        retention_tick_live(&pool, &store).await;
+    }
+
+    #[tokio::test]
+    async fn retention_tick_live_logs_and_returns_when_sweep_fails() {
+        let pool = connect_in_memory().await.unwrap();
+        pool.close().await;
+        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+            path: None,
+            missing_is_allowed: true,
+            original_raw: None,
+            config: bhtune_cli::config::BhtuneConfig {
+                retention_days: Some(30),
+                ..Default::default()
+            },
+            revision: "revision".to_string(),
+            toml_allow_uncertain_quality: None,
+        }));
+
+        retention_tick_live(&pool, &store).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn spawned_retention_sweeper_runs_a_periodic_tick() {
+        tokio::time::resume();
+        let pool = connect_in_memory().await.unwrap();
+        tokio::time::pause();
+        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+            path: None,
+            missing_is_allowed: true,
+            original_raw: None,
+            config: Default::default(),
+            revision: "revision".to_string(),
+            toml_allow_uncertain_quality: None,
+        }));
+
+        spawn_retention_sweeper(pool, store);
+        tokio::task::yield_now().await;
+        tokio::time::advance(RETENTION_SWEEP_INTERVAL + Duration::from_secs(1)).await;
+        for _ in 0..3 {
+            tokio::task::yield_now().await;
+        }
     }
 }

@@ -54,6 +54,14 @@ fn response_from_store(store: &LoadedConfigStore, backup_path: Option<String>) -
     let env_retention = std::env::var("BHTUNE_RETENTION_DAYS")
         .ok()
         .and_then(|value| value.parse().ok());
+    response_from_store_with_retention(store, backup_path, env_retention)
+}
+
+fn response_from_store_with_retention(
+    store: &LoadedConfigStore,
+    backup_path: Option<String>,
+    env_retention: Option<u32>,
+) -> ConfigResponse {
     let effective_retention = resolve_retention_days(env_retention, &store.config);
     let sources = ConfigSources {
         allow_uncertain_quality: if store.toml_allow_uncertain_quality.is_some() {
@@ -327,5 +335,120 @@ mod tests {
                 .unwrap()
                 .contains("changed on disk")
         );
+    }
+
+    #[test]
+    fn response_reports_environment_retention_and_unresolved_path() {
+        let store = LoadedConfigStore {
+            path: None,
+            missing_is_allowed: true,
+            original_raw: None,
+            config: bhtune_cli::config::BhtuneConfig {
+                retention_days: Some(30),
+                ..Default::default()
+            },
+            revision: "revision".to_string(),
+            toml_allow_uncertain_quality: None,
+        };
+
+        let response = response_from_store_with_retention(&store, None, Some(90));
+
+        assert_eq!(response.config_path, "");
+        assert_eq!(response.source.retention_days, "environment");
+        assert_eq!(response.effective.retention_days, Some(90));
+    }
+
+    #[test]
+    fn map_store_error_maps_non_conflicts_to_internal_errors() {
+        let error = map_store_error(ConfigStoreError::PathNotResolved);
+        assert!(matches!(error, ApiError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn put_rejects_zero_retention_days() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        std::fs::write(&path, "").unwrap();
+        let state = state_for(&path).await;
+        let revision = state.config_store.read().unwrap().revision.clone();
+        let response = crate::build_router(state)
+            .oneshot(
+                Request::put("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "revision": revision,
+                            "allow_uncertain_quality": true,
+                            "retention_days": 0
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_body(response).await["error"],
+            "retention_days must be at least 1 or null"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_returns_internal_error_when_config_store_lock_is_poisoned() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        std::fs::write(&path, "").unwrap();
+        let state = state_for(&path).await;
+        let store = Arc::clone(&state.config_store);
+        std::thread::spawn(move || {
+            let _guard = store.write().unwrap();
+            panic!("poison configuration store");
+        })
+        .join()
+        .unwrap_err();
+
+        let response = crate::build_router(state)
+            .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn put_returns_internal_error_when_config_store_lock_is_poisoned() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        std::fs::write(&path, "").unwrap();
+        let state = state_for(&path).await;
+        let revision = state.config_store.read().unwrap().revision.clone();
+        let store = Arc::clone(&state.config_store);
+        std::thread::spawn(move || {
+            let _guard = store.write().unwrap();
+            panic!("poison configuration store");
+        })
+        .join()
+        .unwrap_err();
+
+        let response = crate::build_router(state)
+            .oneshot(
+                Request::put("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "revision": revision,
+                            "allow_uncertain_quality": true,
+                            "retention_days": null
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

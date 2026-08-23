@@ -487,20 +487,17 @@ pub fn parse_config_contents(contents: &str) -> anyhow::Result<BhtuneConfig> {
     toml::from_str(contents).map_err(Into::into)
 }
 
-fn patch_config_contents<F>(
-    raw: Option<&str>,
-    mutator: F,
-) -> Result<(String, BhtuneConfig), ConfigStoreError>
+fn patch_config_contents<F>(raw: Option<&str>, mutator: F) -> Result<(String, BhtuneConfig), String>
 where
     F: FnOnce(&mut toml_edit::DocumentMut),
 {
     let mut document = raw
         .unwrap_or_default()
         .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| config_malformed(None, e))?;
+        .map_err(|e| e.to_string())?;
     mutator(&mut document);
     let patched = document.to_string();
-    let parsed = parse_config_contents(&patched).map_err(|e| config_malformed(None, e))?;
+    let parsed = parse_config_contents(&patched).map_err(|e| e.to_string())?;
     Ok((patched, parsed))
 }
 
@@ -513,6 +510,7 @@ pub fn patch_allow_uncertain_quality(
     patch_config_contents(raw, |document| {
         document["allow_uncertain_quality"] = toml_edit::value(allow_uncertain_quality);
     })
+    .map_err(|source| config_malformed(None, source))
     .map(|(patched, _)| patched)
 }
 
@@ -530,13 +528,14 @@ pub fn patch_retention_days(
             document.as_table_mut().remove("retention_days");
         }
     })
+    .map_err(|source| config_malformed(None, source))
     .map(|(patched, _)| patched)
 }
 
 fn patch_config_policy(
     raw: Option<&str>,
     update: &ConfigPolicyUpdate,
-) -> Result<(String, BhtuneConfig), ConfigStoreError> {
+) -> Result<(String, BhtuneConfig), String> {
     patch_config_contents(raw, |document| {
         document["allow_uncertain_quality"] = toml_edit::value(update.allow_uncertain_quality);
         match update.retention_days {
@@ -627,8 +626,18 @@ fn backup_path_for(path: &Path) -> PathBuf {
 }
 
 fn create_temp_file(path: &Path) -> Result<(PathBuf, fs::File), ConfigStoreError> {
+    create_temp_file_with(path, || sibling_with_suffix(path, "tmp"))
+}
+
+fn create_temp_file_with<F>(
+    path: &Path,
+    mut next_path: F,
+) -> Result<(PathBuf, fs::File), ConfigStoreError>
+where
+    F: FnMut() -> PathBuf,
+{
     for _ in 0..16 {
-        let temp_path = sibling_with_suffix(path, "tmp");
+        let temp_path = next_path();
         match fs::OpenOptions::new()
             .create_new(true)
             .truncate(true)
@@ -657,6 +666,44 @@ fn create_temp_file(path: &Path) -> Result<(PathBuf, fs::File), ConfigStoreError
     })
 }
 
+trait SyncConfigFile {
+    fn sync_config(&self) -> io::Result<()>;
+}
+
+impl SyncConfigFile for fs::File {
+    fn sync_config(&self) -> io::Result<()> {
+        self.sync_all()
+    }
+}
+
+fn write_and_flush_temp_file<T>(
+    path: &Path,
+    temp_path: &Path,
+    bytes: &[u8],
+    temp_file: &mut T,
+) -> Result<(), ConfigStoreError>
+where
+    T: Write + SyncConfigFile,
+{
+    if let Err(e) = temp_file.write_all(bytes) {
+        let _ = fs::remove_file(temp_path);
+        return Err(ConfigStoreError::Write {
+            path: path.to_path_buf(),
+            action: "write temporary config file",
+            source: e,
+        });
+    }
+    if let Err(e) = temp_file.sync_config() {
+        let _ = fs::remove_file(temp_path);
+        return Err(ConfigStoreError::Write {
+            path: path.to_path_buf(),
+            action: "flush temporary config file",
+            source: e,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn sync_parent_dir(path: &Path) {
     if let Some(parent) = path
@@ -676,32 +723,37 @@ fn write_config_file_atomically(
     bytes: &[u8],
     create_parent_dir: bool,
 ) -> Result<Option<PathBuf>, ConfigStoreError> {
+    write_config_file_atomically_with(
+        path,
+        bytes,
+        create_parent_dir,
+        |source, destination| fs::copy(source, destination),
+        |source, destination| fs::rename(source, destination),
+    )
+}
+
+fn write_config_file_atomically_with<Copy, Rename>(
+    path: &Path,
+    bytes: &[u8],
+    create_parent_dir: bool,
+    copy_backup: Copy,
+    replace: Rename,
+) -> Result<Option<PathBuf>, ConfigStoreError>
+where
+    Copy: Fn(&Path, &Path) -> io::Result<u64>,
+    Rename: Fn(&Path, &Path) -> io::Result<()>,
+{
     if create_parent_dir {
         ensure_parent_dir(path)?;
     }
 
     let (temp_path, mut temp_file) = create_temp_file(path)?;
-    if let Err(e) = temp_file.write_all(bytes) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(ConfigStoreError::Write {
-            path: path.to_path_buf(),
-            action: "write temporary config file",
-            source: e,
-        });
-    }
-    if let Err(e) = temp_file.sync_all() {
-        let _ = fs::remove_file(&temp_path);
-        return Err(ConfigStoreError::Write {
-            path: path.to_path_buf(),
-            action: "flush temporary config file",
-            source: e,
-        });
-    }
+    write_and_flush_temp_file(path, &temp_path, bytes, &mut temp_file)?;
     drop(temp_file);
 
     let backup_path = if path.exists() {
         let backup_path = backup_path_for(path);
-        if let Err(e) = fs::copy(path, &backup_path) {
+        if let Err(e) = copy_backup(path, &backup_path) {
             let _ = fs::remove_file(&temp_path);
             return Err(ConfigStoreError::Write {
                 path: path.to_path_buf(),
@@ -714,7 +766,7 @@ fn write_config_file_atomically(
         None
     };
 
-    let replace_result = fs::rename(&temp_path, path);
+    let replace_result = replace(&temp_path, path);
 
     if let Err(e) = replace_result {
         let _ = fs::remove_file(&temp_path);
@@ -782,10 +834,7 @@ pub fn save_config_store(
     }
 
     let (patched_raw, config) = patch_config_policy(state.original_raw.as_deref(), update)
-        .map_err(|e| match e {
-            ConfigStoreError::Malformed { source, .. } => config_malformed(Some(&path), source),
-            other => other,
-        })?;
+        .map_err(|source| config_malformed(Some(&path), source))?;
     let backup_path =
         write_config_file_atomically(&path, patched_raw.as_bytes(), state.original_raw.is_none())?;
     let revision = revision_token_for_raw(Some(&patched_raw));
@@ -1336,6 +1385,18 @@ mod tests {
     }
 
     #[test]
+    fn backup_and_temp_siblings_finds_temporary_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        let temp_path = dir.path().join("bhtune.toml.tmp-leftover");
+        fs::write(&temp_path, b"leftover").unwrap();
+
+        let (_backups, temps) = backup_and_temp_siblings(&path);
+
+        assert_eq!(temps, vec![temp_path]);
+    }
+
+    #[test]
     fn load_config_store_from_missing_auto_path_returns_a_path_aware_default_store() {
         let dir = tempfile::tempdir().unwrap();
         let store =
@@ -1356,10 +1417,7 @@ mod tests {
     fn load_config_store_from_explicit_missing_path_is_a_typed_error() {
         let path = PathBuf::from("/nonexistent/path-aware-bhtune.toml");
         let err = load_config_store_from(Some(&path), None, None, None, false).unwrap_err();
-        match err {
-            ConfigStoreError::Missing { path: actual } => assert_eq!(actual, path),
-            other => panic!("expected Missing, got {other:?}"),
-        }
+        assert!(matches!(err, ConfigStoreError::Missing { path: actual } if actual == path));
     }
 
     #[test]
@@ -1368,22 +1426,39 @@ mod tests {
         writeln!(file, "db = 12345").unwrap();
 
         let err = load_config_store_from(Some(file.path()), None, None, None, false).unwrap_err();
-        match err {
+        assert!(matches!(
+            err,
             ConfigStoreError::Malformed {
                 path: Some(path), ..
-            } => assert_eq!(path, file.path()),
-            other => panic!("expected Malformed, got {other:?}"),
-        }
+            } if path == file.path()
+        ));
     }
 
     #[test]
     fn load_config_store_from_unreadable_path_is_a_typed_error() {
         let dir = tempfile::tempdir().unwrap();
         let err = load_config_store_from(Some(dir.path()), None, None, None, false).unwrap_err();
-        match err {
-            ConfigStoreError::Unreadable { path, .. } => assert_eq!(path, dir.path()),
-            other => panic!("expected Unreadable, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            ConfigStoreError::Unreadable { path, .. } if path == dir.path()
+        ));
+    }
+
+    #[test]
+    fn load_config_store_from_rejects_non_utf8_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+
+        let err = load_config_store_from(Some(&path), None, None, None, false).unwrap_err();
+        let message = err.to_string();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Malformed {
+                path: Some(actual), ..
+            } if actual == path
+        ));
+        assert!(message.contains("not valid UTF-8"));
     }
 
     #[test]
@@ -1412,6 +1487,244 @@ level = "info"
         assert_eq!(parsed.log.level, Some("info".to_string()));
         assert!(!parsed.allow_uncertain_quality);
         assert_eq!(parsed.retention_days, Some(30));
+    }
+
+    #[test]
+    fn patch_retention_days_removes_an_existing_key() {
+        let patched = patch_retention_days(Some("retention_days = 30\n"), None).unwrap();
+        assert!(!patched.contains("retention_days"));
+        assert_eq!(
+            parse_config_contents(&patched).unwrap().retention_days,
+            None
+        );
+    }
+
+    #[test]
+    fn config_store_error_display_and_sources_cover_all_variants() {
+        let path = PathBuf::from("/tmp/bhtune.toml");
+        let errors = [
+            ConfigStoreError::PathNotResolved,
+            ConfigStoreError::Missing { path: path.clone() },
+            ConfigStoreError::Unreadable {
+                path: path.clone(),
+                source: io::Error::new(io::ErrorKind::PermissionDenied, "denied"),
+            },
+            ConfigStoreError::Malformed {
+                path: Some(path.clone()),
+                source: "bad".to_string(),
+            },
+            ConfigStoreError::Malformed {
+                path: None,
+                source: "bad".to_string(),
+            },
+            ConfigStoreError::Conflict {
+                path: Some(path.clone()),
+                message: "stale".to_string(),
+            },
+            ConfigStoreError::Conflict {
+                path: None,
+                message: "stale".to_string(),
+            },
+            ConfigStoreError::Write {
+                path,
+                action: "write config",
+                source: io::Error::other("failed"),
+            },
+        ];
+
+        for error in errors {
+            assert!(!error.to_string().is_empty());
+            let has_source = std::error::Error::source(&error).is_some();
+            assert_eq!(
+                has_source,
+                matches!(
+                    error,
+                    ConfigStoreError::Unreadable { .. } | ConfigStoreError::Write { .. }
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn create_temp_file_retries_after_a_name_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        let collision = dir.path().join("bhtune.toml.tmp-collision");
+        let available = dir.path().join("bhtune.toml.tmp-available");
+        fs::write(&collision, b"already here").unwrap();
+
+        let mut candidates = vec![collision.clone(), available.clone()];
+        let (created, file) = create_temp_file_with(&path, || candidates.remove(0)).unwrap();
+        assert_eq!(created, available);
+        drop(file);
+        assert!(created.exists());
+        fs::remove_file(created).unwrap();
+    }
+
+    #[test]
+    fn create_temp_file_reports_exhausted_name_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        let collision = dir.path().join("bhtune.toml.tmp-collision");
+        fs::write(&collision, b"already here").unwrap();
+
+        let err = create_temp_file_with(&path, || collision.clone()).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Write { source, .. }
+                if source.kind() == io::ErrorKind::AlreadyExists
+        ));
+    }
+
+    struct TestTempFile {
+        bytes: Vec<u8>,
+        fail_write: bool,
+        fail_sync: bool,
+    }
+
+    impl Write for TestTempFile {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.fail_write {
+                Err(io::Error::other("write failed"))
+            } else {
+                self.bytes.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl SyncConfigFile for TestTempFile {
+        fn sync_config(&self) -> io::Result<()> {
+            if self.fail_sync {
+                Err(io::Error::other("sync failed"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn write_and_flush_temp_file_reports_write_and_sync_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        let write_temp = dir.path().join("write.tmp");
+        fs::write(&write_temp, b"placeholder").unwrap();
+        let mut writer = TestTempFile {
+            bytes: Vec::new(),
+            fail_write: true,
+            fail_sync: false,
+        };
+        writer.flush().unwrap();
+        let err =
+            write_and_flush_temp_file(&path, &write_temp, b"config", &mut writer).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Write { action, .. } if action == "write temporary config file"
+        ));
+        assert!(!write_temp.exists());
+
+        let sync_temp = dir.path().join("sync.tmp");
+        fs::write(&sync_temp, b"placeholder").unwrap();
+        let mut writer = TestTempFile {
+            bytes: Vec::new(),
+            fail_write: false,
+            fail_sync: true,
+        };
+        let err = write_and_flush_temp_file(&path, &sync_temp, b"config", &mut writer).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Write { action, .. } if action == "flush temporary config file"
+        ));
+        assert!(!sync_temp.exists());
+    }
+
+    #[test]
+    fn atomic_writer_reports_parent_and_temp_creation_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        fs::write(&blocker, b"not a directory").unwrap();
+        let target = blocker.join("bhtune.toml");
+
+        let err = write_config_file_atomically(&target, b"config", true).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Write { action, .. } if action == "create config directory"
+        ));
+
+        let err = write_config_file_atomically(&target, b"config", false).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Write { action, .. } if action == "create temporary config file"
+        ));
+    }
+
+    #[test]
+    fn atomic_writer_reports_backup_and_replace_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("existing.toml");
+        fs::write(&existing, b"old").unwrap();
+        let noop_replace = |_source: &Path, _destination: &Path| Ok(());
+        let err = write_config_file_atomically_with(
+            &existing,
+            b"new",
+            false,
+            |_source, _destination| Err(io::Error::other("backup failed")),
+            noop_replace,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Write { action, .. } if action == "create config backup"
+        ));
+        assert_eq!(fs::read(&existing).unwrap(), b"old");
+
+        let successful_target = dir.path().join("successful.toml");
+        fs::write(&successful_target, b"old").unwrap();
+        let successful_backup = write_config_file_atomically_with(
+            &successful_target,
+            b"new",
+            false,
+            |_source, _destination| Ok(0),
+            noop_replace,
+        )
+        .unwrap();
+        assert!(successful_backup.is_some());
+        assert_eq!(fs::read(&successful_target).unwrap(), b"old");
+
+        let replace_target = dir.path().join("replace.toml");
+        fs::write(&replace_target, b"old").unwrap();
+        let err = write_config_file_atomically_with(
+            &replace_target,
+            b"new",
+            false,
+            |_source, _destination| Ok(0),
+            |_source, _destination| Err(io::Error::other("replace failed")),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Write { action, .. } if action == "replace config file"
+        ));
+        assert_eq!(fs::read(&replace_target).unwrap(), b"old");
+
+        let mut successful_sync = TestTempFile {
+            bytes: Vec::new(),
+            fail_write: false,
+            fail_sync: false,
+        };
+        write_and_flush_temp_file(
+            &replace_target,
+            &dir.path().join("successful.tmp"),
+            b"config",
+            &mut successful_sync,
+        )
+        .unwrap();
+        assert_eq!(successful_sync.bytes, b"config");
+        successful_sync.sync_config().unwrap();
     }
 
     #[test]
@@ -1510,12 +1823,11 @@ level = "info"
         )
         .unwrap_err();
 
-        match err {
-            ConfigStoreError::Conflict { message, .. } => {
-                assert!(message.contains("stale config revision token"));
-            }
-            other => panic!("expected Conflict, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            ConfigStoreError::Conflict { message, .. }
+                if message.contains("stale config revision token")
+        ));
     }
 
     #[test]
@@ -1537,12 +1849,127 @@ level = "info"
         )
         .unwrap_err();
 
-        match err {
-            ConfigStoreError::Conflict { message, .. } => {
-                assert!(message.contains("changed on disk since it was loaded"));
-            }
-            other => panic!("expected Conflict, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            ConfigStoreError::Conflict { message, .. }
+                if message.contains("changed on disk since it was loaded")
+        ));
+    }
+
+    #[test]
+    fn save_config_store_rejects_unresolved_and_explicit_missing_paths() {
+        let unresolved = load_config_store_from(None, None, None, None, false).unwrap();
+        let err = save_config_store(
+            &unresolved,
+            &unresolved.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: true,
+                retention_days: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigStoreError::PathNotResolved));
+
+        let path = PathBuf::from("/nonexistent/explicit-save-config.toml");
+        let state = LoadedConfigStore {
+            path: Some(path.clone()),
+            missing_is_allowed: false,
+            original_raw: None,
+            config: BhtuneConfig::default(),
+            revision: revision_token_for_raw(None),
+            toml_allow_uncertain_quality: None,
+        };
+        let err = save_config_store(
+            &state,
+            &state.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: true,
+                retention_days: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ConfigStoreError::Missing { path: actual } if actual == path));
+
+        let dir = tempfile::tempdir().unwrap();
+        let appeared_path = dir.path().join("appeared.toml");
+        fs::write(&appeared_path, "bridge_host = \"external:7600\"\n").unwrap();
+        let appeared = LoadedConfigStore {
+            path: Some(appeared_path.clone()),
+            missing_is_allowed: true,
+            original_raw: None,
+            config: BhtuneConfig::default(),
+            revision: revision_token_for_raw(None),
+            toml_allow_uncertain_quality: None,
+        };
+        let err = save_config_store(
+            &appeared,
+            &appeared.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: true,
+                retention_days: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Conflict {
+                path: Some(actual), ..
+            } if actual == appeared_path
+        ));
+    }
+
+    #[test]
+    fn save_config_store_rejects_unreadable_and_malformed_stored_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let unreadable_path = dir.path().join("config-directory");
+        fs::create_dir(&unreadable_path).unwrap();
+        let unreadable = LoadedConfigStore {
+            path: Some(unreadable_path.clone()),
+            missing_is_allowed: false,
+            original_raw: Some(String::new()),
+            config: BhtuneConfig::default(),
+            revision: revision_token_for_raw(Some("")),
+            toml_allow_uncertain_quality: None,
+        };
+        let err = save_config_store(
+            &unreadable,
+            &unreadable.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: true,
+                retention_days: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Unreadable { path, .. } if path == unreadable_path
+        ));
+
+        let malformed_path = dir.path().join("malformed.toml");
+        fs::write(&malformed_path, "[").unwrap();
+        let malformed = LoadedConfigStore {
+            path: Some(malformed_path.clone()),
+            missing_is_allowed: false,
+            original_raw: Some("[".to_string()),
+            config: BhtuneConfig::default(),
+            revision: revision_token_for_raw(Some("[")),
+            toml_allow_uncertain_quality: None,
+        };
+        let err = save_config_store(
+            &malformed,
+            &malformed.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: true,
+                retention_days: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigStoreError::Malformed {
+                path: Some(path), ..
+            } if path == malformed_path
+        ));
     }
 
     /// A minimal, `DcsTemplate::validate()`-passing `[[template]]` block: non-empty `name`,
