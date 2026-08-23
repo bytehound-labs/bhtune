@@ -113,14 +113,18 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
 
     const mvRow = mappingRow(page, "Manipulated variable (MV)");
     await expect(mvRow.getByText("Loop101.MV", { exact: true })).toBeVisible();
-    await mvRow.getByRole("button", { name: "Custom", exact: true }).click();
+    await mvRow
+      .getByRole("button", { name: "Custom tag", exact: true })
+      .click();
     await mvRow
       .getByLabel("Manipulated variable (MV) custom tag")
       .fill("Loop101.PY");
     await expect(
       mvRow.getByLabel("Manipulated variable (MV) custom tag"),
     ).toHaveValue("Loop101.PY");
-    await expect(mvRow.getByText("Custom tag", { exact: true })).toBeVisible();
+    await expect(
+      mvRow.getByRole("button", { name: "Custom tag", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   test("keeps custom tags pinned while the template and base tag change", async ({
@@ -134,7 +138,9 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
 
     await templateField.selectOption("Yokogawa CentumVP");
     await page.getByLabel("Tag name").fill("Loop101.PV");
-    await mvRow.getByRole("button", { name: "Custom", exact: true }).click();
+    await mvRow
+      .getByRole("button", { name: "Custom tag", exact: true })
+      .click();
     await mvRow
       .getByLabel("Manipulated variable (MV) custom tag")
       .fill("Loop101.PY");
@@ -159,12 +165,14 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     const mapping = loopMapping(page);
     const mvRow = mappingRow(page, "Manipulated variable (MV)");
     const setpointRow = mappingRow(page, "Setpoint");
-    await mvRow.getByRole("button", { name: "Custom", exact: true }).click();
+    await mvRow
+      .getByRole("button", { name: "Custom tag", exact: true })
+      .click();
     await mvRow
       .getByLabel("Manipulated variable (MV) custom tag")
       .fill("Loop101.PY");
     await setpointRow
-      .getByRole("button", { name: "Custom", exact: true })
+      .getByRole("button", { name: "Custom tag", exact: true })
       .click();
     await setpointRow
       .getByLabel("Setpoint custom tag")
@@ -172,7 +180,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
 
     await mvRow.getByRole("button", { name: "Reset", exact: true }).click();
     await expect(
-      mvRow.getByRole("button", { name: "Template", exact: true }),
+      mvRow.getByRole("button", { name: "Template tag", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(mvRow.getByText("Loop101.MV", { exact: true })).toBeVisible();
     await expect(
@@ -186,7 +194,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .getByRole("button", { name: "Reset all mapping overrides" })
       .click();
     await expect(
-      setpointRow.getByRole("button", { name: "Template", exact: true }),
+      setpointRow.getByRole("button", { name: "Template tag", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(
       setpointRow.getByText("Loop101.SV", { exact: true }),
@@ -220,7 +228,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .getByRole("combobox", { name: "Driver", exact: true })
       .selectOption("simulator");
     await expect(
-      directionRow.getByRole("button", { name: "Read tag", exact: true }),
+      directionRow.getByRole("button", { name: "Template tag", exact: true }),
     ).toBeDisabled();
     await expect(
       directionRow.getByRole("button", { name: "Fixed value", exact: true }),

@@ -84,7 +84,7 @@ function mappingRow(page: Page, label: string) {
 
 async function setCustomTag(page: Page, label: string, value: string) {
   const row = mappingRow(page, label);
-  await row.getByRole("button", { name: "Custom", exact: true }).click();
+  await row.getByRole("button", { name: "Custom tag", exact: true }).click();
   await row.getByLabel(`${label} custom tag`).fill(value);
 }
 
@@ -206,7 +206,7 @@ test.describe("New Tune draft persistence", () => {
     ).toHaveValue("90");
     await expect(
       mappingRow(page, "PV range low").getByRole("button", {
-        name: "Read tag",
+        name: "Template tag",
         exact: true,
       }),
     ).toHaveAttribute("aria-pressed", "true");
@@ -354,7 +354,7 @@ test.describe("New Tune draft persistence", () => {
     await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("800");
     const mvRow = mappingRow(page, "Manipulated variable (MV)");
     await expect(
-      mvRow.getByRole("button", { name: "Template", exact: true }),
+      mvRow.getByRole("button", { name: "Template tag", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(
       mvRow.getByText("Inactive for Simulator", { exact: true }),

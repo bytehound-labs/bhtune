@@ -333,8 +333,8 @@ export function LoopMappingEditor({
         <div className="max-w-3xl text-sm text-slate-400">
           <p>
             Each row shows the value that will be used and where it comes from.
-            Template/read-tag values follow the selected template and Tag name;
-            custom/fixed values apply only to this tune.
+            Template-derived values follow the selected template and Tag name;
+            custom tag and fixed values apply only to this tune.
           </p>
           {simulator && (
             <p className="mt-2 text-amber-300">
@@ -369,7 +369,7 @@ export function LoopMappingEditor({
                       ? "Inactive for Simulator"
                       : tags.source === "custom"
                         ? "Custom tag"
-                        : "Template default"}
+                        : "Template-derived tag"}
                   </div>
                   <p className="mt-2 text-xs leading-relaxed text-slate-500">
                     {row.description}
@@ -379,8 +379,8 @@ export function LoopMappingEditor({
                   label={row.label}
                   value={tags.source}
                   options={[
-                    { value: "template", label: "Template" },
-                    { value: "custom", label: "Custom" },
+                    { value: "template", label: "Template tag" },
+                    { value: "custom", label: "Custom tag" },
                   ]}
                   disabled={inactive}
                   onChange={(source) => onTagSourceChange(row.key, source)}
@@ -422,8 +422,8 @@ export function LoopMappingEditor({
                     inactive
                       ? "Simulator mode does not use OPC tag overrides."
                       : tags.source === "template"
-                        ? "This row already uses the template default."
-                        : "Reset this row to the template default."
+                        ? "This row already uses the template-derived tag."
+                        : "Reset this row to the template-derived tag."
                   }
                 >
                   Reset
@@ -461,8 +461,8 @@ export function LoopMappingEditor({
                       : values.source === "custom"
                         ? "Custom read tag"
                         : fixed
-                          ? "Fixed override"
-                          : "Read from tag"}
+                          ? "Fixed value"
+                          : "Template-derived read tag"}
                   </div>
                   <p className="mt-2 text-xs leading-relaxed text-slate-500">
                     {row.description}
@@ -474,7 +474,7 @@ export function LoopMappingEditor({
                   options={[
                     {
                       value: "tag",
-                      label: "Read tag",
+                      label: "Template tag",
                       disabled: simulator,
                     },
                     {
