@@ -4,7 +4,13 @@
 //! configuration surfaces stay recognizable to the same user.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsString,
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 /// Default opcda-bridge gateway address bhtune connects to when nothing else specifies one.
 pub const DEFAULT_BRIDGE_HOST: &str = "localhost:7600";
@@ -21,7 +27,7 @@ pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 /// bhtune's configuration, loaded from an optional TOML file. Every field is optional; a
 /// value missing from the file (or the file itself missing) falls back to the env var / CLI
 /// flag / built-in default resolution in the `resolve_*` functions below.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct BhtuneConfig {
     /// Overrides the default SQLite database path (see [`default_db_path_from`]).
@@ -44,11 +50,20 @@ pub struct BhtuneConfig {
     /// Age-based history retention (`history-retention`): tune runs with `started_at` older
     /// than this many days are deleted automatically on every startup (both binaries, via
     /// `crate::db::open`) and, for `bhtune-server`, again on a periodic timer while it keeps
-    /// running -- see `crate::retention`. `None` (the default) means retain forever: there is
-    /// no built-in number of days, since at this project's data volumes (see AGENTS.md's
-    /// History explorer notes) an unexpected auto-delete of someone's baseline tune is a
-    /// worse failure mode than an ever-growing database file. See [`resolve_retention_days`].
+    /// running -- see `crate::retention`. A present value must be at least 1. `None` (the
+    /// default) means retain forever: there is no built-in number of days, since at this
+    /// project's data volumes (see AGENTS.md's History explorer notes) an unexpected
+    /// auto-delete of someone's baseline tune is a worse failure mode than an ever-growing
+    /// database file. See [`resolve_retention_days`].
+    #[serde(default, deserialize_with = "deserialize_retention_days")]
+    #[cfg_attr(feature = "schemars", schemars(range(min = 1)))]
     pub retention_days: Option<u32>,
+    /// Default OPC sample-quality policy for the server config page: `true` accepts
+    /// `Uncertain` quality, while `false` rejects it. A missing key is treated as `true`
+    /// when the config file is parsed, matching the configuration-page default rather than
+    /// `bool`'s ordinary `false`.
+    #[serde(default = "default_allow_uncertain_quality")]
+    pub allow_uncertain_quality: bool,
     /// `[log]` sub-table: level/directory/format/rotation for `crate::logging`'s tracing
     /// setup, mirroring `opcda-bridge-gateway`'s own `log.*` config conventions.
     #[serde(default)]
@@ -59,13 +74,157 @@ pub struct BhtuneConfig {
 /// `crate::logging::resolve_log_settings`. Every field is optional and falls back through
 /// the same `CLI flag > env var > config file > default` precedence as the rest of
 /// [`BhtuneConfig`].
-#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct LogConfig {
     pub level: Option<String>,
     pub dir: Option<String>,
     pub format: Option<String>,
     pub rotation: Option<String>,
+}
+
+/// The default configuration-page quality policy: absent `allow_uncertain_quality` resolves
+/// to `true` rather than `bool`'s usual `false`.
+pub const fn default_allow_uncertain_quality() -> bool {
+    true
+}
+
+fn deserialize_retention_days<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let days = Option::<u32>::deserialize(deserializer)?;
+    match days {
+        Some(0) => Err(serde::de::Error::custom(
+            "retention_days must be at least 1 or omitted",
+        )),
+        other => Ok(other),
+    }
+}
+
+impl Default for BhtuneConfig {
+    fn default() -> Self {
+        Self {
+            db: None,
+            bridge_host: None,
+            server: None,
+            templates: None,
+            bind: None,
+            retention_days: None,
+            allow_uncertain_quality: default_allow_uncertain_quality(),
+            log: LogConfig::default(),
+        }
+    }
+}
+
+/// Path-resolution result for the TOML config store: either an explicit `--config` path or
+/// the auto-discovered default, plus whether a missing file is acceptable at that tier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigPathResolution {
+    pub path: Option<PathBuf>,
+    pub missing_is_allowed: bool,
+}
+
+/// A path-aware TOML config snapshot suitable for server-side read/modify/write flows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedConfigStore {
+    pub path: Option<PathBuf>,
+    pub missing_is_allowed: bool,
+    pub original_raw: Option<String>,
+    pub config: BhtuneConfig,
+    pub revision: String,
+    /// Raw file value, if the key was present. This distinguishes an explicit `true` from
+    /// the defaulted value when reporting configuration provenance.
+    pub toml_allow_uncertain_quality: Option<bool>,
+}
+
+/// The two config-page-owned settings that can be patched in place while preserving every
+/// unrelated key and comment in the source TOML.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigPolicyUpdate {
+    pub allow_uncertain_quality: bool,
+    pub retention_days: Option<u32>,
+}
+
+/// Result of safely saving a patched TOML config file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSaveResult {
+    pub backup_path: Option<PathBuf>,
+    pub state: LoadedConfigStore,
+}
+
+/// Typed errors for the path-aware TOML config store used by the server config page.
+#[derive(Debug)]
+pub enum ConfigStoreError {
+    PathNotResolved,
+    Missing {
+        path: PathBuf,
+    },
+    Unreadable {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Malformed {
+        path: Option<PathBuf>,
+        source: String,
+    },
+    Conflict {
+        path: Option<PathBuf>,
+        message: String,
+    },
+    Write {
+        path: PathBuf,
+        action: &'static str,
+        source: io::Error,
+    },
+}
+
+impl std::fmt::Display for ConfigStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PathNotResolved => write!(
+                f,
+                "no config path could be resolved from --config / XDG_CONFIG_HOME / HOME / APPDATA"
+            ),
+            Self::Missing { path } => write!(f, "config file not found: {}", path.display()),
+            Self::Unreadable { path, source } => {
+                write!(f, "failed to read config file {}: {source}", path.display())
+            }
+            Self::Malformed {
+                path: Some(path),
+                source,
+            } => write!(
+                f,
+                "failed to parse config file {}: {source}",
+                path.display()
+            ),
+            Self::Malformed { path: None, source } => {
+                write!(f, "failed to parse config contents: {source}")
+            }
+            Self::Conflict {
+                path: Some(path),
+                message,
+            } => write!(f, "config store conflict for {}: {message}", path.display()),
+            Self::Conflict {
+                path: None,
+                message,
+            } => write!(f, "config store conflict: {message}"),
+            Self::Write {
+                path,
+                action,
+                source,
+            } => write!(f, "failed to {action} {}: {source}", path.display()),
+        }
+    }
+}
+
+impl std::error::Error for ConfigStoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Unreadable { source, .. } | Self::Write { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 /// Derive bhtune's config file location from raw environment values rather than reading
@@ -93,6 +252,116 @@ pub fn config_path_from(
             .join("bhtune")
             .join("bhtune.toml")
     })
+}
+
+/// Resolve which path the TOML config store should use: an explicit `--config` path if one
+/// was provided, otherwise the platform-default `bhtune.toml` location from
+/// [`config_path_from`]. Explicit paths must already exist; an auto-discovered missing file
+/// is acceptable and can be created on first save.
+pub fn resolve_config_store_path(
+    explicit_path: Option<&Path>,
+    xdg_config_home: Option<&str>,
+    home: Option<&str>,
+    appdata: Option<&str>,
+    is_windows: bool,
+) -> ConfigPathResolution {
+    match explicit_path {
+        Some(path) => ConfigPathResolution {
+            path: Some(path.to_path_buf()),
+            missing_is_allowed: false,
+        },
+        None => ConfigPathResolution {
+            path: config_path_from(xdg_config_home, home, appdata, is_windows),
+            missing_is_allowed: true,
+        },
+    }
+}
+
+const FNV1A_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV1A_PRIME: u64 = 0x100000001b3;
+
+fn stable_revision_hash(bytes: &[u8]) -> u64 {
+    let mut hash = FNV1A_OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV1A_PRIME);
+    }
+    hash
+}
+
+fn revision_token_for_raw(raw: Option<&str>) -> String {
+    match raw {
+        Some(raw) => format!(
+            "present:v1:{}:{:016x}",
+            raw.len(),
+            stable_revision_hash(raw.as_bytes())
+        ),
+        None => "absent:v1".to_string(),
+    }
+}
+
+fn config_malformed(path: Option<&Path>, error: impl std::fmt::Display) -> ConfigStoreError {
+    ConfigStoreError::Malformed {
+        path: path.map(Path::to_path_buf),
+        source: error.to_string(),
+    }
+}
+
+fn load_config_store_from_resolution(
+    resolution: ConfigPathResolution,
+) -> Result<LoadedConfigStore, ConfigStoreError> {
+    match resolution.path {
+        Some(path) => match fs::read(&path) {
+            Ok(bytes) => {
+                let raw = String::from_utf8(bytes).map_err(|e| {
+                    config_malformed(Some(&path), format!("config file is not valid UTF-8: {e}"))
+                })?;
+                let config =
+                    parse_config_contents(&raw).map_err(|e| config_malformed(Some(&path), e))?;
+                let toml_allow_uncertain_quality = raw
+                    .parse::<toml_edit::DocumentMut>()
+                    .ok()
+                    .and_then(|document| {
+                        document
+                            .get("allow_uncertain_quality")
+                            .and_then(|item| item.as_value())
+                            .and_then(|value| value.as_bool())
+                    });
+                let revision = revision_token_for_raw(Some(&raw));
+                Ok(LoadedConfigStore {
+                    path: Some(path),
+                    missing_is_allowed: resolution.missing_is_allowed,
+                    original_raw: Some(raw),
+                    config,
+                    revision,
+                    toml_allow_uncertain_quality,
+                })
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound && resolution.missing_is_allowed => {
+                let revision = revision_token_for_raw(None);
+                Ok(LoadedConfigStore {
+                    path: Some(path),
+                    missing_is_allowed: true,
+                    original_raw: None,
+                    config: BhtuneConfig::default(),
+                    revision,
+                    toml_allow_uncertain_quality: None,
+                })
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                Err(ConfigStoreError::Missing { path })
+            }
+            Err(e) => Err(ConfigStoreError::Unreadable { path, source: e }),
+        },
+        None => Ok(LoadedConfigStore {
+            path: None,
+            missing_is_allowed: true,
+            original_raw: None,
+            config: BhtuneConfig::default(),
+            revision: revision_token_for_raw(None),
+            toml_allow_uncertain_quality: None,
+        }),
+    }
 }
 
 /// Derive bhtune's default *user template catalog* location the same way [`config_path_from`]
@@ -202,20 +471,12 @@ pub fn default_log_dir_from(
 /// `--config` path a missing file is a hard error instead. A file that exists but fails to
 /// parse as TOML is always a hard error -- a config typo should never be silently ignored.
 pub fn load_config_file(path: &Path, missing_is_error: bool) -> anyhow::Result<BhtuneConfig> {
-    match std::fs::read_to_string(path) {
-        Ok(contents) => parse_config_contents(&contents)
-            .map_err(|e| anyhow::anyhow!("failed to parse config file {}: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !missing_is_error => {
-            Ok(BhtuneConfig::default())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err(anyhow::anyhow!("config file not found: {}", path.display()))
-        }
-        Err(e) => Err(anyhow::anyhow!(
-            "failed to read config file {}: {e}",
-            path.display()
-        )),
-    }
+    load_config_store_from_resolution(ConfigPathResolution {
+        path: Some(path.to_path_buf()),
+        missing_is_allowed: !missing_is_error,
+    })
+    .map(|store| store.config)
+    .map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
 /// Parses the in-memory TOML representation of a config file.
@@ -226,16 +487,335 @@ pub fn parse_config_contents(contents: &str) -> anyhow::Result<BhtuneConfig> {
     toml::from_str(contents).map_err(Into::into)
 }
 
+fn patch_config_contents<F>(
+    raw: Option<&str>,
+    mutator: F,
+) -> Result<(String, BhtuneConfig), ConfigStoreError>
+where
+    F: FnOnce(&mut toml_edit::DocumentMut),
+{
+    let mut document = raw
+        .unwrap_or_default()
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| config_malformed(None, e))?;
+    mutator(&mut document);
+    let patched = document.to_string();
+    let parsed = parse_config_contents(&patched).map_err(|e| config_malformed(None, e))?;
+    Ok((patched, parsed))
+}
+
+/// Patch only `allow_uncertain_quality` while preserving every unrelated key, comment, and
+/// formatting detail the source document already had.
+pub fn patch_allow_uncertain_quality(
+    raw: Option<&str>,
+    allow_uncertain_quality: bool,
+) -> Result<String, ConfigStoreError> {
+    patch_config_contents(raw, |document| {
+        document["allow_uncertain_quality"] = toml_edit::value(allow_uncertain_quality);
+    })
+    .map(|(patched, _)| patched)
+}
+
+/// Patch only `retention_days` while preserving every unrelated key, comment, and formatting
+/// detail the source document already had. `None` removes the key entirely.
+pub fn patch_retention_days(
+    raw: Option<&str>,
+    retention_days: Option<u32>,
+) -> Result<String, ConfigStoreError> {
+    patch_config_contents(raw, |document| match retention_days {
+        Some(days) => {
+            document["retention_days"] = toml_edit::value(i64::from(days));
+        }
+        None => {
+            document.as_table_mut().remove("retention_days");
+        }
+    })
+    .map(|(patched, _)| patched)
+}
+
+fn patch_config_policy(
+    raw: Option<&str>,
+    update: &ConfigPolicyUpdate,
+) -> Result<(String, BhtuneConfig), ConfigStoreError> {
+    patch_config_contents(raw, |document| {
+        document["allow_uncertain_quality"] = toml_edit::value(update.allow_uncertain_quality);
+        match update.retention_days {
+            Some(days) => {
+                document["retention_days"] = toml_edit::value(i64::from(days));
+            }
+            None => {
+                document.as_table_mut().remove("retention_days");
+            }
+        }
+    })
+}
+
+/// Load the path-aware TOML config store using real environment-based auto-discovery.
+pub fn load_config_store(
+    explicit_path: Option<&Path>,
+) -> Result<LoadedConfigStore, ConfigStoreError> {
+    load_config_store_from(
+        explicit_path,
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+        std::env::var("APPDATA").ok().as_deref(),
+        cfg!(target_os = "windows"),
+    )
+}
+
+/// Load the path-aware TOML config store using injected path-discovery inputs so every
+/// resolution branch stays unit-testable without mutating process-global environment
+/// variables.
+pub fn load_config_store_from(
+    explicit_path: Option<&Path>,
+    xdg_config_home: Option<&str>,
+    home: Option<&str>,
+    appdata: Option<&str>,
+    is_windows: bool,
+) -> Result<LoadedConfigStore, ConfigStoreError> {
+    load_config_store_from_resolution(resolve_config_store_path(
+        explicit_path,
+        xdg_config_home,
+        home,
+        appdata,
+        is_windows,
+    ))
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), ConfigStoreError> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|e| ConfigStoreError::Write {
+            path: path.to_path_buf(),
+            action: "create config directory",
+            source: e,
+        })?;
+    }
+    Ok(())
+}
+
+fn unique_suffix() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!(
+        "{}-{}-{:09}",
+        std::process::id(),
+        timestamp.as_secs(),
+        timestamp.subsec_nanos()
+    )
+}
+
+fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut file_name = path
+        .file_name()
+        .map(OsString::from)
+        .unwrap_or_else(|| OsString::from("bhtune.toml"));
+    file_name.push(format!(".{suffix}-{}", unique_suffix()));
+    path.with_file_name(file_name)
+}
+
+fn backup_path_for(path: &Path) -> PathBuf {
+    let mut file_name = path
+        .file_name()
+        .map(OsString::from)
+        .unwrap_or_else(|| OsString::from("bhtune.toml"));
+    file_name.push(format!(".backup-{}.bak", unique_suffix()));
+    path.with_file_name(file_name)
+}
+
+fn create_temp_file(path: &Path) -> Result<(PathBuf, fs::File), ConfigStoreError> {
+    for _ in 0..16 {
+        let temp_path = sibling_with_suffix(path, "tmp");
+        match fs::OpenOptions::new()
+            .create_new(true)
+            .truncate(true)
+            .write(true)
+            .open(&temp_path)
+        {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(ConfigStoreError::Write {
+                    path: path.to_path_buf(),
+                    action: "create temporary config file",
+                    source: e,
+                });
+            }
+        }
+    }
+
+    Err(ConfigStoreError::Write {
+        path: path.to_path_buf(),
+        action: "create temporary config file",
+        source: io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "exhausted unique temp-file names",
+        ),
+    })
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        && let Ok(dir) = fs::File::open(parent)
+    {
+        let _ = dir.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) {}
+
+fn write_config_file_atomically(
+    path: &Path,
+    bytes: &[u8],
+    create_parent_dir: bool,
+) -> Result<Option<PathBuf>, ConfigStoreError> {
+    if create_parent_dir {
+        ensure_parent_dir(path)?;
+    }
+
+    let (temp_path, mut temp_file) = create_temp_file(path)?;
+    if let Err(e) = temp_file.write_all(bytes) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ConfigStoreError::Write {
+            path: path.to_path_buf(),
+            action: "write temporary config file",
+            source: e,
+        });
+    }
+    if let Err(e) = temp_file.sync_all() {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ConfigStoreError::Write {
+            path: path.to_path_buf(),
+            action: "flush temporary config file",
+            source: e,
+        });
+    }
+    drop(temp_file);
+
+    let backup_path = if path.exists() {
+        let backup_path = backup_path_for(path);
+        if let Err(e) = fs::copy(path, &backup_path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(ConfigStoreError::Write {
+                path: path.to_path_buf(),
+                action: "create config backup",
+                source: e,
+            });
+        }
+        Some(backup_path)
+    } else {
+        None
+    };
+
+    let replace_result = fs::rename(&temp_path, path);
+
+    if let Err(e) = replace_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ConfigStoreError::Write {
+            path: path.to_path_buf(),
+            action: "replace config file",
+            source: e,
+        });
+    }
+
+    sync_parent_dir(path);
+    Ok(backup_path)
+}
+
+/// Safely save the two config-page-managed settings with optimistic-concurrency checks.
+///
+/// The caller must provide the revision token it last loaded. The save is rejected when that
+/// token is stale *or* the on-disk bytes no longer match the bytes this store last loaded or
+/// wrote, preventing blind overwrites of external edits.
+pub fn save_config_store(
+    state: &LoadedConfigStore,
+    expected_revision: &str,
+    update: &ConfigPolicyUpdate,
+) -> Result<ConfigSaveResult, ConfigStoreError> {
+    if state.revision != expected_revision {
+        return Err(ConfigStoreError::Conflict {
+            path: state.path.clone(),
+            message: format!(
+                "stale config revision token: expected {expected_revision}, latest {}",
+                state.revision
+            ),
+        });
+    }
+
+    let path = state
+        .path
+        .clone()
+        .ok_or(ConfigStoreError::PathNotResolved)?;
+
+    let current_bytes = match fs::read(&path) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(ConfigStoreError::Unreadable {
+                path: path.clone(),
+                source: e,
+            });
+        }
+    };
+    let loaded_bytes = state.original_raw.as_ref().map(|raw| raw.as_bytes());
+    let disk_matches_loaded = match (loaded_bytes, current_bytes.as_deref()) {
+        (None, None) => true,
+        (Some(loaded), Some(current)) => loaded == current,
+        _ => false,
+    };
+    if !disk_matches_loaded {
+        return Err(ConfigStoreError::Conflict {
+            path: Some(path.clone()),
+            message: "config file changed on disk since it was loaded".to_string(),
+        });
+    }
+
+    if state.original_raw.is_none() && !state.missing_is_allowed {
+        return Err(ConfigStoreError::Missing { path });
+    }
+
+    let (patched_raw, config) = patch_config_policy(state.original_raw.as_deref(), update)
+        .map_err(|e| match e {
+            ConfigStoreError::Malformed { source, .. } => config_malformed(Some(&path), source),
+            other => other,
+        })?;
+    let backup_path =
+        write_config_file_atomically(&path, patched_raw.as_bytes(), state.original_raw.is_none())?;
+    let revision = revision_token_for_raw(Some(&patched_raw));
+    let toml_allow_uncertain_quality = Some(update.allow_uncertain_quality);
+
+    Ok(ConfigSaveResult {
+        backup_path,
+        state: LoadedConfigStore {
+            path: Some(path),
+            missing_is_allowed: state.missing_is_allowed,
+            original_raw: Some(patched_raw),
+            config,
+            revision,
+            toml_allow_uncertain_quality,
+        },
+    })
+}
+
 /// Load the config from an auto-discovered path, falling back to defaults when no path
 /// could be discovered at all (e.g. neither `XDG_CONFIG_HOME` nor `HOME` is set on a
 /// non-Windows host). Split out from [`load_config`] so the no-path-discovered branch is
 /// directly unit-testable with a literal `None`, without mutating real process-global
 /// environment variables in a parallel test binary.
 fn load_discovered_config(path: Option<PathBuf>) -> anyhow::Result<BhtuneConfig> {
-    match path {
-        Some(p) => load_config_file(&p, false),
-        None => Ok(BhtuneConfig::default()),
-    }
+    load_config_store_from_resolution(ConfigPathResolution {
+        path,
+        missing_is_allowed: true,
+    })
+    .map(|store| store.config)
+    .map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
 /// Resolve and load the bhtune config: an explicit `--config` path if given, otherwise the
@@ -371,6 +951,7 @@ pub fn resolve_server(cli_server: Option<String>, config: &BhtuneConfig) -> anyh
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::{fs, io::Write};
 
     proptest::proptest! {
         #[test]
@@ -380,7 +961,8 @@ mod tests {
             server in prop::option::of("[A-Za-z0-9_.:-]{0,32}"),
             templates in prop::option::of("[A-Za-z0-9_./:-]{0,32}"),
             bind in prop::option::of("[A-Za-z0-9_.:-]{0,32}"),
-            retention_days in prop::option::of(any::<u32>()),
+            retention_days in prop::option::of(1u32..),
+            allow_uncertain_quality in any::<bool>(),
             level in prop::option::of("[A-Za-z0-9_.:-]{0,16}"),
             dir in prop::option::of("[A-Za-z0-9_./:-]{0,32}"),
             format in prop::option::of("[A-Za-z0-9_.:-]{0,16}"),
@@ -393,6 +975,7 @@ mod tests {
                 templates: templates.map(PathBuf::from),
                 bind,
                 retention_days,
+                allow_uncertain_quality,
                 log: LogConfig {
                     level,
                     dir,
@@ -409,7 +992,6 @@ mod tests {
             let _ = parse_config_contents(&input);
         }
     }
-    use std::io::Write;
 
     #[test]
     fn config_path_from_windows_with_appdata() {
@@ -419,6 +1001,16 @@ mod tests {
             Some(PathBuf::from(
                 r"C:\Users\me\AppData\Roaming/bhtune/bhtune.toml"
             ))
+        );
+    }
+
+    #[test]
+    fn parse_config_rejects_zero_retention_days() {
+        let error = parse_config_contents("retention_days = 0").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("retention_days must be at least 1")
         );
     }
 
@@ -573,6 +1165,51 @@ mod tests {
     }
 
     #[test]
+    fn default_allow_uncertain_quality_is_true() {
+        assert!(BhtuneConfig::default().allow_uncertain_quality);
+    }
+
+    #[test]
+    fn load_config_file_missing_allow_uncertain_quality_key_defaults_to_true() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "bridge_host = \"gateway:7600\"").unwrap();
+        let config = load_config_file(file.path(), true).unwrap();
+        assert!(config.allow_uncertain_quality);
+        assert_eq!(config.bridge_host, Some("gateway:7600".to_string()));
+    }
+
+    #[test]
+    fn resolve_config_store_path_prefers_an_explicit_path() {
+        let resolution = resolve_config_store_path(
+            Some(Path::new("/explicit/bhtune.toml")),
+            Some("/xdg"),
+            Some("/home/me"),
+            None,
+            false,
+        );
+        assert_eq!(
+            resolution,
+            ConfigPathResolution {
+                path: Some(PathBuf::from("/explicit/bhtune.toml")),
+                missing_is_allowed: false,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_config_store_path_falls_back_to_auto_discovery() {
+        let resolution =
+            resolve_config_store_path(None, Some("/xdg"), Some("/home/me"), None, false);
+        assert_eq!(
+            resolution,
+            ConfigPathResolution {
+                path: Some(PathBuf::from("/xdg/bhtune/bhtune.toml")),
+                missing_is_allowed: true,
+            }
+        );
+    }
+
+    #[test]
     fn load_config_file_valid() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         writeln!(
@@ -674,6 +1311,238 @@ mod tests {
         // binary) to force `config_path_from` itself to return `None`.
         let config = load_discovered_config(None).unwrap();
         assert_eq!(config, BhtuneConfig::default());
+    }
+
+    fn backup_and_temp_siblings(path: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let parent = path.parent().unwrap();
+        let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+        let mut backups = Vec::new();
+        let mut temps = Vec::new();
+
+        for entry in fs::read_dir(parent).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(&format!("{file_name}.backup-")) {
+                backups.push(entry.path());
+            }
+            if name.starts_with(&format!("{file_name}.tmp-")) {
+                temps.push(entry.path());
+            }
+        }
+
+        backups.sort();
+        temps.sort();
+        (backups, temps)
+    }
+
+    #[test]
+    fn load_config_store_from_missing_auto_path_returns_a_path_aware_default_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            load_config_store_from(None, Some(dir.path().to_str().unwrap()), None, None, false)
+                .unwrap();
+
+        assert_eq!(
+            store.path,
+            Some(dir.path().join("bhtune").join("bhtune.toml"))
+        );
+        assert!(store.missing_is_allowed);
+        assert_eq!(store.original_raw, None);
+        assert_eq!(store.config, BhtuneConfig::default());
+        assert_eq!(store.revision, "absent:v1");
+    }
+
+    #[test]
+    fn load_config_store_from_explicit_missing_path_is_a_typed_error() {
+        let path = PathBuf::from("/nonexistent/path-aware-bhtune.toml");
+        let err = load_config_store_from(Some(&path), None, None, None, false).unwrap_err();
+        match err {
+            ConfigStoreError::Missing { path: actual } => assert_eq!(actual, path),
+            other => panic!("expected Missing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_config_store_from_malformed_input_is_a_typed_error() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "db = 12345").unwrap();
+
+        let err = load_config_store_from(Some(file.path()), None, None, None, false).unwrap_err();
+        match err {
+            ConfigStoreError::Malformed {
+                path: Some(path), ..
+            } => assert_eq!(path, file.path()),
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_config_store_from_unreadable_path_is_a_typed_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = load_config_store_from(Some(dir.path()), None, None, None, false).unwrap_err();
+        match err {
+            ConfigStoreError::Unreadable { path, .. } => assert_eq!(path, dir.path()),
+            other => panic!("expected Unreadable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn patch_helpers_preserve_comments_unknown_keys_and_unrelated_values() {
+        let raw = r#"# keep this comment
+bridge_host = "gateway:7600"
+unknown_key = "keep me"
+
+[log]
+level = "info"
+"#;
+
+        let patched = patch_allow_uncertain_quality(Some(raw), false).unwrap();
+        let patched = patch_retention_days(Some(&patched), Some(30)).unwrap();
+
+        assert!(patched.contains("# keep this comment"));
+        assert!(patched.contains("bridge_host = \"gateway:7600\""));
+        assert!(patched.contains("unknown_key = \"keep me\""));
+        assert!(patched.contains("[log]"));
+        assert!(patched.contains("level = \"info\""));
+        assert!(patched.contains("allow_uncertain_quality = false"));
+        assert!(patched.contains("retention_days = 30"));
+
+        let parsed = parse_config_contents(&patched).unwrap();
+        assert_eq!(parsed.bridge_host, Some("gateway:7600".to_string()));
+        assert_eq!(parsed.log.level, Some("info".to_string()));
+        assert!(!parsed.allow_uncertain_quality);
+        assert_eq!(parsed.retention_days, Some(30));
+    }
+
+    #[test]
+    fn save_config_store_creates_a_missing_auto_discovered_file_and_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store =
+            load_config_store_from(None, Some(dir.path().to_str().unwrap()), None, None, false)
+                .unwrap();
+        let expected_path = dir.path().join("bhtune").join("bhtune.toml");
+
+        let result = save_config_store(
+            &store,
+            &store.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: false,
+                retention_days: Some(14),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.backup_path, None);
+        assert!(expected_path.exists());
+        assert_eq!(result.state.path, Some(expected_path.clone()));
+        assert_eq!(result.state.config.retention_days, Some(14));
+        assert!(!result.state.config.allow_uncertain_quality);
+        let saved = fs::read_to_string(expected_path).unwrap();
+        assert_eq!(result.state.original_raw.as_deref(), Some(saved.as_str()));
+    }
+
+    #[test]
+    fn save_config_store_creates_a_timestamped_backup_for_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        let original = "bridge_host = \"before:7600\"\nretention_days = 7\n";
+        fs::write(&path, original).unwrap();
+
+        let store = load_config_store_from(Some(&path), None, None, None, false).unwrap();
+        let result = save_config_store(
+            &store,
+            &store.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: false,
+                retention_days: Some(21),
+            },
+        )
+        .unwrap();
+
+        let backup_path = result.backup_path.clone().unwrap();
+        assert!(backup_path.exists());
+        assert_eq!(fs::read_to_string(backup_path).unwrap(), original);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            result.state.original_raw.unwrap()
+        );
+    }
+
+    #[test]
+    fn save_config_store_replaces_the_target_file_and_cleans_up_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        fs::write(&path, "bridge_host = \"before:7600\"\n").unwrap();
+
+        let store = load_config_store_from(Some(&path), None, None, None, false).unwrap();
+        let result = save_config_store(
+            &store,
+            &store.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: true,
+                retention_days: Some(9),
+            },
+        )
+        .unwrap();
+
+        let final_raw = fs::read_to_string(&path).unwrap();
+        assert_eq!(final_raw, result.state.original_raw.unwrap());
+        assert!(final_raw.contains("allow_uncertain_quality = true"));
+        assert!(final_raw.contains("retention_days = 9"));
+        let (_backups, temps) = backup_and_temp_siblings(&path);
+        assert!(temps.is_empty(), "temporary config files were left behind");
+    }
+
+    #[test]
+    fn save_config_store_rejects_a_stale_revision_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        fs::write(&path, "bridge_host = \"before:7600\"\n").unwrap();
+
+        let store = load_config_store_from(Some(&path), None, None, None, false).unwrap();
+        let err = save_config_store(
+            &store,
+            "present:v1:stale",
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: false,
+                retention_days: Some(5),
+            },
+        )
+        .unwrap_err();
+
+        match err {
+            ConfigStoreError::Conflict { message, .. } => {
+                assert!(message.contains("stale config revision token"));
+            }
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn save_config_store_rejects_external_disk_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        fs::write(&path, "bridge_host = \"before:7600\"\n").unwrap();
+
+        let store = load_config_store_from(Some(&path), None, None, None, false).unwrap();
+        fs::write(&path, "bridge_host = \"outside:7600\"\n").unwrap();
+
+        let err = save_config_store(
+            &store,
+            &store.revision,
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: false,
+                retention_days: Some(5),
+            },
+        )
+        .unwrap_err();
+
+        match err {
+            ConfigStoreError::Conflict { message, .. } => {
+                assert!(message.contains("changed on disk since it was loaded"));
+            }
+            other => panic!("expected Conflict, got {other:?}"),
+        }
     }
 
     /// A minimal, `DcsTemplate::validate()`-passing `[[template]]` block: non-empty `name`,

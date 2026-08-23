@@ -103,6 +103,8 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      replacement) and proceeds immediately only for `Good` OPC quality; `Uncertain` or `Bad`
      quality opens a warning with choices to select a different tag or proceed anyway. Proceeding
      only selects the item; tune execution still applies its live-reading quality safeguards.
+     The **Config** page controls whether `Uncertain` readings are accepted during tuning;
+     they are accepted by default, while `Bad` quality is always rejected.
      Reopening the browser expands the available path to the current Tag name, selects that node,
      and scrolls it into view; an unavailable tag falls back to the root level.
    - A **Notes** field records optional operator context, observations, or follow-up actions.
@@ -175,4 +177,5 @@ read live from the DCS.
   unattended runs.
 - [Safety](../guides/safety.md) — cancellation, quality enforcement, and write-back rollback,
   all shared between the CLI and the server.
+- [Configuration](../reference/config.md) — TOML-backed global quality and retention policies.
 - [DCS/PLC templates](../dcs-templates.md) — the tag-mapping system behind the Templates screen.

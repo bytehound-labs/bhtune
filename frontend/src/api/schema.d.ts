@@ -4,6 +4,22 @@
  */
 
 export interface paths {
+  "/api/config": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_config"];
+    put: operations["put_config"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/health": {
     parameters: {
       query?: never;
@@ -432,6 +448,28 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    ConfigResponse: {
+      backup_path?: string | null;
+      config_path: string;
+      effective: components["schemas"]["ConfigValues"];
+      revision: string;
+      source: components["schemas"]["ConfigSources"];
+      toml: components["schemas"]["ConfigTomlValues"];
+    };
+    ConfigSources: {
+      allow_uncertain_quality: string;
+      retention_days: string;
+    };
+    ConfigTomlValues: {
+      allow_uncertain_quality?: boolean | null;
+      /** Format: int32 */
+      retention_days?: number | null;
+    };
+    ConfigValues: {
+      allow_uncertain_quality: boolean;
+      /** Format: int32 */
+      retention_days?: number | null;
+    };
     /**
      * @description Direct-acting (increasing MV increases PV) or Reverse-acting (increasing MV decreases
      *     PV).
@@ -645,7 +683,6 @@ export interface components {
      *     enum field. Notes are intentionally absent: they describe one run, not a reusable draft.
      */
     NewRunDraft: {
-      allow_uncertain_quality?: boolean | null;
       bridge_host?: string | null;
       controller_type?: null | components["schemas"]["ControllerType"];
       /** Format: int32 */
@@ -821,6 +858,8 @@ export interface components {
      */
     RollbackState: "succeeded" | "failed";
     RunDetailResponse: {
+      /** @description Whether this run accepted `Uncertain` OPC quality, captured when the run started. */
+      allow_uncertain_quality: boolean;
       /** @description The resolved bridge host this run actually used, matching `opc_server` above. */
       bridge_host?: string | null;
       /** Format: date-time */
@@ -952,11 +991,6 @@ export interface components {
      *     convention.
      */
     StartRunRequest: {
-      /**
-       * @description Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. See
-       *     [`TuneArgs::allow_uncertain_quality`].
-       */
-      allow_uncertain_quality?: boolean;
       /**
        * @description opcda-bridge gateway address. Only meaningful with `driver: "opcda"` (default:
        *     resolved the same way the CLI resolves `--bridge-host`, via this process's own
@@ -1179,6 +1213,12 @@ export interface components {
      * @enum {string}
      */
     TuneOutcome: "running" | "completed" | "failed" | "aborted";
+    UpdateConfigRequest: {
+      allow_uncertain_quality: boolean;
+      /** Format: int32 */
+      retention_days?: number | null;
+      revision: string;
+    };
     /** @description The body of `PUT /api/runs/{id}/notes`. */
     UpdateNotesRequest: {
       /** @description Replacement note text. Blank or whitespace-only text clears the note. */
@@ -1194,6 +1234,7 @@ export interface components {
     WriteKind: "write" | "revert";
     /** @description Local projection of [`TuneWriteRow`]. */
     WriteResponse: {
+      allow_uncertain_quality: boolean;
       /** Format: float */
       derivative_previous?: number | null;
       /** Format: float */
@@ -1235,6 +1276,86 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  get_config: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The TOML and effective global configuration. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ConfigResponse"];
+        };
+      };
+      /** @description The configuration store could not be read. */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  put_config: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateConfigRequest"];
+      };
+    };
+    responses: {
+      /** @description The configuration was saved. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ConfigResponse"];
+        };
+      };
+      /** @description The request contains an invalid retention policy. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The supplied revision is stale or the file changed on disk. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The configuration could not be written. */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
   health: {
     parameters: {
       query?: never;

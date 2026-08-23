@@ -13,6 +13,11 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
   "description": "bhtune's configuration, loaded from an optional TOML file. Every field is optional; a\nvalue missing from the file (or the file itself missing) falls back to the env var / CLI\nflag / built-in default resolution in the `resolve_*` functions below.",
   "type": "object",
   "properties": {
+    "allow_uncertain_quality": {
+      "description": "Default OPC sample-quality policy for the server config page: `true` accepts\n`Uncertain` quality, while `false` rejects it. A missing key is treated as `true`\nwhen the config file is parsed, matching the configuration-page default rather than\n`bool`'s ordinary `false`.",
+      "type": "boolean",
+      "default": true
+    },
     "bind": {
       "description": "Overrides [`DEFAULT_BIND_ADDR`] -- the `host:port` `bhtune-server` listens on. Only\nmeaningful to the server binary; see [`resolve_bind_addr`].",
       "type": [
@@ -45,13 +50,14 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
       }
     },
     "retention_days": {
-      "description": "Age-based history retention (`history-retention`): tune runs with `started_at` older\nthan this many days are deleted automatically on every startup (both binaries, via\n`crate::db::open`) and, for `bhtune-server`, again on a periodic timer while it keeps\nrunning -- see `crate::retention`. `None` (the default) means retain forever: there is\nno built-in number of days, since at this project's data volumes (see AGENTS.md's\nHistory explorer notes) an unexpected auto-delete of someone's baseline tune is a\nworse failure mode than an ever-growing database file. See [`resolve_retention_days`].",
+      "description": "Age-based history retention (`history-retention`): tune runs with `started_at` older\nthan this many days are deleted automatically on every startup (both binaries, via\n`crate::db::open`) and, for `bhtune-server`, again on a periodic timer while it keeps\nrunning -- see `crate::retention`. A present value must be at least 1. `None` (the\ndefault) means retain forever: there is no built-in number of days, since at this\nproject's data volumes (see AGENTS.md's History explorer notes) an unexpected\nauto-delete of someone's baseline tune is a worse failure mode than an ever-growing\ndatabase file. See [`resolve_retention_days`].",
       "type": [
         "integer",
         "null"
       ],
       "format": "uint32",
-      "minimum": 0
+      "default": null,
+      "minimum": 1
     },
     "server": {
       "description": "Default OPC DA server ProgID, used when `--server` is omitted. Unlike the other\nfields there is no built-in default -- if this is unset and `--server` is omitted,\nthe command errors (see [`resolve_server`]).",

@@ -93,7 +93,6 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l log-dir -d 'Direc
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l log-format -d 'Log file format: "pretty" or "json" (default: pretty)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l log-rotation -d 'Log file rotation: "hourly", "daily", or "never" (default: daily)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l yes -d 'Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without `--write-pid`'
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l allow-uncertain-quality -d 'Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. Off by default: a stale/held value is indistinguishable from a live one to the MRFT engine, so tolerating it can silently corrupt the switch-period measurement the whole test depends on. Only for sites whose gateway reports `Uncertain` as a matter of course -- `Quality::Bad` is never accepted, with or without this flag. Logged loudly when used and recorded on the run (`tune_runs.allow_uncertain_quality`), so history shows a run executed under relaxed rules'
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -s t -l tagname -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l template -r
@@ -137,7 +136,6 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l log-dir -d 'D
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l log-format -d 'Log file format: "pretty" or "json" (default: pretty)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l log-rotation -d 'Log file rotation: "hourly", "daily", or "never" (default: daily)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l yes -d 'See `TuneArgs::yes`'
-complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l allow-uncertain-quality -d 'See `TuneArgs::allow_uncertain_quality`'
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bhtune -n "__fish_bhtune_using_subcommand template; and not __fish_seen_subcommand_from list show import export delete help" -l config -d 'Path to a TOML config file (default: platform-specific, see `crate::config`)' -r -F
 complete -c bhtune -n "__fish_bhtune_using_subcommand template; and not __fish_seen_subcommand_from list show import export delete help" -l db -d 'Path to the SQLite database file (default: a platform-standard data directory, see `crate::config::default_db_path_from`). CLI > `BHTUNE_DB` env var > `db` in the config file > platform default -- see `crate::config::resolve_db_path`' -r -F

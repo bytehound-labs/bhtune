@@ -17,7 +17,6 @@ const defaultDraft = {
   timeout_secs: 3600,
   op_timeout_secs: 30,
   restore_timeout_secs: 30,
-  allow_uncertain_quality: false,
   direction: "reverse",
   pv_range_high: 100,
   pv_range_low: 0,
@@ -286,7 +285,6 @@ test.describe("New Tune draft persistence", () => {
         timeout_secs: 30,
         op_timeout_secs: 30,
         restore_timeout_secs: 30,
-        allow_uncertain_quality: false,
         yes: false,
       },
     });

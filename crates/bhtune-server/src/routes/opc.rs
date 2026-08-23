@@ -92,7 +92,8 @@ pub(crate) async fn servers(
     State(state): State<AppState>,
     Query(query): Query<OpcServersQuery>,
 ) -> Result<Json<OpcServersResponse>, ApiError> {
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
+    let config = state.config_snapshot()?;
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
     let servers = with_timeout("list OPC DA servers", list_opcda_servers(&bridge_host)).await?;
     Ok(Json(OpcServersResponse { servers }))
 }
@@ -153,8 +154,9 @@ pub(crate) async fn browse(
     State(state): State<AppState>,
     Query(query): Query<OpcBrowseQuery>,
 ) -> Result<Json<OpcBrowseResponse>, ApiError> {
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &state.app_config)
+    let config = state.config_snapshot()?;
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let path = query.path.unwrap_or_default();
     let driver = with_timeout(
@@ -225,8 +227,9 @@ pub(crate) async fn read(
         .tag
         .filter(|t| !t.trim().is_empty())
         .ok_or_else(|| ApiError::BadRequest("a tag is required".to_string()))?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &state.app_config)
+    let config = state.config_snapshot()?;
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
@@ -282,9 +285,11 @@ mod tests {
     /// test in this module needs the config resolution to pick up a specific mock gateway
     /// (or a deliberately unreachable/unset one), never the four seeded built-in templates.
     async fn state_with(bridge_host: Option<&str>, opc_server: Option<&str>) -> AppState {
-        let mut state = crate::test_support::in_memory_state().await;
-        state.app_config.bridge_host = bridge_host.map(str::to_string);
-        state.app_config.server = opc_server.map(str::to_string);
+        let state = crate::test_support::in_memory_state().await;
+        let mut store = state.config_store.write().unwrap();
+        store.config.bridge_host = bridge_host.map(str::to_string);
+        store.config.server = opc_server.map(str::to_string);
+        drop(store);
         state
     }
 

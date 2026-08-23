@@ -4,7 +4,7 @@
 .SH NAME
 bhtune\-tune \- Run an MRFT tune against a real OPC DA loop or the in\-process simulator
 .SH SYNOPSIS
-\fBbhtune\-tune\fR [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-pv\-range\-high\fR] [\fB\-\-pv\-range\-low\fR] [\fB\-\-mv\-range\-high\fR] [\fB\-\-mv\-range\-low\fR] [\fB\-\-direction\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-allow\-uncertain\-quality\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-t\fR|\fB\-\-tagname\fR> <\fB\-\-template\fR> <\fB\-\-process\-type\fR> <\fB\-\-controller\-type\fR> <\fB\-\-relay\-amp\fR> <\fB\-\-driver\fR> 
+\fBbhtune\-tune\fR [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-pv\-range\-high\fR] [\fB\-\-pv\-range\-low\fR] [\fB\-\-mv\-range\-high\fR] [\fB\-\-mv\-range\-low\fR] [\fB\-\-direction\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-t\fR|\fB\-\-tagname\fR> <\fB\-\-template\fR> <\fB\-\-process\-type\fR> <\fB\-\-controller\-type\fR> <\fB\-\-relay\-amp\fR> <\fB\-\-driver\fR> 
 .SH DESCRIPTION
 Run an MRFT tune against a real OPC DA loop or the in\-process simulator
 .SH OPTIONS
@@ -153,9 +153,6 @@ moderate
 .IP \(bu 2
 sluggish
 .RE
-.TP
-\fB\-\-allow\-uncertain\-quality\fR
-Accept `Quality::Uncertain` OPC readings instead of hard\-failing on them. Off by default: a stale/held value is indistinguishable from a live one to the MRFT engine, so tolerating it can silently corrupt the switch\-period measurement the whole test depends on. Only for sites whose gateway reports `Uncertain` as a matter of course \-\- `Quality::Bad` is never accepted, with or without this flag. Logged loudly when used and recorded on the run (`tune_runs.allow_uncertain_quality`), so history shows a run executed under relaxed rules
 .TP
 \fB\-\-op\-timeout\-secs\fR \fI<OP_TIMEOUT_SECS>\fR [default: 30]
 Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black\-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `\-\-timeout\-secs` both stay effective even mid\-hung\-read/write \-\- see AGENTS.md\*(Aqs `safety\-cancellation` section. Distinct from `\-\-timeout\-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration

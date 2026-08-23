@@ -81,7 +81,6 @@ json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled
 '--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
 '--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
 '--yes[Confirm an unattended PID write-back. Required alongside \`--write-pid\` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without \`--write-pid\`]' \
-'--allow-uncertain-quality[Accept \`Quality\:\:Uncertain\` OPC readings instead of hard-failing on them. Off by default\: a stale/held value is indistinguishable from a live one to the MRFT engine, so tolerating it can silently corrupt the switch-period measurement the whole test depends on. Only for sites whose gateway reports \`Uncertain\` as a matter of course -- \`Quality\:\:Bad\` is never accepted, with or without this flag. Logged loudly when used and recorded on the run (\`tune_runs.allow_uncertain_quality\`), so history shows a run executed under relaxed rules]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -122,7 +121,6 @@ json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled
 '--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
 '--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
 '--yes[See \`TuneArgs\:\:yes\`]' \
-'--allow-uncertain-quality[See \`TuneArgs\:\:allow_uncertain_quality\`]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0

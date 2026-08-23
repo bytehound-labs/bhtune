@@ -103,8 +103,8 @@ This holds `bhtune.db` (the SQLite database — every template, loop, tune run, 
 and write-back audit row) and `logs/` (structured `tracing` output). Nothing here is
 encrypted or hidden — it's a plain SQLite file you can open with any SQLite tool.
 
-Every run is kept forever unless you opt in to a retention policy (`retention_days` in
-`bhtune.toml`, or `bhtune history prune` on demand) — see
+Every run is kept forever unless you opt in to a retention policy (`retention_days` must be a
+positive whole number in `bhtune.toml`, or use `bhtune history prune` on demand) — see
 [CLI quickstart](cli-quickstart.md#look-at-what-it-calculated).
 
 ## Run as a background service

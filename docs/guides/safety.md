@@ -49,7 +49,8 @@ the loop is ever switched to manual.
 ## OPC quality
 
 Every OPC DA read reports a quality alongside its value (`Good`/`Uncertain`/`Bad`). BHTune
-enforces `Good` by default everywhere quality matters:
+always accepts `Good`, accepts `Uncertain` by default, and never accepts `Bad` for tuning-critical
+operations:
 
 - **Before the loop is touched** (initial PV/MV/range/mode/direction reads): any non-`Good`
   reading is a hard failure. Nothing has been mutated yet, so this is a clean refusal.
@@ -64,9 +65,10 @@ enforces `Good` by default everywhere quality matters:
   or `Bad` quality requires an explicit choice to select another tag or proceed anyway. This
   only accepts the item into the form; tune execution still enforces the quality rules above.
 
-`Bad` quality is never accepted under any flag. Sites whose gateway reports `Uncertain` as a
-matter of course can pass `--allow-uncertain-quality` to accept `Uncertain` (never `Bad`) —
-off by default, logged loudly every time it changes the outcome, and recorded on the run so
+`Bad` quality is never accepted under any setting. Sites whose gateway reports `Uncertain` as a
+matter of course can leave the default `allow_uncertain_quality = true`, or disable that global
+policy on the Config page / in `bhtune.toml` when uncertain readings must be rejected —
+enabled by default, logged loudly every time it changes the outcome, and recorded on the run so
 history shows which runs executed under relaxed rules.
 
 ## Restoration

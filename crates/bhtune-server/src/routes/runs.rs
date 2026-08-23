@@ -154,10 +154,6 @@ pub struct StartRunRequest {
     /// Non-interactively write this response level's calculated PID parameters back to the
     /// DCS. Requires `yes: true`.
     pub write_pid: Option<ResponseLevel>,
-    /// Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. See
-    /// [`TuneArgs::allow_uncertain_quality`].
-    #[serde(default)]
-    pub allow_uncertain_quality: bool,
     /// Cap on any single driver read/write during the run, in seconds.
     #[serde(default = "default_op_or_restore_timeout_secs")]
     pub op_timeout_secs: u64,
@@ -270,7 +266,6 @@ impl StartRunRequest {
             notes: self.notes,
             yes: self.yes,
             write_pid: self.write_pid.map(Into::into),
-            allow_uncertain_quality: self.allow_uncertain_quality,
             op_timeout_secs: self.op_timeout_secs,
             restore_timeout_secs: self.restore_timeout_secs,
             // `drive()`'s doc comment requires `Json` for every HTTP-started run: `execute`'s
@@ -323,7 +318,8 @@ pub(crate) async fn start_run(
     // `--yes`, an unreachable driver) are "exactly the kind of problem an HTTP client
     // expects a synchronous error response for" -- so they map to `400`, not the generic
     // `500` a bare `?`/`Internal` conversion would give.
-    let prepared = prepare(&state.pool, args, &state.app_config)
+    let app_config = state.config_snapshot()?;
+    let prepared = prepare(&state.pool, args, &app_config)
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let run_id = prepared.run_id();
@@ -563,6 +559,7 @@ async fn reserve_connect_and_write(
     response_level: ResponseLevel,
     target: WriteReadback,
     kind: WriteKind,
+    allow_uncertain_quality: bool,
 ) -> Result<RunDetailResponse, ApiError> {
     state
         .active_run
@@ -586,7 +583,7 @@ async fn reserve_connect_and_write(
             response_level,
             target,
             kind,
-            run.allow_uncertain_quality,
+            allow_uncertain_quality,
         )
         .await?;
         Ok(outcome)
@@ -640,6 +637,7 @@ pub(crate) async fn write_run(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
     require_writable_run(&run)?;
+    let allow_uncertain_quality = state.config_snapshot()?.allow_uncertain_quality;
 
     let results = TuneResultRow::list_for_run(&state.pool, run_id).await?;
     let selected = results
@@ -680,6 +678,7 @@ pub(crate) async fn write_run(
         request.response_level,
         target,
         WriteKind::Write,
+        allow_uncertain_quality,
     )
     .await?;
     Ok(Json(detail))
@@ -720,6 +719,7 @@ pub(crate) async fn revert_run(
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
     require_writable_run(&run)?;
+    let allow_uncertain_quality = state.config_snapshot()?.allow_uncertain_quality;
 
     let writes = TuneWriteRow::list_for_run(&state.pool, run_id).await?;
     let last_write = writes
@@ -754,6 +754,7 @@ pub(crate) async fn revert_run(
         response_level,
         target,
         WriteKind::Revert,
+        allow_uncertain_quality,
     )
     .await?;
     Ok(Json(detail))

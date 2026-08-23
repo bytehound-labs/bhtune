@@ -405,7 +405,7 @@ driver genuinely ignores: the OPC DA server ProgID and bridge host (previously c
 hidden outright; now always rendered, so switching drivers no longer reflows the form), the
 tag name (the simulator hardcodes its own PV/MV tags), the write-back level and its
 confirmation checkbox (the simulator has no PID constant tags to write to), the
-`--allow-uncertain-quality` checkbox (the simulator always reports `Good`), and the
+global Config > OPC quality policy (the simulator always reports `Good`), and the
 op/restore timeouts (no out-of-process I/O to time out) — each with a one-line hint
 explaining why. The template stays enabled intentionally: the simulator ignores its DCS tag
 mappings, but `calculate_all` still applies its PID type and unit conventions to the calculated
@@ -1720,6 +1720,33 @@ The block's actual branches are both genuinely exercised: the success path 13 ti
 `run_with_cli_config_load_failure_is_exit_failure` test's unwritable `/nonexistent-dir/`
 database path — not a real gap.
 
+## Browser configuration page and global quality policy
+
+The browser's `/config` page edits the same `bhtune.toml` file used by the CLI and server; it
+does not create a second SQLite settings authority. It currently exposes the global
+`allow_uncertain_quality` policy and `retention_days`, while startup-only settings such as the
+database path, bind address, logging, and template-catalog path remain file/configuration
+settings rather than live UI controls.
+
+`allow_uncertain_quality` defaults to `true` when the key or file is absent. `Good` readings
+always pass, `Uncertain` readings follow this global policy, and `Bad` readings are always
+rejected. The policy is captured at the start of each tune and PID write/revert operation and
+stored with the resulting history/audit rows, so changing Config cannot reinterpret an
+operation already in progress or make its historical quality decision ambiguous.
+
+Config saves preserve comments, unknown TOML keys, and unrelated formatting, validate the
+patched document, create a timestamped sibling backup when replacing an existing file, and
+atomically replace the live file. The server updates its live quality/retention snapshot after a
+successful save. A stale browser revision or an external edit detected since startup/last save
+returns `409 Conflict`; hand edits intentionally take effect after a server restart rather than
+being hot-reloaded underneath the running process.
+
+Retention remains `CLI --retention-days > BHTUNE_RETENTION_DAYS > bhtune.toml > retain forever`;
+the TOML value must be a positive whole number when present, and zero is rejected at startup.
+Saving Config changes the policy for future startup or scheduled sweeps and never deletes
+history immediately. The server's periodic sweep reads the live snapshot each time; the CLI
+continues to resolve its policy when a new invocation starts.
+
 ## Automation (`cli-automation`)
 
 `bhtune tune`/`bhtune simulate` support fully non-interactive operation for scheduled/scripted
@@ -1931,9 +1958,11 @@ show` (not `list`, to keep the list view narrow) prints the snapshotted template
   called it — a tag reporting `Uncertain` (a stale held-last-value during a comms hiccup) or
   outright `Bad` quality flowed into the MRFT engine and a PID write-back exactly like a
   trustworthy `Good` reading. `check_quality` is now the single choke point: `Good` always
-  passes; `Bad` is never accepted, `--allow-uncertain-quality` or not; `Uncertain` is
-  accepted only with that flag set, logging a loud `tracing::warn!` every time so a run
-  executed under relaxed rules is never silently indistinguishable from a normal one. Wired
+  passes; `Bad` is never accepted; `Uncertain` is accepted when the global
+  `allow_uncertain_quality` policy is enabled (the default), logging a loud
+  `tracing::warn!` every time so a run executed under the relaxed policy is never silently
+  indistinguishable from a normal one. The policy is configured in TOML or on the browser's
+  Config page, not per tune. Wired
   through every read that feeds a tuning decision:
   - `read_initial_values`/`transition_to_manual`'s setpoint read — a poor-quality reading
     before any mutation of the loop is a hard failure (a plain `anyhow::Error`), since
@@ -1953,9 +1982,9 @@ show` (not `list`, to keep the list view narrow) prints the snapshotted template
   DB-side mirror of `bhtune_driver::Quality` — two separate enums since `bhtune-driver` and
   `bhtune-db` are sibling crates, neither depending on the other) and `tune_runs` gained
   `allow_uncertain_quality`, so a run's quality posture is part of its permanent history.
-  `bhtune tune --allow-uncertain-quality` is the CLI flag; a poor-quality abort exits with
-  `EXIT_POOR_QUALITY` (5), distinct from a Ctrl+C/timeout abort, and `--output json` carries
-  nullable `poor_quality_tag`/`poor_quality` fields alongside the existing `timeout_secs`.
+  A poor-quality abort exits with `EXIT_POOR_QUALITY` (5), distinct from a Ctrl+C/timeout
+  abort, and `--output json` carries nullable `poor_quality_tag`/`poor_quality` fields
+  alongside the existing `timeout_secs`.
 
 - **Ctrl+C and `--timeout-secs` now reach an in-flight driver call, and the restore itself
   is bounded** — done (`bhtune-cli::cancel`, `commands::tune::{bounded_driver_call,
@@ -2152,9 +2181,10 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
   a successful rollback (confirming the driver's live value was actually restored, not just
   the audit row), a rollback that itself fails (`rollback_state = Failed` with
   `rollback_error` naming the constant), and an `Uncertain` readback accepted without
-  incident under `--allow-uncertain-quality` (proving finding 5's escape hatch and finding
-  6's tolerance check compose correctly rather than the latter accidentally re-imposing a
-  `Good`-only rule of its own). `pid_value_within_tolerance` also has direct unit
+  incident when the global `allow_uncertain_quality` policy is enabled (proving finding 5's
+  configurable policy and finding 6's tolerance check compose correctly rather than the latter
+  accidentally re-imposing a `Good`-only rule of its own). `pid_value_within_tolerance` also
+  has direct unit
   tests pinning down its exact-match, relative-band, absolute-floor-near-zero, and
   negative-value behavior.
 

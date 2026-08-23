@@ -784,6 +784,50 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
     .await
     .unwrap();
 
+    let (default_policy,): (i64,) = sqlx::query_as(
+        "SELECT allow_uncertain_quality FROM tune_writes WHERE run_id = ? ORDER BY id LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        default_policy, 1,
+        "omitting allow_uncertain_quality must use the global true default"
+    );
+
+    let invalid_policy = sqlx::query(
+        r#"
+        INSERT INTO tune_writes (
+            run_id, response_level, written_at, kind, allow_uncertain_quality, success
+        ) VALUES (?, 'sluggish', ?, 'write', 2, 1)
+        "#,
+    )
+    .bind(run_id)
+    .bind(Utc::now())
+    .execute(&pool)
+    .await;
+    assert!(
+        invalid_policy.is_err(),
+        "allow_uncertain_quality outside 0/1 must be rejected"
+    );
+
+    let null_policy = sqlx::query(
+        r#"
+        INSERT INTO tune_writes (
+            run_id, response_level, written_at, kind, allow_uncertain_quality, success
+        ) VALUES (?, 'sluggish', ?, 'write', NULL, 1)
+        "#,
+    )
+    .bind(run_id)
+    .bind(Utc::now())
+    .execute(&pool)
+    .await;
+    assert!(
+        null_policy.is_err(),
+        "allow_uncertain_quality must be NOT NULL"
+    );
+
     // A failed write: no readback, an error message instead.
     sqlx::query(
         r#"

@@ -90,8 +90,8 @@ pub const EXIT_TIMED_OUT: u8 = 4;
 /// A `tune`/`simulate` run was aborted because a driver reported a non-`Good` OPC quality
 /// for a tuning-critical reading (finding 5 of the live-plant safety review): an initial
 /// reading, the transition-to-manual setpoint capture, or an in-flight PV poll sample, and
-/// (for the in-flight case) `--allow-uncertain-quality` either wasn't set or the quality was
-/// `Bad` rather than merely `Uncertain`. The loop was restored to its pre-test mode, exactly
+/// (for the in-flight case) the global Config > OPC quality policy rejected `Uncertain`, or the
+/// quality was `Bad` rather than merely `Uncertain`. The loop was restored to its pre-test mode, exactly
 /// like [`EXIT_ABORTED`]/[`EXIT_TIMED_OUT`]. Distinct from both so a scheduler's alerting can
 /// tell "the plant data itself couldn't be trusted" apart from a user-initiated stop or a
 /// run that simply took too long. See `commands::tune::TuneOutcome::PoorQuality` and
@@ -130,7 +130,11 @@ pub async fn run() -> ExitCode {
     let ctrl_c = cancel::CtrlC::install();
     let cli = Cli::parse();
 
-    let config = config::load_config(cli.config.as_deref()).unwrap_or_default();
+    let output_format = cli.command.output_format();
+    let config = match config::load_config(cli.config.as_deref()) {
+        Ok(config) => config,
+        Err(error) => return fail(&error, output_format),
+    };
     let default_log_dir = config::default_log_dir_from(
         std::env::var("XDG_DATA_HOME").ok().as_deref(),
         std::env::var("HOME").ok().as_deref(),
@@ -411,7 +415,6 @@ mod tests {
                 notes: None,
                 yes: false,
                 write_pid: None,
-                allow_uncertain_quality: false,
                 op_timeout_secs: 30,
                 restore_timeout_secs: 30,
                 output: OutputFormat::Table,
@@ -488,7 +491,6 @@ mod tests {
             notes: Some("dispatch test".to_string()),
             yes: false,
             write_pid: None,
-            allow_uncertain_quality: false,
             op_timeout_secs: 30,
             restore_timeout_secs: 30,
             output: OutputFormat::Table,

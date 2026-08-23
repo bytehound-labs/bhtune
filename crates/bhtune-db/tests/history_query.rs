@@ -1310,8 +1310,12 @@ async fn tune_write_insert_records_full_success_with_previous_and_no_rollback() 
     )
     .await
     .unwrap();
+    let run = TuneRunRow::record_allow_uncertain_quality(&pool, run.id, false)
+        .await
+        .unwrap();
 
     let mut new = NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());
+    new.allow_uncertain_quality = true;
     new.previous = Some(WriteReadback {
         proportional: 50.0,
         integral: 3.0,
@@ -1328,6 +1332,8 @@ async fn tune_write_insert_records_full_success_with_previous_and_no_rollback() 
     let row = TuneWriteRow::insert(&pool, run.id, new).await.unwrap();
     assert_eq!(row.run_id, run.id);
     assert_eq!(row.response_level, ResponseLevel::Moderate);
+    assert!(!run.allow_uncertain_quality);
+    assert!(row.allow_uncertain_quality);
     assert!(row.success);
     assert_eq!(
         row.previous,
@@ -1344,6 +1350,14 @@ async fn tune_write_insert_records_full_success_with_previous_and_no_rollback() 
     assert!(row.error_message.is_none());
     assert!(row.rollback_state.is_none());
     assert!(row.rollback_error.is_none());
+
+    // The write keeps its effective policy even if the parent run is later updated.
+    let updated_run = TuneRunRow::record_allow_uncertain_quality(&pool, run.id, false)
+        .await
+        .unwrap();
+    assert!(!updated_run.allow_uncertain_quality);
+    let listed = TuneWriteRow::list_for_run(&pool, run.id).await.unwrap();
+    assert!(listed[0].allow_uncertain_quality);
 }
 
 #[tokio::test]
@@ -1364,6 +1378,7 @@ async fn tune_write_insert_records_pre_read_failure_with_nothing_attempted() {
     .unwrap();
 
     let mut new = NewTuneWrite::new(ResponseLevel::Aggressive, Utc::now());
+    new.allow_uncertain_quality = false;
     new.error_message = Some("pre-read of Integral tag failed: bad quality".to_string());
 
     let row = TuneWriteRow::insert(&pool, run.id, new).await.unwrap();
@@ -1401,6 +1416,7 @@ async fn tune_write_insert_records_partial_write_with_successful_rollback() {
     .unwrap();
 
     let mut new = NewTuneWrite::new(ResponseLevel::Sluggish, Utc::now());
+    new.allow_uncertain_quality = false;
     new.previous = Some(WriteReadback {
         proportional: 50.0,
         integral: 3.0,
@@ -1446,6 +1462,7 @@ async fn tune_write_insert_records_partial_write_with_failed_rollback() {
     .unwrap();
 
     let mut new = NewTuneWrite::new(ResponseLevel::Aggressive, Utc::now());
+    new.allow_uncertain_quality = false;
     new.previous = Some(WriteReadback {
         proportional: 50.0,
         integral: 3.0,
@@ -1485,12 +1502,14 @@ async fn tune_write_list_for_run_orders_oldest_first() {
     let t0 = Utc::now();
 
     let mut new_second = NewTuneWrite::new(ResponseLevel::Moderate, t0 + Duration::seconds(5));
+    new_second.allow_uncertain_quality = false;
     new_second.success = true;
     let second = TuneWriteRow::insert(&pool, run.id, new_second)
         .await
         .unwrap();
 
     let mut new_first = NewTuneWrite::new(ResponseLevel::Aggressive, t0);
+    new_first.allow_uncertain_quality = false;
     new_first.success = true;
     let first = TuneWriteRow::insert(&pool, run.id, new_first)
         .await
@@ -1627,6 +1646,7 @@ async fn delete_matching_cascades_to_samples_results_and_writes() {
     );
     TuneResultRow::insert(&pool, &result_row).await.unwrap();
     let mut new_write = NewTuneWrite::new(ResponseLevel::Moderate, now);
+    new_write.allow_uncertain_quality = false;
     new_write.success = true;
     TuneWriteRow::insert(&pool, run.id, new_write)
         .await

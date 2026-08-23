@@ -95,7 +95,6 @@ type FormState = {
   timeoutSecs: NumOrBlank;
   opTimeoutSecs: NumOrBlank;
   restoreTimeoutSecs: NumOrBlank;
-  allowUncertainQuality: boolean;
   tagSources: TagMappingSources;
   valueSources: ValueMappingSources;
   valueTagOverrides: ValueTagOverrideFormState;
@@ -146,7 +145,6 @@ const initialForm: FormState = {
   timeoutSecs: 3600,
   opTimeoutSecs: 30,
   restoreTimeoutSecs: 30,
-  allowUncertainQuality: false,
   tagSources: { ...DEFAULT_TAG_MAPPING_SOURCES },
   valueSources: { ...DEFAULT_VALUE_MAPPING_SOURCES },
   // The simulator has no range/direction tags at all, so these five are hard-required
@@ -417,7 +415,7 @@ function draftTagSources(draft: NewRunDraft): TagMappingSources {
  *
  * `bhtune-cli`'s `RequestSnapshot` (what actually populates `request_json`) always resolves
  * the fields that carry a CLI/server default — `mrft_delay`, `poll_interval_ms`, every
- * timeout, every `sim_*` field, `yes`, `allow_uncertain_quality` — to a concrete value before
+ * timeout, every `sim_*` field, and `yes` — to a concrete value before
  * it's stored, so those are simply copied across; the `?? initialForm...` fallback only ever
  * matters for a foreign/pre-`db-run-request-snapshot` row that somehow lacks the field. Every
  * other optional field (cycles, ranges, direction, connection overrides) is
@@ -447,7 +445,6 @@ function formFromRequest(request: StartRunRequest): FormState {
     opTimeoutSecs: request.op_timeout_secs ?? initialForm.opTimeoutSecs,
     restoreTimeoutSecs:
       request.restore_timeout_secs ?? initialForm.restoreTimeoutSecs,
-    allowUncertainQuality: request.allow_uncertain_quality ?? false,
     tagSources: inferTagSources(request.tag_overrides),
     valueSources: inferRequestValueSources(request),
     valueTagOverrides: formValueTagOverrides(request.tag_overrides),
@@ -554,8 +551,6 @@ function formFromDraft(draft: NewRunDraft): FormState {
       draft.restore_timeout_secs === undefined
         ? initialForm.restoreTimeoutSecs
         : toNumOrBlank(draft.restore_timeout_secs),
-    allowUncertainQuality:
-      draft.allow_uncertain_quality ?? initialForm.allowUncertainQuality,
     tagSources: draftTagSources(draft),
     valueSources,
     valueTagOverrides: formValueTagOverrides(draft.tag_overrides),
@@ -642,7 +637,6 @@ function draftFromForm(form: FormState): NewRunDraft {
     timeout_secs: toNullable(form.timeoutSecs),
     op_timeout_secs: toNullable(form.opTimeoutSecs),
     restore_timeout_secs: toNullable(form.restoreTimeoutSecs),
-    allow_uncertain_quality: form.allowUncertainQuality,
     direction: form.opcDirection || null,
     pv_range_high: toNullable(form.opcPvRangeHigh),
     pv_range_low: toNullable(form.opcPvRangeLow),
@@ -841,7 +835,6 @@ function buildRequest(form: FormState): StartRunRequest | string {
     notes: form.notes.trim() || undefined,
     yes: form.yes,
     write_pid: form.writePid || undefined,
-    allow_uncertain_quality: form.allowUncertainQuality,
     op_timeout_secs: toOptional(form.opTimeoutSecs),
     restore_timeout_secs: toOptional(form.restoreTimeoutSecs),
   };
@@ -1469,17 +1462,6 @@ export function NewRunPage() {
               form.driver === "simulator"
                 ? "Disabled — the simulator has no out-of-process I/O to time out."
                 : "Cap on restoring the loop afterward."
-            }
-          />
-          <CheckboxField
-            label="Allow uncertain quality"
-            checked={form.allowUncertainQuality}
-            onChange={(v) => set("allowUncertainQuality", v)}
-            disabled={form.driver === "simulator"}
-            hint={
-              form.driver === "simulator"
-                ? "Disabled — the simulator always reports Good quality."
-                : "Accept Quality::Uncertain readings instead of aborting. Bad quality is never accepted."
             }
           />
         </FormSection>

@@ -12,6 +12,7 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use bhtune_cli::{config, db, logging};
@@ -54,11 +55,13 @@ pub struct BoundServer {
 /// resolve config (an explicit `config_path` if given, otherwise the platform's
 /// auto-discovered path -- mirroring `bhtune-cli` calling `load_config(None)` whenever
 /// `--config` itself wasn't passed), init logging, open/migrate/seed the database, spawn the
-/// periodic retention sweeper if configured, and bind the configured address.
+/// periodic retention sweeper, and bind the configured address.
 ///
 /// Does not start serving -- see [`serve`].
 pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundServer> {
-    let config = config::load_config(config_path).unwrap_or_default();
+    let loaded_config = config::load_config_store(config_path)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let config = loaded_config.config.clone();
 
     let default_log_dir = config::default_log_dir_from(
         std::env::var("XDG_DATA_HOME").ok().as_deref(),
@@ -100,9 +103,8 @@ pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundSer
     );
     let pool = db::open(&db_path, user_templates, retention_days).await?;
 
-    if let Some(days) = retention_days {
-        spawn_retention_sweeper(pool.clone(), days);
-    }
+    let config_store = Arc::new(RwLock::new(loaded_config));
+    spawn_retention_sweeper(pool.clone(), config_store.clone());
 
     let bind_addr = config::resolve_bind_addr(std::env::var("BHTUNE_BIND").ok(), &config);
     let addr: SocketAddr = bind_addr
@@ -113,7 +115,7 @@ pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundSer
     let app = build_router(AppState {
         pool,
         active_run: active_run.clone(),
-        app_config: config,
+        config_store,
     });
     let listener = tokio::net::TcpListener::bind(addr).await?;
     // Logs the OS-assigned address, not the requested `addr` -- identical for every real
@@ -198,18 +200,19 @@ pub async fn shutdown_signal() {
 }
 
 /// Spawns the background task that re-applies `history-retention`'s policy every
-/// [`RETENTION_SWEEP_INTERVAL`] for as long as the server keeps running. Only ever called
-/// when a retention policy is actually configured (`build_server`'s `if let Some(days)`
-/// guard) -- there is deliberately no task at all, not a task that immediately no-ops, when
-/// retention is disabled (the default), matching `db::open`'s own "skip entirely" behavior
-/// for `None`.
+/// [`RETENTION_SWEEP_INTERVAL`] for as long as the server keeps running. The task retains the
+/// synchronized store rather than a copied day count, so a config-page save is observed by
+/// the next sweep; a disabled policy simply makes that tick a no-op.
 ///
 /// Not joined or cancelled anywhere: the task only ever does one cheap `DELETE` per tick and
 /// holds no resources between ticks, so letting it end abruptly when the process exits
 /// (rather than folding it into a careful graceful-shutdown sequence) risks losing at most
 /// one in-progress sweep, never corrupting anything -- SQLite's own transaction guarantees
 /// cover the rest.
-fn spawn_retention_sweeper(pool: bhtune_db::SqlitePool, days: u32) {
+fn spawn_retention_sweeper(
+    pool: bhtune_db::SqlitePool,
+    config_store: Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(RETENTION_SWEEP_INTERVAL);
         // The first tick fires immediately; `db::open` already ran a startup sweep moments
@@ -217,9 +220,29 @@ fn spawn_retention_sweeper(pool: bhtune_db::SqlitePool, days: u32) {
         interval.tick().await;
         loop {
             interval.tick().await;
-            retention_tick(&pool, days).await;
+            retention_tick_live(&pool, &config_store).await;
         }
     });
+}
+
+async fn retention_tick_live(
+    pool: &bhtune_db::SqlitePool,
+    config_store: &Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
+) {
+    let config = match config_store.read() {
+        Ok(store) => store.config.clone(),
+        Err(_) => {
+            tracing::warn!("configuration store lock poisoned; skipping retention sweep");
+            return;
+        }
+    };
+    let env_days = std::env::var("BHTUNE_RETENTION_DAYS")
+        .ok()
+        .and_then(|value| value.parse().ok());
+    let Some(days) = bhtune_cli::config::resolve_retention_days(env_days, &config) else {
+        return;
+    };
+    retention_tick(pool, days).await;
 }
 
 /// One periodic retention sweep. Logs a warning and returns on failure rather than
@@ -239,6 +262,19 @@ async fn retention_tick(pool: &bhtune_db::SqlitePool, days: u32) {
 mod tests {
     use super::*;
     use bhtune_db::connect_in_memory;
+
+    #[tokio::test]
+    async fn build_server_propagates_a_malformed_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        std::fs::write(&path, "retention_days = [not valid toml").unwrap();
+
+        let error = match build_server(Some(&path)).await {
+            Ok(_) => panic!("malformed config should fail startup"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("failed to parse config file"));
+    }
 
     #[tokio::test]
     async fn retention_tick_deletes_runs_past_the_cutoff_and_logs_nothing_fatal() {

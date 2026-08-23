@@ -500,8 +500,8 @@ pub struct TuneRunRow {
     /// Mutable operator notes for this run. `None` means no note is recorded.
     pub notes: Option<String>,
     pub initial_readings: Option<TuneRunInitialReadings>,
-    /// Whether this run permitted `Quality::Uncertain` OPC readings via
-    /// `--allow-uncertain-quality` (finding 5 of the live-plant safety review;
+    /// Whether this run permitted `Quality::Uncertain` OPC readings under the global
+    /// `allow_uncertain_quality` policy (finding 5 of the live-plant safety review;
     /// `Quality::Bad` is never accepted regardless). `false` for every run started before
     /// [`TuneRunRow::record_allow_uncertain_quality`] is called -- see that method's doc
     /// comment for why it's a separate post-`start()` update rather than a `start()`
@@ -801,8 +801,8 @@ impl TuneRunRow {
         row_to_tune_run(row)
     }
 
-    /// Records whether this run permitted `Quality::Uncertain` OPC readings, via
-    /// `--allow-uncertain-quality` (finding 5 of the live-plant safety review). A separate
+    /// Records whether this run permitted `Quality::Uncertain` OPC readings under the global
+    /// configuration policy (finding 5 of the live-plant safety review). A separate
     /// post-`start()` update rather than a new `start()` parameter deliberately: `start()`
     /// already has 8 positional parameters across 28 call sites in this crate's own test
     /// suite alone, and this is a rarely-used escape hatch, not information every caller
@@ -1435,6 +1435,10 @@ pub struct TuneWriteRow {
     /// Whether this row is a normal write-back or `bhtune history revert` undoing one. See
     /// [`WriteKind`].
     pub kind: WriteKind,
+    /// Whether this operation allowed `Quality::Uncertain` readings. This is
+    /// the explicit per-operation policy supplied at insertion time; it is
+    /// independent of [`TuneRunRow::allow_uncertain_quality`].
+    pub allow_uncertain_quality: bool,
     /// The P/I/D values read from the driver *before* any write was attempted. `None` only
     /// when the pre-read itself failed -- a hard stop before any write, so nothing else on
     /// this row was ever attempted either (`success = false`, every other field below `None`).
@@ -1512,6 +1516,7 @@ pub struct NewTuneWrite {
     pub response_level: ResponseLevel,
     pub written_at: DateTime<Utc>,
     pub kind: WriteKind,
+    pub allow_uncertain_quality: bool,
     pub previous: Option<WriteReadback>,
     pub proportional_written: Option<f32>,
     pub integral_written: Option<f32>,
@@ -1527,15 +1532,15 @@ pub struct NewTuneWrite {
 
 impl NewTuneWrite {
     /// Starts a record with every previous/written/readback/rollback field unset and
-    /// `kind = WriteKind::Write` -- callers fill in fields (all `pub`) as they progress
-    /// through the pre-read, write-and-verify, and rollback steps, then pass the result to
-    /// [`TuneWriteRow::insert`]. A `bhtune history revert` caller should set `kind =
-    /// WriteKind::Revert` immediately after constructing.
+    /// `kind = WriteKind::Write`. New production write/revert operations must overwrite
+    /// `allow_uncertain_quality` with the policy captured when that operation began; the
+    /// permissive default keeps direct repository/test construction backward-compatible.
     pub fn new(response_level: ResponseLevel, written_at: DateTime<Utc>) -> Self {
         NewTuneWrite {
             response_level,
             written_at,
             kind: WriteKind::Write,
+            allow_uncertain_quality: true,
             previous: None,
             proportional_written: None,
             integral_written: None,
@@ -1562,11 +1567,16 @@ impl TuneWriteRow {
             r#"
             INSERT INTO tune_writes (
                 run_id, response_level, written_at, kind,
+                allow_uncertain_quality,
                 proportional_previous, integral_previous, derivative_previous,
                 proportional_written, integral_written, derivative_written,
                 proportional_readback, integral_readback, derivative_readback,
                 success, error_message, rollback_state, rollback_error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (
+                ?, ?, ?, ?,
+                ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
             RETURNING *
             "#,
         )
@@ -1574,6 +1584,7 @@ impl TuneWriteRow {
         .bind(enum_to_text(&new.response_level))
         .bind(new.written_at)
         .bind(enum_to_text(&new.kind))
+        .bind(new.allow_uncertain_quality)
         .bind(new.previous.map(|p| p.proportional))
         .bind(new.previous.map(|p| p.integral))
         .bind(new.previous.map(|p| p.derivative))
@@ -1635,6 +1646,9 @@ fn row_to_tune_write(row: SqliteRow) -> DbResult<TuneWriteRow> {
         response_level: text_to_enum("response_level", &response_level)?,
         written_at: row.try_get("written_at").map_err(DbError::Query)?,
         kind: text_to_enum("kind", &kind)?,
+        allow_uncertain_quality: row
+            .try_get("allow_uncertain_quality")
+            .map_err(DbError::Query)?,
         previous,
         proportional_written: row
             .try_get("proportional_written")

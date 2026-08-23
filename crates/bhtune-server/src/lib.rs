@@ -48,6 +48,7 @@ pub fn build_router(state: AppState) -> axum::Router {
         .merge(routes::history::router())
         .merge(routes::runs::router())
         .merge(routes::draft::router())
+        .merge(routes::config::router())
         .merge(routes::stream::router())
         .merge(routes::opc::router())
         .route("/api/openapi.json", axum::routing::get(openapi_json))
@@ -94,6 +95,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(runs.status(), StatusCode::OK);
+
+        let config = app
+            .clone()
+            .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(config.status(), StatusCode::OK);
 
         // `history::router()` registers `GET /api/runs` and `runs::router()` registers
         // `POST /api/runs` at that same path string -- proving axum actually merges the two

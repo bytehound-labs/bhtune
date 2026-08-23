@@ -12,7 +12,7 @@
 use utoipa::OpenApi;
 
 use crate::error::ErrorBody;
-use crate::routes::{draft, health, history, opc, runs, stream, templates};
+use crate::routes::{config, draft, health, history, opc, runs, stream, templates};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -32,6 +32,8 @@ use crate::routes::{draft, health, history, opc, runs, stream, templates};
         history::last_request,
         draft::get_draft,
         draft::put_draft,
+        config::get_config,
+        config::put_config,
         history::show_run,
         history::export_run,
         history::delete_run,
@@ -60,6 +62,10 @@ use crate::routes::{draft, health, history, opc, runs, stream, templates};
         history::RunExportFormat,
         runs::StartRunRequest,
         draft::NewRunDraft,
+        config::ConfigResponse,
+        config::ConfigTomlValues,
+        config::ConfigSources,
+        config::UpdateConfigRequest,
         runs::UpdateNotesRequest,
         runs::WriteRunRequest,
         stream::RunStreamDone,
@@ -73,6 +79,7 @@ use crate::routes::{draft, health, history, opc, runs, stream, templates};
         (name = "health", description = "Liveness probe"),
         (name = "templates", description = "DCS/PLC template catalog (built-in, community-catalog, and user-created)"),
         (name = "runs", description = "Start, cancel, and browse the history of tune runs"),
+        (name = "config", description = "Global TOML-backed configuration"),
         (name = "opc", description = "Read-only OPC DA server/tag diagnostics: server discovery, tag-tree browsing, and single-tag reads"),
     ),
 )]

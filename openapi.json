@@ -9,6 +9,94 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/config": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "operationId": "get_config",
+        "responses": {
+          "200": {
+            "description": "The TOML and effective global configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The configuration store could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "operationId": "put_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The configuration was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request contains an invalid retention policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The supplied revision is stale or the file changed on disk.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The configuration could not be written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "tags": [
@@ -1171,6 +1259,92 @@
   },
   "components": {
     "schemas": {
+      "ConfigResponse": {
+        "type": "object",
+        "required": [
+          "revision",
+          "config_path",
+          "toml",
+          "effective",
+          "source"
+        ],
+        "properties": {
+          "backup_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "config_path": {
+            "type": "string"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/ConfigValues"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ConfigSources"
+          },
+          "toml": {
+            "$ref": "#/components/schemas/ConfigTomlValues"
+          }
+        }
+      },
+      "ConfigSources": {
+        "type": "object",
+        "required": [
+          "allow_uncertain_quality",
+          "retention_days"
+        ],
+        "properties": {
+          "allow_uncertain_quality": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "string"
+          }
+        }
+      },
+      "ConfigTomlValues": {
+        "type": "object",
+        "properties": {
+          "allow_uncertain_quality": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "retention_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 1
+          }
+        }
+      },
+      "ConfigValues": {
+        "type": "object",
+        "required": [
+          "allow_uncertain_quality"
+        ],
+        "properties": {
+          "allow_uncertain_quality": {
+            "type": "boolean"
+          },
+          "retention_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 1
+          }
+        }
+      },
       "ControllerDirection": {
         "type": "string",
         "description": "Direct-acting (increasing MV increases PV) or Reverse-acting (increasing MV decreases\nPV).",
@@ -1601,12 +1775,6 @@
         "type": "object",
         "description": "The editable state of the New Tune form.\n\nFields are optional because the form is allowed to be incomplete while it is being edited.\nThe frontend sends the complete shape on each save, using `null` for a cleared numeric or\nenum field. Notes are intentionally absent: they describe one run, not a reusable draft.",
         "properties": {
-          "allow_uncertain_quality": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "bridge_host": {
             "type": [
               "string",
@@ -2110,12 +2278,17 @@
           "started_at",
           "template_name",
           "template_origin",
+          "allow_uncertain_quality",
           "config",
           "samples",
           "results",
           "writes"
         ],
         "properties": {
+          "allow_uncertain_quality": {
+            "type": "boolean",
+            "description": "Whether this run accepted `Uncertain` OPC quality, captured when the run started."
+          },
           "bridge_host": {
             "type": [
               "string",
@@ -2375,10 +2548,6 @@
           "driver"
         ],
         "properties": {
-          "allow_uncertain_quality": {
-            "type": "boolean",
-            "description": "Accept `Quality::Uncertain` OPC readings instead of hard-failing on them. See\n[`TuneArgs::allow_uncertain_quality`]."
-          },
           "bridge_host": {
             "type": [
               "string",
@@ -2759,6 +2928,29 @@
           "aborted"
         ]
       },
+      "UpdateConfigRequest": {
+        "type": "object",
+        "required": [
+          "revision",
+          "allow_uncertain_quality"
+        ],
+        "properties": {
+          "allow_uncertain_quality": {
+            "type": "boolean"
+          },
+          "retention_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 1
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
       "UpdateNotesRequest": {
         "type": "object",
         "description": "The body of `PUT /api/runs/{id}/notes`.",
@@ -2786,10 +2978,14 @@
         "required": [
           "kind",
           "response_level",
+          "allow_uncertain_quality",
           "written_at",
           "success"
         ],
         "properties": {
+          "allow_uncertain_quality": {
+            "type": "boolean"
+          },
           "derivative_previous": {
             "type": [
               "number",
@@ -2917,6 +3113,10 @@
     {
       "name": "runs",
       "description": "Start, cancel, and browse the history of tune runs"
+    },
+    {
+      "name": "config",
+      "description": "Global TOML-backed configuration"
     },
     {
       "name": "opc",
