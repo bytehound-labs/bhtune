@@ -1,5 +1,5 @@
 //! Serves the built React SPA (`frontend/dist/`) as [`crate::build_router`]'s fallback --
-//! i.e. every request that doesn't match one of the `/api/*` routes merged ahead of it.
+//! i.e. every request that doesn't match one of the declared routes merged ahead of it.
 //! Complements `frontend/vite.config.ts`'s dev-mode proxy: that config sends `/api/*` from
 //! the Vite dev server to a locally running `bhtune-server` for hot-reload development; this
 //! module is the production/single-binary side, where `bhtune-server` itself serves the SPA
@@ -24,12 +24,13 @@ const INDEX_HTML: &str = "index.html";
 #[allow_missing = true]
 struct Assets;
 
-/// [`crate::build_router`]'s fallback handler: tried only after every `/api/*` route (and
-/// `/api/docs`) has already failed to match, since axum resolves declared routes before
-/// falling back.
+/// [`crate::build_router`]'s fallback handler: tried only after every declared route has
+/// failed to match, since axum resolves declared routes before falling back.
 ///
 /// - A path matching an embedded file exactly (`/assets/index-<hash>.js`) serves that file's
 ///   real bytes with its real MIME type.
+/// - An unmatched `/api` path returns a JSON 404 rather than the SPA shell. This keeps a
+///   stale or incompatible server from masquerading as a successful API response.
 /// - Anything else falls back to `index.html`, so React Router's client-side routes
 ///   (`/runs/1`, `/templates/new`, ...) resolve on a direct navigation or hard refresh, not
 ///   only after client-side navigation from `/` -- **except** a path whose last segment
@@ -40,6 +41,17 @@ struct Assets;
 ///   confusing blank 404. This is the one case a contributor running `cargo run -p
 ///   bhtune-server` straight after cloning, without having built the frontend, will hit.
 pub(crate) async fn static_handler(uri: Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if path == "api" || path.starts_with("api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(crate::error::ErrorBody {
+                error: format!("API route not found: /{path}"),
+            }),
+        )
+            .into_response();
+    }
+
     if Assets::iter().next().is_none() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -50,7 +62,6 @@ pub(crate) async fn static_handler(uri: Uri) -> Response {
             .into_response();
     }
 
-    let path = uri.path().trim_start_matches('/');
     if path.is_empty() {
         return serve_index();
     }
@@ -189,5 +200,23 @@ mod tests {
         }
         let response = get("/assets/does-not-exist.js").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_api_path_returns_a_json_404() {
+        let response = get("/api/does-not-exist").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "API route not found: /api/does-not-exist");
     }
 }

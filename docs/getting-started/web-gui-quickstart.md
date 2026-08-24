@@ -107,7 +107,7 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      they are accepted by default, while `Bad` quality is always rejected.
      Reopening the browser expands the available path to the current Tag name, selects that node,
      and scrolls it into view; an unavailable tag falls back to the root level.
-     Indexed search is enabled per server by the gateway. Add the exact ProgID to the gateway
+     Indexed search is an optional whole-server accelerator. Add the exact ProgID to the gateway
      configuration before using **Refresh index**:
 
      ```toml
@@ -116,7 +116,10 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      ```
 
      Restart `opcda-bridge-gateway` after changing this allow-list. The gateway intentionally
-     does not index every registered OPC DA server automatically.
+     does not index every registered OPC DA server automatically. If indexing is not configured
+     or is still building, the global search field is disabled, but the lazy tag tree, direct
+     ItemID entry in the form, live reads, and tune workflow remain available. Index status
+     messages are informational and do not block browsing.
 
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail

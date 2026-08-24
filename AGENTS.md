@@ -629,7 +629,10 @@ progress, ranked exact matches, breadcrumbs, and `has_more`. `openapi.json` and
 `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
 The gateway accepts indexed-search operations only for ProgIDs listed in its
 `[index].servers` allow-list; an unconfigured server remains browseable but cannot be refreshed,
-and BHTune surfaces that requirement in the tag browser.
+and BHTune surfaces that requirement in the tag browser. Indexing is an optional search
+accelerator: the global search control is disabled until a complete usable generation exists,
+while lazy browse, direct ItemID entry, live reads, and tuning remain independent of index state.
+Index-status failures are compact diagnostics rather than browse failures.
 
 Phase 7.5's `ui-opc-browser` is also done — the last GUI/API todo of the eleven. Two new pieces
 wire the OPC routes into
@@ -734,6 +737,14 @@ paged `bhtune opc browse` (or explicit `--all` draining), live `bhtune opc searc
 `bhtune opc search-index status|search|refresh|control`; progress and warnings stay on stderr so
 JSON output remains machine-readable. CLI browse sessions remain open for continuation after a
 page is printed and are released with `bhtune opc close <session-id>`.
+
+Indexed search is deliberately not a prerequisite for tag selection or tuning. When a server is
+unconfigured, still building its first generation, or has no usable index, the browser disables
+only the global search input and keeps the lazy tree, exact ItemID entry, quality read, and
+selection controls available. It never falls back automatically to the slow live whole-server
+search. A failed tree page retains already loaded nodes and exposes a per-level **Retry** action;
+unknown `/api/*` paths return JSON 404 responses instead of the SPA shell, making stale
+server/frontend combinations diagnosable.
 
 Live acceptance against `Yokogawa.CSHIS_OPC.1` confirmed the root page exposes the full controller
 family set, navigation reaches `FCS0201` → `204FI00510` → `PV`, the exact ItemID

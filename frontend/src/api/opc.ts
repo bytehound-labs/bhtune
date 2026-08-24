@@ -116,6 +116,7 @@ export function useOpcBrowseFetcher(bridgeHost: string, opcServer: string) {
           if (error) throw toApiError(error, response);
           return data;
         },
+        retry: false,
         staleTime: 30_000,
       }),
     [bridgeHost, opcServer, queryClient],

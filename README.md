@@ -115,10 +115,12 @@ The browser also exposes gateway capabilities and persistent indexed namespace s
 searches are bounded unary requests against the gateway-owned index, with ranked matches,
 breadcrumbs, exact ItemIDs, `has_more`, and explicit index state/progress. Search never downloads
 the complete namespace into the browser and never falls back to the slow live traversal search.
-Indexed search is opt-in per OPC DA server: add the exact ProgID to the gateway's
-`[index].servers` allow-list and restart `opcda-bridge-gateway` before using **Refresh index**.
-The browser reports this configuration requirement instead of treating an unconfigured server as
-a failed browse.
+Indexed search is an optional whole-server accelerator, configured per OPC DA server by adding
+the exact ProgID to the gateway's `[index].servers` allow-list and restarting
+`opcda-bridge-gateway` before using **Refresh index**. Without a usable index, the global search
+box is disabled with a compact status message, while lazy tree browsing, direct ItemID entry,
+live reads, and tuning remain available. The browser reports index configuration or build
+failures without treating them as browse failures.
 Browse sessions are closed when the modal exits, and reopening it reveals and scrolls to the saved
 selection when the gateway can resolve its path.
 

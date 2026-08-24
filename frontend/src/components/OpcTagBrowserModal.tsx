@@ -117,6 +117,25 @@ function indexConfigurationMessage(server: string): string {
   return `Indexing is not enabled for ${server}. Add this exact ProgID to the gateway's [index].servers allow-list, then restart the gateway.`;
 }
 
+function hasUsableIndex(
+  status: OpcSearchIndexStatusResponse | undefined,
+): boolean {
+  if (
+    !status?.configured ||
+    status.active_generation < 1 ||
+    status.state === "partial" ||
+    status.state === "not_indexed"
+  ) {
+    return false;
+  }
+  return (
+    status.state === "ready" ||
+    status.state === "stale" ||
+    status.state === "refreshing" ||
+    status.state === "failed"
+  );
+}
+
 function matchPath(match: OpcIndexedSearchMatchResponse): string {
   return [...match.breadcrumbs, match.display_name].join(" / ");
 }
@@ -183,6 +202,7 @@ function TreeLevel({
   onSelect,
   onConfirm,
   onLoadMore,
+  onRetry,
   selectedNode,
   selectedNodeRef,
   disabled,
@@ -195,6 +215,7 @@ function TreeLevel({
   onSelect: (node: OpcTagNodeResponse) => void;
   onConfirm: (node: OpcTagNodeResponse) => void;
   onLoadMore: (parentNodeKey: string | null) => void;
+  onRetry: (parentNodeKey: string | null) => void;
   selectedNode: SelectedNode | null;
   selectedNodeRef: RefObject<HTMLButtonElement | null>;
   disabled: boolean;
@@ -215,10 +236,18 @@ function TreeLevel({
   if (state.status === "error" && state.nodes.length === 0) {
     return (
       <div
-        className="py-1 text-xs text-red-400"
+        className="flex items-center gap-2 py-1 text-xs text-red-400"
         style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
       >
-        {state.message}
+        <span>{state.message}</span>
+        <button
+          type="button"
+          onClick={() => onRetry(parentNodeKey)}
+          disabled={disabled}
+          className="text-blue-300 underline hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -299,6 +328,7 @@ function TreeLevel({
                 onSelect={onSelect}
                 onConfirm={onConfirm}
                 onLoadMore={onLoadMore}
+                onRetry={onRetry}
                 selectedNode={selectedNode}
                 selectedNodeRef={selectedNodeRef}
                 disabled={disabled}
@@ -309,10 +339,18 @@ function TreeLevel({
       })}
       {state.status === "error" && state.nodes.length > 0 && (
         <div
-          className="py-1 text-xs text-red-400"
+          className="flex items-center gap-2 py-1 text-xs text-red-400"
           style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
         >
-          {state.message}
+          <span>{state.message}</span>
+          <button
+            type="button"
+            onClick={() => onRetry(parentNodeKey)}
+            disabled={disabled}
+            className="text-blue-300 underline hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Retry
+          </button>
         </div>
       )}
       {!state.complete && state.nextPageToken && (
@@ -390,6 +428,26 @@ export function OpcTagBrowserModal({
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
   const searchAbortRef = useRef<AbortController | null>(null);
   const searchResultRefs = useRef<Record<number, HTMLButtonElement | null>>({});
+  const indexStatus = searchIndexStatus.data ?? searchResponse?.status;
+  const indexStateLabel = searchStateLabel(indexStatus);
+  const indexNotConfigured =
+    indexStatus !== undefined && !indexStatus.configured;
+  const indexConfigurationHint = indexNotConfigured
+    ? indexConfigurationMessage(opcServer)
+    : null;
+  const indexSearchAvailable = hasUsableIndex(indexStatus);
+  const indexUnavailableMessage = searchIndexStatus.error
+    ? `Global search is unavailable: ${userFacingErrorMessage(
+        searchIndexStatus.error,
+        "the gateway index status could not be read.",
+      )} Lazy browse and direct ItemID entry remain available.`
+    : !indexStatus
+      ? "Global search is unavailable until the gateway index status is available. Lazy browse and direct ItemID entry remain available."
+      : indexStatus.state === "partial"
+        ? "Global search will be available when the gateway finishes building the index. Lazy browse and direct ItemID entry remain available."
+        : indexStatus.state === "failed"
+          ? "Global search is unavailable because the gateway has no complete index. Lazy browse and direct ItemID entry remain available."
+          : "Global search is unavailable until the gateway has a complete index. Lazy browse and direct ItemID entry remain available.";
 
   useEffect(() => {
     scopeStateRef.current = scopeState;
@@ -558,6 +616,7 @@ export function OpcTagBrowserModal({
   async function revealInitialTag(
     rootNodes: OpcTagNodeResponse[],
     target: string,
+    canUseIndexedSearch: boolean,
     isCancelled: () => boolean,
   ): Promise<boolean> {
     const rootMatch = rootNodes.find((node) => nodeItemId(node) === target);
@@ -565,6 +624,7 @@ export function OpcTagBrowserModal({
       setSelectedNode({ nodeKey: rootMatch.node_key, itemId: target });
       return true;
     }
+    if (!canUseIndexedSearch) return false;
 
     const controller = new AbortController();
     searchAbortRef.current = controller;
@@ -600,9 +660,14 @@ export function OpcTagBrowserModal({
       if (cancelled || !root) return;
 
       const target = initialTag;
+      let revealStatus = searchIndexStatus.data;
+      if (target && !revealStatus && !searchIndexStatus.isError) {
+        revealStatus = (await searchIndexStatus.refetch()).data;
+      }
       if (
         target &&
-        (await revealInitialTag(root.nodes, target, () => cancelled))
+        hasUsableIndex(revealStatus) &&
+        (await revealInitialTag(root.nodes, target, true, () => cancelled))
       ) {
         return;
       }
@@ -718,13 +783,26 @@ export function OpcTagBrowserModal({
     void load(parentNodeKey, { pageToken: state.nextPageToken, append: true });
   }
 
+  function retryBrowse(parentNodeKey: string | null) {
+    const state = scopeStateRef.current[scopeKey(parentNodeKey)];
+    if (!state) return;
+    if (state.nodes.length > 0 && state.nextPageToken) {
+      void load(parentNodeKey, {
+        pageToken: state.nextPageToken,
+        append: true,
+      });
+    } else {
+      void load(parentNodeKey);
+    }
+  }
+
   useEffect(() => {
     const query = searchQuery.trim();
     cancelActiveSearch();
     setSearchError(null);
     setActiveSearchIndex(-1);
 
-    if (query.length < 2 || !opcServer) {
+    if (query.length < 2 || !opcServer || !indexSearchAvailable) {
       setSearchMatches([]);
       setSearchResponse(null);
       return;
@@ -774,7 +852,7 @@ export function OpcTagBrowserModal({
     // `indexedSearch` is a stable mutation hook; changing connection or query
     // intentionally starts a new debounced request.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery, bridgeHost, opcServer]);
+  }, [searchQuery, bridgeHost, opcServer, indexSearchAvailable]);
 
   useEffect(() => {
     if (activeSearchIndex < 0) return;
@@ -826,13 +904,6 @@ export function OpcTagBrowserModal({
 
   const selectedTag = selectedNode?.itemId ?? null;
   const busy = testConnection.isPending || selectionCheckPending;
-  const indexStatus = searchIndexStatus.data ?? searchResponse?.status;
-  const indexStateLabel = searchStateLabel(indexStatus);
-  const indexNotConfigured =
-    indexStatus !== undefined && !indexStatus.configured;
-  const indexConfigurationHint = indexNotConfigured
-    ? indexConfigurationMessage(opcServer)
-    : null;
 
   async function refreshIndex() {
     setSearchError(null);
@@ -947,7 +1018,12 @@ export function OpcTagBrowserModal({
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 onKeyDown={handleSearchKeyDown}
-                placeholder="Type at least 2 characters to search tags"
+                disabled={!indexSearchAvailable}
+                placeholder={
+                  indexSearchAvailable
+                    ? "Type at least 2 characters to search tags"
+                    : "Global search unavailable — browse below or enter an ItemID"
+                }
                 aria-activedescendant={
                   activeSearchIndex >= 0
                     ? `opc-search-result-${activeSearchIndex}`
@@ -966,6 +1042,8 @@ export function OpcTagBrowserModal({
                   refreshSearchIndex.isPending ||
                   !opcServer ||
                   indexNotConfigured ||
+                  !indexStatus ||
+                  searchIndexStatus.isError ||
                   indexStatus?.state === "partial" ||
                   indexStatus?.state === "refreshing"
                 }
@@ -977,9 +1055,11 @@ export function OpcTagBrowserModal({
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
               <span>
-                {searchQuery.trim().length < 3
-                  ? "Prefix search"
-                  : "Smart contains search"}{" "}
+                {indexSearchAvailable
+                  ? searchQuery.trim().length < 3
+                    ? "Prefix search"
+                    : "Smart contains search"
+                  : "Global search unavailable"}{" "}
                 · results stay on the gateway
               </span>
               {indexStateLabel && (
@@ -995,29 +1075,27 @@ export function OpcTagBrowserModal({
                 </span>
               )}
             </div>
+            {!indexSearchAvailable && (
+              <p role="status" className="text-xs text-slate-400">
+                {indexConfigurationHint ? (
+                  <>
+                    <span>{indexConfigurationHint}</span>{" "}
+                    <span>
+                      Lazy browse and direct ItemID entry remain available.
+                    </span>
+                  </>
+                ) : (
+                  indexUnavailableMessage
+                )}
+              </p>
+            )}
           </div>
           {(searchError ||
-            searchIndexStatus.error ||
-            indexConfigurationHint ||
             searchMatches.length > 0 ||
             searchQuery.trim().length >= 2 ||
             indexStatus?.progress) && (
             <div className="mb-3 max-h-56 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
-              {indexConfigurationHint && (
-                <p className="mb-2 rounded-md border border-amber-800 bg-amber-950/50 px-3 py-2 text-xs text-amber-200">
-                  {indexConfigurationHint}
-                </p>
-              )}
-              {searchError ? (
-                <ErrorBanner message={searchError} />
-              ) : searchIndexStatus.error ? (
-                <ErrorBanner
-                  message={userFacingErrorMessage(
-                    searchIndexStatus.error,
-                    "Unable to read the tag-index status.",
-                  )}
-                />
-              ) : null}
+              {searchError && <ErrorBanner message={searchError} />}
               {indexedSearch.isPending && (
                 <p className="mb-2 text-xs text-slate-400">
                   Searching… previous results remain visible until the new query
@@ -1074,13 +1152,15 @@ export function OpcTagBrowserModal({
                 searchQuery.trim().length >= 2 &&
                 searchMatches.length === 0 && (
                   <p className="text-xs text-slate-400">
-                    {indexStatus?.state === "partial"
-                      ? "The tag index is still building; no complete no-match result is available yet."
-                      : indexStatus?.state === "not_indexed"
-                        ? "The tag index is not ready. Refresh the index to build it."
-                        : indexStatus?.state === "failed"
-                          ? "The tag index failed to build. Refresh it after resolving the gateway error."
-                          : "No matching tags."}
+                    {!indexSearchAvailable
+                      ? indexUnavailableMessage
+                      : indexStatus?.state === "partial"
+                        ? "The tag index is still building; no complete no-match result is available yet."
+                        : indexStatus?.state === "not_indexed"
+                          ? "The tag index is not ready. Refresh the index to build it."
+                          : indexStatus?.state === "failed"
+                            ? "The tag index failed to build. Refresh it after resolving the gateway error."
+                            : "No matching tags."}
                   </p>
                 )}
             </div>
@@ -1099,6 +1179,7 @@ export function OpcTagBrowserModal({
                 if (itemId) void confirmTag(itemId);
               }}
               onLoadMore={loadMore}
+              onRetry={retryBrowse}
               selectedNode={selectedNode}
               selectedNodeRef={selectedNodeRef}
               disabled={busy}

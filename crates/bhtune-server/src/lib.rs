@@ -143,6 +143,31 @@ mod tests {
         assert_ne!(opc_servers.status(), StatusCode::NOT_FOUND);
         assert_ne!(opc_servers.status(), StatusCode::METHOD_NOT_ALLOWED);
 
+        let unknown_api = app
+            .clone()
+            .oneshot(
+                Request::get("/api/does-not-exist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unknown_api.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            unknown_api
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/json"
+        );
+        let unknown_api_body = to_bytes(unknown_api.into_body(), usize::MAX).await.unwrap();
+        let unknown_api_json: serde_json::Value =
+            serde_json::from_slice(&unknown_api_body).unwrap();
+        assert_eq!(
+            unknown_api_json["error"],
+            "API route not found: /api/does-not-exist"
+        );
+
         let openapi_json = app
             .clone()
             .oneshot(
