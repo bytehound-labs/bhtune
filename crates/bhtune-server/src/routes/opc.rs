@@ -1535,4 +1535,22 @@ mod tests {
             other => panic!("expected BadRequest, got {other:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn with_timeout_preserves_index_configuration_diagnostic() {
+        let err = with_timeout("refresh the OPC namespace index", async {
+            Err::<(), _>(bhtune_driver::DriverError::IndexOperationRejected {
+                message: "server is not configured for namespace indexing".to_string(),
+            })
+        })
+        .await
+        .unwrap_err();
+        match err {
+            ApiError::BadRequest(message) => {
+                assert!(message.contains("refresh the OPC namespace index"));
+                assert!(message.contains("server is not configured for namespace indexing"));
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
 }

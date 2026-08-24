@@ -550,13 +550,23 @@ fn match_search_mode(mode: SearchMatchMode) -> opcda_bridge::SearchMatchMode {
 /// any RPC — to the matching [`DriverError`] variant: `opcda_bridge::Error::Connect` (the
 /// gRPC channel itself couldn't be established) becomes [`DriverError::Connect`], and
 /// `opcda_bridge::Error::Rpc` (the channel is fine, but the gateway returned a gRPC error
-/// for this specific call) becomes [`DriverError::Operation`]. An exhaustive match rather
+/// for this specific call) becomes [`DriverError::Operation`], except for an indexed-search
+/// `FailedPrecondition`, which becomes [`DriverError::IndexOperationRejected`] so gateway
+/// configuration and concurrency diagnostics remain actionable. An exhaustive match rather
 /// than a wildcard arm, deliberately: if `opcda_bridge::Error` ever gains a new variant,
 /// this should fail to compile and force a real decision about where it belongs, not
 /// silently fall into one bucket.
 fn map_bridge_error_for(err: opcda_bridge::Error, operation: &'static str) -> DriverError {
     match &err {
         opcda_bridge::Error::Connect(_) => DriverError::Connect(Box::new(err)),
+        opcda_bridge::Error::Rpc(status)
+            if is_indexed_search_operation(operation)
+                && status.code() == tonic::Code::FailedPrecondition =>
+        {
+            DriverError::IndexOperationRejected {
+                message: status.message().to_string(),
+            }
+        }
         opcda_bridge::Error::Rpc(status)
             if (operation == "paged browse" || operation == "browse-session close")
                 && matches!(
@@ -573,6 +583,16 @@ fn map_bridge_error_for(err: opcda_bridge::Error, operation: &'static str) -> Dr
             DriverError::Operation(Box::new(err))
         }
     }
+}
+
+fn is_indexed_search_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "indexed-search status"
+            | "indexed-search refresh"
+            | "indexed-search control"
+            | "indexed search"
+    )
 }
 
 #[cfg(test)]
@@ -713,6 +733,21 @@ mod tests {
         assert_eq!(page.next_page_token.as_deref(), Some("next"));
         assert!(!page.complete);
         assert_eq!(page.warning.as_deref(), Some("partial"));
+    }
+
+    #[test]
+    fn indexed_search_precondition_preserves_gateway_reason() {
+        let err = map_bridge_error_for(
+            opcda_bridge::Error::Rpc(tonic::Status::failed_precondition(
+                "server is not configured for namespace indexing",
+            )),
+            "indexed-search refresh",
+        );
+        assert!(matches!(
+            err,
+            DriverError::IndexOperationRejected { message }
+                if message == "server is not configured for namespace indexing"
+        ));
     }
 
     #[tokio::test]

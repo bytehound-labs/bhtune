@@ -14,7 +14,7 @@ import {
   useRefreshOpcSearchIndex,
   useTestOpcConnection,
 } from "../api/opc";
-import { userFacingErrorMessage } from "../api/errors";
+import { apiErrorMessage, userFacingErrorMessage } from "../api/errors";
 import type {
   OpcBrowseResponse,
   OpcIndexedSearchMatchResponse,
@@ -111,6 +111,10 @@ function searchStateLabel(status: OpcSearchIndexStatusResponse | undefined) {
     default:
       return status.state;
   }
+}
+
+function indexConfigurationMessage(server: string): string {
+  return `Indexing is not enabled for ${server}. Add this exact ProgID to the gateway's [index].servers allow-list, then restart the gateway.`;
 }
 
 function matchPath(match: OpcIndexedSearchMatchResponse): string {
@@ -820,8 +824,22 @@ export function OpcTagBrowserModal({
     }
   }
 
+  const selectedTag = selectedNode?.itemId ?? null;
+  const busy = testConnection.isPending || selectionCheckPending;
+  const indexStatus = searchIndexStatus.data ?? searchResponse?.status;
+  const indexStateLabel = searchStateLabel(indexStatus);
+  const indexNotConfigured =
+    indexStatus !== undefined && !indexStatus.configured;
+  const indexConfigurationHint = indexNotConfigured
+    ? indexConfigurationMessage(opcServer)
+    : null;
+
   async function refreshIndex() {
     setSearchError(null);
+    if (indexConfigurationHint) {
+      setSearchError(indexConfigurationHint);
+      return;
+    }
     try {
       const status = await refreshSearchIndex.mutateAsync({
         bridgeHost,
@@ -833,16 +851,14 @@ export function OpcTagBrowserModal({
       );
       await searchIndexStatus.refetch();
     } catch (err) {
+      const detail = apiErrorMessage(err);
       setSearchError(
-        userFacingErrorMessage(err, "Unable to refresh the tag index."),
+        detail.includes("server is not configured for namespace indexing")
+          ? indexConfigurationMessage(opcServer)
+          : userFacingErrorMessage(err, "Unable to refresh the tag index."),
       );
     }
   }
-
-  const selectedTag = selectedNode?.itemId ?? null;
-  const busy = testConnection.isPending || selectionCheckPending;
-  const indexStatus = searchIndexStatus.data ?? searchResponse?.status;
-  const indexStateLabel = searchStateLabel(indexStatus);
 
   useEffect(() => {
     if (
@@ -949,9 +965,11 @@ export function OpcTagBrowserModal({
                 disabled={
                   refreshSearchIndex.isPending ||
                   !opcServer ||
+                  indexNotConfigured ||
                   indexStatus?.state === "partial" ||
                   indexStatus?.state === "refreshing"
                 }
+                title={indexConfigurationHint ?? undefined}
                 onClick={() => void refreshIndex()}
               >
                 {refreshSearchIndex.isPending ? "Refreshing…" : "Refresh index"}
@@ -980,10 +998,16 @@ export function OpcTagBrowserModal({
           </div>
           {(searchError ||
             searchIndexStatus.error ||
+            indexConfigurationHint ||
             searchMatches.length > 0 ||
             searchQuery.trim().length >= 2 ||
             indexStatus?.progress) && (
             <div className="mb-3 max-h-56 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
+              {indexConfigurationHint && (
+                <p className="mb-2 rounded-md border border-amber-800 bg-amber-950/50 px-3 py-2 text-xs text-amber-200">
+                  {indexConfigurationHint}
+                </p>
+              )}
               {searchError ? (
                 <ErrorBanner message={searchError} />
               ) : searchIndexStatus.error ? (

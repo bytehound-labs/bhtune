@@ -43,6 +43,12 @@ pub enum DriverError {
     #[error("'{operation}' is not supported by this driver")]
     Unsupported { operation: &'static str },
 
+    /// The gateway rejected an indexed-search operation because its current index
+    /// configuration does not permit it (for example, the server is not in the
+    /// gateway's indexed-server allow-list).
+    #[error("indexed-search operation rejected: {message}")]
+    IndexOperationRejected { message: String },
+
     /// The connected gateway predates a required protocol operation.
     #[error(
         "gateway does not support {operation}; upgrade the OPC DA bridge gateway to a compatible version"
@@ -107,6 +113,17 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("upgrade the OPC DA bridge gateway")
+        );
+    }
+
+    #[test]
+    fn indexed_search_rejection_names_gateway_reason() {
+        let err = DriverError::IndexOperationRejected {
+            message: "server is not configured for namespace indexing".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "indexed-search operation rejected: server is not configured for namespace indexing"
         );
     }
 

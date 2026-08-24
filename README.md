@@ -115,6 +115,10 @@ The browser also exposes gateway capabilities and persistent indexed namespace s
 searches are bounded unary requests against the gateway-owned index, with ranked matches,
 breadcrumbs, exact ItemIDs, `has_more`, and explicit index state/progress. Search never downloads
 the complete namespace into the browser and never falls back to the slow live traversal search.
+Indexed search is opt-in per OPC DA server: add the exact ProgID to the gateway's
+`[index].servers` allow-list and restart `opcda-bridge-gateway` before using **Refresh index**.
+The browser reports this configuration requirement instead of treating an unconfigured server as
+a failed browse.
 Browse sessions are closed when the modal exits, and reopening it reveals and scrolls to the saved
 selection when the gateway can resolve its path.
 

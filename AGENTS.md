@@ -627,6 +627,9 @@ The gateway's indexed-search extension adds `GET /api/opc/search-index/status`,
 `GET /api/opc/search-index/search`, and refresh/control endpoints with persistent-index state,
 progress, ranked exact matches, breadcrumbs, and `has_more`. `openapi.json` and
 `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
+The gateway accepts indexed-search operations only for ProgIDs listed in its
+`[index].servers` allow-list; an unconfigured server remains browseable but cannot be refreshed,
+and BHTune surfaces that requirement in the tag browser.
 
 Phase 7.5's `ui-opc-browser` is also done — the last GUI/API todo of the eleven. Two new pieces
 wire the OPC routes into
@@ -1443,9 +1446,11 @@ Integration rules, as implemented in `OpcDaDriver`:
   `Err` — a gateway-level rejected write (read-only tag, out of range) is a normal RPC result,
   never an RPC error.
 - `opcda_bridge::Error` is boxed and wrapped, preserving its source, via one exhaustive
-  `map_bridge_error` function: `Error::Connect` becomes `DriverError::Connect`, `Error::Rpc`
-  becomes `DriverError::Operation`. Exhaustive (no wildcard arm) so a future new variant in
-  `opcda_bridge::Error` fails this crate's build rather than silently falling into one bucket.
+  `map_bridge_error` function: `Error::Connect` becomes `DriverError::Connect`, ordinary
+  `Error::Rpc` becomes `DriverError::Operation`, and indexed-search `FailedPrecondition`
+  responses become `DriverError::IndexOperationRejected` with the gateway's actionable reason.
+  Exhaustive (no wildcard arm) so a future new variant in `opcda_bridge::Error` fails this
+  crate's build rather than silently falling into one bucket.
 - `browse_page` requests one bounded page of immediate children. The gateway owns the browse
   session, node key, and continuation token; BHTune round-trips those values unchanged and
   never infers hierarchy from `.`, `!`, or `/`. A `BrowseNode` carries a display label, an

@@ -66,11 +66,12 @@ function searchIndexStatus(
     | "stale"
     | "refreshing"
     | "failed" = "ready",
+  configured = true,
 ) {
   return {
     server: "Test.Server",
     state,
-    configured: true,
+    configured,
     active_generation: 1,
     entry_count: 2,
     unique_item_count: 2,
@@ -909,6 +910,82 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(
       page.getByText("Unable to refresh the tag index."),
     ).not.toBeVisible();
+  });
+
+  test("explains when the gateway has not enabled indexing for the server", async ({
+    page,
+  }) => {
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("not_indexed", false)),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+
+    await expect(
+      page.getByText(
+        "Indexing is not enabled for Yokogawa.CSHIS_OPC.1. Add this exact ProgID to the gateway's [index].servers allow-list, then restart the gateway.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Refresh index" }),
+    ).toBeDisabled();
+  });
+
+  test("preserves the gateway configuration diagnostic if refresh races with status", async ({
+    page,
+  }) => {
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("ready")),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+    await page.route(/search-index\/refresh/, async (route) => {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error:
+            "refresh the OPC namespace index: indexed-search operation rejected: server is not configured for namespace indexing",
+        }),
+      });
+    });
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await page.getByRole("button", { name: "Refresh index" }).click();
+
+    await expect(
+      page.getByText(
+        "Indexing is not enabled for Yokogawa.CSHIS_OPC.1. Add this exact ProgID to the gateway's [index].servers allow-list, then restart the gateway.",
+        { exact: true },
+      ),
+    ).toBeVisible();
   });
 
   test("warns before selecting a tag whose OPC quality is not Good", async ({
