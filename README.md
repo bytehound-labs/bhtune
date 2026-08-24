@@ -108,7 +108,8 @@ registered on the gateway. Its tag browser opens a bounded browse session, loads
 immediate children at a time, and provides **Load more** for incomplete pages. The gateway
 returns opaque navigation keys and exact ItemIDs; BHTune never reconstructs hierarchy by
 splitting `.`, `!`, or `/`, which is essential for namespaces such as
-`FCS0201!204FI00510.PV`. Nodes that are both branches and items remain both expandable and
+`FCS0201!204FI00510.PV`. Double-clicking a leaf confirms it; double-clicking any expandable
+node expands or collapses it. Nodes that are both branches and items remain both expandable and
 selectable.
 
 The browser also exposes gateway capabilities and persistent indexed namespace search. Warm

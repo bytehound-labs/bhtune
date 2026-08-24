@@ -94,11 +94,12 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      values. Simulator direction and ranges are kept separately from OPC fixed overrides. The
      browser itself stays focused on browsing and testing the selected PV tag. It offers a
      **Read selected tag** action showing a live value
-     and its quality. Double-clicking a leaf selects it; double-clicking a branch expands or
-     collapses it. Selecting **Select tag** writes the selected tag with its final component
-     replaced by the active template's process-variable suffix into the Tag name field. Changing
-     templates likewise replaces the final component with the new template's process-variable
-     suffix, regardless of what the previous component was, preserving the rest of the tag path.
+     and its quality. Double-clicking a leaf selects it; double-clicking any expandable node,
+     including a branch-and-item node, expands or collapses it. Selecting **Select tag** writes
+     the selected tag with its final component replaced by the active template's process-variable
+     suffix into the Tag name field. Changing templates likewise replaces the final component
+     with the new template's process-variable suffix, regardless of what the previous component
+     was, preserving the rest of the tag path.
      Clicking **Select tag** performs a fresh read of the original selected item (before suffix
      replacement) and proceeds immediately only for `Good` OPC quality; `Uncertain` or `Bad`
      quality opens a warning with choices to select a different tag or proceed anyway. Proceeding

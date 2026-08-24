@@ -303,7 +303,11 @@ function TreeLevel({
                 type="button"
                 onClick={() => (itemId ? onSelect(node) : onToggle(node))}
                 onDoubleClick={() =>
-                  itemId ? onConfirm(node) : onToggle(node)
+                  isBranch
+                    ? onToggle(node)
+                    : itemId
+                      ? onConfirm(node)
+                      : onToggle(node)
                 }
                 ref={isSelected ? selectedNodeRef : undefined}
                 disabled={disabled || (!itemId && !isBranch)}

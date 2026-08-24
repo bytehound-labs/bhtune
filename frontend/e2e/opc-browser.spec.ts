@@ -653,9 +653,9 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(page.getByRole("button", { name: "First" })).toBeVisible();
     await page.getByRole("button", { name: "Load more" }).click();
-    await page.getByRole("button", { name: "Unit1.LIC101" }).click();
+    await page.getByRole("button", { name: "Unit1.LIC101" }).dblclick();
     await expect(page.getByText(`Selected: ${selectedItemId}`)).toBeVisible();
-    await page.getByRole("button", { name: "Expand" }).click();
+    await expect(page.getByRole("button", { name: "Collapse" })).toBeVisible();
     await expect(page.getByRole("button", { name: "SV" })).toBeVisible();
     await page.getByRole("button", { name: "Select tag" }).click();
 
