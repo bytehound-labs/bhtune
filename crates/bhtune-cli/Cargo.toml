@@ -96,7 +96,7 @@ sqlx = { version = "0.9", default-features = false, features = [
 # Pinned to the same versions `opcda-bridge` (and `bhtune-driver`'s own tests) use, so the
 # `opc` subcommand's tests can stand up a mock `Bridge` gRPC service and get wire-compatible
 # generated types to test `OpcDaDriver`-backed commands end-to-end.
-opcda-bridge-proto = "0.2"
+opcda-bridge-proto = "0.3"
 tonic = "0.14"
 tokio-stream = "0.1"
 # Test-only: `tune.rs`'s tests implement `bhtune_driver::Driver` for a local in-memory mock

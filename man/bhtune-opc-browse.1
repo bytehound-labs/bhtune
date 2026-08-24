@@ -1,12 +1,12 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH bhtune-opc-browse 1  "bhtune-opc-browse " 
+.TH bhtune-opc-browse 1  "bhtune-opc-browse "
 .SH NAME
-bhtune\-opc\-browse \- Browse tags under a path (empty for the top level)
+bhtune\-opc\-browse \- Browse one bounded page of tags. Without a session, lists the root level
 .SH SYNOPSIS
-\fBbhtune\-opc\-browse\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPATH\fR] 
+\fBbhtune\-opc\-browse\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-session\-id\fR] [\fB\-\-parent\-node\-key\fR] [\fB\-\-page\-token\fR] [\fB\-\-page\-size\fR] [\fB\-\-all\fR] [\fB\-\-refresh\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .SH DESCRIPTION
-Browse tags under a path (empty for the top level)
+Browse one bounded page of tags. Without a session, lists the root level
 .SH OPTIONS
 .TP
 \fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
@@ -15,8 +15,23 @@ Browse tags under a path (empty for the top level)
 \fB\-\-server\fR \fI<SERVER>\fR
 
 .TP
+\fB\-\-session\-id\fR \fI<SESSION_ID>\fR
+Existing bridge browse session to continue or use with `parent\-node\-key`
+.TP
+\fB\-\-parent\-node\-key\fR \fI<PARENT_NODE_KEY>\fR
+Opaque node key returned by a previous page
+.TP
+\fB\-\-page\-token\fR \fI<PAGE_TOKEN>\fR
+Opaque continuation token returned by a previous page
+.TP
+\fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 200]
+Number of immediate children to request
+.TP
+\fB\-\-all\fR
+Follow continuation pages until the requested level is complete
+.TP
+\fB\-\-refresh\fR
+Ask the gateway to refresh its namespace view
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
-.TP
-[\fIPATH\fR] [default: ]
-

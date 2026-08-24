@@ -41,8 +41,9 @@ against the built-in simulator with no setup at all, or against a real OPC DA lo
 [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) — including calculating PID
 constants, writing them back with confirmation and rollback, and recording full run history.
 See [Getting started](#getting-started) below to try it. No versioned release or prebuilt
-binaries exist yet (see [Installation](#installation)), and golden-master validation against
-the legacy application's captured traces is still in progress — track both via the
+binaries exist yet (see [Installation](#installation)). One captured golden trace validates
+the MRFT port end to end; additional legacy trace capture is intentionally deferred. Track
+release progress and remaining work via the
 [issues](https://github.com/bytehound-labs/bhtune/issues) and
 [`AGENTS.md`](AGENTS.md), which records the full phased implementation plan.
 
@@ -65,13 +66,13 @@ drift from what's in this repo.
 
 A Cargo workspace of small, single-purpose crates:
 
-| Crate           | Role                                                                                                                                                                                                 |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bhtune-core`   | Pure domain logic: the MRFT state machine, tuning math, and data model. No I/O, no async, no clock reads — this is what makes deterministic, replayable testing possible.                            |
-| `bhtune-driver` | The `Driver` trait (`read`/`write`/`browse`) and its implementations: OPC DA (via `opcda-bridge`), an in-process process simulator, and a golden-trace replay driver used for regression validation. |
-| `bhtune-db`     | SQLite persistence (`sqlx`, WAL mode): DCS/PLC templates, loops, tune runs, samples, and results.                                                                                                    |
-| `bhtune-cli`    | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                      |
-| `bhtune-server` | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                           |
+| Crate           | Role                                                                                                                                                                                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`   | Pure domain logic: the MRFT state machine, tuning math, and data model. No I/O, no async, no clock reads — this is what makes deterministic, replayable testing possible.                                                    |
+| `bhtune-driver` | The `Driver` trait (`read`/`write`/capabilities/paged browse/search) and its implementations: OPC DA (via `opcda-bridge`), an in-process process simulator, and a golden-trace replay driver used for regression validation. |
+| `bhtune-db`     | SQLite persistence (`sqlx`, WAL mode): DCS/PLC templates, loops, tune runs, samples, and results.                                                                                                                            |
+| `bhtune-cli`    | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                                              |
+| `bhtune-server` | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                                                   |
 
 The frontend (`bhtune-frontend`: React + TypeScript + Vite + Tailwind CSS, for `bhtune-server`)
 lives under `frontend/` — a pnpm workspace package, kept separate from the Cargo workspace. See
@@ -92,22 +93,31 @@ library from crates.io:
 
 ```toml
 [dependencies]
-opcda-bridge = "0.2"
+opcda-bridge = "0.3"
 ```
 
 The library communicates with the separate Windows-side
 [`opcda-bridge-gateway`](https://crates.io/crates/opcda-bridge-gateway) process over the network.
-The dependency is added to `bhtune-driver` when its OPC DA implementation is introduced; the
-scaffolding workspace intentionally does not declare unused dependencies.
+BHTune requires the session-aware browse/search contract introduced by gateway 0.3.2 or newer.
+The dependency is kept local to `bhtune-driver`; all other crates use the protocol-neutral
+`Driver` trait.
 
 The web form's **Browse servers** button opens an on-demand picker for the OPC DA servers
-registered on the gateway. Its tag browser expands one namespace level at a time and supports
-both dotted and slash-separated OPC item IDs. The first node is selected automatically when
-the tree loads, and the selection panel remains in place while browsing. With a template
-selected, confirming a tag selection replaces its final component with that template's
-process-variable suffix before writing the value into the Tag name field. Use a
-gateway release with recursive hierarchical browsing for servers that expose branch names
-through `OPC_FLAT` without returning their descendants.
+registered on the gateway. Its tag browser opens a bounded browse session, loads one page of
+immediate children at a time, and provides **Load more** for incomplete pages. The gateway
+returns opaque navigation keys and exact ItemIDs; BHTune never reconstructs hierarchy by
+splitting `.`, `!`, or `/`, which is essential for namespaces such as
+`FCS0201!204FI00510.PV`. Nodes that are both branches and items remain both expandable and
+selectable.
+
+The browser also exposes gateway capabilities and bounded namespace search. Search results
+arrive progressively with breadcrumbs, exact ItemIDs, completion/truncation metadata, and
+warnings when a gateway visit limit prevents an authoritative result. Browse sessions are
+closed when the modal exits, and reopening it reveals and scrolls to the saved selection when
+the gateway can resolve its path.
+
+With a template selected, confirming a tag selection replaces its final component with that
+template's process-variable suffix before writing the value into the Tag name field.
 Changing templates replaces a tag's final component with the new template's process-variable
 suffix, regardless of what the previous component was, while preserving the tag path.
 Confirming a tag selection performs a fresh read of the original item selected in the browser
@@ -118,6 +128,10 @@ page controls whether `Uncertain` readings are accepted during tuning; `Bad` is 
 Reopening the browser automatically expands the available path to the current Tag name, selects
 that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
 level.
+The diagnostic CLI exposes the bounded operations through `bhtune opc servers`, `browse`, and
+`search`; `bhtune opc browse --all` explicitly drains continuation pages instead of silently
+downloading an entire namespace. A browse session remains available for continuation after the
+command exits; release it explicitly with `bhtune opc close <session-id>`.
 
 The New tune form's collapsible **Loop mapping** section is the single place to inspect and
 adjust the effective mapping. Every row shows its effective value and source. Tag mappings use
@@ -130,8 +144,8 @@ The selected source and values are retained in the saved draft. Simulator direct
 are stored separately from OPC fixed overrides, so changing drivers cannot turn simulator
 settings into live OPC overrides.
 
-In **Simulator** mode, the form disables the OPC DA connection, tag, quality, timeout, and
-automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
+In **Simulator** mode, the form disables the OPC DA connection, tag, quality, operation/restore
+timeout, and automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
 template remains selectable: the simulator ignores its tag mappings, but its PID type and unit
 conventions still format the calculated results (for example, Yokogawa uses proportional band
 while the other built-in templates use gain). PV/MV ranges and controller direction remain

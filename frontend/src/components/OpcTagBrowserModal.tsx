@@ -1,7 +1,25 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
-import { useOpcBrowseFetcher, useTestOpcConnection } from "../api/opc";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from "react";
+import {
+  useCloseOpcBrowseSession,
+  useOpcBrowseFetcher,
+  useOpcSearch,
+  useTestOpcConnection,
+} from "../api/opc";
 import { userFacingErrorMessage } from "../api/errors";
-import type { OpcReadResponse, OpcTagNodeResponse } from "../api/opc";
+import type {
+  OpcBrowseResponse,
+  OpcReadResponse,
+  OpcSearchEvent,
+  OpcSearchMatchResponse,
+  OpcSearchProgress,
+  OpcTagNodeResponse,
+} from "../api/opc";
 import type { components } from "../api/schema";
 import { SAMPLE_QUALITY_LABELS, SAMPLE_QUALITY_TONE } from "../lib/enumLabels";
 import { deriveTag } from "../lib/opcTags";
@@ -13,62 +31,96 @@ type QualityWarning = {
   reading: OpcReadResponse;
 };
 
-type PathState =
-  | { status: "loading" }
-  | { status: "loaded"; nodes: OpcTagNodeResponse[] }
-  | { status: "error"; message: string };
+type SelectedNode = {
+  nodeKey: string;
+  itemId: string;
+};
+
+type ScopeState = {
+  status: "loading" | "loading-more" | "loaded" | "error";
+  nodes: OpcTagNodeResponse[];
+  nextPageToken: string | null;
+  complete: boolean;
+  warning: string | null;
+  message?: string;
+};
+
+type ScopeSnapshot = Omit<ScopeState, "status" | "message">;
 
 /** Indentation step per tree depth; matches the width of the expand chevron column so a
  * leaf's label lines up under its parent branch's label, not under its chevron. */
 const INDENT_PX = 18;
+const ROOT_SCOPE_KEY = "__root__";
+const BROWSE_PAGE_SIZE = 200;
+const SEARCH_MAX_RESULTS = 25;
 
-function namespaceSegments(value: string): string[] {
-  return value.split(/[.!/]/).filter((segment) => segment !== "");
+function scopeKey(parentNodeKey: string | null): string {
+  return parentNodeKey ?? ROOT_SCOPE_KEY;
 }
 
-function isNamespaceDescendant(parent: string, candidate: string): boolean {
-  const parentSegments = namespaceSegments(parent);
-  const candidateSegments = namespaceSegments(candidate);
-  return (
-    candidateSegments.length > parentSegments.length &&
-    parentSegments.every(
-      (segment, index) => candidateSegments[index] === segment,
-    )
-  );
+function nodeCanExpand(node: OpcTagNodeResponse): boolean {
+  return node.kind === "branch" || node.kind === "branch_and_item";
 }
 
-/** One tree level -- renders `pathState[path]`'s nodes and recurses into whichever of them
- * are both a branch and currently expanded. Kept as a separate component (rather than a
- * loop inside `OpcTagBrowserModal` itself) purely so the recursion has somewhere to call
- * back into; all the actual state (`pathState`/`expanded`/`selectedTag`) lives in the parent
- * and is threaded through as props. */
+function nodeCanSelect(node: OpcTagNodeResponse): boolean {
+  return Boolean(nodeItemId(node));
+}
+
+function nodeItemId(node: OpcTagNodeResponse): string | null {
+  return node.item_id || null;
+}
+
+function nodeKindLabel(node: OpcTagNodeResponse): string | null {
+  if (node.kind === "branch_and_item") return "branch + tag";
+  if (nodeCanSelect(node)) return "tag";
+  return null;
+}
+
+function mergePage(
+  previous: ScopeState | undefined,
+  page: OpcBrowseResponse,
+  append: boolean,
+): ScopeSnapshot {
+  return {
+    nodes: append ? [...(previous?.nodes ?? []), ...page.nodes] : page.nodes,
+    nextPageToken: page.next_page_token ?? null,
+    complete: page.complete,
+    warning: page.warning ?? null,
+  };
+}
+
+/** One tree level -- renders one browsed scope and recurses into whichever branch nodes are
+ * expanded. Navigation uses only the gateway's opaque `node_key`; `item_id` is kept only for
+ * reads/selections. */
 function TreeLevel({
-  path,
+  parentNodeKey,
   depth,
-  pathState,
+  scopeState,
   expanded,
   onToggle,
   onSelect,
   onConfirm,
-  selectedTag,
+  onLoadMore,
+  selectedNode,
   selectedNodeRef,
   disabled,
 }: {
-  path: string;
+  parentNodeKey: string | null;
   depth: number;
-  pathState: Record<string, PathState>;
+  scopeState: Record<string, ScopeState>;
   expanded: Set<string>;
-  onToggle: (tag: string) => void;
-  onSelect: (tag: string) => void;
-  onConfirm: (tag: string) => void;
-  selectedTag: string | null;
+  onToggle: (node: OpcTagNodeResponse) => void;
+  onSelect: (node: OpcTagNodeResponse) => void;
+  onConfirm: (node: OpcTagNodeResponse) => void;
+  onLoadMore: (parentNodeKey: string | null) => void;
+  selectedNode: SelectedNode | null;
   selectedNodeRef: RefObject<HTMLButtonElement | null>;
   disabled: boolean;
 }) {
-  const state = pathState[path];
+  const state = scopeState[scopeKey(parentNodeKey)];
   if (!state) return null;
 
-  if (state.status === "loading") {
+  if (state.status === "loading" && state.nodes.length === 0) {
     return (
       <div
         className="py-1 text-xs text-slate-500"
@@ -78,7 +130,7 @@ function TreeLevel({
       </div>
     );
   }
-  if (state.status === "error") {
+  if (state.status === "error" && state.nodes.length === 0) {
     return (
       <div
         className="py-1 text-xs text-red-400"
@@ -101,86 +153,110 @@ function TreeLevel({
 
   return (
     <>
-      {state.nodes.map((node) => (
-        <div key={node.tag}>
-          <div
-            className={`flex items-center gap-1.5 rounded px-1 py-1 text-sm hover:bg-slate-800 ${
-              selectedTag === node.tag ? "bg-slate-800" : ""
-            }`}
-            style={{ paddingLeft: `${depth * INDENT_PX}px` }}
-          >
-            {node.is_branch ? (
+      {state.warning && (
+        <div
+          className="py-1 text-xs text-amber-300"
+          style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
+        >
+          {state.warning}
+        </div>
+      )}
+      {state.nodes.map((node) => {
+        const isBranch = nodeCanExpand(node);
+        const itemId = nodeItemId(node);
+        const isSelected = selectedNode?.nodeKey === node.node_key;
+        return (
+          <div key={node.node_key}>
+            <div
+              className={`flex items-center gap-1.5 rounded px-1 py-1 text-sm hover:bg-slate-800 ${
+                isSelected ? "bg-slate-800" : ""
+              }`}
+              style={{ paddingLeft: `${depth * INDENT_PX}px` }}
+            >
+              {isBranch ? (
+                <button
+                  type="button"
+                  onClick={() => onToggle(node)}
+                  disabled={disabled}
+                  aria-label={
+                    expanded.has(node.node_key) ? "Collapse" : "Expand"
+                  }
+                  className="w-4 shrink-0 text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {expanded.has(node.node_key) ? "▾" : "▸"}
+                </button>
+              ) : (
+                <span className="w-4 shrink-0" />
+              )}
               <button
                 type="button"
-                onClick={() => onToggle(node.tag)}
-                disabled={disabled}
-                aria-label={expanded.has(node.tag) ? "Collapse" : "Expand"}
-                className="w-4 shrink-0 text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => (itemId ? onSelect(node) : onToggle(node))}
+                onDoubleClick={() =>
+                  itemId ? onConfirm(node) : onToggle(node)
+                }
+                ref={isSelected ? selectedNodeRef : undefined}
+                disabled={disabled || (!itemId && !isBranch)}
+                title={itemId ?? node.display_name}
+                className="flex-1 truncate text-left font-mono text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {expanded.has(node.tag) ? "▾" : "▸"}
+                {node.display_name}
               </button>
-            ) : (
-              <span className="w-4 shrink-0" />
-            )}
-            <button
-              type="button"
-              onClick={() => onSelect(node.tag)}
-              onDoubleClick={() =>
-                node.is_branch ? onToggle(node.tag) : onConfirm(node.tag)
-              }
-              ref={selectedTag === node.tag ? selectedNodeRef : undefined}
-              disabled={disabled}
-              title={node.tag}
-              className="flex-1 truncate text-left font-mono text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {node.tag}
-            </button>
-            {!node.is_branch && (
-              <span className="shrink-0 text-xs text-slate-500">tag</span>
+              {nodeKindLabel(node) && (
+                <span className="shrink-0 text-xs text-slate-500">
+                  {nodeKindLabel(node)}
+                </span>
+              )}
+            </div>
+            {isBranch && expanded.has(node.node_key) && (
+              <TreeLevel
+                parentNodeKey={node.node_key}
+                depth={depth + 1}
+                scopeState={scopeState}
+                expanded={expanded}
+                onToggle={onToggle}
+                onSelect={onSelect}
+                onConfirm={onConfirm}
+                onLoadMore={onLoadMore}
+                selectedNode={selectedNode}
+                selectedNodeRef={selectedNodeRef}
+                disabled={disabled}
+              />
             )}
           </div>
-          {node.is_branch && expanded.has(node.tag) && (
-            <TreeLevel
-              path={node.tag}
-              depth={depth + 1}
-              pathState={pathState}
-              expanded={expanded}
-              onToggle={onToggle}
-              onSelect={onSelect}
-              onConfirm={onConfirm}
-              selectedTag={selectedTag}
-              selectedNodeRef={selectedNodeRef}
-              disabled={disabled}
-            />
-          )}
+        );
+      })}
+      {state.status === "error" && state.nodes.length > 0 && (
+        <div
+          className="py-1 text-xs text-red-400"
+          style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
+        >
+          {state.message}
         </div>
-      ))}
+      )}
+      {!state.complete && state.nextPageToken && (
+        <button
+          type="button"
+          disabled={disabled || state.status === "loading-more"}
+          onClick={() => onLoadMore(parentNodeKey)}
+          className="py-1 text-xs text-blue-300 hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
+        >
+          {state.status === "loading-more" ? "Loading more…" : "Load more"}
+        </button>
+      )}
     </>
   );
 }
 
 /**
- * The OPC tag-tree browser modal (`ui-opc-browser`): a lazily-expanding tree fed one level
- * at a time from `GET /api/opc/browse`, a per-node "Read selected tag" action backed by
- * `GET /api/opc/read`
- * (showing the live value and its quality). When the user confirms a selection, the final
- * component is replaced with the active template's process-variable suffix before the value
- * is written back to the form, but only after a fresh read of the originally selected tag
- * confirms `Good` OPC quality. A non-Good result pauses selection behind an explicit warning,
- * while a read failure leaves the browser open so the tag is never accepted without
- * verification. The main form's collapsed Loop mapping section is the single place for
- * reviewing template defaults and changing any other tag.
- * Double-clicking a leaf performs the same confirmation as the `Select tag` button, while
- * double-clicking a branch expands or collapses it.
- * Reopening the modal starts from `initialTag` when that tag is present in the browsed tree:
- * each matching ancestor branch is expanded and the tag is selected automatically. If the
- * tag is unavailable, the browser keeps its root-level default selection. The selected node
- * is scrolled into the tree viewport when it becomes available.
- *
- * A fresh instance is mounted each time the New tune form opens it (see `NewRunPage`'s
- * conditional render), so there's no need to reset internal state on `bridgeHost`/
- * `opcServer` changes -- those can't change while this is open anyway, since the modal's
- * full-viewport backdrop makes the form underneath unreachable.
+ * The OPC tag-tree browser modal (`ui-opc-browser`): a lazily-expanding, paged tree fed by
+ * `GET /api/opc/browse`, a per-node "Read selected tag" action backed by `GET /api/opc/read`,
+ * and an optional search backed by `GET /api/opc/search`. Browse navigation round-trips the
+ * gateway's opaque session, node, and page tokens; display names are never parsed into paths.
+ * When the user confirms a selection, the active template's process-variable suffix is
+ * applied to the selected node's exact original ItemID, after a fresh quality check reads that
+ * same ItemID. Reopening at a saved tag uses exact search breadcrumbs to reveal and scroll the
+ * matching node when the server supports it.
  */
 export function OpcTagBrowserModal({
   bridgeHost,
@@ -197,12 +273,18 @@ export function OpcTagBrowserModal({
   onClose: () => void;
   onSelect: (tag: string) => void;
 }) {
-  const fetchPath = useOpcBrowseFetcher(bridgeHost, opcServer);
+  const { fetchPage, clearCache } = useOpcBrowseFetcher(bridgeHost, opcServer);
+  const closeBrowseSession = useCloseOpcBrowseSession();
+  const searchOpcTags = useOpcSearch();
   const testConnection = useTestOpcConnection();
-  const [pathState, setPathState] = useState<Record<string, PathState>>({});
+  const [scopeState, setScopeState] = useState<Record<string, ScopeState>>({});
+  const scopeStateRef = useRef(scopeState);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const selectedNodeRef = useRef<HTMLButtonElement | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+  const closedSessionIdsRef = useRef<Set<string>>(new Set());
+  const disposedRef = useRef(false);
   const [selectionReadError, setSelectionReadError] = useState<string | null>(
     null,
   );
@@ -210,21 +292,99 @@ export function OpcTagBrowserModal({
   const [qualityWarning, setQualityWarning] = useState<QualityWarning | null>(
     null,
   );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatches, setSearchMatches] = useState<OpcSearchMatchResponse[]>(
+    [],
+  );
+  const [searchProgress, setSearchProgress] =
+    useState<OpcSearchProgress | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
 
-  async function load(path: string): Promise<OpcTagNodeResponse[] | null> {
-    setPathState((prev) => ({ ...prev, [path]: { status: "loading" } }));
+  useEffect(() => {
+    scopeStateRef.current = scopeState;
+  }, [scopeState]);
+
+  function rememberSession(sessionId: string) {
+    sessionIdRef.current = sessionId;
+  }
+
+  function closeSessionOnce(sessionId: string | null) {
+    if (!sessionId || closedSessionIdsRef.current.has(sessionId)) {
+      return;
+    }
+    closedSessionIdsRef.current.add(sessionId);
+    closeBrowseSession.mutate({ bridgeHost, opcServer, sessionId });
+  }
+
+  function closeActiveSession() {
+    const sessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
+    closeSessionOnce(sessionId);
+    clearCache();
+  }
+
+  function disposeBrowse() {
+    disposedRef.current = true;
+    cancelActiveSearch();
+    closeActiveSession();
+  }
+
+  function cancelActiveSearch() {
+    searchAbortRef.current?.abort();
+  }
+
+  async function load(
+    parentNodeKey: string | null,
+    options: { pageToken?: string; append?: boolean } = {},
+  ): Promise<ScopeSnapshot | null> {
+    const key = scopeKey(parentNodeKey);
+    const previous = scopeStateRef.current[key];
+    setScopeState((prev) => ({
+      ...prev,
+      [key]: {
+        status: options.append ? "loading-more" : "loading",
+        nodes: options.append ? (prev[key]?.nodes ?? []) : [],
+        nextPageToken: options.append
+          ? (prev[key]?.nextPageToken ?? null)
+          : null,
+        complete: options.append ? (prev[key]?.complete ?? false) : false,
+        warning: options.append ? (prev[key]?.warning ?? null) : null,
+      },
+    }));
     try {
-      const nodes = await fetchPath(path);
-      setPathState((prev) => ({
+      const page = await fetchPage({
+        sessionId: sessionIdRef.current ?? undefined,
+        parentNodeKey: parentNodeKey ?? undefined,
+        pageToken: options.pageToken,
+        pageSize: BROWSE_PAGE_SIZE,
+      });
+      if (disposedRef.current) {
+        closeSessionOnce(page.session_id);
+        return null;
+      }
+      rememberSession(page.session_id);
+      const snapshot = mergePage(previous, page, options.append ?? false);
+      setScopeState((prev) => ({
         ...prev,
-        [path]: { status: "loaded", nodes },
+        [key]: { status: "loaded", ...snapshot },
       }));
-      return nodes;
+      scopeStateRef.current = {
+        ...scopeStateRef.current,
+        [key]: { status: "loaded", ...snapshot },
+      };
+      return snapshot;
     } catch (err) {
-      setPathState((prev) => ({
+      if (disposedRef.current) return null;
+      const fallback = options.append ? previous : undefined;
+      setScopeState((prev) => ({
         ...prev,
-        [path]: {
+        [key]: {
           status: "error",
+          nodes: fallback?.nodes ?? [],
+          nextPageToken: fallback?.nextPageToken ?? null,
+          complete: fallback?.complete ?? false,
+          warning: fallback?.warning ?? null,
           message: userFacingErrorMessage(
             err,
             "Unable to load tags at this level.",
@@ -235,92 +395,170 @@ export function OpcTagBrowserModal({
     }
   }
 
+  async function ensureNodeVisible(
+    parentNodeKey: string | null,
+    nodeKey: string,
+    isCancelled: () => boolean,
+  ): Promise<OpcTagNodeResponse | null> {
+    let state = scopeStateRef.current[scopeKey(parentNodeKey)];
+    if (!state) {
+      const snapshot = await load(parentNodeKey);
+      if (!snapshot || isCancelled()) return null;
+      state = { status: "loaded", ...snapshot };
+    }
+
+    while (!isCancelled()) {
+      const match = state.nodes.find((node) => node.node_key === nodeKey);
+      if (match) return match;
+      if (!state.nextPageToken) return null;
+      const snapshot = await load(parentNodeKey, {
+        pageToken: state.nextPageToken,
+        append: true,
+      });
+      if (!snapshot) return null;
+      state = { status: "loaded", ...snapshot };
+    }
+    return null;
+  }
+
+  async function revealSearchMatch(
+    match: OpcSearchMatchResponse,
+    isCancelled: () => boolean,
+  ): Promise<boolean> {
+    let parentNodeKey: string | null = null;
+    const breadcrumbs =
+      match.breadcrumbs.at(-1)?.node_key === match.node.node_key
+        ? match.breadcrumbs.slice(0, -1)
+        : match.breadcrumbs;
+    for (const breadcrumb of breadcrumbs) {
+      const branch = await ensureNodeVisible(
+        parentNodeKey,
+        breadcrumb.node_key,
+        isCancelled,
+      );
+      if (!branch || !nodeCanExpand(branch)) return false;
+      setExpanded((previous) => {
+        if (previous.has(branch.node_key)) return previous;
+        const next = new Set(previous);
+        next.add(branch.node_key);
+        return next;
+      });
+      parentNodeKey = branch.node_key;
+    }
+
+    const node = await ensureNodeVisible(
+      parentNodeKey,
+      match.node.node_key,
+      isCancelled,
+    );
+    const itemId = node ? nodeItemId(node) : nodeItemId(match.node);
+    if (!itemId) return false;
+    setSelectedNode({ nodeKey: match.node.node_key, itemId });
+    return true;
+  }
+
   async function revealInitialTag(
     rootNodes: OpcTagNodeResponse[],
     target: string,
     isCancelled: () => boolean,
   ): Promise<boolean> {
-    let nodes = rootNodes;
-    while (!isCancelled()) {
-      const matchingNode = nodes.find((node) => node.tag === target);
-      if (matchingNode) {
-        setSelectedTag(matchingNode.tag);
-        return true;
-      }
-
-      const branch = nodes.find(
-        (node) => node.is_branch && isNamespaceDescendant(node.tag, target),
-      );
-      if (!branch) return false;
-
-      setExpanded((previous) => {
-        if (previous.has(branch.tag)) return previous;
-        const next = new Set(previous);
-        next.add(branch.tag);
-        return next;
-      });
-
-      const childNodes = await load(branch.tag);
-      if (!childNodes) return false;
-      nodes = childNodes;
+    const rootMatch = rootNodes.find((node) => nodeItemId(node) === target);
+    if (rootMatch) {
+      setSelectedNode({ nodeKey: rootMatch.node_key, itemId: target });
+      return true;
     }
-    return false;
+
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    try {
+      const result = await searchOpcTags.mutateAsync({
+        bridgeHost,
+        opcServer,
+        query: target,
+        matchMode: "exact",
+        sessionId: sessionIdRef.current ?? undefined,
+        maxResults: 1,
+        includeBranches: false,
+        signal: controller.signal,
+      });
+      const match = result.matches.find((candidate) => {
+        return nodeItemId(candidate.node) === target;
+      });
+      if (!match || isCancelled() || controller.signal.aborted) return false;
+      return revealSearchMatch(match, isCancelled);
+    } catch {
+      return false;
+    } finally {
+      if (searchAbortRef.current === controller) {
+        searchAbortRef.current = null;
+      }
+    }
   }
 
-  // Loads the root level once, as soon as there's a server to browse. `opcServer` is the
-  // only variable in `fetchPath`'s closure that can plausibly change while this effect's
-  // owner is mounted (see the doc comment above for why it otherwise can't) -- an empty
-  // `opcServer` means "nothing to browse yet" and is handled by the early-return render
-  // path below instead of firing a request that would just 400.
   useEffect(() => {
     if (!opcServer) return;
     let cancelled = false;
     async function initialize() {
-      const rootNodes = await load("");
-      if (cancelled || !rootNodes) return;
+      const root = await load(null);
+      if (cancelled || !root) return;
 
-      const target = initialTag.trim();
+      const target = initialTag;
       if (
         target &&
-        (await revealInitialTag(rootNodes, target, () => cancelled))
+        (await revealInitialTag(root.nodes, target, () => cancelled))
       ) {
         return;
       }
+
       if (!cancelled) {
+        const firstSelectable = root.nodes.find(nodeCanSelect);
+        const firstItemId = firstSelectable
+          ? nodeItemId(firstSelectable)
+          : null;
         setExpanded(new Set());
-        setSelectedTag(rootNodes[0]?.tag ?? null);
+        setSelectedNode(
+          firstSelectable && firstItemId
+            ? {
+                nodeKey: firstSelectable.node_key,
+                itemId: firstItemId,
+              }
+            : null,
+        );
       }
     }
     void initialize();
     return () => {
       cancelled = true;
+      disposeBrowse();
     };
-    // Deliberately depends only on `bridgeHost`/`opcServer`/`initialTag`: `load`/`fetchPath` are
-    // recreated every render but always call through to the same underlying query-cache
-    // fetch, so this intentionally does not list them -- doing so would only cause
-    // redundant re-fetches of the root level on every unrelated re-render.
+    // `load`, `revealInitialTag`, and `disposeBrowse` close over stable per-mount inputs;
+    // including them would turn every render into a new browse session.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [bridgeHost, opcServer, initialTag]);
 
   useEffect(() => {
     selectedNodeRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedTag, pathState, expanded]);
+  }, [selectedNode, scopeState, expanded]);
 
-  function toggle(tag: string) {
+  function toggle(node: OpcTagNodeResponse) {
+    if (!nodeCanExpand(node)) return;
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(tag)) {
-        next.delete(tag);
+      if (next.has(node.node_key)) {
+        next.delete(node.node_key);
       } else {
-        next.add(tag);
-        if (!pathState[tag]) void load(tag);
+        next.add(node.node_key);
+        if (!scopeStateRef.current[scopeKey(node.node_key)])
+          void load(node.node_key);
       }
       return next;
     });
   }
 
-  function selectTag(tag: string) {
-    setSelectedTag(tag);
+  function selectNode(node: OpcTagNodeResponse) {
+    const itemId = nodeItemId(node);
+    if (!itemId) return;
+    setSelectedNode({ nodeKey: node.node_key, itemId });
     setSelectionReadError(null);
     testConnection.reset();
   }
@@ -329,6 +567,7 @@ export function OpcTagBrowserModal({
     const pvTag = template
       ? (deriveTag(tag, template.process_variable_suffix) ?? tag)
       : tag;
+    disposeBrowse();
     onSelect(pvTag);
     onClose();
   }
@@ -360,14 +599,92 @@ export function OpcTagBrowserModal({
   }
 
   function readSelectedTag() {
-    if (!selectedTag) return;
+    if (!selectedNode) return;
     setSelectionReadError(null);
     testConnection.mutate({
       bridgeHost,
       opcServer,
-      tag: selectedTag,
+      tag: selectedNode.itemId,
     });
   }
+
+  function loadMore(parentNodeKey: string | null) {
+    const state = scopeStateRef.current[scopeKey(parentNodeKey)];
+    if (!state?.nextPageToken) return;
+    void load(parentNodeKey, { pageToken: state.nextPageToken, append: true });
+  }
+
+  async function runSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) return;
+    cancelActiveSearch();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    setSearchError(null);
+    setSearchMatches([]);
+    setSearchProgress(null);
+    try {
+      const result = await searchOpcTags.mutateAsync({
+        bridgeHost,
+        opcServer,
+        query,
+        matchMode: "contains",
+        sessionId: sessionIdRef.current ?? undefined,
+        maxResults: SEARCH_MAX_RESULTS,
+        includeBranches: false,
+        signal: controller.signal,
+        onEvent: (searchEvent: OpcSearchEvent) => {
+          if (controller.signal.aborted) return;
+          if (searchEvent.type === "match") {
+            setSearchMatches((previous) => [...previous, searchEvent.match]);
+          } else if (searchEvent.type === "progress") {
+            setSearchProgress(searchEvent.progress);
+          } else {
+            setSearchProgress(null);
+          }
+        },
+      });
+      if (controller.signal.aborted) return;
+      setSearchMatches(result.matches);
+      setSearchProgress(null);
+      if (result.warning) {
+        setSearchError(result.warning);
+      } else if (result.truncated) {
+        setSearchError(`Showing the first ${result.matches.length} matches.`);
+      } else if (result.matches.length === 0) {
+        setSearchError("No matching tags.");
+      }
+    } catch (err) {
+      if (controller.signal.aborted) {
+        setSearchError("Search cancelled.");
+        return;
+      }
+      setSearchMatches([]);
+      setSearchProgress(null);
+      setSearchError(userFacingErrorMessage(err, "Unable to search tags."));
+    } finally {
+      if (searchAbortRef.current === controller) {
+        searchAbortRef.current = null;
+      }
+    }
+  }
+
+  function chooseSearchMatch(match: OpcSearchMatchResponse) {
+    setSearchError(null);
+    void revealSearchMatch(match, () => false).then((revealed) => {
+      if (!revealed) {
+        const itemId = nodeItemId(match.node);
+        if (itemId) setSelectedNode({ nodeKey: match.node.node_key, itemId });
+      }
+    });
+  }
+
+  const selectedTag = selectedNode?.itemId ?? null;
+  const busy =
+    testConnection.isPending ||
+    selectionCheckPending ||
+    searchOpcTags.isPending;
 
   return (
     <Modal
@@ -376,7 +693,10 @@ export function OpcTagBrowserModal({
           ? "OPC quality warning"
           : `Browse tags on ${opcServer || "(no server)"}`
       }
-      onClose={onClose}
+      onClose={() => {
+        disposeBrowse();
+        onClose();
+      }}
       widthClassName="max-w-2xl"
     >
       {qualityWarning ? (
@@ -427,18 +747,86 @@ export function OpcTagBrowserModal({
         </p>
       ) : (
         <>
+          <form className="mb-3 flex gap-2" onSubmit={runSearch}>
+            <label className="sr-only" htmlFor="opc-tag-search">
+              Search OPC tags
+            </label>
+            <input
+              id="opc-tag-search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search tags"
+              className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+            />
+            {searchOpcTags.isPending ? (
+              <Button type="button" onClick={cancelActiveSearch}>
+                Cancel
+              </Button>
+            ) : (
+              <Button type="submit" disabled={busy || !searchQuery.trim()}>
+                Search
+              </Button>
+            )}
+          </form>
+          {(searchError || searchMatches.length > 0 || searchProgress) && (
+            <div className="mb-3 max-h-32 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
+              {searchProgress && (
+                <p className="mb-2 text-xs text-slate-400">
+                  Searching… visited {searchProgress.visited_nodes} nodes, found{" "}
+                  {searchProgress.matches} matches
+                  {searchProgress.partial ? " so far" : ""}.
+                </p>
+              )}
+              {searchError && <ErrorBanner message={searchError} />}
+              {searchMatches.length > 0 && (
+                <div className="space-y-1">
+                  {searchMatches.map((match) => {
+                    const itemId = nodeItemId(match.node);
+                    const breadcrumbs =
+                      match.breadcrumbs.at(-1)?.node_key === match.node.node_key
+                        ? match.breadcrumbs.slice(0, -1)
+                        : match.breadcrumbs;
+                    const path = [
+                      ...breadcrumbs.map((part) => part.display_name),
+                      match.node.display_name,
+                    ].join(" / ");
+                    return (
+                      <button
+                        key={match.node.node_key}
+                        type="button"
+                        disabled={busy || !itemId}
+                        onClick={() => chooseSearchMatch(match)}
+                        title={itemId ?? path}
+                        className="block w-full truncate rounded px-2 py-1 text-left text-xs text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <span className="font-mono">{path}</span>
+                        {itemId && itemId !== path && (
+                          <span className="ml-2 text-slate-500">{itemId}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
             <TreeLevel
-              path=""
+              parentNodeKey={null}
               depth={0}
-              pathState={pathState}
+              scopeState={scopeState}
               expanded={expanded}
               onToggle={toggle}
-              onSelect={selectTag}
-              onConfirm={confirmTag}
-              selectedTag={selectedTag}
+              onSelect={selectNode}
+              onConfirm={(node) => {
+                const itemId = nodeItemId(node);
+                if (itemId) void confirmTag(itemId);
+              }}
+              onLoadMore={loadMore}
+              selectedNode={selectedNode}
               selectedNodeRef={selectedNodeRef}
-              disabled={testConnection.isPending || selectionCheckPending}
+              disabled={busy}
             />
           </div>
 
@@ -459,10 +847,7 @@ export function OpcTagBrowserModal({
                 </p>
 
                 <div className="mt-3 flex items-center gap-2">
-                  <Button
-                    disabled={testConnection.isPending || selectionCheckPending}
-                    onClick={readSelectedTag}
-                  >
+                  <Button disabled={busy} onClick={readSelectedTag}>
                     {selectionCheckPending
                       ? "Checking…"
                       : testConnection.isPending
@@ -493,10 +878,17 @@ export function OpcTagBrowserModal({
                 </div>
 
                 <div className="mt-3 flex justify-end gap-2">
-                  <Button onClick={onClose}>Cancel</Button>
+                  <Button
+                    onClick={() => {
+                      disposeBrowse();
+                      onClose();
+                    }}
+                  >
+                    Cancel
+                  </Button>
                   <Button
                     variant="primary"
-                    disabled={testConnection.isPending || selectionCheckPending}
+                    disabled={busy}
                     onClick={() => void confirmTag(selectedTag)}
                   >
                     {selectionCheckPending ? "Checking…" : "Select tag"}

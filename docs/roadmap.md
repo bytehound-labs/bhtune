@@ -19,7 +19,7 @@ order here, not a fixed sequence.
 OPC DA (via [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge)) is the primary,
 supported driver today, but it isn't the only industrial protocol in the field, and it isn't
 architecturally privileged: BHTune talks to the plant entirely through one `Driver` trait
-(`read`/`write`/`browse`), and the tuning engine has no idea which protocol is on the other
+(`read`, `write`, capabilities, paged browsing, and search), and the tuning engine has no idea which protocol is on the other
 side of it. Adding `OpcUaDriver` and `ModbusDriver` implementations is additive work at the
 `bhtune-driver` layer — it needs no changes to `bhtune-core`'s tuning math or the MRFT state
 machine, and no schema changes either, since a loop's tags are just strings regardless of the

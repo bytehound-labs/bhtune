@@ -1,0 +1,52 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc-search 1  "bhtune-opc-search "
+.SH NAME
+bhtune\-opc\-search \- Search the OPC DA namespace without downloading the whole tree
+.SH SYNOPSIS
+\fBbhtune\-opc\-search\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-match\-mode\fR] [\fB\-\-max\-results\fR] [\fB\-\-session\-id\fR] [\fB\-\-scope\-node\-key\fR] [\fB\-\-include\-branches\fR] [\fB\-\-refresh\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIQUERY\fR>
+.SH DESCRIPTION
+Search the OPC DA namespace without downloading the whole tree
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+
+.TP
+\fB\-\-server\fR \fI<SERVER>\fR
+
+.TP
+\fB\-\-match\-mode\fR \fI<MATCH_MODE>\fR [default: contains]
+How the query should match
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+exact
+.IP \(bu 2
+prefix
+.IP \(bu 2
+contains
+.RE
+.TP
+\fB\-\-max\-results\fR \fI<MAX_RESULTS>\fR [default: 200]
+Maximum number of matches
+.TP
+\fB\-\-session\-id\fR \fI<SESSION_ID>\fR
+Existing bridge browse session to search within
+.TP
+\fB\-\-scope\-node\-key\fR \fI<SCOPE_NODE_KEY>\fR
+Opaque node key limiting the search scope
+.TP
+\fB\-\-include\-branches\fR
+Include branch nodes as search results
+.TP
+\fB\-\-refresh\fR
+Ask the gateway to refresh its namespace view
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIQUERY\fR>
+Text to find in node labels/item IDs

@@ -132,6 +132,9 @@ pub enum Command {
     /// Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing
     /// the tuning engine entirely.
     Opc {
+        /// How to print OPC diagnostic results.
+        #[arg(long, global = true, value_enum, default_value = "table")]
+        output: crate::output::OutputFormat,
         #[command(subcommand)]
         command: OpcCommand,
     },
@@ -149,9 +152,8 @@ impl Command {
             Command::Tune(args) => args.output,
             Command::Simulate(args) => args.output,
             Command::History { command } => command.output_format(),
-            Command::Template { .. } | Command::Export(_) | Command::Opc { .. } => {
-                crate::output::OutputFormat::Table
-            }
+            Command::Template { .. } | Command::Export(_) => crate::output::OutputFormat::Table,
+            Command::Opc { output, .. } => *output,
         }
     }
 }
@@ -804,15 +806,82 @@ pub enum OpcCommand {
         tag: String,
         value: String,
     },
-    /// Browse tags under a path (empty for the top level).
+    /// Browse one bounded page of tags. Without a session, lists the root level.
     Browse {
         #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
         bridge_host: Option<String>,
         #[arg(long)]
         server: Option<String>,
-        #[arg(default_value = "")]
-        path: String,
+        /// Existing bridge browse session to continue or use with `parent-node-key`.
+        #[arg(long)]
+        session_id: Option<String>,
+        /// Opaque node key returned by a previous page.
+        #[arg(long)]
+        parent_node_key: Option<String>,
+        /// Opaque continuation token returned by a previous page.
+        #[arg(long)]
+        page_token: Option<String>,
+        /// Number of immediate children to request.
+        #[arg(long, default_value_t = bhtune_driver::DEFAULT_PAGE_SIZE, value_parser = positive_u32)]
+        page_size: u32,
+        /// Follow continuation pages until the requested level is complete.
+        #[arg(long)]
+        all: bool,
+        /// Ask the gateway to refresh its namespace view.
+        #[arg(long)]
+        refresh: bool,
     },
+    /// Explicitly release a gateway browse session returned by `opc browse`.
+    Close {
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+        /// Opaque browse-session ID returned by `opc browse`.
+        session_id: String,
+    },
+    /// Search the OPC DA namespace without downloading the whole tree.
+    Search {
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        /// Text to find in node labels/item IDs.
+        query: String,
+        /// How the query should match.
+        #[arg(long, value_enum, default_value = "contains")]
+        match_mode: OpcSearchMatchModeArg,
+        /// Maximum number of matches.
+        #[arg(long, default_value_t = bhtune_driver::DEFAULT_SEARCH_MAX_RESULTS, value_parser = positive_u32)]
+        max_results: u32,
+        /// Existing bridge browse session to search within.
+        #[arg(long)]
+        session_id: Option<String>,
+        /// Opaque node key limiting the search scope.
+        #[arg(long)]
+        scope_node_key: Option<String>,
+        /// Include branch nodes as search results.
+        #[arg(long)]
+        include_branches: bool,
+        /// Ask the gateway to refresh its namespace view.
+        #[arg(long)]
+        refresh: bool,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpcSearchMatchModeArg {
+    Exact,
+    Prefix,
+    Contains,
+}
+
+impl From<OpcSearchMatchModeArg> for bhtune_driver::SearchMatchMode {
+    fn from(value: OpcSearchMatchModeArg) -> Self {
+        match value {
+            OpcSearchMatchModeArg::Exact => bhtune_driver::SearchMatchMode::Exact,
+            OpcSearchMatchModeArg::Prefix => bhtune_driver::SearchMatchMode::Prefix,
+            OpcSearchMatchModeArg::Contains => bhtune_driver::SearchMatchMode::Contains,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1407,7 +1476,7 @@ mod tests {
     #[test]
     fn opc_servers_bridge_host_defaults_to_none() {
         let cli = Cli::parse_from(["bhtune", "opc", "servers"]);
-        let command = expect_variant!(cli.command, Command::Opc { command } => command, "Opc");
+        let command = expect_variant!(cli.command, Command::Opc { command, .. } => command, "Opc");
         let bridge_host =
             expect_variant!(command, OpcCommand::Servers { bridge_host } => bridge_host, "Servers");
         assert_eq!(bridge_host, None);
@@ -1416,7 +1485,7 @@ mod tests {
     #[test]
     fn opc_read_bridge_host_and_server_default_to_none() {
         let cli = Cli::parse_from(["bhtune", "opc", "read", "Unit1.LIC101.PV"]);
-        let command = expect_variant!(cli.command, Command::Opc { command } => command, "Opc");
+        let command = expect_variant!(cli.command, Command::Opc { command, .. } => command, "Opc");
         let (bridge_host, server) = expect_variant!(
             command,
             OpcCommand::Read { bridge_host, server, .. } => (bridge_host, server),

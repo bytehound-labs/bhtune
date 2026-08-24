@@ -42,6 +42,16 @@ pub enum DriverError {
     /// a transient [`DriverError::Operation`] failure, since retrying can never help.
     #[error("'{operation}' is not supported by this driver")]
     Unsupported { operation: &'static str },
+
+    /// The connected gateway predates a required protocol operation.
+    #[error(
+        "gateway does not support {operation}; upgrade the OPC DA bridge gateway to a compatible version"
+    )]
+    IncompatibleGateway { operation: &'static str },
+
+    /// A server-side browse session or continuation token is no longer usable.
+    #[error("browse session or cursor is no longer valid; reopen the tag browser")]
+    BrowseStateInvalid,
 }
 
 /// A `Result` alias for [`DriverError`], mirroring the ergonomics of `opcda_bridge::Result`
@@ -87,5 +97,25 @@ mod tests {
             operation: "browse",
         };
         assert_eq!(err.to_string(), "'browse' is not supported by this driver");
+    }
+
+    #[test]
+    fn incompatible_gateway_names_the_upgrade_action() {
+        let err = DriverError::IncompatibleGateway {
+            operation: "paged browse",
+        };
+        assert!(
+            err.to_string()
+                .contains("upgrade the OPC DA bridge gateway")
+        );
+    }
+
+    #[test]
+    fn invalid_browse_state_is_actionable() {
+        assert!(
+            DriverError::BrowseStateInvalid
+                .to_string()
+                .contains("reopen the tag browser")
+        );
     }
 }

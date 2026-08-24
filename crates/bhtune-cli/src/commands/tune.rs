@@ -48,9 +48,9 @@ pub enum TuneOutcome {
     TimedOut,
     /// A driver reported a non-`Good` OPC quality for a tuning-critical reading -- an
     /// initial reading (including the setpoint capture, when the loop starts in Auto) or an
-    /// in-flight PV poll sample when Config > OPC quality policy rejects Uncertain (or with
-    /// the policy enabled, but the
-    /// quality was `Bad` rather than merely `Uncertain`) -- and the run was aborted and the
+    /// in-flight PV poll sample when the global Config > OPC quality policy rejects
+    /// `Uncertain` (or with the policy enabled, but the quality was
+    /// `Bad` rather than merely `Uncertain`) -- and the run was aborted and the
     /// loop restored before returning, exactly like
     /// [`TuneOutcome::Aborted`]/[`TuneOutcome::TimedOut`] but distinguished so a scheduler's
     /// alerting can tell "the plant data itself couldn't be trusted" apart from either of
@@ -532,8 +532,8 @@ enum AbortReason {
     /// out.
     OperationTimedOut { tag: String, op_timeout_secs: u64 },
     /// An in-flight PV poll sample's quality was `Bad`, or `Uncertain` without
-    /// Config > OPC quality policy set to reject Uncertain (finding 5 of the live-plant
-    /// safety review). Unlike
+    /// the global Config > OPC quality policy set (finding 5 of the live-plant safety
+    /// review). Unlike
     /// the two variants above, this is checked and constructed from inside
     /// [`run_polling_loop`] itself rather than from [`execute`]'s outer `tokio::select!`,
     /// since it depends on the value just read, not an independent timer/signal. A poor
@@ -1107,10 +1107,10 @@ async fn execute<R: std::io::BufRead>(
 
 /// The single choke point enforcing finding 5 of the live-plant safety review
 /// ("`Quality::is_trustworthy()` exists and is documented as the rule; nothing in the tune
-/// path calls it"): `Quality::Bad` is never accepted; `Quality::Uncertain`
-/// is accepted only when the global Config > OPC quality policy
-/// (`allow_uncertain_quality` in TOML) permits it, and each use of it is logged loudly so a run executed under relaxed rules is never silently
-/// indistinguishable from a normal one; `Quality::Good` always passes.
+/// path calls it"): `Quality::Bad` is never accepted; `Quality::Uncertain` is accepted only
+/// when the global Config > OPC quality policy (`allow_uncertain_quality` in TOML) permits
+/// it, and each use of it is logged loudly so a run executed under relaxed rules is never
+/// silently indistinguishable from a normal one; `Quality::Good` always passes.
 fn check_quality(
     tag: &str,
     quality: bhtune_driver::Quality,
@@ -3437,8 +3437,8 @@ mod tests {
 
         async fn browse(
             &self,
-            _path: &str,
-        ) -> bhtune_driver::DriverResult<Vec<bhtune_driver::TagNode>> {
+            _request: bhtune_driver::BrowsePageRequest,
+        ) -> bhtune_driver::DriverResult<bhtune_driver::BrowsePage> {
             Err(bhtune_driver::DriverError::Unsupported {
                 operation: "browse",
             })
@@ -3450,7 +3450,10 @@ mod tests {
         // `tune`'s own logic never calls `Driver::browse` -- this only exists so
         // `MockDriver` satisfies the trait -- but it should still honor the same
         // "unsupported, not a panic" convention real drivers document for it.
-        let err = MockDriver::new(&[]).browse("").await.unwrap_err();
+        let err = MockDriver::new(&[])
+            .browse(bhtune_driver::BrowsePageRequest::root(20))
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             bhtune_driver::DriverError::Unsupported {

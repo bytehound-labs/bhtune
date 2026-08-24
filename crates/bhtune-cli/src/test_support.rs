@@ -11,8 +11,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
 use opcda_bridge_proto::bridge::{
-    BrowseRequest, BrowseResponse, ListServersRequest, ListServersResponse, ReadRequest,
-    ReadResponse, WriteRequest, WriteResponse,
+    BrowsePage, BrowseRequest, CloseBrowseSessionRequest, GetCapabilitiesRequest,
+    GetCapabilitiesResponse, ListServersRequest, ListServersResponse, ReadRequest, ReadResponse,
+    SearchEvent, SearchRequest, WriteRequest, WriteResponse,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -20,12 +21,14 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-#[derive(Default)]
 pub(crate) struct MockBridgeService {
     pub(crate) read_response: ReadResponse,
     pub(crate) write_response: WriteResponse,
-    pub(crate) browse_responses: Vec<BrowseResponse>,
+    pub(crate) browse_response: BrowsePage,
     pub(crate) list_servers_response: ListServersResponse,
+    pub(crate) capabilities_response: GetCapabilitiesResponse,
+    pub(crate) search_events: Vec<SearchEvent>,
+    pub(crate) search_error: Option<Status>,
     /// Once the `read` RPC has been called this many times (1-based) or more, it fails with
     /// a gRPC error instead of returning `read_response` — lets a test simulate a bridge
     /// that works fine during setup and then drops partway through a poll loop.
@@ -34,6 +37,34 @@ pub(crate) struct MockBridgeService {
     // struct-update syntax across the module boundary; every real caller just leaves this at
     // its default and never sets it explicitly.
     pub(crate) read_calls: Arc<AtomicU32>,
+    pub(crate) close_browse_session_calls: Arc<AtomicU32>,
+}
+
+impl Default for MockBridgeService {
+    fn default() -> Self {
+        Self {
+            read_response: ReadResponse::default(),
+            write_response: WriteResponse::default(),
+            browse_response: BrowsePage {
+                complete: true,
+                ..Default::default()
+            },
+            list_servers_response: ListServersResponse::default(),
+            capabilities_response: GetCapabilitiesResponse {
+                application_version: "0.3.2".to_string(),
+                protocol_version: "2".to_string(),
+                max_page_size: 1000,
+                supports_browse_sessions: true,
+                supports_search: true,
+                ..Default::default()
+            },
+            search_events: Vec::new(),
+            search_error: None,
+            fail_read_from_call: None,
+            read_calls: Arc::new(AtomicU32::new(0)),
+            close_browse_session_calls: Arc::new(AtomicU32::new(0)),
+        }
+    }
 }
 
 impl MockBridgeService {
@@ -45,6 +76,13 @@ impl MockBridgeService {
 
 #[tonic::async_trait]
 impl Bridge for MockBridgeService {
+    async fn get_capabilities(
+        &self,
+        _request: Request<GetCapabilitiesRequest>,
+    ) -> Result<Response<GetCapabilitiesResponse>, Status> {
+        Ok(Response::new(self.capabilities_response.clone()))
+    }
+
     async fn list_servers(
         &self,
         _request: Request<ListServersRequest>,
@@ -52,19 +90,36 @@ impl Bridge for MockBridgeService {
         Ok(Response::new(self.list_servers_response.clone()))
     }
 
-    type BrowseStream = ReceiverStream<Result<BrowseResponse, Status>>;
-
     async fn browse(
         &self,
         _request: Request<BrowseRequest>,
-    ) -> Result<Response<Self::BrowseStream>, Status> {
+    ) -> Result<Response<BrowsePage>, Status> {
+        Ok(Response::new(self.browse_response.clone()))
+    }
+
+    async fn close_browse_session(
+        &self,
+        _request: Request<CloseBrowseSessionRequest>,
+    ) -> Result<Response<()>, Status> {
+        self.close_browse_session_calls
+            .fetch_add(1, Ordering::SeqCst);
+        Ok(Response::new(()))
+    }
+
+    type SearchStream = ReceiverStream<Result<SearchEvent, Status>>;
+
+    async fn search(
+        &self,
+        _request: Request<SearchRequest>,
+    ) -> Result<Response<Self::SearchStream>, Status> {
+        if let Some(status) = self.search_error.clone() {
+            return Err(status);
+        }
         let (tx, rx) = mpsc::channel(4);
-        let items = self.browse_responses.clone();
+        let events = self.search_events.clone();
         tokio::spawn(async move {
-            for item in items {
-                if tx.send(Ok(item)).await.is_err() {
-                    // The caller dropped the stream before consuming every item — stop
-                    // forwarding rather than sending into a channel with no receiver.
+            for event in events {
+                if tx.send(Ok(event)).await.is_err() {
                     break;
                 }
             }
@@ -138,8 +193,6 @@ pub(crate) async fn start_mock_server(service: MockBridgeService) -> (String, Mo
 
 #[cfg(test)]
 mod tests {
-    use tokio_stream::StreamExt;
-
     use super::*;
 
     #[tokio::test]
@@ -171,44 +224,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn browse_forwards_every_configured_response() {
+    async fn browse_returns_the_configured_page() {
         let service = MockBridgeService {
-            browse_responses: vec![BrowseResponse {
-                tag_id: "Unit1".to_string(),
-                node_type: "Branch".to_string(),
-            }],
+            browse_response: BrowsePage {
+                session_id: "session".to_string(),
+                complete: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        let mut stream = service
+        let page = service
             .browse(Request::new(BrowseRequest::default()))
             .await
             .unwrap()
             .into_inner();
-        let first = stream.next().await.unwrap().unwrap();
-        assert_eq!(first.tag_id, "Unit1");
-        assert!(stream.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn browse_forwarder_stops_once_the_caller_drops_the_stream() {
-        let service = MockBridgeService {
-            browse_responses: vec![BrowseResponse {
-                tag_id: "Unit1".to_string(),
-                node_type: "Branch".to_string(),
-            }],
-            ..Default::default()
-        };
-        let response = service
-            .browse(Request::new(BrowseRequest::default()))
-            .await
-            .unwrap();
-        // Drop the stream before the spawned forwarder task has had any chance to run (it
-        // was only just `tokio::spawn`-ed, not yet polled), so its first `tx.send` observes
-        // an already-closed channel and takes the early-exit `break` rather than looping to
-        // completion.
-        drop(response);
-        tokio::task::yield_now().await;
-        tokio::task::yield_now().await;
+        assert_eq!(page.session_id, "session");
     }
 
     #[tokio::test]

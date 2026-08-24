@@ -1,16 +1,29 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH bhtune-opc 1  "bhtune-opc " 
+.TH bhtune-opc 1  "bhtune-opc "
 .SH NAME
 bhtune\-opc \- Low\-level OPC DA passthrough (diagnostics) via the opcda\-bridge gateway, bypassing the tuning engine entirely
 .SH SYNOPSIS
-\fBbhtune\-opc\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+\fBbhtune\-opc\fR [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
 .SH DESCRIPTION
 Low\-level OPC DA passthrough (diagnostics) via the opcda\-bridge gateway, bypassing the tuning engine entirely
 .SH OPTIONS
 .TP
+\fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
+How to print OPC diagnostic results
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+table: Human\-readable text (default)
+.IP \(bu 2
+json: Pretty\-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+.RE
+.TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SH SUBCOMMANDS
 .TP
 bhtune\-opc\-servers(1)
@@ -23,7 +36,13 @@ bhtune\-opc\-write(1)
 Write a value to one tag
 .TP
 bhtune\-opc\-browse(1)
-Browse tags under a path (empty for the top level)
+Browse one bounded page of tags. Without a session, lists the root level
+.TP
+bhtune\-opc\-close(1)
+Explicitly release a gateway browse session returned by `opc browse`
+.TP
+bhtune\-opc\-search(1)
+Search the OPC DA namespace without downloading the whole tree
 .TP
 bhtune\-opc\-help(1)
 Print this message or the help of the given subcommand(s)

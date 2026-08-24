@@ -54,6 +54,9 @@ axum = "0.8"
 # `sqlx`/`tonic`) so this doesn't add a new crate to the tree, only a new direct edge to one
 # already present.
 async-stream = "0.3"
+# Names the stream trait used by the typed SSE search handler; it is already present
+# transitively, but must be a direct dependency when it appears in a public function type.
+futures-core = "0.3"
 # `spa.rs` (`server-embed-spa`): embeds the built React SPA (`frontend/dist/`) into the
 # binary. Kept local rather than promoted to `[workspace.dependencies]` -- this is the only
 # crate that will ever serve a browser UI. `interpolate-folder-path` anchors the `#[folder]`
@@ -161,7 +164,7 @@ libc = "0.2"
 # `smoke_tests` module. Pinned to the exact same versions that module (and `opcda-bridge`
 # itself) use, for the same reason: the mock service's generated `tonic`/`prost` types must
 # agree on the wire format with `opcda_bridge::Client`'s generated stub on the other end.
-opcda-bridge-proto = "0.2"
+opcda-bridge-proto = "0.3"
 tonic = "0.14"
 tokio-stream = "0.1"
 

@@ -29,6 +29,35 @@ function mappingRow(page: Page, label: string) {
   return loopMapping(page).getByRole("group", { name: label, exact: true });
 }
 
+function browseNode(
+  nodeKey: string,
+  displayName: string,
+  kind: "branch" | "item" | "branch_and_item",
+  itemId?: string,
+) {
+  return {
+    node_key: nodeKey,
+    display_name: displayName,
+    kind,
+    item_id: itemId ?? null,
+  };
+}
+
+function browsePage(
+  nodes: ReturnType<typeof browseNode>[],
+  options: { nextPageToken?: string | null; complete?: boolean } = {},
+) {
+  return {
+    session_id: "session-1",
+    nodes,
+    next_page_token: options.nextPageToken ?? null,
+    complete: options.complete ?? true,
+    organization: "hierarchical",
+    source: "da2",
+    warning: null,
+  };
+}
+
 test.describe("OPC DA server discovery and tag browser (no gateway present)", () => {
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/runs/draft", async (route) => {
@@ -439,25 +468,15 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     });
     await page.route("**/api/opc/browse**", async (route) => {
       const url = new URL(route.request().url());
-      const path = url.searchParams.get("path");
+      const parentNodeKey = url.searchParams.get("parent_node_key");
       const nodes =
-        path === "Simulink.Device1._System"
-          ? [
-              {
-                tag: originalTag,
-                is_branch: false,
-              },
-            ]
-          : [
-              {
-                tag: "Simulink.Device1._System",
-                is_branch: true,
-              },
-            ];
+        parentNodeKey === "system"
+          ? [browseNode("demand-poll", originalTag, "item", originalTag)]
+          : [browseNode("system", "Simulink.Device1._System", "branch")];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ nodes }),
+        body: JSON.stringify(browsePage(nodes)),
       });
     });
 
@@ -466,7 +485,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       page.getByRole("button", { name: "Simulink.Device1._System" }),
     ).toBeVisible();
     await expect(
-      page.getByText("Selected: Simulink.Device1._System"),
+      page.getByText("Select a tag to test its live value and quality."),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Expand" }).click();
@@ -510,6 +529,90 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     expect(readTags).toEqual([originalTag, originalTag]);
   });
 
+  test("loads additional pages, expands branch-and-item nodes, and closes the session", async ({
+    page,
+  }) => {
+    const selectedItemId = "Unit1.LIC101.PV";
+    const readTags: string[] = [];
+    const closePaths: string[] = [];
+    await page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox")
+      .selectOption("Yokogawa CentumVP");
+    await page
+      .getByLabel("OPC DA server ProgID")
+      .fill("Matrikon.OPC.Simulation");
+
+    await page.route("**/api/opc/read**", async (route) => {
+      const url = new URL(route.request().url());
+      readTags.push(url.searchParams.get("tag") ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: selectedItemId,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      if (route.request().method() === "DELETE") {
+        const url = new URL(route.request().url());
+        closePaths.push(url.pathname);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ closed: true }),
+        });
+        return;
+      }
+      const url = new URL(route.request().url());
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      const pageToken = url.searchParams.get("page_token");
+      const nodes =
+        parentNodeKey === "loop"
+          ? [browseNode("sv", "SV", "item", "Unit1.LIC101.SV")]
+          : pageToken === "root-next"
+            ? [
+                browseNode(
+                  "loop",
+                  "Unit1.LIC101",
+                  "branch_and_item",
+                  selectedItemId,
+                ),
+              ]
+            : [browseNode("first", "First", "item", "First.PV")];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          browsePage(nodes, {
+            nextPageToken: pageToken ? null : "root-next",
+            complete: Boolean(pageToken || parentNodeKey),
+          }),
+        ),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(page.getByRole("button", { name: "First" })).toBeVisible();
+    await page.getByRole("button", { name: "Load more" }).click();
+    await page.getByRole("button", { name: "Unit1.LIC101" }).click();
+    await expect(page.getByText(`Selected: ${selectedItemId}`)).toBeVisible();
+    await page.getByRole("button", { name: "Expand" }).click();
+    await expect(page.getByRole("button", { name: "SV" })).toBeVisible();
+    await page.getByRole("button", { name: "Select tag" }).click();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(selectedItemId);
+    expect(readTags).toEqual([selectedItemId]);
+    await expect
+      .poll(() => closePaths)
+      .toEqual(["/api/opc/browse/sessions/session-1"]);
+  });
+
   test("reopens the browser at the previously selected tag", async ({
     page,
   }) => {
@@ -536,23 +639,44 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         }),
       });
     });
+    await page.route("**/api/opc/search**", async (route) => {
+      const match = {
+        breadcrumbs: [
+          { node_key: "simulink", display_name: "Simulink" },
+          {
+            node_key: "statistics",
+            display_name: "Simulink._Statistics",
+          },
+        ],
+        node: browseNode("pv", originalTag, "item", originalTag),
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `event: match\ndata: ${JSON.stringify(match)}\n\nevent: completed\ndata: ${JSON.stringify({ complete: true, cancelled: false, truncated: false, warning: null })}\n\n`,
+      });
+    });
     await page.route("**/api/opc/browse**", async (route) => {
       const url = new URL(route.request().url());
-      const path = url.searchParams.get("path");
-      const fillerNodes = Array.from({ length: 30 }, (_, index) => ({
-        tag: `Filler${index}`,
-        is_branch: false,
-      }));
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      const fillerNodes = Array.from({ length: 30 }, (_, index) =>
+        browseNode(
+          `filler-${index}`,
+          `Filler${index}`,
+          "item",
+          `Filler${index}`,
+        ),
+      );
       const nodes =
-        path === "Simulink"
-          ? [{ tag: "Simulink._Statistics", is_branch: true }]
-          : path === "Simulink._Statistics"
-            ? [{ tag: originalTag, is_branch: false }]
-            : [...fillerNodes, { tag: "Simulink", is_branch: true }];
+        parentNodeKey === "simulink"
+          ? [browseNode("statistics", "Simulink._Statistics", "branch")]
+          : parentNodeKey === "statistics"
+            ? [browseNode("pv", originalTag, "item", originalTag)]
+            : [...fillerNodes, browseNode("simulink", "Simulink", "branch")];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ nodes }),
+        body: JSON.stringify(browsePage(nodes)),
       });
     });
 
@@ -605,15 +729,15 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     });
     await page.route("**/api/opc/browse**", async (route) => {
       const url = new URL(route.request().url());
-      const path = url.searchParams.get("path");
+      const parentNodeKey = url.searchParams.get("parent_node_key");
       const nodes =
-        path === "Simulink.Device1._System"
-          ? [{ tag: originalTag, is_branch: false }]
-          : [{ tag: "Simulink.Device1._System", is_branch: true }];
+        parentNodeKey === "system"
+          ? [browseNode("demand-poll", originalTag, "item", originalTag)]
+          : [browseNode("system", "Simulink.Device1._System", "branch")];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ nodes }),
+        body: JSON.stringify(browsePage(nodes)),
       });
     });
 

@@ -123,8 +123,7 @@
         "tags": [
           "opc"
         ],
-        "summary": "List the tags/branches directly under one tree level of an OPC DA server.",
-        "description": "`GET /api/opc/browse` -- one level at a time (not a recursive dump of the whole tree),\nmatching `Driver::browse`'s own contract; the GUI's tag-tree modal calls this again for\neach branch the user expands. Requires `opc_server` (from the query or config) since,\nunlike `GET /api/opc/servers`, browsing needs a specific server to connect to.",
+        "summary": "List one bounded page of immediate children. A missing `session_id` opens a new session and\nlists its root; all later calls round-trip the returned opaque session/node/token values.",
         "operationId": "browse",
         "parameters": [
           {
@@ -144,12 +143,45 @@
             }
           },
           {
-            "name": "path",
+            "name": "session_id",
             "in": "query",
-            "description": "The tree level to list; an absent or empty path lists the top level, matching\n`Driver::browse`'s own \"empty string for the top level\" convention.",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "parent_node_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -165,7 +197,113 @@
             }
           },
           "400": {
-            "description": "No OPC server was specified (and none is configured), or the gateway/browse call could not be reached in time.",
+            "description": "No OPC server was specified, the browse state is invalid, or the gateway could not be reached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/browse/sessions/{session_id}": {
+      "delete": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "close_browse_session",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Opaque bridge browse-session ID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcCloseBrowseSessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The browse session could not be closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/capabilities": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "summary": "Report browse capabilities for one OPC DA server.",
+        "operationId": "capabilities",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcCapabilitiesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The bridge or OPC server could not be reached.",
             "content": {
               "application/json": {
                 "schema": {
@@ -225,6 +363,105 @@
           },
           "400": {
             "description": "No tag or OPC server was specified (and none is configured), or the gateway/read call could not be reached in time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "search",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "match_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_node_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "include_branches",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of match, progress, and completed events."
+          },
+          "400": {
+            "description": "The search request or gateway connection is invalid.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2087,18 +2324,128 @@
           }
         }
       },
-      "OpcBrowseResponse": {
+      "OpcBrowseNodeKind": {
+        "type": "string",
+        "enum": [
+          "unspecified",
+          "branch",
+          "item",
+          "branch_and_item"
+        ]
+      },
+      "OpcBrowseNodeResponse": {
         "type": "object",
-        "description": "Response body of `GET /api/opc/browse`.",
+        "description": "One node returned by `GET /api/opc/browse`. `node_key` and `item_id` must remain separate:\nthe former is an opaque navigation key, while the latter is the exact selectable OPC DA\nItemID and may contain namespace punctuation with no relationship to hierarchy.",
         "required": [
-          "nodes"
+          "node_key",
+          "display_name",
+          "kind"
         ],
         "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OpcBrowseNodeKind"
+          },
+          "node_key": {
+            "type": "string"
+          }
+        }
+      },
+      "OpcBrowseResponse": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "nodes",
+          "complete",
+          "organization",
+          "source"
+        ],
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "next_page_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "nodes": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/OpcTagNodeResponse"
+              "$ref": "#/components/schemas/OpcBrowseNodeResponse"
             }
+          },
+          "organization": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OpcCapabilitiesResponse": {
+        "type": "object",
+        "required": [
+          "application_version",
+          "protocol_version",
+          "max_page_size",
+          "supports_browse_sessions",
+          "supports_search",
+          "organization",
+          "source"
+        ],
+        "properties": {
+          "application_version": {
+            "type": "string"
+          },
+          "max_page_size": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "organization": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "supports_browse_sessions": {
+            "type": "boolean"
+          },
+          "supports_search": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OpcCloseBrowseSessionResponse": {
+        "type": "object",
+        "required": [
+          "closed"
+        ],
+        "properties": {
+          "closed": {
+            "type": "boolean"
           }
         }
       },
@@ -2142,22 +2489,6 @@
             "items": {
               "type": "string"
             }
-          }
-        }
-      },
-      "OpcTagNodeResponse": {
-        "type": "object",
-        "description": "One node of `GET /api/opc/browse`'s `nodes` array -- a plain HTTP-facing projection of\n[`bhtune_driver::TagNode`], per this workspace's DTO-decoupling convention (`bhtune-driver`\ntypes deliberately don't derive `Serialize`/`ToSchema`; every JSON-facing consumer builds\nits own projection instead).",
-        "required": [
-          "tag",
-          "is_branch"
-        ],
-        "properties": {
-          "is_branch": {
-            "type": "boolean"
-          },
-          "tag": {
-            "type": "string"
           }
         }
       },

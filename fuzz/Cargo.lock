@@ -222,6 +222,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tonic",
 ]
 
 [[package]]
@@ -1248,9 +1249,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opcda-bridge"
-version = "0.2.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f400c7527d7477dfeedf9d0d6a6e046df43194e2ee50291d2765804ad42c549b"
+checksum = "f628ba5fe73d0f57e199ec11d08049f48be9c5c11a0d0ad7c6606478607d0d7f"
 dependencies = [
  "opcda-bridge-proto",
  "thiserror",
@@ -1260,9 +1261,9 @@ dependencies = [
 
 [[package]]
 name = "opcda-bridge-proto"
-version = "0.2.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75adc531d2df768474ff9e98251e03c8f0df3c24e19047e50d3a8ac84b8eaff"
+checksum = "05b71b5790dbbc95506a5afcb79af6fd846815c3fdbd7f17db90d7d443a2e798"
 dependencies = [
  "prost",
  "tonic",

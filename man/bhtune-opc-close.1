@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc-close 1  "bhtune-opc-close "
+.SH NAME
+bhtune\-opc\-close \- Explicitly release a gateway browse session returned by `opc browse`
+.SH SYNOPSIS
+\fBbhtune\-opc\-close\fR [\fB\-\-bridge\-host\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISESSION_ID\fR>
+.SH DESCRIPTION
+Explicitly release a gateway browse session returned by `opc browse`
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISESSION_ID\fR>
+Opaque browse\-session ID returned by `opc browse`

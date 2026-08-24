@@ -35,35 +35,76 @@ pub(crate) async fn in_memory_state() -> AppState {
 /// [`bhtune_driver::OpcDaDriver`] connect/read/write/browse/list-servers round trip rather
 /// than stopping at a route's eligibility checks -- originally `routes::runs`'s own private
 /// `mod mock_bridge` (for `write_run`/`revert_run`, with `list_servers`/`browse` hardcoded to
-/// empty since neither handler ever called them), promoted here and given configurable
-/// `list_servers_response`/`browse_responses` once `routes::opc`'s tests needed to actually
-/// exercise those two RPCs. Mirrors `bhtune_driver::opcda`'s own `smoke_tests` module (itself
-/// mirroring `bhtune-cli`'s `test_support`), field-for-field where the shape overlaps.
+/// empty since neither handler ever called them), promoted here for the OPC diagnostic routes.
+/// The mock mirrors the released typed browse/session/search protobuf contract.
 pub(crate) mod mock_bridge {
     use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
     use opcda_bridge_proto::bridge::{
-        BrowseRequest, BrowseResponse, ListServersRequest, ListServersResponse, ReadRequest,
-        ReadResponse, WriteRequest, WriteResponse,
+        BrowsePage, BrowseRequest, CloseBrowseSessionRequest, GetCapabilitiesRequest,
+        GetCapabilitiesResponse, ListServersRequest, ListServersResponse, ReadRequest,
+        ReadResponse, SearchEvent, SearchRequest, WriteRequest, WriteResponse,
     };
     use std::net::SocketAddr;
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
     use tonic::transport::Server;
     use tonic::{Request, Response, Status};
 
-    #[derive(Default)]
     pub(crate) struct MockBridgeService {
         pub(crate) list_servers_response: ListServersResponse,
         pub(crate) list_servers_error: Option<Status>,
-        pub(crate) browse_responses: Vec<BrowseResponse>,
+        pub(crate) browse_response: BrowsePage,
         pub(crate) browse_error: Option<Status>,
+        pub(crate) capabilities_response: GetCapabilitiesResponse,
+        pub(crate) capabilities_error: Option<Status>,
+        pub(crate) search_events: Vec<SearchEvent>,
+        pub(crate) search_error: Option<Status>,
         pub(crate) read_response: ReadResponse,
         pub(crate) read_error: Option<Status>,
         pub(crate) write_response: WriteResponse,
         pub(crate) write_error: Option<Status>,
     }
 
+    impl Default for MockBridgeService {
+        fn default() -> Self {
+            Self {
+                list_servers_response: ListServersResponse::default(),
+                list_servers_error: None,
+                browse_response: BrowsePage {
+                    complete: true,
+                    ..Default::default()
+                },
+                browse_error: None,
+                capabilities_response: GetCapabilitiesResponse {
+                    application_version: "0.3.2".to_string(),
+                    protocol_version: "2".to_string(),
+                    max_page_size: 1000,
+                    supports_browse_sessions: true,
+                    supports_search: true,
+                    ..Default::default()
+                },
+                capabilities_error: None,
+                search_events: Vec::new(),
+                search_error: None,
+                read_response: ReadResponse::default(),
+                read_error: None,
+                write_response: WriteResponse::default(),
+                write_error: None,
+            }
+        }
+    }
+
     #[tonic::async_trait]
     impl Bridge for MockBridgeService {
+        async fn get_capabilities(
+            &self,
+            _request: Request<GetCapabilitiesRequest>,
+        ) -> Result<Response<GetCapabilitiesResponse>, Status> {
+            if let Some(status) = self.capabilities_error.clone() {
+                return Err(status);
+            }
+            Ok(Response::new(self.capabilities_response.clone()))
+        }
+
         async fn list_servers(
             &self,
             _request: Request<ListServersRequest>,
@@ -74,22 +115,37 @@ pub(crate) mod mock_bridge {
             Ok(Response::new(self.list_servers_response.clone()))
         }
 
-        type BrowseStream = ReceiverStream<Result<BrowseResponse, Status>>;
-
         async fn browse(
             &self,
             _request: Request<BrowseRequest>,
-        ) -> Result<Response<Self::BrowseStream>, Status> {
+        ) -> Result<Response<BrowsePage>, Status> {
             if let Some(status) = self.browse_error.clone() {
                 return Err(status);
             }
+            Ok(Response::new(self.browse_response.clone()))
+        }
+
+        async fn close_browse_session(
+            &self,
+            _request: Request<CloseBrowseSessionRequest>,
+        ) -> Result<Response<()>, Status> {
+            Ok(Response::new(()))
+        }
+
+        type SearchStream = ReceiverStream<Result<SearchEvent, Status>>;
+
+        async fn search(
+            &self,
+            _request: Request<SearchRequest>,
+        ) -> Result<Response<Self::SearchStream>, Status> {
+            if let Some(status) = self.search_error.clone() {
+                return Err(status);
+            }
             let (tx, rx) = tokio::sync::mpsc::channel(4);
-            let items = self.browse_responses.clone();
+            let events = self.search_events.clone();
             tokio::spawn(async move {
-                for item in items {
-                    if tx.send(Ok(item)).await.is_err() {
-                        // The caller dropped the stream before consuming every item --
-                        // stop forwarding rather than sending into a closed channel.
+                for event in events {
+                    if tx.send(Ok(event)).await.is_err() {
                         break;
                     }
                 }

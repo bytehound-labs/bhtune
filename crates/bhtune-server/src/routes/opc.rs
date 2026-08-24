@@ -1,25 +1,28 @@
-//! OPC DA diagnostic routes: `GET /api/opc/servers`, `GET /api/opc/browse`, and
-//! `GET /api/opc/read` -- back the GUI's server dropdown, tag-tree browser, and a "test
-//! connection" button (`ui-opc-browser`), independent of running (or having ever run) a
-//! tune. Mirrors `bhtune-cli`'s `commands::opc` module (`bhtune opc servers/read/browse`)
-//! field-for-field -- same config resolution (`bhtune_cli::config::resolve_bridge_host`/
-//! `resolve_server`), same driver calls -- just returned as JSON instead of printed to
-//! stdout.
+//! OPC DA diagnostic routes: `GET /api/opc/servers`, `GET /api/opc/capabilities`,
+//! `GET /api/opc/browse`, `DELETE /api/opc/browse/sessions/:id`, `GET /api/opc/search`,
+//! and `GET /api/opc/read` -- back the GUI's server dropdown, typed tag-tree browser,
+//! progressive namespace search, and connection test.
 //!
 //! All three are read-only, bounded by an explicit [`OPC_QUERY_TIMEOUT_SECS`] timeout (see
 //! that constant's doc comment for why one is needed at all), and none ever touches
 //! [`crate::state::AppState::active_run`] -- a diagnostic browse/read must not be blocked by,
 //! or block, an in-flight tune.
 
+use std::convert::Infallible;
 use std::future::Future;
 use std::time::Duration;
 
-use axum::extract::{Query, State};
-use axum::routing::get;
+use axum::extract::{Path, Query, State};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use bhtune_cli::commands::tune::sample_quality_from_driver;
 use bhtune_db::models::SampleQuality;
-use bhtune_driver::{Driver, DriverResult, OpcDaDriver, TagNode, list_opcda_servers};
+use bhtune_driver::{
+    BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource, Driver,
+    DriverCapabilities, DriverResult, NamespaceOrganization, OpcDaDriver, SearchEvent, SearchMatch,
+    SearchMatchMode, SearchRequest, list_opcda_servers,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -90,12 +93,73 @@ pub struct OpcServersResponse {
 )]
 pub(crate) async fn servers(
     State(state): State<AppState>,
-    Query(query): Query<OpcServersQuery>,
+    Query(query): Query<OpcServerQuery>,
 ) -> Result<Json<OpcServersResponse>, ApiError> {
     let config = state.config_snapshot()?;
     let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
     let servers = with_timeout("list OPC DA servers", list_opcda_servers(&bridge_host)).await?;
     Ok(Json(OpcServersResponse { servers }))
+}
+
+/// Query parameters for `GET /api/opc/capabilities`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpcServerQuery {
+    pub bridge_host: Option<String>,
+    pub opc_server: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpcCapabilitiesResponse {
+    pub application_version: String,
+    pub protocol_version: String,
+    pub max_page_size: u32,
+    pub supports_browse_sessions: bool,
+    pub supports_search: bool,
+    pub organization: String,
+    pub source: String,
+}
+
+impl From<DriverCapabilities> for OpcCapabilitiesResponse {
+    fn from(capabilities: DriverCapabilities) -> Self {
+        Self {
+            application_version: capabilities.application_version,
+            protocol_version: capabilities.protocol_version,
+            max_page_size: capabilities.max_page_size,
+            supports_browse_sessions: capabilities.supports_browse_sessions,
+            supports_search: capabilities.supports_search,
+            organization: organization_name(capabilities.organization).to_string(),
+            source: source_name(capabilities.source).to_string(),
+        }
+    }
+}
+
+/// Report browse capabilities for one OPC DA server.
+#[utoipa::path(
+    get,
+    path = "/api/opc/capabilities",
+    tag = "opc",
+    params(OpcServerQuery),
+    responses(
+        (status = 200, body = OpcCapabilitiesResponse),
+        (status = 400, description = "The bridge or OPC server could not be reached.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn capabilities(
+    State(state): State<AppState>,
+    Query(query): Query<OpcServerQuery>,
+) -> Result<Json<OpcCapabilitiesResponse>, ApiError> {
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
+    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &state.app_config)
+        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    let driver = with_timeout(
+        &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
+        OpcDaDriver::connect(&bridge_host, opc_server),
+    )
+    .await?;
+    let capabilities =
+        with_timeout("discover OPC browse capabilities", driver.capabilities()).await?;
+    Ok(Json(capabilities.into()))
 }
 
 /// Query parameters for `GET /api/opc/browse`.
@@ -104,42 +168,114 @@ pub(crate) async fn servers(
 pub struct OpcBrowseQuery {
     pub bridge_host: Option<String>,
     pub opc_server: Option<String>,
-    /// The tree level to list; an absent or empty path lists the top level, matching
-    /// `Driver::browse`'s own "empty string for the top level" convention.
-    pub path: Option<String>,
+    pub session_id: Option<String>,
+    pub parent_node_key: Option<String>,
+    pub page_token: Option<String>,
+    #[serde(default = "default_page_size")]
+    pub page_size: u32,
+    pub refresh: Option<bool>,
 }
 
-/// One node of `GET /api/opc/browse`'s `nodes` array -- a plain HTTP-facing projection of
-/// [`bhtune_driver::TagNode`], per this workspace's DTO-decoupling convention (`bhtune-driver`
-/// types deliberately don't derive `Serialize`/`ToSchema`; every JSON-facing consumer builds
-/// its own projection instead).
-#[derive(Debug, Serialize, ToSchema)]
-pub struct OpcTagNodeResponse {
-    pub tag: String,
-    pub is_branch: bool,
+fn default_page_size() -> u32 {
+    bhtune_driver::DEFAULT_PAGE_SIZE
 }
 
-impl From<TagNode> for OpcTagNodeResponse {
-    fn from(node: TagNode) -> Self {
-        OpcTagNodeResponse {
-            tag: node.tag,
-            is_branch: node.is_branch,
+fn validate_positive(value: u32, field: &str) -> Result<u32, ApiError> {
+    if value == 0 {
+        return Err(ApiError::BadRequest(format!(
+            "{field} must be greater than zero"
+        )));
+    }
+    Ok(value)
+}
+
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OpcBrowseNodeKind {
+    Unspecified,
+    Branch,
+    Item,
+    BranchAndItem,
+}
+
+impl From<BrowseNodeKind> for OpcBrowseNodeKind {
+    fn from(kind: BrowseNodeKind) -> Self {
+        match kind {
+            BrowseNodeKind::Unspecified => Self::Unspecified,
+            BrowseNodeKind::Branch => Self::Branch,
+            BrowseNodeKind::Item => Self::Item,
+            BrowseNodeKind::BranchAndItem => Self::BranchAndItem,
         }
     }
 }
 
-/// Response body of `GET /api/opc/browse`.
+/// One node returned by `GET /api/opc/browse`. `node_key` and `item_id` must remain separate:
+/// the former is an opaque navigation key, while the latter is the exact selectable OPC DA
+/// ItemID and may contain namespace punctuation with no relationship to hierarchy.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct OpcBrowseResponse {
-    pub nodes: Vec<OpcTagNodeResponse>,
+pub struct OpcBrowseNodeResponse {
+    pub node_key: String,
+    pub display_name: String,
+    pub kind: OpcBrowseNodeKind,
+    pub item_id: Option<String>,
 }
 
-/// List the tags/branches directly under one tree level of an OPC DA server.
-///
-/// `GET /api/opc/browse` -- one level at a time (not a recursive dump of the whole tree),
-/// matching `Driver::browse`'s own contract; the GUI's tag-tree modal calls this again for
-/// each branch the user expands. Requires `opc_server` (from the query or config) since,
-/// unlike `GET /api/opc/servers`, browsing needs a specific server to connect to.
+impl From<BrowseNode> for OpcBrowseNodeResponse {
+    fn from(node: BrowseNode) -> Self {
+        Self {
+            node_key: node.node_key,
+            display_name: node.display_name,
+            kind: node.kind.into(),
+            item_id: node.item_id,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpcBrowseResponse {
+    pub session_id: String,
+    pub nodes: Vec<OpcBrowseNodeResponse>,
+    pub next_page_token: Option<String>,
+    pub complete: bool,
+    pub organization: String,
+    pub source: String,
+    pub warning: Option<String>,
+}
+
+impl From<BrowsePage> for OpcBrowseResponse {
+    fn from(page: BrowsePage) -> Self {
+        Self {
+            session_id: page.session_id,
+            nodes: page.nodes.into_iter().map(Into::into).collect(),
+            next_page_token: page.next_page_token,
+            complete: page.complete,
+            organization: organization_name(page.organization).to_string(),
+            source: source_name(page.source).to_string(),
+            warning: page.warning,
+        }
+    }
+}
+
+fn organization_name(value: NamespaceOrganization) -> &'static str {
+    match value {
+        NamespaceOrganization::Unspecified => "unspecified",
+        NamespaceOrganization::Flat => "flat",
+        NamespaceOrganization::Hierarchical => "hierarchical",
+    }
+}
+
+fn source_name(value: BrowseSource) -> &'static str {
+    match value {
+        BrowseSource::Unspecified => "unspecified",
+        BrowseSource::Da3 => "da3",
+        BrowseSource::Da2 => "da2",
+        BrowseSource::Flat => "flat",
+        BrowseSource::Derived => "derived",
+    }
+}
+
+/// List one bounded page of immediate children. A missing `session_id` opens a new session and
+/// lists its root; all later calls round-trip the returned opaque session/node/token values.
 #[utoipa::path(
     get,
     path = "/api/opc/browse",
@@ -147,7 +283,7 @@ pub struct OpcBrowseResponse {
     params(OpcBrowseQuery),
     responses(
         (status = 200, body = OpcBrowseResponse),
-        (status = 400, description = "No OPC server was specified (and none is configured), or the gateway/browse call could not be reached in time.", body = ErrorBody),
+        (status = 400, description = "No OPC server was specified, the browse state is invalid, or the gateway could not be reached.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn browse(
@@ -158,16 +294,223 @@ pub(crate) async fn browse(
     let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
     let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
-    let path = query.path.unwrap_or_default();
+    let page_size = validate_positive(query.page_size, "page_size")?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
         OpcDaDriver::connect(&bridge_host, opc_server.clone()),
     )
     .await?;
-    let nodes = with_timeout(&format!("browse '{path}'"), driver.browse(&path)).await?;
-    Ok(Json(OpcBrowseResponse {
-        nodes: nodes.into_iter().map(OpcTagNodeResponse::from).collect(),
-    }))
+    let request = BrowsePageRequest {
+        session_id: query.session_id,
+        parent_node_key: query.parent_node_key,
+        page_token: query.page_token,
+        page_size,
+        refresh: query.refresh.unwrap_or(false),
+    };
+    let page = with_timeout("browse OPC DA namespace", driver.browse(request)).await?;
+    Ok(Json(page.into()))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpcCloseBrowseSessionResponse {
+    pub closed: bool,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/opc/browse/sessions/{session_id}",
+    tag = "opc",
+    params(
+        ("session_id" = String, Path, description = "Opaque bridge browse-session ID."),
+        OpcServerQuery
+    ),
+    responses(
+        (status = 200, body = OpcCloseBrowseSessionResponse),
+        (status = 400, description = "The browse session could not be closed.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn close_browse_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Query(query): Query<OpcServerQuery>,
+) -> Result<Json<OpcCloseBrowseSessionResponse>, ApiError> {
+    if session_id.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "a browse session ID is required".to_string(),
+        ));
+    }
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
+    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &state.app_config)
+        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    let driver = with_timeout(
+        &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
+        OpcDaDriver::connect(&bridge_host, opc_server),
+    )
+    .await?;
+    with_timeout(
+        "close OPC browse session",
+        driver.close_browse_session(&session_id),
+    )
+    .await?;
+    Ok(Json(OpcCloseBrowseSessionResponse { closed: true }))
+}
+
+/// Query parameters for the progressive `GET /api/opc/search` SSE endpoint.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpcSearchQuery {
+    pub bridge_host: Option<String>,
+    pub opc_server: Option<String>,
+    pub query: String,
+    #[serde(default = "default_search_match_mode")]
+    pub match_mode: String,
+    pub session_id: Option<String>,
+    pub scope_node_key: Option<String>,
+    #[serde(default = "default_search_max_results")]
+    pub max_results: u32,
+    pub include_branches: Option<bool>,
+    pub refresh: Option<bool>,
+}
+
+fn default_search_match_mode() -> String {
+    "contains".to_string()
+}
+
+fn default_search_max_results() -> u32 {
+    bhtune_driver::DEFAULT_SEARCH_MAX_RESULTS
+}
+
+fn parse_search_match_mode(value: &str) -> Result<SearchMatchMode, ApiError> {
+    match value {
+        "exact" => Ok(SearchMatchMode::Exact),
+        "prefix" => Ok(SearchMatchMode::Prefix),
+        "contains" => Ok(SearchMatchMode::Contains),
+        _ => Err(ApiError::BadRequest(
+            "match_mode must be one of: exact, prefix, contains".to_string(),
+        )),
+    }
+}
+
+fn search_event_to_sse(event: SearchEvent) -> Event {
+    let (kind, payload) = match event {
+        SearchEvent::Match(found) => ("match", json_search_match(&found)),
+        SearchEvent::Progress(progress) => (
+            "progress",
+            serde_json::json!({
+                "visited_nodes": progress.visited_nodes,
+                "matches": progress.matches,
+                "partial": progress.partial,
+            }),
+        ),
+        SearchEvent::Completed(completed) => (
+            "completed",
+            serde_json::json!({
+                "complete": completed.complete,
+                "cancelled": completed.cancelled,
+                "truncated": completed.truncated,
+                "warning": completed.warning,
+            }),
+        ),
+    };
+    Event::default().event(kind).data(payload.to_string())
+}
+
+fn json_search_match(found: &SearchMatch) -> serde_json::Value {
+    serde_json::json!({
+        "node": {
+            "node_key": found.node.node_key,
+            "display_name": found.node.display_name,
+            "kind": browse_node_kind_name(found.node.kind),
+            "item_id": found.node.item_id,
+        },
+        "breadcrumbs": found.breadcrumbs.iter().map(|part| {
+            serde_json::json!({
+                "node_key": part.node_key,
+                "display_name": part.display_name,
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn browse_node_kind_name(kind: BrowseNodeKind) -> &'static str {
+    match kind {
+        BrowseNodeKind::Unspecified => "unspecified",
+        BrowseNodeKind::Branch => "branch",
+        BrowseNodeKind::Item => "item",
+        BrowseNodeKind::BranchAndItem => "branch_and_item",
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/opc/search",
+    tag = "opc",
+    params(OpcSearchQuery),
+    responses(
+        (status = 200, description = "SSE stream of match, progress, and completed events."),
+        (status = 400, description = "The search request or gateway connection is invalid.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn search(
+    State(state): State<AppState>,
+    Query(query): Query<OpcSearchQuery>,
+) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    if query.query.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "a search query is required".to_string(),
+        ));
+    }
+    let match_mode = parse_search_match_mode(&query.match_mode)?;
+    let max_results = validate_positive(query.max_results, "max_results")?;
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
+    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &state.app_config)
+        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    let driver = with_timeout(
+        &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
+        OpcDaDriver::connect(&bridge_host, opc_server.clone()),
+    )
+    .await?;
+    let request = SearchRequest {
+        query: query.query,
+        match_mode,
+        session_id: query.session_id,
+        scope_node_key: query.scope_node_key,
+        max_results,
+        include_branches: query.include_branches.unwrap_or(false),
+        refresh: query.refresh.unwrap_or(false),
+    };
+    let mut stream =
+        with_timeout("start OPC namespace search", driver.search_stream(request)).await?;
+    let events = async_stream::stream! {
+        loop {
+            match tokio::time::timeout(
+                Duration::from_secs(OPC_QUERY_TIMEOUT_SECS),
+                stream.next(),
+            )
+            .await
+            {
+                Ok(Ok(Some(event))) => yield Ok(search_event_to_sse(event)),
+                Ok(Ok(None)) => break,
+                Ok(Err(error)) => {
+                    yield Ok(Event::default().event("error").data(
+                        serde_json::json!({"error": error.to_string()}).to_string(),
+                    ));
+                    break;
+                }
+                Err(_) => {
+                    yield Ok(Event::default().event("error").data(
+                        serde_json::json!({
+                            "error": format!(
+                                "namespace search: no response within {OPC_QUERY_TIMEOUT_SECS}s"
+                            )
+                        }).to_string(),
+                    ));
+                    break;
+                }
+            }
+        }
+    };
+    Ok(Sse::new(events).keep_alive(KeepAlive::default()))
 }
 
 /// Query parameters for `GET /api/opc/read`.
@@ -255,7 +598,13 @@ pub(crate) async fn read(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/opc/servers", get(servers))
+        .route("/api/opc/capabilities", get(capabilities))
         .route("/api/opc/browse", get(browse))
+        .route(
+            "/api/opc/browse/sessions/{session_id}",
+            delete(close_browse_session),
+        )
+        .route("/api/opc/search", get(search))
         .route("/api/opc/read", get(read))
 }
 
@@ -266,7 +615,8 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use opcda_bridge_proto::bridge::{
-        BrowseResponse, ListServersResponse, ReadResponse, TagValue as ProtoTagValue,
+        BrowseNode as ProtoBrowseNode, BrowseNodeKind as ProtoBrowseNodeKind, BrowsePage,
+        ListServersResponse, ReadResponse, TagValue as ProtoTagValue,
     };
     use tower::ServiceExt;
 
@@ -357,10 +707,17 @@ mod tests {
     #[tokio::test]
     async fn browse_returns_nodes_from_a_mock_gateway() {
         let host = start_mock_server(MockBridgeService {
-            browse_responses: vec![BrowseResponse {
-                tag_id: "Unit1".to_string(),
-                node_type: "Branch".to_string(),
-            }],
+            browse_response: BrowsePage {
+                session_id: "session".to_string(),
+                nodes: vec![ProtoBrowseNode {
+                    node_key: "unit1".to_string(),
+                    display_name: "Unit1".to_string(),
+                    kind: ProtoBrowseNodeKind::Branch as i32,
+                    item_id: None,
+                }],
+                complete: true,
+                ..Default::default()
+            },
             ..Default::default()
         })
         .await;
@@ -369,8 +726,9 @@ mod tests {
         let response = get(app, "/api/opc/browse").await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_json(response).await;
-        assert_eq!(body["nodes"][0]["tag"], "Unit1");
-        assert_eq!(body["nodes"][0]["is_branch"], true);
+        assert_eq!(body["session_id"], "session");
+        assert_eq!(body["nodes"][0]["display_name"], "Unit1");
+        assert_eq!(body["nodes"][0]["kind"], "branch");
     }
 
     #[tokio::test]
@@ -378,9 +736,15 @@ mod tests {
         let host = start_mock_server(MockBridgeService::default()).await;
         let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
-        let response = get(app, "/api/opc/browse?path=Unit1").await;
+        let response = get(
+            app,
+            "/api/opc/browse?session_id=session&parent_node_key=unit1",
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(body_json(response).await, serde_json::json!({"nodes": []}));
+        let body = body_json(response).await;
+        assert_eq!(body["nodes"], serde_json::json!([]));
+        assert_eq!(body["complete"], true);
     }
 
     #[tokio::test]

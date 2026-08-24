@@ -45,13 +45,43 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * List the tags/branches directly under one tree level of an OPC DA server.
-     * @description `GET /api/opc/browse` -- one level at a time (not a recursive dump of the whole tree),
-     *     matching `Driver::browse`'s own contract; the GUI's tag-tree modal calls this again for
-     *     each branch the user expands. Requires `opc_server` (from the query or config) since,
-     *     unlike `GET /api/opc/servers`, browsing needs a specific server to connect to.
+     * List one bounded page of immediate children. A missing `session_id` opens a new session and
+     *     lists its root; all later calls round-trip the returned opaque session/node/token values.
      */
     get: operations["browse"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/browse/sessions/{session_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["close_browse_session"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/capabilities": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Report browse capabilities for one OPC DA server. */
+    get: operations["capabilities"];
     put?: never;
     post?: never;
     delete?: never;
@@ -76,6 +106,22 @@ export interface paths {
      *     gets rather than failing on `Uncertain`/`Bad`, matching `bhtune opc read`'s own behavior.
      */
     get: operations["read"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["search"];
     put?: never;
     post?: never;
     delete?: never;
@@ -747,9 +793,40 @@ export interface components {
       write_pid?: null | components["schemas"]["ResponseLevel"];
       yes?: boolean | null;
     };
-    /** @description Response body of `GET /api/opc/browse`. */
+    /** @enum {string} */
+    OpcBrowseNodeKind: "unspecified" | "branch" | "item" | "branch_and_item";
+    /**
+     * @description One node returned by `GET /api/opc/browse`. `node_key` and `item_id` must remain separate:
+     *     the former is an opaque navigation key, while the latter is the exact selectable OPC DA
+     *     ItemID and may contain namespace punctuation with no relationship to hierarchy.
+     */
+    OpcBrowseNodeResponse: {
+      display_name: string;
+      item_id?: string | null;
+      kind: components["schemas"]["OpcBrowseNodeKind"];
+      node_key: string;
+    };
     OpcBrowseResponse: {
-      nodes: components["schemas"]["OpcTagNodeResponse"][];
+      complete: boolean;
+      next_page_token?: string | null;
+      nodes: components["schemas"]["OpcBrowseNodeResponse"][];
+      organization: string;
+      session_id: string;
+      source: string;
+      warning?: string | null;
+    };
+    OpcCapabilitiesResponse: {
+      application_version: string;
+      /** Format: int32 */
+      max_page_size: number;
+      organization: string;
+      protocol_version: string;
+      source: string;
+      supports_browse_sessions: boolean;
+      supports_search: boolean;
+    };
+    OpcCloseBrowseSessionResponse: {
+      closed: boolean;
     };
     /**
      * @description Response body of `GET /api/opc/read`.
@@ -778,16 +855,6 @@ export interface components {
     /** @description Response body of `GET /api/opc/servers`. */
     OpcServersResponse: {
       servers: string[];
-    };
-    /**
-     * @description One node of `GET /api/opc/browse`'s `nodes` array -- a plain HTTP-facing projection of
-     *     [`bhtune_driver::TagNode`], per this workspace's DTO-decoupling convention (`bhtune-driver`
-     *     types deliberately don't derive `Serialize`/`ToSchema`; every JSON-facing consumer builds
-     *     its own projection instead).
-     */
-    OpcTagNodeResponse: {
-      is_branch: boolean;
-      tag: string;
     };
     /**
      * @description A run's snapshotted PID constant tag names, present only when all three were configured.
@@ -1381,11 +1448,11 @@ export interface operations {
       query?: {
         bridge_host?: string;
         opc_server?: string;
-        /**
-         * @description The tree level to list; an absent or empty path lists the top level, matching
-         *     `Driver::browse`'s own "empty string for the top level" convention.
-         */
-        path?: string;
+        session_id?: string;
+        parent_node_key?: string;
+        page_token?: string;
+        page_size?: number;
+        refresh?: boolean;
       };
       header?: never;
       path?: never;
@@ -1401,7 +1468,72 @@ export interface operations {
           "application/json": components["schemas"]["OpcBrowseResponse"];
         };
       };
-      /** @description No OPC server was specified (and none is configured), or the gateway/browse call could not be reached in time. */
+      /** @description No OPC server was specified, the browse state is invalid, or the gateway could not be reached. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  close_browse_session: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+      };
+      header?: never;
+      path: {
+        /** @description Opaque bridge browse-session ID. */
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcCloseBrowseSessionResponse"];
+        };
+      };
+      /** @description The browse session could not be closed. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  capabilities: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcCapabilitiesResponse"];
+        };
+      };
+      /** @description The bridge or OPC server could not be reached. */
       400: {
         headers: {
           [name: string]: unknown;
@@ -1438,6 +1570,43 @@ export interface operations {
         };
       };
       /** @description No tag or OPC server was specified (and none is configured), or the gateway/read call could not be reached in time. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  search: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        query: string;
+        match_mode?: string;
+        session_id?: string;
+        scope_node_key?: string;
+        max_results?: number;
+        include_branches?: boolean;
+        refresh?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description SSE stream of match, progress, and completed events. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description The search request or gateway connection is invalid. */
       400: {
         headers: {
           [name: string]: unknown;

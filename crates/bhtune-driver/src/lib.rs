@@ -1,7 +1,7 @@
 //! `bhtune-driver` — the extensibility seam.
 //!
 //! Defines a single async [`Driver`] trait abstracting all tag I/O (`read`/`write`/
-//! `browse`) so `bhtune-core`'s tuning engine never knows what it is talking to. Three
+//! browse/search) so `bhtune-core`'s tuning engine never knows what it is talking to. Three
 //! implementations exist:
 //!
 //! - [`opcda`]: the primary driver for v1 ([`OpcDaDriver`]), over the `opcda-bridge`
@@ -22,7 +22,7 @@
 //!
 //! - [`driver`] — the [`Driver`] trait itself.
 //! - [`types`] — the plain data types ([`TagId`], [`TagValue`], [`TagWrite`],
-//!   [`WriteOutcome`], [`TagNode`]) that cross the trait boundary.
+//!   [`WriteOutcome`], browse-page, capability, and search types) that cross the trait boundary.
 //! - [`error`] — the crate's error type, [`DriverError`].
 //! - [`opcda`] — [`OpcDaDriver`], the OPC DA implementation, and [`list_opcda_servers`].
 //! - [`simulator`] — [`SimulatorDriver`], [`FopdtProcess`]/[`FopdtConfig`], and
@@ -38,7 +38,14 @@ pub mod types;
 
 pub use driver::Driver;
 pub use error::{DriverError, DriverResult};
-pub use opcda::{OpcDaDriver, list_opcda_servers};
+pub use opcda::{
+    DEFAULT_PAGE_SIZE, DEFAULT_SEARCH_MAX_RESULTS, OpcDaDriver, close_opcda_browse_session,
+    list_opcda_servers,
+};
 pub use replay::{RecordedWrite, ReplayDriver, ReplaySample, ReplayTraceExhausted};
 pub use simulator::{FopdtConfig, FopdtProcess, SimulatorDriver, VirtualPid, VirtualPidConfig};
-pub use types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome};
+pub use types::{
+    BrowseBreadcrumb, BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource,
+    DriverCapabilities, NamespaceOrganization, Quality, SearchCompleted, SearchEvent, SearchMatch,
+    SearchMatchMode, SearchProgress, SearchRequest, TagId, TagValue, TagWrite, WriteOutcome,
+};

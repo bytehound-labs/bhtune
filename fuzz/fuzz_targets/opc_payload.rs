@@ -2,7 +2,7 @@
 
 use bhtune_driver::{
     opcda::{
-        opc_value_from_write, quality_from_raw, tag_node_from_browse, tag_value_from_raw,
+        browse_node_from_bridge, opc_value_from_write, quality_from_raw, tag_value_from_raw,
         write_outcome_from_result,
     },
     types::TagWrite,
@@ -18,9 +18,11 @@ fuzz_target!(|data: &[u8]| {
         quality: text.clone(),
         timestamp: text.clone(),
     });
-    let _ = tag_node_from_browse(opcda_bridge::BrowseNode {
-        tag_id: text.clone(),
-        node_type: text.clone(),
+    let _ = browse_node_from_bridge(opcda_bridge::BrowseNode {
+        node_key: text.clone(),
+        display_name: text.clone(),
+        kind: opcda_bridge::BrowseNodeKind::Item,
+        item_id: Some(text.clone()),
     });
     let _ = write_outcome_from_result(opcda_bridge::WriteResult {
         tag_id: text.clone(),

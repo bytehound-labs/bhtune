@@ -90,9 +90,9 @@ pub const EXIT_TIMED_OUT: u8 = 4;
 /// A `tune`/`simulate` run was aborted because a driver reported a non-`Good` OPC quality
 /// for a tuning-critical reading (finding 5 of the live-plant safety review): an initial
 /// reading, the transition-to-manual setpoint capture, or an in-flight PV poll sample, and
-/// (for the in-flight case) the global Config > OPC quality policy rejected `Uncertain`, or the
-/// quality was `Bad` rather than merely `Uncertain`. The loop was restored to its pre-test mode, exactly
-/// like [`EXIT_ABORTED`]/[`EXIT_TIMED_OUT`]. Distinct from both so a scheduler's alerting can
+/// (for the in-flight case) the global Config > OPC quality policy rejected `Uncertain`, or
+/// the quality was `Bad` rather than merely `Uncertain`. The loop was restored to its pre-test
+/// mode, exactly like [`EXIT_ABORTED`]/[`EXIT_TIMED_OUT`]. Distinct from both so a scheduler's alerting can
 /// tell "the plant data itself couldn't be trusted" apart from a user-initiated stop or a
 /// run that simply took too long. See `commands::tune::TuneOutcome::PoorQuality` and
 /// AGENTS.md's `safety-quality` section.
@@ -234,9 +234,11 @@ async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCod
                 Command::Export(args) => commands::export::run(&pool, args)
                     .await
                     .map(|()| ExitCode::SUCCESS),
-                Command::Opc { command } => commands::opc::run(command, &config)
-                    .await
-                    .map(|()| ExitCode::SUCCESS),
+                Command::Opc { output, command } => {
+                    commands::opc::run_with_output(command, &config, output)
+                        .await
+                        .map(|()| ExitCode::SUCCESS)
+                }
             };
             match result {
                 Ok(code) => code,
@@ -585,6 +587,7 @@ mod tests {
                 log_format: None,
                 log_rotation: None,
                 command: Command::Opc {
+                    output: OutputFormat::Table,
                     command: crate::args::OpcCommand::Read {
                         bridge_host: Some("127.0.0.1:1".to_string()),
                         server: Some("Sim.Server".to_string()),

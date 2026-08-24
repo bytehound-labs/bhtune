@@ -22,7 +22,10 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 use crate::{
     driver::Driver,
     error::{DriverError, DriverResult},
-    types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome},
+    types::{
+        BrowsePage, BrowsePageRequest, DriverCapabilities, Quality, SearchEvent, SearchRequest,
+        TagId, TagValue, TagWrite, WriteOutcome,
+    },
 };
 
 /// Configuration for a [`FopdtProcess`]: the classic three parameters process control
@@ -364,9 +367,27 @@ impl Driver for SimulatorDriver {
         Ok(WriteOutcome::success())
     }
 
-    async fn browse(&self, _path: &str) -> DriverResult<Vec<TagNode>> {
+    async fn capabilities(&self) -> DriverResult<DriverCapabilities> {
+        Err(DriverError::Unsupported {
+            operation: "capabilities",
+        })
+    }
+
+    async fn browse(&self, _request: BrowsePageRequest) -> DriverResult<BrowsePage> {
         Err(DriverError::Unsupported {
             operation: "browse",
+        })
+    }
+
+    async fn close_browse_session(&self, _session_id: &str) -> DriverResult<()> {
+        Err(DriverError::Unsupported {
+            operation: "browse-session close",
+        })
+    }
+
+    async fn search(&self, _request: SearchRequest) -> DriverResult<Vec<SearchEvent>> {
+        Err(DriverError::Unsupported {
+            operation: "search",
         })
     }
 }
@@ -689,7 +710,10 @@ mod tests {
     #[tokio::test]
     async fn browse_is_unsupported() {
         let driver = driver();
-        let err = driver.browse("").await.unwrap_err();
+        let err = driver
+            .browse(BrowsePageRequest::root(20))
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             DriverError::Unsupported {

@@ -145,7 +145,15 @@ fn write(path: &Path, contents: String) {
         std::fs::create_dir_all(parent)
             .unwrap_or_else(|err| panic!("failed to create {}: {err}", parent.display()));
     }
-    std::fs::write(path, contents)
+    let mut normalized = contents
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if contents.ends_with('\n') {
+        normalized.push('\n');
+    }
+    std::fs::write(path, normalized)
         .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
     println!("wrote {}", path.display());
 }

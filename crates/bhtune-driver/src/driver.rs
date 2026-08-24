@@ -4,7 +4,10 @@ use async_trait::async_trait;
 
 use crate::{
     error::DriverResult,
-    types::{TagId, TagNode, TagValue, TagWrite, WriteOutcome},
+    types::{
+        BrowsePage, BrowsePageRequest, DriverCapabilities, SearchEvent, SearchRequest, TagId,
+        TagValue, TagWrite, WriteOutcome,
+    },
 };
 
 /// Abstracts all tag I/O so `bhtune-core`'s tuning engine never knows what it's talking to.
@@ -44,14 +47,32 @@ pub trait Driver: Send + Sync {
     /// not reaching the driver at all.
     async fn write(&self, tag: &TagId, value: TagWrite) -> DriverResult<WriteOutcome>;
 
-    /// Lists the tags/branches available directly under `path` (empty string for the top
-    /// level) — one level, not a recursive dump of the whole tree.
-    ///
-    /// Drivers with no real browsable tag tree (`SimulatorDriver`, `ReplayDriver`) return
-    /// `Err(DriverError::Unsupported { .. })` rather than a misleadingly empty `Ok(vec![])`,
-    /// so a caller (e.g. a GUI tag picker) can distinguish "this driver has no tags here"
-    /// from "this driver has no concept of browsing at all".
-    async fn browse(&self, path: &str) -> DriverResult<Vec<TagNode>>;
+    /// Reports the namespace capabilities of this driver/server pair.
+    async fn capabilities(&self) -> DriverResult<DriverCapabilities> {
+        Err(crate::error::DriverError::Unsupported {
+            operation: "capabilities",
+        })
+    }
+
+    /// Lists one bounded page of immediate children. Navigation uses opaque session, node, and
+    /// continuation values returned by the driver; callers must not infer hierarchy by parsing
+    /// punctuation in an ItemID.
+    async fn browse(&self, request: BrowsePageRequest) -> DriverResult<BrowsePage>;
+
+    /// Releases a server-side browse session.
+    async fn close_browse_session(&self, _session_id: &str) -> DriverResult<()> {
+        Err(crate::error::DriverError::Unsupported {
+            operation: "browse-session close",
+        })
+    }
+
+    /// Collects a bounded namespace search. Drivers that support progressive search may expose
+    /// a richer stream through their concrete type; this method is the portable trait surface.
+    async fn search(&self, _request: SearchRequest) -> DriverResult<Vec<SearchEvent>> {
+        Err(crate::error::DriverError::Unsupported {
+            operation: "search",
+        })
+    }
 }
 
 #[cfg(test)]
@@ -67,7 +88,6 @@ mod tests {
     struct MockDriver {
         values: std::collections::HashMap<TagId, (String, Quality)>,
         writes: Mutex<Vec<(TagId, TagWrite)>>,
-        browsable: bool,
     }
 
     #[async_trait]
@@ -97,17 +117,34 @@ mod tests {
             Ok(WriteOutcome::success())
         }
 
-        async fn browse(&self, _path: &str) -> DriverResult<Vec<TagNode>> {
-            if self.browsable {
-                Ok(vec![TagNode {
-                    tag: "Area1.LIC101".to_string(),
-                    is_branch: true,
-                }])
-            } else {
-                Err(DriverError::Unsupported {
-                    operation: "browse",
-                })
-            }
+        async fn capabilities(&self) -> DriverResult<DriverCapabilities> {
+            Ok(DriverCapabilities {
+                application_version: "test".into(),
+                protocol_version: "test".into(),
+                max_page_size: 200,
+                supports_browse_sessions: true,
+                supports_search: true,
+                organization: crate::types::NamespaceOrganization::Hierarchical,
+                source: crate::types::BrowseSource::Derived,
+            })
+        }
+
+        async fn browse(&self, _request: BrowsePageRequest) -> DriverResult<BrowsePage> {
+            Err(DriverError::Unsupported {
+                operation: "browse",
+            })
+        }
+
+        async fn close_browse_session(&self, _session_id: &str) -> DriverResult<()> {
+            Err(DriverError::Unsupported {
+                operation: "browse-session close",
+            })
+        }
+
+        async fn search(&self, _request: SearchRequest) -> DriverResult<Vec<SearchEvent>> {
+            Err(DriverError::Unsupported {
+                operation: "search",
+            })
         }
     }
 
@@ -124,7 +161,6 @@ mod tests {
         MockDriver {
             values,
             writes: Mutex::new(Vec::new()),
-            browsable: true,
         }
     }
 
@@ -187,9 +223,10 @@ mod tests {
 
     #[tokio::test]
     async fn browse_returns_unsupported_when_driver_has_no_tag_tree() {
-        let mut driver = mock();
-        driver.browsable = false;
-        let err = driver.browse("").await.unwrap_err();
+        let err = mock()
+            .browse(BrowsePageRequest::root(20))
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             DriverError::Unsupported {
