@@ -865,6 +865,56 @@ pub enum OpcCommand {
         #[arg(long)]
         refresh: bool,
     },
+    /// Query and manage the gateway's persistent namespace search index.
+    SearchIndex {
+        #[command(subcommand)]
+        command: SearchIndexCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SearchIndexCommand {
+    /// Show persistent namespace-index status.
+    Status {
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Search the persistent namespace index without traversing the live OPC tree.
+    Search {
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        /// Text to find in indexed node labels/item IDs.
+        query: String,
+        /// How the query should match.
+        #[arg(long, value_enum, default_value = "contains")]
+        match_mode: OpcSearchMatchModeArg,
+        /// Maximum number of matches.
+        #[arg(long, default_value_t = bhtune_driver::DEFAULT_INDEX_SEARCH_MAX_RESULTS, value_parser = positive_u32)]
+        max_results: u32,
+    },
+    /// Start or coalesce a persistent namespace-index refresh.
+    Refresh {
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        /// Start a refresh even when the active index is already current.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Pause, resume, or cancel a persistent namespace-index build.
+    Control {
+        #[arg(long, env = "BHTUNE_BRIDGE_HOST")]
+        bridge_host: Option<String>,
+        #[arg(long)]
+        server: Option<String>,
+        #[arg(value_enum)]
+        action: SearchIndexControlActionArg,
+    },
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -872,6 +922,23 @@ pub enum OpcSearchMatchModeArg {
     Exact,
     Prefix,
     Contains,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchIndexControlActionArg {
+    Pause,
+    Resume,
+    Cancel,
+}
+
+impl From<SearchIndexControlActionArg> for bhtune_driver::SearchIndexControlAction {
+    fn from(value: SearchIndexControlActionArg) -> Self {
+        match value {
+            SearchIndexControlActionArg::Pause => bhtune_driver::SearchIndexControlAction::Pause,
+            SearchIndexControlActionArg::Resume => bhtune_driver::SearchIndexControlAction::Resume,
+            SearchIndexControlActionArg::Cancel => bhtune_driver::SearchIndexControlAction::Cancel,
+        }
+    }
 }
 
 impl From<OpcSearchMatchModeArg> for bhtune_driver::SearchMatchMode {

@@ -16,9 +16,10 @@ use crate::{
     error::{DriverError, DriverResult},
     types::{
         BrowseBreadcrumb, BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource,
-        DriverCapabilities, NamespaceOrganization, Quality, SearchCompleted, SearchEvent,
-        SearchMatch, SearchMatchMode, SearchProgress, SearchRequest, TagId, TagValue, TagWrite,
-        WriteOutcome,
+        DriverCapabilities, IndexedSearchMatch, IndexedSearchProgress, NamespaceOrganization,
+        Quality, SearchCompleted, SearchEvent, SearchIndexControlAction, SearchIndexRequest,
+        SearchIndexResponse, SearchIndexState, SearchIndexStatus, SearchMatch, SearchMatchMode,
+        SearchProgress, SearchRequest, TagId, TagValue, TagWrite, WriteOutcome,
     },
 };
 
@@ -28,6 +29,9 @@ pub const DEFAULT_PAGE_SIZE: u32 = opcda_bridge::DEFAULT_PAGE_SIZE;
 
 /// Default maximum number of search matches requested by the CLI and browser.
 pub const DEFAULT_SEARCH_MAX_RESULTS: u32 = opcda_bridge::DEFAULT_SEARCH_MAX_RESULTS;
+
+/// Default maximum number of matches requested from the persistent namespace index.
+pub const DEFAULT_INDEX_SEARCH_MAX_RESULTS: u32 = opcda_bridge::DEFAULT_INDEX_SEARCH_MAX_RESULTS;
 
 /// A cancellable stream of typed namespace-search events.
 #[derive(Debug)]
@@ -133,6 +137,58 @@ impl OpcDaDriver {
         }
         Ok(events)
     }
+
+    /// Returns the gateway-owned persistent namespace-index status for this OPC server.
+    pub async fn search_index_status(&self) -> DriverResult<SearchIndexStatus> {
+        let mut client = self.client.lock().await;
+        client
+            .search_index_status(self.server.clone())
+            .await
+            .map_err(|err| map_bridge_error_for(err, "indexed-search status"))
+            .map(search_index_status_from_bridge)
+    }
+
+    /// Starts or coalesces a persistent namespace-index refresh for this OPC server.
+    pub async fn refresh_search_index(&self, force: bool) -> DriverResult<SearchIndexStatus> {
+        let mut client = self.client.lock().await;
+        client
+            .refresh_search_index(self.server.clone(), force)
+            .await
+            .map_err(|err| map_bridge_error_for(err, "indexed-search refresh"))
+            .map(search_index_status_from_bridge)
+    }
+
+    /// Pauses, resumes, or cancels a persistent namespace-index build.
+    pub async fn control_search_index(
+        &self,
+        action: SearchIndexControlAction,
+    ) -> DriverResult<SearchIndexStatus> {
+        let mut client = self.client.lock().await;
+        client
+            .control_search_index(self.server.clone(), action.into())
+            .await
+            .map_err(|err| map_bridge_error_for(err, "indexed-search control"))
+            .map(search_index_status_from_bridge)
+    }
+
+    /// Queries the gateway-owned persistent namespace index without falling back to live
+    /// namespace traversal.
+    pub async fn search_index_query(
+        &self,
+        request: SearchIndexRequest,
+    ) -> DriverResult<SearchIndexResponse> {
+        let mut client = self.client.lock().await;
+        client
+            .search_index(opcda_bridge::SearchIndexRequest {
+                server: self.server.clone(),
+                query: request.query,
+                match_mode: match_search_mode(request.match_mode),
+                max_results: request.max_results,
+            })
+            .await
+            .map_err(|err| map_bridge_error_for(err, "indexed search"))
+            .map(search_index_response_from_bridge)
+    }
 }
 
 /// Lists the OPC DA servers registered on the `opcda-bridge` gateway's own host at
@@ -218,6 +274,25 @@ impl Driver for OpcDaDriver {
     async fn search(&self, request: SearchRequest) -> DriverResult<Vec<SearchEvent>> {
         self.search_events(request).await
     }
+
+    async fn search_index_status(&self) -> DriverResult<SearchIndexStatus> {
+        self.search_index_status().await
+    }
+
+    async fn refresh_search_index(&self, force: bool) -> DriverResult<SearchIndexStatus> {
+        self.refresh_search_index(force).await
+    }
+
+    async fn control_search_index(
+        &self,
+        action: SearchIndexControlAction,
+    ) -> DriverResult<SearchIndexStatus> {
+        self.control_search_index(action).await
+    }
+
+    async fn search_index(&self, request: SearchIndexRequest) -> DriverResult<SearchIndexResponse> {
+        self.search_index_query(request).await
+    }
 }
 
 /// Maps `opcda_bridge`'s raw OPC quality string to [`Quality`].
@@ -289,7 +364,97 @@ pub fn capabilities_from_bridge(
         supports_search: capabilities.supports_search,
         organization: namespace_organization_from_bridge(capabilities.organization),
         source: browse_source_from_bridge(capabilities.source),
+        supports_indexed_search: capabilities.supports_indexed_search,
+        indexed_search_protocol_version: capabilities.indexed_search_protocol_version,
+        max_indexed_search_results: capabilities.max_indexed_search_results,
+        search_index_state: search_index_state_from_bridge(capabilities.search_index_state),
     })
+}
+
+pub fn search_index_state_from_bridge(state: opcda_bridge::SearchIndexState) -> SearchIndexState {
+    match state {
+        opcda_bridge::SearchIndexState::Unspecified => SearchIndexState::Unspecified,
+        opcda_bridge::SearchIndexState::NotIndexed => SearchIndexState::NotIndexed,
+        opcda_bridge::SearchIndexState::Partial => SearchIndexState::Partial,
+        opcda_bridge::SearchIndexState::Ready => SearchIndexState::Ready,
+        opcda_bridge::SearchIndexState::Stale => SearchIndexState::Stale,
+        opcda_bridge::SearchIndexState::Refreshing => SearchIndexState::Refreshing,
+        opcda_bridge::SearchIndexState::Failed => SearchIndexState::Failed,
+    }
+}
+
+pub fn indexed_search_progress_from_bridge(
+    progress: opcda_bridge::IndexedSearchProgress,
+) -> IndexedSearchProgress {
+    IndexedSearchProgress {
+        branches_visited: progress.branches_visited,
+        entries_seen: progress.entries_seen,
+        unique_items: progress.unique_items,
+        active_time_ms: progress.active_time_ms,
+        paused_time_ms: progress.paused_time_ms,
+        items_per_second: progress.items_per_second,
+        estimated_remaining_ms: progress.estimated_remaining_ms,
+    }
+}
+
+pub fn search_index_status_from_bridge(
+    status: opcda_bridge::SearchIndexStatus,
+) -> SearchIndexStatus {
+    SearchIndexStatus {
+        server: status.server,
+        state: search_index_state_from_bridge(status.state),
+        configured: status.configured,
+        active_generation: status.active_generation,
+        entry_count: status.entry_count,
+        unique_item_count: status.unique_item_count,
+        started_at: status.started_at,
+        completed_at: status.completed_at,
+        last_error: status.last_error,
+        database_bytes: status.database_bytes,
+        organization: namespace_organization_from_bridge(status.organization),
+        source: browse_source_from_bridge(status.source),
+        progress: status.progress.map(indexed_search_progress_from_bridge),
+    }
+}
+
+pub fn indexed_search_match_from_bridge(
+    found: opcda_bridge::IndexedSearchMatch,
+) -> IndexedSearchMatch {
+    IndexedSearchMatch {
+        item_id: found.item_id,
+        display_name: found.display_name,
+        kind: match found.kind {
+            opcda_bridge::BrowseNodeKind::Unspecified => BrowseNodeKind::Unspecified,
+            opcda_bridge::BrowseNodeKind::Branch => BrowseNodeKind::Branch,
+            opcda_bridge::BrowseNodeKind::Item => BrowseNodeKind::Item,
+            opcda_bridge::BrowseNodeKind::BranchAndItem => BrowseNodeKind::BranchAndItem,
+        },
+        breadcrumbs: found.breadcrumbs,
+    }
+}
+
+pub fn search_index_response_from_bridge(
+    response: opcda_bridge::SearchIndexResponse,
+) -> SearchIndexResponse {
+    SearchIndexResponse {
+        matches: response
+            .matches
+            .into_iter()
+            .map(indexed_search_match_from_bridge)
+            .collect(),
+        has_more: response.has_more,
+        status: search_index_status_from_bridge(response.status),
+    }
+}
+
+impl From<SearchIndexControlAction> for opcda_bridge::SearchIndexControlAction {
+    fn from(action: SearchIndexControlAction) -> Self {
+        match action {
+            SearchIndexControlAction::Pause => Self::Pause,
+            SearchIndexControlAction::Resume => Self::Resume,
+            SearchIndexControlAction::Cancel => Self::Cancel,
+        }
+    }
 }
 
 pub fn namespace_organization_from_bridge(
@@ -578,11 +743,14 @@ mod smoke_tests {
     use opcda_bridge_proto::bridge::{
         BrowseNode as ProtoBrowseNode, BrowseNodeKind as ProtoNodeKind,
         BrowsePage as ProtoBrowsePage, BrowseRequest, BrowseSource as ProtoBrowseSource,
-        CloseBrowseSessionRequest, GetCapabilitiesRequest, GetCapabilitiesResponse,
-        ListServersRequest, ListServersResponse, NamespaceOrganization as ProtoOrganization,
-        ReadRequest, ReadResponse, SearchEvent as ProtoSearchEvent,
-        SearchProgress as ProtoSearchProgress, TagValue as ProtoTagValue, WriteRequest,
-        WriteResponse,
+        CloseBrowseSessionRequest, ControlSearchIndexRequest, GetCapabilitiesRequest,
+        GetCapabilitiesResponse, GetSearchIndexStatusRequest,
+        IndexedSearchMatch as ProtoIndexedSearchMatch, ListServersRequest, ListServersResponse,
+        NamespaceOrganization as ProtoOrganization, ReadRequest, ReadResponse,
+        RefreshSearchIndexRequest, SearchEvent as ProtoSearchEvent,
+        SearchIndexResponse as ProtoSearchIndexResponse, SearchIndexState as ProtoSearchIndexState,
+        SearchIndexStatus as ProtoSearchIndexStatus, SearchProgress as ProtoSearchProgress,
+        TagValue as ProtoTagValue, WriteRequest, WriteResponse,
     };
     use std::net::SocketAddr;
     use tokio::sync::mpsc;
@@ -599,6 +767,8 @@ mod smoke_tests {
         write_error: Option<Status>,
         list_servers_response: ListServersResponse,
         search_events: Vec<ProtoSearchEvent>,
+        search_index_status_response: ProtoSearchIndexStatus,
+        search_index_response: ProtoSearchIndexResponse,
     }
 
     #[tonic::async_trait]
@@ -629,6 +799,34 @@ mod smoke_tests {
             _request: Request<CloseBrowseSessionRequest>,
         ) -> Result<Response<()>, Status> {
             Ok(Response::new(()))
+        }
+
+        async fn get_search_index_status(
+            &self,
+            _request: Request<GetSearchIndexStatusRequest>,
+        ) -> Result<Response<ProtoSearchIndexStatus>, Status> {
+            Ok(Response::new(self.search_index_status_response.clone()))
+        }
+
+        async fn refresh_search_index(
+            &self,
+            _request: Request<RefreshSearchIndexRequest>,
+        ) -> Result<Response<ProtoSearchIndexStatus>, Status> {
+            Ok(Response::new(self.search_index_status_response.clone()))
+        }
+
+        async fn control_search_index(
+            &self,
+            _request: Request<ControlSearchIndexRequest>,
+        ) -> Result<Response<ProtoSearchIndexStatus>, Status> {
+            Ok(Response::new(self.search_index_status_response.clone()))
+        }
+
+        async fn search_index(
+            &self,
+            _request: Request<opcda_bridge_proto::bridge::SearchIndexRequest>,
+        ) -> Result<Response<ProtoSearchIndexResponse>, Status> {
+            Ok(Response::new(self.search_index_response.clone()))
         }
 
         type SearchStream = ReceiverStream<Result<ProtoSearchEvent, Status>>;
@@ -746,13 +944,17 @@ mod smoke_tests {
     async fn capabilities_and_browse_preserve_typed_namespace_metadata() {
         let host = start_mock_server(MockBridgeService {
             capabilities_response: GetCapabilitiesResponse {
-                application_version: "0.3.2".into(),
+                application_version: "0.4.0".into(),
                 protocol_version: "2".into(),
                 max_page_size: 1000,
                 supports_browse_sessions: true,
                 supports_search: true,
                 organization: ProtoOrganization::Hierarchical as i32,
                 source: ProtoBrowseSource::Da2 as i32,
+                supports_indexed_search: true,
+                indexed_search_protocol_version: "1".into(),
+                max_indexed_search_results: 50,
+                search_index_state: ProtoSearchIndexState::Ready as i32,
             },
             browse_response: browse_page(),
             ..Default::default()
@@ -760,8 +962,10 @@ mod smoke_tests {
         .await;
         let driver = OpcDaDriver::connect(&host, "S1").await.unwrap();
         let capabilities = driver.capabilities().await.unwrap();
-        assert_eq!(capabilities.application_version, "0.3.2");
+        assert_eq!(capabilities.application_version, "0.4.0");
         assert!(capabilities.supports_browse_sessions);
+        assert!(capabilities.supports_indexed_search);
+        assert_eq!(capabilities.indexed_search_protocol_version, "1");
         let page = driver.browse(BrowsePageRequest::root(200)).await.unwrap();
         assert_eq!(page.session_id, "session");
         assert!(page.nodes[0].kind.is_branch());
@@ -771,6 +975,59 @@ mod smoke_tests {
             Some("FCS0201!204FI00510.PV")
         );
         driver.close_browse_session("session").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn indexed_search_round_trips_exact_item_id_and_status() {
+        let host = start_mock_server(MockBridgeService {
+            search_index_status_response: ProtoSearchIndexStatus {
+                server: "S1".into(),
+                state: ProtoSearchIndexState::Ready as i32,
+                configured: true,
+                active_generation: 7,
+                entry_count: 2,
+                unique_item_count: 2,
+                organization: ProtoOrganization::Hierarchical as i32,
+                source: ProtoBrowseSource::Da2 as i32,
+                ..Default::default()
+            },
+            search_index_response: ProtoSearchIndexResponse {
+                matches: vec![ProtoIndexedSearchMatch {
+                    item_id: "FCS0201!204FI00510.PV".into(),
+                    display_name: "PV".into(),
+                    kind: ProtoNodeKind::Item as i32,
+                    breadcrumbs: vec!["FCS0201".into(), "204FI00510".into()],
+                }],
+                has_more: false,
+                status: Some(ProtoSearchIndexStatus {
+                    server: "S1".into(),
+                    state: ProtoSearchIndexState::Ready as i32,
+                    configured: true,
+                    active_generation: 7,
+                    entry_count: 2,
+                    unique_item_count: 2,
+                    organization: ProtoOrganization::Hierarchical as i32,
+                    source: ProtoBrowseSource::Da2 as i32,
+                    ..Default::default()
+                }),
+            },
+            ..Default::default()
+        })
+        .await;
+        let driver = OpcDaDriver::connect(&host, "S1").await.unwrap();
+        let status = driver.search_index_status().await.unwrap();
+        assert_eq!(status.state, SearchIndexState::Ready);
+        assert_eq!(status.active_generation, 7);
+        let response = driver
+            .search_index_query(SearchIndexRequest::new(
+                "FCS0201!204FI00510",
+                SearchMatchMode::Prefix,
+                50,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.matches[0].item_id, "FCS0201!204FI00510.PV");
+        assert!(!response.has_more);
     }
 
     #[tokio::test]

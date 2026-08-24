@@ -567,6 +567,147 @@ json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled
 ':query -- Text to find in node labels/item IDs:_default' \
 && ret=0
 ;;
+(search-index)
+_arguments "${_arguments_options[@]}" : \
+'--output=[How to print OPC diagnostic results]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--retention-days=[Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default\: unset -- retain forever). CLI > \`BHTUNE_RETENTION_DAYS\` env var > \`retention_days\` in the config file > (no default) -- see \`crate\:\:config\:\:resolve_retention_days\`. \`bhtune history prune\` applies the same policy on demand, with a \`--dry-run\` preview, instead of waiting for the next startup]:RETENTION_DAYS:_default' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_bhtune__subcmd__opc__subcmd__search-index_commands" \
+"*::: :->search-index" \
+&& ret=0
+
+    case $state in
+    (search-index)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-opc-search-index-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[]:BRIDGE_HOST:_default' \
+'--server=[]:SERVER:_default' \
+'--output=[How to print OPC diagnostic results]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--retention-days=[Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default\: unset -- retain forever). CLI > \`BHTUNE_RETENTION_DAYS\` env var > \`retention_days\` in the config file > (no default) -- see \`crate\:\:config\:\:resolve_retention_days\`. \`bhtune history prune\` applies the same policy on demand, with a \`--dry-run\` preview, instead of waiting for the next startup]:RETENTION_DAYS:_default' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(search)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[]:BRIDGE_HOST:_default' \
+'--server=[]:SERVER:_default' \
+'--match-mode=[How the query should match]:MATCH_MODE:(exact prefix contains)' \
+'--max-results=[Maximum number of matches]:MAX_RESULTS:_default' \
+'--output=[How to print OPC diagnostic results]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--retention-days=[Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default\: unset -- retain forever). CLI > \`BHTUNE_RETENTION_DAYS\` env var > \`retention_days\` in the config file > (no default) -- see \`crate\:\:config\:\:resolve_retention_days\`. \`bhtune history prune\` applies the same policy on demand, with a \`--dry-run\` preview, instead of waiting for the next startup]:RETENTION_DAYS:_default' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':query -- Text to find in indexed node labels/item IDs:_default' \
+&& ret=0
+;;
+(refresh)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[]:BRIDGE_HOST:_default' \
+'--server=[]:SERVER:_default' \
+'--output=[How to print OPC diagnostic results]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--retention-days=[Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default\: unset -- retain forever). CLI > \`BHTUNE_RETENTION_DAYS\` env var > \`retention_days\` in the config file > (no default) -- see \`crate\:\:config\:\:resolve_retention_days\`. \`bhtune history prune\` applies the same policy on demand, with a \`--dry-run\` preview, instead of waiting for the next startup]:RETENTION_DAYS:_default' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'--force[Start a refresh even when the active index is already current]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(control)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[]:BRIDGE_HOST:_default' \
+'--server=[]:SERVER:_default' \
+'--output=[How to print OPC diagnostic results]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--retention-days=[Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default\: unset -- retain forever). CLI > \`BHTUNE_RETENTION_DAYS\` env var > \`retention_days\` in the config file > (no default) -- see \`crate\:\:config\:\:resolve_retention_days\`. \`bhtune history prune\` applies the same policy on demand, with a \`--dry-run\` preview, instead of waiting for the next startup]:RETENTION_DAYS:_default' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':action:(pause resume cancel)' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__opc__subcmd__search-index__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-opc-search-index-help-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(search)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(refresh)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(control)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_bhtune__subcmd__opc__subcmd__help_commands" \
@@ -602,6 +743,38 @@ _arguments "${_arguments_options[@]}" : \
 (search)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
+;;
+(search-index)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__opc__subcmd__help__subcmd__search-index_commands" \
+"*::: :->search-index" \
+&& ret=0
+
+    case $state in
+    (search-index)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-opc-help-search-index-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(search)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(refresh)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(control)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
@@ -743,6 +916,38 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(search-index)
+_arguments "${_arguments_options[@]}" : \
+":: :_bhtune__subcmd__help__subcmd__opc__subcmd__search-index_commands" \
+"*::: :->search-index" \
+&& ret=0
+
+    case $state in
+    (search-index)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:bhtune-help-opc-search-index-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(search)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(refresh)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(control)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
         esac
     ;;
 esac
@@ -840,6 +1045,7 @@ _bhtune__subcmd__help__subcmd__opc_commands() {
 'browse:Browse one bounded page of tags. Without a session, lists the root level' \
 'close:Explicitly release a gateway browse session returned by \`opc browse\`' \
 'search:Search the OPC DA namespace without downloading the whole tree' \
+'search-index:Query and manage the gateway'\''s persistent namespace search index' \
     )
     _describe -t commands 'bhtune help opc commands' commands "$@"
 }
@@ -862,6 +1068,36 @@ _bhtune__subcmd__help__subcmd__opc__subcmd__read_commands() {
 _bhtune__subcmd__help__subcmd__opc__subcmd__search_commands() {
     local commands; commands=()
     _describe -t commands 'bhtune help opc search commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__search-index_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__search-index_commands() {
+    local commands; commands=(
+'status:Show persistent namespace-index status' \
+'search:Search the persistent namespace index without traversing the live OPC tree' \
+'refresh:Start or coalesce a persistent namespace-index refresh' \
+'control:Pause, resume, or cancel a persistent namespace-index build' \
+    )
+    _describe -t commands 'bhtune help opc search-index commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__search-index__subcmd__control_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__search-index__subcmd__control_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help opc search-index control commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__search-index__subcmd__refresh_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__search-index__subcmd__refresh_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help opc search-index refresh commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__search-index__subcmd__search_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__search-index__subcmd__search_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help opc search-index search commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__search-index__subcmd__status_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__search-index__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help opc search-index status commands' commands "$@"
 }
 (( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__servers_commands] )) ||
 _bhtune__subcmd__help__subcmd__opc__subcmd__servers_commands() {
@@ -995,6 +1231,7 @@ _bhtune__subcmd__opc_commands() {
 'browse:Browse one bounded page of tags. Without a session, lists the root level' \
 'close:Explicitly release a gateway browse session returned by \`opc browse\`' \
 'search:Search the OPC DA namespace without downloading the whole tree' \
+'search-index:Query and manage the gateway'\''s persistent namespace search index' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'bhtune opc commands' commands "$@"
@@ -1018,6 +1255,7 @@ _bhtune__subcmd__opc__subcmd__help_commands() {
 'browse:Browse one bounded page of tags. Without a session, lists the root level' \
 'close:Explicitly release a gateway browse session returned by \`opc browse\`' \
 'search:Search the OPC DA namespace without downloading the whole tree' \
+'search-index:Query and manage the gateway'\''s persistent namespace search index' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'bhtune opc help commands' commands "$@"
@@ -1047,6 +1285,36 @@ _bhtune__subcmd__opc__subcmd__help__subcmd__search_commands() {
     local commands; commands=()
     _describe -t commands 'bhtune opc help search commands' commands "$@"
 }
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__search-index_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__search-index_commands() {
+    local commands; commands=(
+'status:Show persistent namespace-index status' \
+'search:Search the persistent namespace index without traversing the live OPC tree' \
+'refresh:Start or coalesce a persistent namespace-index refresh' \
+'control:Pause, resume, or cancel a persistent namespace-index build' \
+    )
+    _describe -t commands 'bhtune opc help search-index commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__search-index__subcmd__control_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__search-index__subcmd__control_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help search-index control commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__search-index__subcmd__refresh_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__search-index__subcmd__refresh_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help search-index refresh commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__search-index__subcmd__search_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__search-index__subcmd__search_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help search-index search commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__search-index__subcmd__status_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__search-index__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help search-index status commands' commands "$@"
+}
 (( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__servers_commands] )) ||
 _bhtune__subcmd__opc__subcmd__help__subcmd__servers_commands() {
     local commands; commands=()
@@ -1066,6 +1334,73 @@ _bhtune__subcmd__opc__subcmd__read_commands() {
 _bhtune__subcmd__opc__subcmd__search_commands() {
     local commands; commands=()
     _describe -t commands 'bhtune opc search commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index_commands() {
+    local commands; commands=(
+'status:Show persistent namespace-index status' \
+'search:Search the persistent namespace index without traversing the live OPC tree' \
+'refresh:Start or coalesce a persistent namespace-index refresh' \
+'control:Pause, resume, or cancel a persistent namespace-index build' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune opc search-index commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__control_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__control_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index control commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__help_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__help_commands() {
+    local commands; commands=(
+'status:Show persistent namespace-index status' \
+'search:Search the persistent namespace index without traversing the live OPC tree' \
+'refresh:Start or coalesce a persistent namespace-index refresh' \
+'control:Pause, resume, or cancel a persistent namespace-index build' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'bhtune opc search-index help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__control_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__control_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index help control commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__help_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index help help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__refresh_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__refresh_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index help refresh commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__search_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__search_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index help search commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__status_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__help__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index help status commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__refresh_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__refresh_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index refresh commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__search_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__search_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index search commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__search-index__subcmd__status_commands] )) ||
+_bhtune__subcmd__opc__subcmd__search-index__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc search-index status commands' commands "$@"
 }
 (( $+functions[_bhtune__subcmd__opc__subcmd__servers_commands] )) ||
 _bhtune__subcmd__opc__subcmd__servers_commands() {

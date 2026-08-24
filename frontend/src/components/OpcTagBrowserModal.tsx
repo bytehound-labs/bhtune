@@ -2,22 +2,25 @@ import {
   useEffect,
   useRef,
   useState,
-  type FormEvent,
+  type KeyboardEvent,
   type RefObject,
+  type ReactNode,
 } from "react";
 import {
   useCloseOpcBrowseSession,
   useOpcBrowseFetcher,
-  useOpcSearch,
+  useOpcIndexedSearch,
+  useOpcSearchIndexStatus,
+  useRefreshOpcSearchIndex,
   useTestOpcConnection,
 } from "../api/opc";
 import { userFacingErrorMessage } from "../api/errors";
 import type {
   OpcBrowseResponse,
+  OpcIndexedSearchMatchResponse,
   OpcReadResponse,
-  OpcSearchEvent,
-  OpcSearchMatchResponse,
-  OpcSearchProgress,
+  OpcSearchIndexResponse,
+  OpcSearchIndexStatusResponse,
   OpcTagNodeResponse,
 } from "../api/opc";
 import type { components } from "../api/schema";
@@ -52,7 +55,8 @@ type ScopeSnapshot = Omit<ScopeState, "status" | "message">;
 const INDENT_PX = 18;
 const ROOT_SCOPE_KEY = "__root__";
 const BROWSE_PAGE_SIZE = 200;
-const SEARCH_MAX_RESULTS = 25;
+const SEARCH_MAX_RESULTS = 50;
+const SEARCH_DEBOUNCE_MS = 150;
 
 function scopeKey(parentNodeKey: string | null): string {
   return parentNodeKey ?? ROOT_SCOPE_KEY;
@@ -87,6 +91,80 @@ function mergePage(
     complete: page.complete,
     warning: page.warning ?? null,
   };
+}
+
+function searchStateLabel(status: OpcSearchIndexStatusResponse | undefined) {
+  if (!status) return null;
+  switch (status.state) {
+    case "not_indexed":
+      return "Not indexed";
+    case "partial":
+      return "Building";
+    case "ready":
+      return "Ready";
+    case "stale":
+      return "Stale";
+    case "refreshing":
+      return "Refreshing";
+    case "failed":
+      return "Failed";
+    default:
+      return status.state;
+  }
+}
+
+function matchPath(match: OpcIndexedSearchMatchResponse): string {
+  return [...match.breadcrumbs, match.display_name].join(" / ");
+}
+
+function highlightedText(text: string, query: string): ReactNode {
+  const terms = [
+    ...new Set(query.toLocaleLowerCase().split(/\s+/).filter(Boolean)),
+  ];
+  if (terms.length === 0) return text;
+
+  const lowerText = text.toLocaleLowerCase();
+  const ranges: Array<[number, number]> = [];
+  for (const term of terms) {
+    let from = 0;
+    while (from < lowerText.length) {
+      const start = lowerText.indexOf(term, from);
+      if (start < 0) break;
+      ranges.push([start, start + term.length]);
+      from = start + term.length;
+    }
+  }
+  if (ranges.length === 0) return text;
+
+  ranges.sort(([a], [b]) => a - b);
+  const merged: Array<[number, number]> = [];
+  for (const [start, end] of ranges) {
+    const previous = merged.at(-1);
+    if (previous && start <= previous[1]) {
+      previous[1] = Math.max(previous[1], end);
+    } else {
+      merged.push([start, end]);
+    }
+  }
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const [start, end] of merged) {
+    if (start > cursor) {
+      parts.push(text.slice(cursor, start));
+    }
+    parts.push(
+      <mark
+        key={`${start}-${end}`}
+        className="rounded bg-blue-900/70 px-0.5 text-blue-100"
+      >
+        {text.slice(start, end)}
+      </mark>,
+    );
+    cursor = end;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
 }
 
 /** One tree level -- renders one browsed scope and recurses into whichever branch nodes are
@@ -251,12 +329,12 @@ function TreeLevel({
 /**
  * The OPC tag-tree browser modal (`ui-opc-browser`): a lazily-expanding, paged tree fed by
  * `GET /api/opc/browse`, a per-node "Read selected tag" action backed by `GET /api/opc/read`,
- * and an optional search backed by `GET /api/opc/search`. Browse navigation round-trips the
- * gateway's opaque session, node, and page tokens; display names are never parsed into paths.
- * When the user confirms a selection, the active template's process-variable suffix is
- * applied to the selected node's exact original ItemID, after a fresh quality check reads that
- * same ItemID. Reopening at a saved tag uses exact search breadcrumbs to reveal and scroll the
- * matching node when the server supports it.
+ * and an incremental search backed by the gateway-owned persistent index. Browse navigation
+ * round-trips the gateway's opaque session, node, and page tokens; display names are never
+ * parsed into paths. When the user confirms a selection, the active template's
+ * process-variable suffix is applied to the selected node's exact original ItemID, after a
+ * fresh quality check reads that same ItemID. Reopening at a saved tag uses indexed-search
+ * breadcrumbs to reveal and scroll the matching node when the server supports it.
  */
 export function OpcTagBrowserModal({
   bridgeHost,
@@ -275,7 +353,13 @@ export function OpcTagBrowserModal({
 }) {
   const { fetchPage, clearCache } = useOpcBrowseFetcher(bridgeHost, opcServer);
   const closeBrowseSession = useCloseOpcBrowseSession();
-  const searchOpcTags = useOpcSearch();
+  const indexedSearch = useOpcIndexedSearch();
+  const searchIndexStatus = useOpcSearchIndexStatus(
+    bridgeHost,
+    opcServer,
+    Boolean(opcServer),
+  );
+  const refreshSearchIndex = useRefreshOpcSearchIndex();
   const testConnection = useTestOpcConnection();
   const [scopeState, setScopeState] = useState<Record<string, ScopeState>>({});
   const scopeStateRef = useRef(scopeState);
@@ -293,13 +377,15 @@ export function OpcTagBrowserModal({
     null,
   );
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchMatches, setSearchMatches] = useState<OpcSearchMatchResponse[]>(
-    [],
-  );
-  const [searchProgress, setSearchProgress] =
-    useState<OpcSearchProgress | null>(null);
+  const [searchMatches, setSearchMatches] = useState<
+    OpcIndexedSearchMatchResponse[]
+  >([]);
+  const [searchResponse, setSearchResponse] =
+    useState<OpcSearchIndexResponse | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
   const searchAbortRef = useRef<AbortController | null>(null);
+  const searchResultRefs = useRef<Record<number, HTMLButtonElement | null>>({});
 
   useEffect(() => {
     scopeStateRef.current = scopeState;
@@ -395,9 +481,10 @@ export function OpcTagBrowserModal({
     }
   }
 
-  async function ensureNodeVisible(
+  async function ensureNodeByName(
     parentNodeKey: string | null,
-    nodeKey: string,
+    displayName: string,
+    expectedItemId: string | null,
     isCancelled: () => boolean,
   ): Promise<OpcTagNodeResponse | null> {
     let state = scopeStateRef.current[scopeKey(parentNodeKey)];
@@ -408,7 +495,12 @@ export function OpcTagBrowserModal({
     }
 
     while (!isCancelled()) {
-      const match = state.nodes.find((node) => node.node_key === nodeKey);
+      const match = state.nodes.find((node) => {
+        return (
+          node.display_name === displayName &&
+          (!expectedItemId || nodeItemId(node) === expectedItemId)
+        );
+      });
       if (match) return match;
       if (!state.nextPageToken) return null;
       const snapshot = await load(parentNodeKey, {
@@ -421,19 +513,21 @@ export function OpcTagBrowserModal({
     return null;
   }
 
-  async function revealSearchMatch(
-    match: OpcSearchMatchResponse,
+  async function revealIndexedSearchMatch(
+    match: OpcIndexedSearchMatchResponse,
     isCancelled: () => boolean,
   ): Promise<boolean> {
     let parentNodeKey: string | null = null;
     const breadcrumbs =
-      match.breadcrumbs.at(-1)?.node_key === match.node.node_key
+      match.breadcrumbs.at(-1) === match.display_name
         ? match.breadcrumbs.slice(0, -1)
         : match.breadcrumbs;
+
     for (const breadcrumb of breadcrumbs) {
-      const branch = await ensureNodeVisible(
+      const branch = await ensureNodeByName(
         parentNodeKey,
-        breadcrumb.node_key,
+        breadcrumb,
+        null,
         isCancelled,
       );
       if (!branch || !nodeCanExpand(branch)) return false;
@@ -446,14 +540,14 @@ export function OpcTagBrowserModal({
       parentNodeKey = branch.node_key;
     }
 
-    const node = await ensureNodeVisible(
+    const node = await ensureNodeByName(
       parentNodeKey,
-      match.node.node_key,
+      match.display_name,
+      match.item_id,
       isCancelled,
     );
-    const itemId = node ? nodeItemId(node) : nodeItemId(match.node);
-    if (!itemId) return false;
-    setSelectedNode({ nodeKey: match.node.node_key, itemId });
+    if (!node || !nodeItemId(node)) return false;
+    setSelectedNode({ nodeKey: node.node_key, itemId: match.item_id });
     return true;
   }
 
@@ -471,21 +565,19 @@ export function OpcTagBrowserModal({
     const controller = new AbortController();
     searchAbortRef.current = controller;
     try {
-      const result = await searchOpcTags.mutateAsync({
+      const result = await indexedSearch.mutateAsync({
         bridgeHost,
         opcServer,
         query: target,
         matchMode: "exact",
-        sessionId: sessionIdRef.current ?? undefined,
         maxResults: 1,
-        includeBranches: false,
         signal: controller.signal,
       });
-      const match = result.matches.find((candidate) => {
-        return nodeItemId(candidate.node) === target;
-      });
+      const match = result.matches.find(
+        (candidate) => candidate.item_id === target,
+      );
       if (!match || isCancelled() || controller.signal.aborted) return false;
-      return revealSearchMatch(match, isCancelled);
+      return revealIndexedSearchMatch(match, isCancelled);
     } catch {
       return false;
     } finally {
@@ -498,6 +590,7 @@ export function OpcTagBrowserModal({
   useEffect(() => {
     if (!opcServer) return;
     let cancelled = false;
+    disposedRef.current = false;
     async function initialize() {
       const root = await load(null);
       if (cancelled || !root) return;
@@ -535,6 +628,13 @@ export function OpcTagBrowserModal({
     // including them would turn every render into a new browse session.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [bridgeHost, opcServer, initialTag]);
+
+  useEffect(() => {
+    setSearchMatches([]);
+    setSearchResponse(null);
+    setSearchError(null);
+    setActiveSearchIndex(-1);
+  }, [bridgeHost, opcServer]);
 
   useEffect(() => {
     selectedNodeRef.current?.scrollIntoView({ block: "nearest" });
@@ -614,77 +714,151 @@ export function OpcTagBrowserModal({
     void load(parentNodeKey, { pageToken: state.nextPageToken, append: true });
   }
 
-  async function runSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
     const query = searchQuery.trim();
-    if (!query) return;
     cancelActiveSearch();
+    setSearchError(null);
+    setActiveSearchIndex(-1);
+
+    if (query.length < 2 || !opcServer) {
+      setSearchMatches([]);
+      setSearchResponse(null);
+      return;
+    }
+
     const controller = new AbortController();
     searchAbortRef.current = controller;
-    setSearchError(null);
-    setSearchMatches([]);
-    setSearchProgress(null);
-    try {
-      const result = await searchOpcTags.mutateAsync({
-        bridgeHost,
-        opcServer,
-        query,
-        matchMode: "contains",
-        sessionId: sessionIdRef.current ?? undefined,
-        maxResults: SEARCH_MAX_RESULTS,
-        includeBranches: false,
-        signal: controller.signal,
-        onEvent: (searchEvent: OpcSearchEvent) => {
-          if (controller.signal.aborted) return;
-          if (searchEvent.type === "match") {
-            setSearchMatches((previous) => [...previous, searchEvent.match]);
-          } else if (searchEvent.type === "progress") {
-            setSearchProgress(searchEvent.progress);
-          } else {
-            setSearchProgress(null);
-          }
-        },
-      });
+    const timer = window.setTimeout(async () => {
       if (controller.signal.aborted) return;
-      setSearchMatches(result.matches);
-      setSearchProgress(null);
-      if (result.warning) {
-        setSearchError(result.warning);
-      } else if (result.truncated) {
-        setSearchError(`Showing the first ${result.matches.length} matches.`);
-      } else if (result.matches.length === 0) {
-        setSearchError("No matching tags.");
+      try {
+        const result = await indexedSearch.mutateAsync({
+          bridgeHost,
+          opcServer,
+          query,
+          matchMode: query.length < 3 ? "prefix" : "contains",
+          maxResults: SEARCH_MAX_RESULTS,
+          signal: controller.signal,
+        });
+        if (
+          controller.signal.aborted ||
+          searchAbortRef.current !== controller
+        ) {
+          return;
+        }
+        setSearchResponse(result);
+        setSearchMatches(result.matches);
+        setActiveSearchIndex(result.matches.length > 0 ? 0 : -1);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setSearchError(userFacingErrorMessage(err, "Unable to search tags."));
+        setSearchResponse(null);
+        setSearchMatches([]);
+      } finally {
+        if (searchAbortRef.current === controller) {
+          searchAbortRef.current = null;
+        }
       }
-    } catch (err) {
-      if (controller.signal.aborted) {
-        setSearchError("Search cancelled.");
-        return;
-      }
-      setSearchMatches([]);
-      setSearchProgress(null);
-      setSearchError(userFacingErrorMessage(err, "Unable to search tags."));
-    } finally {
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
       if (searchAbortRef.current === controller) {
         searchAbortRef.current = null;
       }
-    }
-  }
+    };
+    // `indexedSearch` is a stable mutation hook; changing connection or query
+    // intentionally starts a new debounced request.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery, bridgeHost, opcServer]);
 
-  function chooseSearchMatch(match: OpcSearchMatchResponse) {
+  useEffect(() => {
+    if (activeSearchIndex < 0) return;
+    searchResultRefs.current[activeSearchIndex]?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [activeSearchIndex]);
+
+  function chooseSearchMatch(match: OpcIndexedSearchMatchResponse) {
     setSearchError(null);
-    void revealSearchMatch(match, () => false).then((revealed) => {
-      if (!revealed) {
-        const itemId = nodeItemId(match.node);
-        if (itemId) setSelectedNode({ nodeKey: match.node.node_key, itemId });
-      }
+    setSelectionReadError(null);
+    testConnection.reset();
+    setSelectedNode({
+      nodeKey: `indexed:${match.item_id}`,
+      itemId: match.item_id,
     });
   }
 
+  function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setSearchQuery("");
+      return;
+    }
+    if (searchMatches.length === 0) return;
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      setActiveSearchIndex((previous) => {
+        const start =
+          previous < 0
+            ? direction > 0
+              ? 0
+              : searchMatches.length - 1
+            : previous;
+        return (
+          (start + direction + searchMatches.length) % searchMatches.length
+        );
+      });
+    } else if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      setActiveSearchIndex(event.key === "Home" ? 0 : searchMatches.length - 1);
+    } else if (event.key === "Enter" && activeSearchIndex >= 0) {
+      event.preventDefault();
+      chooseSearchMatch(searchMatches[activeSearchIndex]);
+    }
+  }
+
+  async function refreshIndex() {
+    setSearchError(null);
+    try {
+      const status = await refreshSearchIndex.mutateAsync({
+        bridgeHost,
+        opcServer,
+        force: true,
+      });
+      setSearchResponse((previous) =>
+        previous ? { ...previous, status } : previous,
+      );
+      await searchIndexStatus.refetch();
+    } catch (err) {
+      setSearchError(
+        userFacingErrorMessage(err, "Unable to refresh the tag index."),
+      );
+    }
+  }
+
   const selectedTag = selectedNode?.itemId ?? null;
-  const busy =
-    testConnection.isPending ||
-    selectionCheckPending ||
-    searchOpcTags.isPending;
+  const busy = testConnection.isPending || selectionCheckPending;
+  const indexStatus = searchIndexStatus.data ?? searchResponse?.status;
+  const indexStateLabel = searchStateLabel(indexStatus);
+
+  useEffect(() => {
+    if (
+      indexStatus?.state !== "partial" &&
+      indexStatus?.state !== "refreshing"
+    ) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void searchIndexStatus.refetch();
+    }, 1_000);
+    return () => window.clearInterval(interval);
+    // `refetch` is the same query operation for this modal; depending on its
+    // render-time identity would restart the interval on every query update.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [indexStatus?.state]);
 
   return (
     <Modal
@@ -747,67 +921,144 @@ export function OpcTagBrowserModal({
         </p>
       ) : (
         <>
-          <form className="mb-3 flex gap-2" onSubmit={runSearch}>
-            <label className="sr-only" htmlFor="opc-tag-search">
-              Search OPC tags
-            </label>
-            <input
-              id="opc-tag-search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search tags"
-              className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
-            />
-            {searchOpcTags.isPending ? (
-              <Button type="button" onClick={cancelActiveSearch}>
-                Cancel
+          <div className="mb-3 space-y-2">
+            <div className="flex gap-2">
+              <label className="sr-only" htmlFor="opc-tag-search">
+                Search OPC tags
+              </label>
+              <input
+                id="opc-tag-search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Type at least 2 characters to search tags"
+                aria-activedescendant={
+                  activeSearchIndex >= 0
+                    ? `opc-search-result-${activeSearchIndex}`
+                    : undefined
+                }
+                className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+              />
+              {indexedSearch.isPending && (
+                <Button type="button" onClick={cancelActiveSearch}>
+                  Cancel
+                </Button>
+              )}
+              <Button
+                type="button"
+                disabled={
+                  refreshSearchIndex.isPending ||
+                  !opcServer ||
+                  indexStatus?.state === "partial" ||
+                  indexStatus?.state === "refreshing"
+                }
+                onClick={() => void refreshIndex()}
+              >
+                {refreshSearchIndex.isPending ? "Refreshing…" : "Refresh index"}
               </Button>
-            ) : (
-              <Button type="submit" disabled={busy || !searchQuery.trim()}>
-                Search
-              </Button>
-            )}
-          </form>
-          {(searchError || searchMatches.length > 0 || searchProgress) && (
-            <div className="mb-3 max-h-32 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
-              {searchProgress && (
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+              <span>
+                {searchQuery.trim().length < 3
+                  ? "Prefix search"
+                  : "Smart contains search"}{" "}
+                · results stay on the gateway
+              </span>
+              {indexStateLabel && (
+                <span className="text-slate-400">
+                  Index: {indexStateLabel.toLocaleLowerCase()}
+                </span>
+              )}
+              {indexStatus?.progress && (
+                <span>
+                  {indexStatus.progress.entries_seen.toLocaleString()} entries
+                  {" · "}
+                  {indexStatus.progress.items_per_second.toFixed(0)} items/s
+                </span>
+              )}
+            </div>
+          </div>
+          {(searchError ||
+            searchIndexStatus.error ||
+            searchMatches.length > 0 ||
+            searchQuery.trim().length >= 2 ||
+            indexStatus?.progress) && (
+            <div className="mb-3 max-h-56 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
+              {searchError ? (
+                <ErrorBanner message={searchError} />
+              ) : searchIndexStatus.error ? (
+                <ErrorBanner
+                  message={userFacingErrorMessage(
+                    searchIndexStatus.error,
+                    "Unable to read the tag-index status.",
+                  )}
+                />
+              ) : null}
+              {indexedSearch.isPending && (
                 <p className="mb-2 text-xs text-slate-400">
-                  Searching… visited {searchProgress.visited_nodes} nodes, found{" "}
-                  {searchProgress.matches} matches
-                  {searchProgress.partial ? " so far" : ""}.
+                  Searching… previous results remain visible until the new query
+                  completes.
                 </p>
               )}
-              {searchError && <ErrorBanner message={searchError} />}
               {searchMatches.length > 0 && (
-                <div className="space-y-1">
-                  {searchMatches.map((match) => {
-                    const itemId = nodeItemId(match.node);
-                    const breadcrumbs =
-                      match.breadcrumbs.at(-1)?.node_key === match.node.node_key
-                        ? match.breadcrumbs.slice(0, -1)
-                        : match.breadcrumbs;
-                    const path = [
-                      ...breadcrumbs.map((part) => part.display_name),
-                      match.node.display_name,
-                    ].join(" / ");
+                <div
+                  role="listbox"
+                  aria-label="OPC tag search results"
+                  className="space-y-1"
+                >
+                  {searchMatches.map((match, index) => {
+                    const path = matchPath(match);
+                    const active = index === activeSearchIndex;
                     return (
                       <button
-                        key={match.node.node_key}
+                        key={match.item_id}
+                        id={`opc-search-result-${index}`}
+                        ref={(element) => {
+                          searchResultRefs.current[index] = element;
+                        }}
+                        role="option"
+                        aria-selected={active}
                         type="button"
-                        disabled={busy || !itemId}
+                        disabled={busy}
+                        onMouseEnter={() => setActiveSearchIndex(index)}
                         onClick={() => chooseSearchMatch(match)}
-                        title={itemId ?? path}
-                        className="block w-full truncate rounded px-2 py-1 text-left text-xs text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        title={match.item_id}
+                        className={`block w-full rounded px-2 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
+                          active
+                            ? "bg-blue-950/70 text-blue-100"
+                            : "text-slate-300 hover:bg-slate-800"
+                        }`}
                       >
-                        <span className="font-mono">{path}</span>
-                        {itemId && itemId !== path && (
-                          <span className="ml-2 text-slate-500">{itemId}</span>
-                        )}
+                        <span className="block truncate font-mono">
+                          {highlightedText(match.item_id, searchQuery)}
+                        </span>
+                        <span className="block truncate text-slate-500">
+                          {highlightedText(path, searchQuery)}
+                        </span>
                       </button>
                     );
                   })}
                 </div>
               )}
+              {searchResponse?.has_more && (
+                <p className="mt-2 text-xs text-slate-400">
+                  50+ matches — keep typing to narrow.
+                </p>
+              )}
+              {!indexedSearch.isPending &&
+                !searchError &&
+                searchQuery.trim().length >= 2 &&
+                searchMatches.length === 0 && (
+                  <p className="text-xs text-slate-400">
+                    {indexStatus?.state === "partial"
+                      ? "The tag index is still building; no complete no-match result is available yet."
+                      : indexStatus?.state === "not_indexed"
+                        ? "The tag index is not ready. Refresh the index to build it."
+                        : indexStatus?.state === "failed"
+                          ? "The tag index failed to build. Refresh it after resolving the gateway error."
+                          : "No matching tags."}
+                  </p>
+                )}
             </div>
           )}
 

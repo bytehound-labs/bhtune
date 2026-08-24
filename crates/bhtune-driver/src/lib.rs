@@ -39,13 +39,15 @@ pub mod types;
 pub use driver::Driver;
 pub use error::{DriverError, DriverResult};
 pub use opcda::{
-    DEFAULT_PAGE_SIZE, DEFAULT_SEARCH_MAX_RESULTS, OpcDaDriver, close_opcda_browse_session,
-    list_opcda_servers,
+    DEFAULT_INDEX_SEARCH_MAX_RESULTS, DEFAULT_PAGE_SIZE, DEFAULT_SEARCH_MAX_RESULTS, OpcDaDriver,
+    close_opcda_browse_session, list_opcda_servers,
 };
 pub use replay::{RecordedWrite, ReplayDriver, ReplaySample, ReplayTraceExhausted};
 pub use simulator::{FopdtConfig, FopdtProcess, SimulatorDriver, VirtualPid, VirtualPidConfig};
 pub use types::{
     BrowseBreadcrumb, BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource,
-    DriverCapabilities, NamespaceOrganization, Quality, SearchCompleted, SearchEvent, SearchMatch,
-    SearchMatchMode, SearchProgress, SearchRequest, TagId, TagValue, TagWrite, WriteOutcome,
+    DriverCapabilities, IndexedSearchMatch, IndexedSearchProgress, NamespaceOrganization, Quality,
+    SearchCompleted, SearchEvent, SearchIndexControlAction, SearchIndexRequest,
+    SearchIndexResponse, SearchIndexState, SearchIndexStatus, SearchMatch, SearchMatchMode,
+    SearchProgress, SearchRequest, TagId, TagValue, TagWrite, WriteOutcome,
 };

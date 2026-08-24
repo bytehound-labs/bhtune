@@ -615,16 +615,17 @@ shell completion files were regenerated via the existing `gen_docs` example and 
 under CI's drift gate. Full quality gate green: `fmt`, `clippy -D warnings`,
 `cargo test --workspace`, `deny check`, `machete`.
 
-Phase 7.5's `api-opc-browse` is also done. The initial read-only routes
-(`GET /api/opc/servers`, `/browse`, and `/read`) now proxy the released
-`opcda-bridge` 0.3.2 session-aware contract: `GET /api/opc/capabilities`,
-`GET /api/opc/browse` with opaque session/node/page-token parameters,
-`DELETE /api/opc/browse/sessions/{session_id}`, `GET /api/opc/search`, and
-`GET /api/opc/read`. Calls remain independent of `AppState::active_run` and are bounded by
-the 30-second `OPC_QUERY_TIMEOUT_SECS` deadline. Browse responses preserve exact ItemIDs
-separately from display labels, expose branch/item/branch-and-item kinds, continuation
-metadata, namespace source, and warnings. Search is progressive and reports breadcrumbs,
-cancellation, truncation, and completion metadata. `openapi.json` and
+Phase 7.5's `api-opc-browse` is also done. The read-only routes
+(`GET /api/opc/servers`, `/browse`, and `/read`) proxy the released session-aware
+`opcda-bridge` contract: `GET /api/opc/capabilities`, `GET /api/opc/browse` with opaque
+session/node/page-token parameters, `DELETE /api/opc/browse/sessions/{session_id}`,
+`GET /api/opc/search`, and `GET /api/opc/read`. Calls remain independent of
+`AppState::active_run` and are bounded by the 30-second `OPC_QUERY_TIMEOUT_SECS` deadline.
+Browse responses preserve exact ItemIDs separately from display labels, expose
+branch/item/branch-and-item kinds, continuation metadata, namespace source, and warnings.
+The gateway's indexed-search extension adds `GET /api/opc/search-index/status`,
+`GET /api/opc/search-index/search`, and refresh/control endpoints with persistent-index state,
+progress, ranked exact matches, breadcrumbs, and `has_more`. `openapi.json` and
 `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
 
 Phase 7.5's `ui-opc-browser` is also done — the last GUI/API todo of the eleven. Two new pieces
@@ -713,21 +714,23 @@ overrides. The browser modal only browses, reads, checks quality, and selects th
 
 ## Scalable OPC browse/search integration
 
-The BHTune OPC integration now targets `opcda-bridge` 0.3.2. The old flat, globally limited
-namespace model is not supported: `bhtune-driver` uses typed capabilities, bounded browse pages,
-opaque browse sessions/node keys/page tokens, exact ItemIDs, branch/item/branch-and-item node
-kinds, explicit session cleanup, and progressive search events. The HTTP API and React browser
-proxy the same contract, while simulator and replay drivers return explicit unsupported errors
-instead of fabricating a namespace.
+The BHTune OPC integration now targets `opcda-bridge` 0.4.0 or newer. The old flat, globally
+limited namespace model is not supported: `bhtune-driver` uses typed capabilities, bounded browse
+pages, opaque browse sessions/node keys/page tokens, exact ItemIDs, branch/item/branch-and-item
+node kinds, explicit session cleanup, and gateway-owned persistent indexed search. The HTTP API
+and React browser proxy the same contract, while simulator and replay drivers return explicit
+unsupported errors instead of fabricating a namespace.
 
 The browser loads only the requested page, preserves continuation state, offers **Load more**,
-keeps expandable-and-selectable nodes usable, and shows partial-search warnings rather than
-claiming that an incomplete search found nothing. It uses gateway breadcrumbs/search to reveal a
-saved selection and never splits `.`, `!`, or `/` to guess hierarchy. The CLI mirrors this with
-`bhtune opc servers`, paged `bhtune opc browse` (or explicit `--all` draining), and
-`bhtune opc search`; progress and warnings stay on stderr so JSON output remains machine-readable.
-CLI browse sessions remain open for continuation after a page is printed and are released with
-`bhtune opc close <session-id>`.
+keeps expandable-and-selectable nodes usable, and uses the persistent index for bounded,
+debounced fzf-style search. Search exposes ranked exact ItemIDs, breadcrumbs, index state/
+progress, and `has_more`; stale or partial results are labeled rather than presented as an
+authoritative no-match. It uses gateway breadcrumbs/search to reveal a saved selection and never
+splits `.`, `!`, or `/` to guess hierarchy. The CLI mirrors this with `bhtune opc servers`,
+paged `bhtune opc browse` (or explicit `--all` draining), live `bhtune opc search`, and
+`bhtune opc search-index status|search|refresh|control`; progress and warnings stay on stderr so
+JSON output remains machine-readable. CLI browse sessions remain open for continuation after a
+page is printed and are released with `bhtune opc close <session-id>`.
 
 Live acceptance against `Yokogawa.CSHIS_OPC.1` confirmed the root page exposes the full controller
 family set, navigation reaches `FCS0201` → `204FI00510` → `PV`, the exact ItemID
@@ -772,8 +775,8 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   network. bhtune itself builds and runs on Linux, macOS, and Windows identically.
 - **The OPC DA client is a crates.io dependency, local to `bhtune-driver` only.** The
   `OpcDaDriver` implementation consumes the published `opcda-bridge` library with
-  `opcda-bridge = "0.3"` pinned directly in `crates/bhtune-driver/Cargo.toml` (currently
-  resolving to the 0.3.2 release) — not promoted
+  `opcda-bridge = "0.4"` pinned directly in `crates/bhtune-driver/Cargo.toml` (currently
+  resolving to the 0.4.0 release) — not promoted
   to `[workspace.dependencies]`, since `bhtune-driver` is the only crate that talks to the
   bridge directly (everything else goes through the `Driver` trait), matching this project's
   single-consumer-stays-local dependency convention. It must not use a Git dependency or a
@@ -1386,7 +1389,7 @@ crate `opcda-bridge-client`:
 ```toml
 # crates/bhtune-driver/Cargo.toml
 [dependencies]
-opcda-bridge = "0.3"
+opcda-bridge = "0.4"
 ```
 
 The facade intentionally hides generated gRPC details and exposes typed capabilities,
@@ -1448,14 +1451,15 @@ Integration rules, as implemented in `OpcDaDriver`:
   never infers hierarchy from `.`, `!`, or `/`. A `BrowseNode` carries a display label, an
   opaque navigation key, an exact optional ItemID, and a kind distinguishing branches, items,
   and nodes that are both (`branch_and_item`).
-- `search_stream` provides progressive matches, progress, breadcrumbs, and terminal metadata
-  including cancellation, truncation, and warnings. Dropping the stream cancels the gateway
-  search. `search_events` collects the same stream for callers that do not need incremental
-  delivery.
+- `search_index_status` reports the gateway-owned persistent index state, generation, counts,
+  timestamps, error, source, and build progress. `search_index` performs a bounded unary query
+  against that index and returns ranked matches with exact ItemIDs, breadcrumbs, and `has_more`.
+  `refresh_search_index` and `control_search_index` expose explicit refresh and pause/resume/
+  cancel controls. BHTune does not fall back to the known-slow live traversal search.
 - `close_browse_session` explicitly releases gateway-side browse state. The HTTP browser calls
   it during modal cleanup; the CLI leaves sessions open so printed continuation tokens remain
   usable and exposes `bhtune opc close <session-id>` for explicit cleanup.
-- `opcda-bridge-proto = "0.3"`, `tonic = "0.14"`, and `tokio-stream = "0.1"` are
+- `opcda-bridge-proto = "0.4"`, `tonic = "0.14"`, and `tokio-stream = "0.1"` are
   dev-dependencies only, pinned to the exact versions `opcda-bridge` itself uses internally,
   so this crate's mock-gateway smoke tests produce wire-compatible types. Production code
   never depends on `opcda-bridge-proto` directly — only the facade.
@@ -1463,10 +1467,10 @@ Integration rules, as implemented in `OpcDaDriver`:
 The gateway is a separate Windows process installed with `cargo install opcda-bridge-gateway` or
 downloaded from the upstream releases page. It runs beside the OPC DA server, listens on port
 `7600` by default, and requires the firewall to allow the client-to-gateway connection. The
-0.3.2 protocol offers `ListServers`, `GetCapabilities`, paged `Browse`, `CloseBrowseSession`,
-streaming `Search`, and unary `Read`/`Write`. MRFT polling only needs the unary calls, while
-subscription-driven Step Test remains deferred until the bridge exposes a live push/subscription
-RPC.
+0.4.0 protocol offers `ListServers`, `GetCapabilities`, paged `Browse`, `CloseBrowseSession`,
+streaming live `Search`, persistent indexed-search status/query/refresh/control operations, and
+unary `Read`/`Write`. MRFT polling only needs the unary calls, while subscription-driven Step
+Test remains deferred until the bridge exposes a live push/subscription RPC.
 
 ## Simulator driver reference (`driver-simulator`)
 
@@ -4075,7 +4079,7 @@ that binary does something real and gains its own targeted tests.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
    `cargo-deny` open-source dependency gate.
 2. **`opcda-bridge` reusable client library** (published upstream) — consumed as a plain
-   crates.io dependency (`opcda-bridge = "0.3"`), local to `bhtune-driver`'s own `Cargo.toml`
+   crates.io dependency (`opcda-bridge = "0.4"`), local to `bhtune-driver`'s own `Cargo.toml`
    (see "Key architectural decisions" for why it stays out of `[workspace.dependencies]`).
 3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, tuning math, and the
    golden-master replay harness are all done, with the correctness-critical details above baked

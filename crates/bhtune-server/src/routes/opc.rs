@@ -1,12 +1,14 @@
 //! OPC DA diagnostic routes: `GET /api/opc/servers`, `GET /api/opc/capabilities`,
 //! `GET /api/opc/browse`, `DELETE /api/opc/browse/sessions/:id`, `GET /api/opc/search`,
-//! and `GET /api/opc/read` -- back the GUI's server dropdown, typed tag-tree browser,
-//! progressive namespace search, and connection test.
+//! `GET /api/opc/read`, and the indexed-search status/refresh/control routes -- back the GUI's
+//! server dropdown, typed tag-tree browser, namespace search, index management, and connection
+//! test.
 //!
-//! All three are read-only, bounded by an explicit [`OPC_QUERY_TIMEOUT_SECS`] timeout (see
-//! that constant's doc comment for why one is needed at all), and none ever touches
-//! [`crate::state::AppState::active_run`] -- a diagnostic browse/read must not be blocked by,
-//! or block, an in-flight tune.
+//! Read-only diagnostics remain independent of [`crate::state::AppState::active_run`], and every
+//! OPC operation is bounded by an explicit [`OPC_QUERY_TIMEOUT_SECS`] timeout (see that constant's
+//! doc comment for why one is needed at all). Index management does not acquire the active-tune
+//! lock either: starting or controlling a gateway inventory must not block, or be blocked by, an
+//! in-flight tune.
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -14,14 +16,16 @@ use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use bhtune_cli::commands::tune::sample_quality_from_driver;
 use bhtune_db::models::SampleQuality;
 use bhtune_driver::{
     BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource, Driver,
-    DriverCapabilities, DriverResult, NamespaceOrganization, OpcDaDriver, SearchEvent, SearchMatch,
-    SearchMatchMode, SearchRequest, list_opcda_servers,
+    DriverCapabilities, DriverResult, IndexedSearchMatch, IndexedSearchProgress,
+    NamespaceOrganization, OpcDaDriver, SearchEvent, SearchIndexControlAction, SearchIndexRequest,
+    SearchIndexResponse, SearchIndexStatus, SearchMatch, SearchMatchMode, SearchRequest,
+    list_opcda_servers,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -93,7 +97,7 @@ pub struct OpcServersResponse {
 )]
 pub(crate) async fn servers(
     State(state): State<AppState>,
-    Query(query): Query<OpcServerQuery>,
+    Query(query): Query<OpcServersQuery>,
 ) -> Result<Json<OpcServersResponse>, ApiError> {
     let config = state.config_snapshot()?;
     let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
@@ -118,6 +122,10 @@ pub struct OpcCapabilitiesResponse {
     pub supports_search: bool,
     pub organization: String,
     pub source: String,
+    pub supports_indexed_search: bool,
+    pub indexed_search_protocol_version: String,
+    pub max_indexed_search_results: u32,
+    pub search_index_state: String,
 }
 
 impl From<DriverCapabilities> for OpcCapabilitiesResponse {
@@ -130,6 +138,10 @@ impl From<DriverCapabilities> for OpcCapabilitiesResponse {
             supports_search: capabilities.supports_search,
             organization: organization_name(capabilities.organization).to_string(),
             source: source_name(capabilities.source).to_string(),
+            supports_indexed_search: capabilities.supports_indexed_search,
+            indexed_search_protocol_version: capabilities.indexed_search_protocol_version,
+            max_indexed_search_results: capabilities.max_indexed_search_results,
+            search_index_state: capabilities.search_index_state.to_string(),
         }
     }
 }
@@ -149,8 +161,9 @@ pub(crate) async fn capabilities(
     State(state): State<AppState>,
     Query(query): Query<OpcServerQuery>,
 ) -> Result<Json<OpcCapabilitiesResponse>, ApiError> {
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &state.app_config)
+    let config = state.config_snapshot()?;
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
@@ -160,6 +173,276 @@ pub(crate) async fn capabilities(
     let capabilities =
         with_timeout("discover OPC browse capabilities", driver.capabilities()).await?;
     Ok(Json(capabilities.into()))
+}
+
+/// Query parameters shared by indexed-search status and search-index actions.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpcSearchIndexServerQuery {
+    pub bridge_host: Option<String>,
+    pub opc_server: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpcIndexedSearchProgressResponse {
+    pub branches_visited: u64,
+    pub entries_seen: u64,
+    pub unique_items: u64,
+    pub active_time_ms: u64,
+    pub paused_time_ms: u64,
+    pub items_per_second: f64,
+    pub estimated_remaining_ms: Option<u64>,
+}
+
+impl From<IndexedSearchProgress> for OpcIndexedSearchProgressResponse {
+    fn from(progress: IndexedSearchProgress) -> Self {
+        Self {
+            branches_visited: progress.branches_visited,
+            entries_seen: progress.entries_seen,
+            unique_items: progress.unique_items,
+            active_time_ms: progress.active_time_ms,
+            paused_time_ms: progress.paused_time_ms,
+            items_per_second: progress.items_per_second,
+            estimated_remaining_ms: progress.estimated_remaining_ms,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpcSearchIndexStatusResponse {
+    pub server: String,
+    pub state: String,
+    pub configured: bool,
+    pub active_generation: u64,
+    pub entry_count: u64,
+    pub unique_item_count: u64,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub last_error: Option<String>,
+    pub database_bytes: u64,
+    pub organization: String,
+    pub source: String,
+    pub progress: Option<OpcIndexedSearchProgressResponse>,
+}
+
+impl From<SearchIndexStatus> for OpcSearchIndexStatusResponse {
+    fn from(status: SearchIndexStatus) -> Self {
+        Self {
+            server: status.server,
+            state: status.state.to_string(),
+            configured: status.configured,
+            active_generation: status.active_generation,
+            entry_count: status.entry_count,
+            unique_item_count: status.unique_item_count,
+            started_at: status.started_at,
+            completed_at: status.completed_at,
+            last_error: status.last_error,
+            database_bytes: status.database_bytes,
+            organization: organization_name(status.organization).to_string(),
+            source: source_name(status.source).to_string(),
+            progress: status.progress.map(Into::into),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpcIndexedSearchMatchResponse {
+    pub item_id: String,
+    pub display_name: String,
+    pub kind: OpcBrowseNodeKind,
+    pub breadcrumbs: Vec<String>,
+}
+
+impl From<IndexedSearchMatch> for OpcIndexedSearchMatchResponse {
+    fn from(found: IndexedSearchMatch) -> Self {
+        Self {
+            item_id: found.item_id,
+            display_name: found.display_name,
+            kind: found.kind.into(),
+            breadcrumbs: found.breadcrumbs,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpcSearchIndexResponse {
+    pub matches: Vec<OpcIndexedSearchMatchResponse>,
+    pub has_more: bool,
+    pub status: OpcSearchIndexStatusResponse,
+}
+
+impl From<SearchIndexResponse> for OpcSearchIndexResponse {
+    fn from(response: SearchIndexResponse) -> Self {
+        Self {
+            matches: response.matches.into_iter().map(Into::into).collect(),
+            has_more: response.has_more,
+            status: response.status.into(),
+        }
+    }
+}
+
+async fn connect_search_index_driver(
+    state: &AppState,
+    bridge_host: Option<String>,
+    opc_server: Option<String>,
+) -> Result<OpcDaDriver, ApiError> {
+    let config = state.config_snapshot()?;
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(bridge_host, &config);
+    let opc_server = bhtune_cli::config::resolve_server(opc_server, &config)
+        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    with_timeout(
+        &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
+        OpcDaDriver::connect(&bridge_host, opc_server),
+    )
+    .await
+}
+
+/// Return the persistent namespace-index status for one OPC DA server.
+#[utoipa::path(
+    get,
+    path = "/api/opc/search-index/status",
+    tag = "opc",
+    params(OpcSearchIndexServerQuery),
+    responses(
+        (status = 200, body = OpcSearchIndexStatusResponse),
+        (status = 400, description = "The bridge or OPC server could not be reached.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn search_index_status(
+    State(state): State<AppState>,
+    Query(query): Query<OpcSearchIndexServerQuery>,
+) -> Result<Json<OpcSearchIndexStatusResponse>, ApiError> {
+    let driver = connect_search_index_driver(&state, query.bridge_host, query.opc_server).await?;
+    let status = with_timeout("read OPC search-index status", driver.search_index_status()).await?;
+    Ok(Json(status.into()))
+}
+
+/// Query the gateway-owned persistent namespace index. This is a bounded unary request and
+/// never falls back to the legacy live traversal search.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpcSearchIndexQuery {
+    pub bridge_host: Option<String>,
+    pub opc_server: Option<String>,
+    pub query: String,
+    #[serde(default = "default_search_match_mode")]
+    pub match_mode: String,
+    #[serde(default = "default_index_search_max_results")]
+    pub max_results: u32,
+}
+
+fn default_index_search_max_results() -> u32 {
+    bhtune_driver::DEFAULT_INDEX_SEARCH_MAX_RESULTS
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/opc/search-index/search",
+    tag = "opc",
+    params(OpcSearchIndexQuery),
+    responses(
+        (status = 200, body = OpcSearchIndexResponse),
+        (status = 400, description = "The indexed-search request or gateway connection is invalid.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn search_index(
+    State(state): State<AppState>,
+    Query(query): Query<OpcSearchIndexQuery>,
+) -> Result<Json<OpcSearchIndexResponse>, ApiError> {
+    if query.query.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "a search query is required".to_string(),
+        ));
+    }
+    let match_mode = parse_search_match_mode(&query.match_mode)?;
+    let max_results = validate_positive(query.max_results, "max_results")?;
+    let driver = connect_search_index_driver(&state, query.bridge_host, query.opc_server).await?;
+    let response = with_timeout(
+        "search the OPC namespace index",
+        driver.search_index(SearchIndexRequest::new(
+            query.query,
+            match_mode,
+            max_results,
+        )),
+    )
+    .await?;
+    Ok(Json(response.into()))
+}
+
+/// Query parameters for `POST /api/opc/search-index/refresh`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpcSearchIndexRefreshQuery {
+    pub bridge_host: Option<String>,
+    pub opc_server: Option<String>,
+    pub force: Option<bool>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/opc/search-index/refresh",
+    tag = "opc",
+    params(OpcSearchIndexRefreshQuery),
+    responses(
+        (status = 200, body = OpcSearchIndexStatusResponse),
+        (status = 400, description = "The refresh request or gateway connection is invalid.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn refresh_search_index(
+    State(state): State<AppState>,
+    Query(query): Query<OpcSearchIndexRefreshQuery>,
+) -> Result<Json<OpcSearchIndexStatusResponse>, ApiError> {
+    let driver = connect_search_index_driver(&state, query.bridge_host, query.opc_server).await?;
+    let status = with_timeout(
+        "refresh the OPC namespace index",
+        driver.refresh_search_index(query.force.unwrap_or(false)),
+    )
+    .await?;
+    Ok(Json(status.into()))
+}
+
+/// Query parameters for `POST /api/opc/search-index/control`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpcSearchIndexControlQuery {
+    pub bridge_host: Option<String>,
+    pub opc_server: Option<String>,
+    pub action: String,
+}
+
+fn parse_search_index_control_action(value: &str) -> Result<SearchIndexControlAction, ApiError> {
+    match value {
+        "pause" => Ok(SearchIndexControlAction::Pause),
+        "resume" => Ok(SearchIndexControlAction::Resume),
+        "cancel" => Ok(SearchIndexControlAction::Cancel),
+        _ => Err(ApiError::BadRequest(
+            "action must be one of: pause, resume, cancel".to_string(),
+        )),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/opc/search-index/control",
+    tag = "opc",
+    params(OpcSearchIndexControlQuery),
+    responses(
+        (status = 200, body = OpcSearchIndexStatusResponse),
+        (status = 400, description = "The control action or gateway connection is invalid.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn control_search_index(
+    State(state): State<AppState>,
+    Query(query): Query<OpcSearchIndexControlQuery>,
+) -> Result<Json<OpcSearchIndexStatusResponse>, ApiError> {
+    let action = parse_search_index_control_action(&query.action)?;
+    let driver = connect_search_index_driver(&state, query.bridge_host, query.opc_server).await?;
+    let status = with_timeout(
+        "control the OPC namespace index",
+        driver.control_search_index(action),
+    )
+    .await?;
+    Ok(Json(status.into()))
 }
 
 /// Query parameters for `GET /api/opc/browse`.
@@ -339,8 +622,9 @@ pub(crate) async fn close_browse_session(
             "a browse session ID is required".to_string(),
         ));
     }
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &state.app_config)
+    let config = state.config_snapshot()?;
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
@@ -462,8 +746,9 @@ pub(crate) async fn search(
     }
     let match_mode = parse_search_match_mode(&query.match_mode)?;
     let max_results = validate_positive(query.max_results, "max_results")?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &state.app_config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &state.app_config)
+    let config = state.config_snapshot()?;
+    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
@@ -605,6 +890,10 @@ pub fn router() -> Router<AppState> {
             delete(close_browse_session),
         )
         .route("/api/opc/search", get(search))
+        .route("/api/opc/search-index/status", get(search_index_status))
+        .route("/api/opc/search-index/search", get(search_index))
+        .route("/api/opc/search-index/refresh", post(refresh_search_index))
+        .route("/api/opc/search-index/control", post(control_search_index))
         .route("/api/opc/read", get(read))
 }
 
@@ -616,8 +905,14 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use opcda_bridge_proto::bridge::{
         BrowseNode as ProtoBrowseNode, BrowseNodeKind as ProtoBrowseNodeKind, BrowsePage,
-        ListServersResponse, ReadResponse, TagValue as ProtoTagValue,
+        BrowseSource as ProtoBrowseSource, IndexedSearchMatch as ProtoIndexedSearchMatch,
+        IndexedSearchProgress as ProtoIndexedSearchProgress, ListServersResponse,
+        NamespaceOrganization as ProtoNamespaceOrganization, ReadResponse,
+        SearchIndexResponse as ProtoSearchIndexResponse, SearchIndexState as ProtoSearchIndexState,
+        SearchIndexStatus as ProtoSearchIndexStatus, SearchMatchMode as ProtoSearchMatchMode,
+        TagValue as ProtoTagValue,
     };
+    use tonic::Code;
     use tower::ServiceExt;
 
     async fn body_json(response: axum::http::Response<Body>) -> serde_json::Value {
@@ -631,6 +926,37 @@ mod tests {
             .unwrap()
     }
 
+    async fn post(app: axum::Router, path: &str) -> axum::http::Response<Body> {
+        app.oneshot(Request::post(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    fn proto_index_status(state: ProtoSearchIndexState) -> ProtoSearchIndexStatus {
+        ProtoSearchIndexStatus {
+            server: "Sim.Server".to_string(),
+            state: state as i32,
+            configured: true,
+            active_generation: 7,
+            entry_count: 12_345,
+            unique_item_count: 9_876,
+            started_at: Some("2026-08-16T10:00:00Z".to_string()),
+            completed_at: Some("2026-08-16T10:05:00Z".to_string()),
+            last_error: None,
+            database_bytes: 65_536,
+            organization: ProtoNamespaceOrganization::Hierarchical as i32,
+            source: ProtoBrowseSource::Da3 as i32,
+            progress: Some(ProtoIndexedSearchProgress {
+                branches_visited: 321,
+                entries_seen: 12_345,
+                unique_items: 9_876,
+                active_time_ms: 240_000,
+                paused_time_ms: 60_000,
+                items_per_second: 250.5,
+                estimated_remaining_ms: Some(30_000),
+            }),
+        }
+    }
     /// A fresh in-memory [`AppState`] with `bridge_host`/`opc_server` overridden -- every
     /// test in this module needs the config resolution to pick up a specific mock gateway
     /// (or a deliberately unreachable/unset one), never the four seeded built-in templates.
@@ -702,6 +1028,282 @@ mod tests {
 
         let response = get(app, &format!("/api/opc/servers?bridge_host={host}")).await;
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn capabilities_reports_the_indexed_search_contract() {
+        let host = start_mock_server(MockBridgeService {
+            capabilities_response: opcda_bridge_proto::bridge::GetCapabilitiesResponse {
+                application_version: "0.4.0".to_string(),
+                protocol_version: "2".to_string(),
+                max_page_size: 1000,
+                supports_browse_sessions: true,
+                supports_search: true,
+                organization: ProtoNamespaceOrganization::Hierarchical as i32,
+                source: ProtoBrowseSource::Da3 as i32,
+                supports_indexed_search: true,
+                indexed_search_protocol_version: "1".to_string(),
+                max_indexed_search_results: 50,
+                search_index_state: ProtoSearchIndexState::Ready as i32,
+            },
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+
+        let response = get(app, "/api/opc/capabilities").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["application_version"], "0.4.0");
+        assert_eq!(body["protocol_version"], "2");
+        assert_eq!(body["supports_indexed_search"], true);
+        assert_eq!(body["indexed_search_protocol_version"], "1");
+        assert_eq!(body["max_indexed_search_results"], 50);
+        assert_eq!(body["search_index_state"], "ready");
+    }
+
+    #[tokio::test]
+    async fn search_index_status_maps_every_state_and_progress() {
+        let states = [
+            (ProtoSearchIndexState::Unspecified, "unspecified"),
+            (ProtoSearchIndexState::NotIndexed, "not_indexed"),
+            (ProtoSearchIndexState::Partial, "partial"),
+            (ProtoSearchIndexState::Ready, "ready"),
+            (ProtoSearchIndexState::Stale, "stale"),
+            (ProtoSearchIndexState::Refreshing, "refreshing"),
+            (ProtoSearchIndexState::Failed, "failed"),
+        ];
+
+        for (state, expected_state) in states {
+            let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let host = start_mock_server(MockBridgeService {
+                search_index_status_response: proto_index_status(state),
+                search_index_status_requests: requests.clone(),
+                ..Default::default()
+            })
+            .await;
+            let app = crate::build_router(state_with(Some(&host), None).await);
+
+            let response = get(app, "/api/opc/search-index/status?opc_server=Sim.Server").await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_json(response).await;
+            assert_eq!(body["server"], "Sim.Server");
+            assert_eq!(body["state"], expected_state);
+            assert_eq!(body["configured"], true);
+            assert_eq!(body["active_generation"], 7);
+            assert_eq!(body["entry_count"], 12_345);
+            assert_eq!(body["unique_item_count"], 9_876);
+            assert_eq!(body["started_at"], "2026-08-16T10:00:00Z");
+            assert_eq!(body["completed_at"], "2026-08-16T10:05:00Z");
+            assert_eq!(body["database_bytes"], 65_536);
+            assert_eq!(body["organization"], "hierarchical");
+            assert_eq!(body["source"], "da3");
+            assert_eq!(body["progress"]["branches_visited"], 321);
+            assert_eq!(body["progress"]["entries_seen"], 12_345);
+            assert_eq!(body["progress"]["unique_items"], 9_876);
+            assert_eq!(body["progress"]["active_time_ms"], 240_000);
+            assert_eq!(body["progress"]["paused_time_ms"], 60_000);
+            assert_eq!(body["progress"]["items_per_second"], 250.5);
+            assert_eq!(body["progress"]["estimated_remaining_ms"], 30_000);
+            assert_eq!(
+                requests.lock().unwrap().as_slice(),
+                &[opcda_bridge_proto::bridge::GetSearchIndexStatusRequest {
+                    server: "Sim.Server".to_string(),
+                }]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn search_index_returns_exact_matches_status_and_has_more() {
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let host = start_mock_server(MockBridgeService {
+            search_index_response: ProtoSearchIndexResponse {
+                matches: vec![ProtoIndexedSearchMatch {
+                    item_id: "FCS0201!204FI00510.PV".to_string(),
+                    display_name: "PV".to_string(),
+                    kind: ProtoBrowseNodeKind::BranchAndItem as i32,
+                    breadcrumbs: vec!["FCS0201".to_string(), "204FI00510".to_string()],
+                }],
+                has_more: true,
+                status: Some(proto_index_status(ProtoSearchIndexState::Ready)),
+            },
+            search_index_requests: requests.clone(),
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), None).await);
+
+        let response = get(
+            app,
+            "/api/opc/search-index/search?opc_server=Sim.Server&query=204FI00510&match_mode=prefix&max_results=7",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["matches"],
+            serde_json::json!([{
+                "item_id": "FCS0201!204FI00510.PV",
+                "display_name": "PV",
+                "kind": "branch_and_item",
+                "breadcrumbs": ["FCS0201", "204FI00510"],
+            }])
+        );
+        assert_eq!(body["has_more"], true);
+        assert_eq!(body["status"]["state"], "ready");
+
+        let request = &requests.lock().unwrap()[0];
+        assert_eq!(request.server, "Sim.Server");
+        assert_eq!(request.query, "204FI00510");
+        assert_eq!(request.match_mode, ProtoSearchMatchMode::Prefix as i32);
+        assert_eq!(request.max_results, 7);
+    }
+
+    #[tokio::test]
+    async fn search_index_refresh_and_control_forward_actions() {
+        let refresh_requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let control_requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let host = start_mock_server(MockBridgeService {
+            search_index_status_response: proto_index_status(ProtoSearchIndexState::Refreshing),
+            refresh_search_index_requests: refresh_requests.clone(),
+            control_search_index_requests: control_requests.clone(),
+            ..Default::default()
+        })
+        .await;
+
+        let refresh_app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+        let response = post(refresh_app, "/api/opc/search-index/refresh?force=true").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["state"], "refreshing");
+        assert_eq!(
+            refresh_requests.lock().unwrap().as_slice(),
+            &[opcda_bridge_proto::bridge::RefreshSearchIndexRequest {
+                server: "Sim.Server".to_string(),
+                force: true,
+            }]
+        );
+
+        let control_app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+        let response = post(control_app, "/api/opc/search-index/control?action=resume").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["state"], "refreshing");
+        assert_eq!(
+            control_requests.lock().unwrap().as_slice(),
+            &[opcda_bridge_proto::bridge::ControlSearchIndexRequest {
+                server: "Sim.Server".to_string(),
+                action: opcda_bridge_proto::bridge::SearchIndexControlAction::Resume as i32,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn indexed_search_routes_reject_invalid_input_before_connecting() {
+        let cases = [
+            (
+                "/api/opc/search-index/search?query=%20&opc_server=Sim.Server",
+                "search query is required",
+            ),
+            (
+                "/api/opc/search-index/search?query=PV&match_mode=wildcard&opc_server=Sim.Server",
+                "match_mode must be one of",
+            ),
+            (
+                "/api/opc/search-index/search?query=PV&max_results=0&opc_server=Sim.Server",
+                "max_results must be greater than zero",
+            ),
+            (
+                "/api/opc/search-index/control?action=stop&opc_server=Sim.Server",
+                "action must be one of",
+            ),
+        ];
+
+        for (path, expected_error) in cases {
+            let app = crate::build_router(state_with(None, None).await);
+            let response = if path.contains("/control") {
+                post(app, path).await
+            } else {
+                get(app, path).await
+            };
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = body_json(response).await;
+            assert!(body["error"].as_str().unwrap().contains(expected_error));
+        }
+    }
+
+    #[tokio::test]
+    async fn indexed_search_routes_surface_gateway_errors() {
+        let host = start_mock_server(MockBridgeService {
+            search_index_status_error: Some(tonic::Status::internal("status failed")),
+            search_index_error: Some(tonic::Status::internal("search failed")),
+            refresh_search_index_error: Some(tonic::Status::internal("refresh failed")),
+            control_search_index_error: Some(tonic::Status::internal("control failed")),
+            ..Default::default()
+        })
+        .await;
+        let paths = [
+            (
+                "/api/opc/search-index/status?opc_server=Sim.Server",
+                "read OPC search-index status",
+                false,
+            ),
+            (
+                "/api/opc/search-index/search?query=PV&opc_server=Sim.Server",
+                "search the OPC namespace index",
+                false,
+            ),
+            (
+                "/api/opc/search-index/refresh?opc_server=Sim.Server",
+                "refresh the OPC namespace index",
+                true,
+            ),
+            (
+                "/api/opc/search-index/control?action=pause&opc_server=Sim.Server",
+                "control the OPC namespace index",
+                true,
+            ),
+        ];
+
+        for (path, operation, is_post) in paths {
+            let app = crate::build_router(state_with(Some(&host), None).await);
+            let response = if is_post {
+                post(app, path).await
+            } else {
+                get(app, path).await
+            };
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let error = body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert!(error.contains(operation), "{error}");
+            assert!(error.contains("failed"), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn indexed_search_status_reports_an_unsupported_gateway() {
+        let host = start_mock_server(MockBridgeService {
+            search_index_status_error: Some(tonic::Status::new(
+                Code::Unimplemented,
+                "indexed search is unavailable",
+            )),
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), None).await);
+
+        let response = get(app, "/api/opc/search-index/status?opc_server=Sim.Server").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("does not support indexed-search status"));
+        assert!(
+            error.contains("upgrade the OPC DA bridge gateway"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

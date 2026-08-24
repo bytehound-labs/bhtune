@@ -5,8 +5,9 @@ use async_trait::async_trait;
 use crate::{
     error::DriverResult,
     types::{
-        BrowsePage, BrowsePageRequest, DriverCapabilities, SearchEvent, SearchRequest, TagId,
-        TagValue, TagWrite, WriteOutcome,
+        BrowsePage, BrowsePageRequest, DriverCapabilities, SearchEvent, SearchIndexControlAction,
+        SearchIndexRequest, SearchIndexResponse, SearchIndexStatus, SearchRequest, TagId, TagValue,
+        TagWrite, WriteOutcome,
     },
 };
 
@@ -73,6 +74,40 @@ pub trait Driver: Send + Sync {
             operation: "search",
         })
     }
+
+    /// Reports the gateway-owned persistent namespace-index status.
+    async fn search_index_status(&self) -> DriverResult<SearchIndexStatus> {
+        Err(crate::error::DriverError::Unsupported {
+            operation: "indexed-search status",
+        })
+    }
+
+    /// Starts or coalesces a persistent namespace-index refresh.
+    async fn refresh_search_index(&self, _force: bool) -> DriverResult<SearchIndexStatus> {
+        Err(crate::error::DriverError::Unsupported {
+            operation: "indexed-search refresh",
+        })
+    }
+
+    /// Pauses, resumes, or cancels a persistent namespace-index build.
+    async fn control_search_index(
+        &self,
+        _action: SearchIndexControlAction,
+    ) -> DriverResult<SearchIndexStatus> {
+        Err(crate::error::DriverError::Unsupported {
+            operation: "indexed-search control",
+        })
+    }
+
+    /// Queries the gateway-owned persistent namespace index.
+    async fn search_index(
+        &self,
+        _request: SearchIndexRequest,
+    ) -> DriverResult<SearchIndexResponse> {
+        Err(crate::error::DriverError::Unsupported {
+            operation: "indexed search",
+        })
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +161,10 @@ mod tests {
                 supports_search: true,
                 organization: crate::types::NamespaceOrganization::Hierarchical,
                 source: crate::types::BrowseSource::Derived,
+                supports_indexed_search: false,
+                indexed_search_protocol_version: String::new(),
+                max_indexed_search_results: 0,
+                search_index_state: crate::types::SearchIndexState::Unspecified,
             })
         }
 

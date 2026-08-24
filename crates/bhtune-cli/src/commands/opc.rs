@@ -4,11 +4,12 @@
 
 use bhtune_driver::{
     BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, Driver, OpcDaDriver, Quality,
-    SearchEvent, SearchMatch, SearchRequest, TagWrite, close_opcda_browse_session,
+    SearchEvent, SearchIndexControlAction, SearchIndexRequest, SearchIndexResponse,
+    SearchIndexStatus, SearchMatch, SearchRequest, TagWrite, close_opcda_browse_session,
     list_opcda_servers,
 };
 
-use crate::args::{OpcCommand, OpcSearchMatchModeArg};
+use crate::args::{OpcCommand, OpcSearchMatchModeArg, SearchIndexCommand};
 use crate::output::OutputFormat;
 
 pub async fn run(command: OpcCommand, config: &crate::config::BhtuneConfig) -> anyhow::Result<()> {
@@ -106,6 +107,71 @@ pub async fn run_with_output(
                 output,
             )
             .await
+        }
+        OpcCommand::SearchIndex { command } => {
+            run_search_index_command(command, config, output).await
+        }
+    }
+}
+
+async fn run_search_index_command(
+    command: SearchIndexCommand,
+    config: &crate::config::BhtuneConfig,
+    output: OutputFormat,
+) -> anyhow::Result<()> {
+    match command {
+        SearchIndexCommand::Status {
+            bridge_host,
+            server,
+        } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            let server = crate::config::resolve_server(server, config)?;
+            let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
+            let status = driver.search_index_status().await?;
+            print_search_index_status(&status, output)
+        }
+        SearchIndexCommand::Search {
+            bridge_host,
+            server,
+            query,
+            match_mode,
+            max_results,
+        } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            let server = crate::config::resolve_server(server, config)?;
+            let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
+            let response = driver
+                .search_index(SearchIndexRequest::new(
+                    query,
+                    match_mode.into(),
+                    max_results,
+                ))
+                .await?;
+            print_search_index_results(&response, output)
+        }
+        SearchIndexCommand::Refresh {
+            bridge_host,
+            server,
+            force,
+        } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            let server = crate::config::resolve_server(server, config)?;
+            let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
+            let status = driver.refresh_search_index(force).await?;
+            print_search_index_status(&status, output)
+        }
+        SearchIndexCommand::Control {
+            bridge_host,
+            server,
+            action,
+        } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            let server = crate::config::resolve_server(server, config)?;
+            let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
+            let status = driver
+                .control_search_index(SearchIndexControlAction::from(action))
+                .await?;
+            print_search_index_status(&status, output)
         }
     }
 }
@@ -531,6 +597,107 @@ fn json_search_match(found: &SearchMatch) -> serde_json::Value {
                 "display_name": part.display_name,
             })
         }).collect::<Vec<_>>(),
+    })
+}
+
+fn print_search_index_status(
+    status: &SearchIndexStatus,
+    output: OutputFormat,
+) -> anyhow::Result<()> {
+    if output == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_search_index_status(status))?
+        );
+        return Ok(());
+    }
+    println!("Server: {}", status.server);
+    println!("State: {}", status.state);
+    println!("Configured: {}", status.configured);
+    println!("Active generation: {}", status.active_generation);
+    println!("Entries: {}", status.entry_count);
+    println!("Unique items: {}", status.unique_item_count);
+    if let Some(progress) = &status.progress {
+        println!(
+            "Progress: {} entries, {:.1} items/s",
+            progress.entries_seen, progress.items_per_second
+        );
+    }
+    if let Some(error) = &status.last_error {
+        println!("Last error: {error}");
+    }
+    Ok(())
+}
+
+fn print_search_index_results(
+    response: &SearchIndexResponse,
+    output: OutputFormat,
+) -> anyhow::Result<()> {
+    if output == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "matches": response.matches.iter().map(json_indexed_search_match).collect::<Vec<_>>(),
+                "has_more": response.has_more,
+                "status": json_search_index_status(&response.status),
+            }))?
+        );
+        return Ok(());
+    }
+    if response.matches.is_empty() {
+        println!(
+            "No matching tags found (index state: {}).",
+            response.status.state
+        );
+    } else {
+        for found in &response.matches {
+            println!("{}\t{}", found.item_id, found.breadcrumbs.join("/"));
+        }
+    }
+    if response.has_more {
+        eprintln!("More than the requested number of matches exist; refine the query.");
+    }
+    if response.status.state != bhtune_driver::SearchIndexState::Ready {
+        eprintln!(
+            "Search results come from an {} namespace index.",
+            response.status.state
+        );
+    }
+    Ok(())
+}
+
+fn json_search_index_status(status: &SearchIndexStatus) -> serde_json::Value {
+    serde_json::json!({
+        "server": status.server,
+        "state": status.state.to_string(),
+        "configured": status.configured,
+        "active_generation": status.active_generation,
+        "entry_count": status.entry_count,
+        "unique_item_count": status.unique_item_count,
+        "started_at": status.started_at,
+        "completed_at": status.completed_at,
+        "last_error": status.last_error,
+        "database_bytes": status.database_bytes,
+        "organization": format!("{:?}", status.organization).to_lowercase(),
+        "source": format!("{:?}", status.source).to_lowercase(),
+        "progress": status.progress.as_ref().map(|progress| serde_json::json!({
+            "branches_visited": progress.branches_visited,
+            "entries_seen": progress.entries_seen,
+            "unique_items": progress.unique_items,
+            "active_time_ms": progress.active_time_ms,
+            "paused_time_ms": progress.paused_time_ms,
+            "items_per_second": progress.items_per_second,
+            "estimated_remaining_ms": progress.estimated_remaining_ms,
+        })),
+    })
+}
+
+fn json_indexed_search_match(found: &bhtune_driver::IndexedSearchMatch) -> serde_json::Value {
+    serde_json::json!({
+        "item_id": found.item_id,
+        "display_name": found.display_name,
+        "kind": browse_node_kind_name(found.kind),
+        "breadcrumbs": found.breadcrumbs,
     })
 }
 

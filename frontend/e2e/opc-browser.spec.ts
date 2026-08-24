@@ -58,6 +58,51 @@ function browsePage(
   };
 }
 
+function searchIndexStatus(
+  state:
+    | "not_indexed"
+    | "partial"
+    | "ready"
+    | "stale"
+    | "refreshing"
+    | "failed" = "ready",
+) {
+  return {
+    server: "Test.Server",
+    state,
+    configured: true,
+    active_generation: 1,
+    entry_count: 2,
+    unique_item_count: 2,
+    started_at: null,
+    completed_at: "2024-01-15T10:23:45Z",
+    last_error: null,
+    database_bytes: 1024,
+    organization: "hierarchical",
+    source: "da2",
+    progress: null,
+  };
+}
+
+function indexedSearchResponse(
+  matches: {
+    item_id: string;
+    display_name: string;
+    kind: "item" | "branch" | "branch_and_item";
+    breadcrumbs: string[];
+  }[],
+  options: {
+    hasMore?: boolean;
+    state?: Parameters<typeof searchIndexStatus>[0];
+  } = {},
+) {
+  return {
+    matches,
+    has_more: options.hasMore ?? false,
+    status: searchIndexStatus(options.state),
+  };
+}
+
 test.describe("OPC DA server discovery and tag browser (no gateway present)", () => {
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/runs/draft", async (route) => {
@@ -74,6 +119,13 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
           body: route.request().postData() ?? "{}",
         });
       }
+    });
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus()),
+      });
     });
     await page.goto("/runs/new");
     await page.getByLabel("Driver").selectOption("opcda");
@@ -639,21 +691,20 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         }),
       });
     });
-    await page.route("**/api/opc/search**", async (route) => {
-      const match = {
-        breadcrumbs: [
-          { node_key: "simulink", display_name: "Simulink" },
-          {
-            node_key: "statistics",
-            display_name: "Simulink._Statistics",
-          },
-        ],
-        node: browseNode("pv", originalTag, "item", originalTag),
-      };
+    await page.route("**/api/opc/search-index/search**", async (route) => {
       await route.fulfill({
         status: 200,
-        contentType: "text/event-stream",
-        body: `event: match\ndata: ${JSON.stringify(match)}\n\nevent: completed\ndata: ${JSON.stringify({ complete: true, cancelled: false, truncated: false, warning: null })}\n\n`,
+        contentType: "application/json",
+        body: JSON.stringify(
+          indexedSearchResponse([
+            {
+              item_id: originalTag,
+              display_name: originalTag,
+              kind: "item",
+              breadcrumbs: ["Simulink", "Simulink._Statistics"],
+            },
+          ]),
+        ),
       });
     });
     await page.route("**/api/opc/browse**", async (route) => {
@@ -699,6 +750,165 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .poll(() => treeViewport.evaluate((element) => element.scrollTop))
       .toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: "Collapse" })).toHaveCount(2);
+  });
+
+  test("provides debounced indexed search with keyboard selection and exact ItemIDs", async ({
+    page,
+  }) => {
+    const queries: Array<{ query: string; mode: string }> = [];
+    const selectedItemId = "FCS0202!204FI00510.PV";
+    const readTags: string[] = [];
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          browsePage([browseNode("root", "FCS0201", "branch")]),
+        ),
+      });
+    });
+    await page.route("**/api/opc/read**", async (route) => {
+      const url = new URL(route.request().url());
+      readTags.push(url.searchParams.get("tag") ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: selectedItemId,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/search-index/search**", async (route) => {
+      const url = new URL(route.request().url());
+      const query = url.searchParams.get("query") ?? "";
+      queries.push({
+        query,
+        mode: url.searchParams.get("match_mode") ?? "",
+      });
+      if (query === "fc") await page.waitForTimeout(300);
+      const matches =
+        query === "fcs"
+          ? [
+              {
+                item_id: "FCS0201!204FI00510.PV",
+                display_name: "204FI00510.PV",
+                kind: "item" as const,
+                breadcrumbs: ["FCS0201"],
+              },
+              {
+                item_id: selectedItemId,
+                display_name: "204FI00510.PV",
+                kind: "item" as const,
+                breadcrumbs: ["FCS0202"],
+              },
+            ]
+          : [
+              {
+                item_id: "FCS0201!204FI00510.PV",
+                display_name: "204FI00510.PV",
+                kind: "item" as const,
+                breadcrumbs: ["FCS0201"],
+              },
+            ];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(indexedSearchResponse(matches)),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    const search = page.getByLabel("Search OPC tags");
+    await search.fill("f");
+    await page.waitForTimeout(250);
+    expect(queries).toEqual([]);
+
+    await search.fill("fc");
+    await expect
+      .poll(() => queries.some(({ query }) => query === "fc"))
+      .toBe(true);
+    await search.fill("fcs");
+    await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(2);
+    expect(queries).toEqual(
+      expect.arrayContaining([
+        { query: "fc", mode: "prefix" },
+        { query: "fcs", mode: "contains" },
+      ]),
+    );
+    expect(queries.some(({ query }) => query === "f")).toBe(false);
+
+    await search.press("ArrowDown");
+    await search.press("Enter");
+    await expect(
+      page.getByText(`Selected: ${selectedItemId}`, { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Select tag" }).click();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(
+      "FCS0202!204FI00510.Inp_PV",
+    );
+    expect(readTags).toEqual([selectedItemId]);
+  });
+
+  test("refreshes the indexed namespace without turning status into an error", async ({
+    page,
+  }) => {
+    let statusCalls = 0;
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      statusCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          searchIndexStatus(
+            statusCalls < 2
+              ? "ready"
+              : statusCalls === 2
+                ? "refreshing"
+                : "ready",
+          ),
+        ),
+      });
+    });
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+    await page.route(/search-index\/refresh/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("refreshing")),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await page.getByRole("button", { name: "Refresh index" }).click();
+    await expect(page.getByText("Index: refreshing")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Refresh index" }),
+    ).toBeDisabled();
+    await expect(page.getByText("Index: ready")).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(
+      page.getByRole("button", { name: "Refresh index" }),
+    ).toBeEnabled();
+    await expect(
+      page.getByText("Unable to refresh the tag index."),
+    ).not.toBeVisible();
   });
 
   test("warns before selecting a tag whose OPC quality is not Good", async ({

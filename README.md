@@ -93,12 +93,13 @@ library from crates.io:
 
 ```toml
 [dependencies]
-opcda-bridge = "0.3"
+opcda-bridge = "0.4"
 ```
 
 The library communicates with the separate Windows-side
 [`opcda-bridge-gateway`](https://crates.io/crates/opcda-bridge-gateway) process over the network.
-BHTune requires the session-aware browse/search contract introduced by gateway 0.3.2 or newer.
+BHTune requires gateway 0.4.0 or newer for the session-aware browse and persistent indexed-search
+contract.
 The dependency is kept local to `bhtune-driver`; all other crates use the protocol-neutral
 `Driver` trait.
 
@@ -110,11 +111,12 @@ splitting `.`, `!`, or `/`, which is essential for namespaces such as
 `FCS0201!204FI00510.PV`. Nodes that are both branches and items remain both expandable and
 selectable.
 
-The browser also exposes gateway capabilities and bounded namespace search. Search results
-arrive progressively with breadcrumbs, exact ItemIDs, completion/truncation metadata, and
-warnings when a gateway visit limit prevents an authoritative result. Browse sessions are
-closed when the modal exits, and reopening it reveals and scrolls to the saved selection when
-the gateway can resolve its path.
+The browser also exposes gateway capabilities and persistent indexed namespace search. Warm
+searches are bounded unary requests against the gateway-owned index, with ranked matches,
+breadcrumbs, exact ItemIDs, `has_more`, and explicit index state/progress. Search never downloads
+the complete namespace into the browser and never falls back to the slow live traversal search.
+Browse sessions are closed when the modal exits, and reopening it reveals and scrolls to the saved
+selection when the gateway can resolve its path.
 
 With a template selected, confirming a tag selection replaces its final component with that
 template's process-variable suffix before writing the value into the Tag name field.
@@ -129,9 +131,10 @@ Reopening the browser automatically expands the available path to the current Ta
 that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
 level.
 The diagnostic CLI exposes the bounded operations through `bhtune opc servers`, `browse`, and
-`search`; `bhtune opc browse --all` explicitly drains continuation pages instead of silently
-downloading an entire namespace. A browse session remains available for continuation after the
-command exits; release it explicitly with `bhtune opc close <session-id>`.
+live `search`; `bhtune opc search-index status|search|refresh|control` manages and queries the
+persistent index. `bhtune opc browse --all` explicitly drains continuation pages instead of
+silently downloading an entire namespace. A browse session remains available for continuation
+after the command exits; release it explicitly with `bhtune opc close <session-id>`.
 
 The New tune form's collapsible **Loop mapping** section is the single place to inspect and
 adjust the effective mapping. Every row shows its effective value and source. Tag mappings use
@@ -236,9 +239,11 @@ built-in defaults; `POST /api/runs`/
 `PUT`/`DELETE /api/runs/{id}/notes` to edit or clear operator notes while a run is active or
 after it finishes. Multiple tune runs can execute concurrently; PID writes and reverts remain
 exclusive so they cannot overlap an active tune;
-and `GET /api/opc/servers`/`GET /api/opc/browse`/`GET /api/opc/read` for read-only OPC DA
-server discovery, tag-tree browsing, and a live single-tag read — using the same SQLite
-database and config precedence as the CLI. The full API contract is described by an OpenAPI
+and `GET /api/opc/servers`/`GET /api/opc/capabilities`/`GET /api/opc/browse`/
+`GET /api/opc/read` plus the indexed-search status/search/refresh/control endpoints for
+read-only OPC DA discovery, tag-tree browsing, live single-tag reads, and gateway index
+management — using the same SQLite database and config precedence as the CLI. The full API contract
+is described by an OpenAPI
 3.1 document, served as raw JSON at `GET /api/openapi.json` and as interactive documentation
 at `/api/docs`
 (a [Scalar](https://scalar.com/) UI — try it in a browser, or point any OpenAPI-aware tool at

@@ -11,9 +11,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
 use opcda_bridge_proto::bridge::{
-    BrowsePage, BrowseRequest, CloseBrowseSessionRequest, GetCapabilitiesRequest,
-    GetCapabilitiesResponse, ListServersRequest, ListServersResponse, ReadRequest, ReadResponse,
-    SearchEvent, SearchRequest, WriteRequest, WriteResponse,
+    BrowsePage, BrowseRequest, CloseBrowseSessionRequest, ControlSearchIndexRequest,
+    GetCapabilitiesRequest, GetCapabilitiesResponse, GetSearchIndexStatusRequest,
+    ListServersRequest, ListServersResponse, ReadRequest, ReadResponse, RefreshSearchIndexRequest,
+    SearchEvent, SearchIndexResponse, SearchIndexStatus, SearchRequest, WriteRequest,
+    WriteResponse,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -28,6 +30,8 @@ pub(crate) struct MockBridgeService {
     pub(crate) list_servers_response: ListServersResponse,
     pub(crate) capabilities_response: GetCapabilitiesResponse,
     pub(crate) search_events: Vec<SearchEvent>,
+    pub(crate) search_index_status_response: SearchIndexStatus,
+    pub(crate) search_index_response: SearchIndexResponse,
     pub(crate) search_error: Option<Status>,
     /// Once the `read` RPC has been called this many times (1-based) or more, it fails with
     /// a gRPC error instead of returning `read_response` — lets a test simulate a bridge
@@ -51,14 +55,19 @@ impl Default for MockBridgeService {
             },
             list_servers_response: ListServersResponse::default(),
             capabilities_response: GetCapabilitiesResponse {
-                application_version: "0.3.2".to_string(),
+                application_version: "0.4.0".to_string(),
                 protocol_version: "2".to_string(),
                 max_page_size: 1000,
                 supports_browse_sessions: true,
                 supports_search: true,
+                supports_indexed_search: true,
+                indexed_search_protocol_version: "1".to_string(),
+                max_indexed_search_results: 50,
                 ..Default::default()
             },
             search_events: Vec::new(),
+            search_index_status_response: SearchIndexStatus::default(),
+            search_index_response: SearchIndexResponse::default(),
             search_error: None,
             fail_read_from_call: None,
             read_calls: Arc::new(AtomicU32::new(0)),
@@ -125,6 +134,34 @@ impl Bridge for MockBridgeService {
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn get_search_index_status(
+        &self,
+        _request: Request<GetSearchIndexStatusRequest>,
+    ) -> Result<Response<SearchIndexStatus>, Status> {
+        Ok(Response::new(self.search_index_status_response.clone()))
+    }
+
+    async fn refresh_search_index(
+        &self,
+        _request: Request<RefreshSearchIndexRequest>,
+    ) -> Result<Response<SearchIndexStatus>, Status> {
+        Ok(Response::new(self.search_index_status_response.clone()))
+    }
+
+    async fn control_search_index(
+        &self,
+        _request: Request<ControlSearchIndexRequest>,
+    ) -> Result<Response<SearchIndexStatus>, Status> {
+        Ok(Response::new(self.search_index_status_response.clone()))
+    }
+
+    async fn search_index(
+        &self,
+        _request: Request<opcda_bridge_proto::bridge::SearchIndexRequest>,
+    ) -> Result<Response<SearchIndexResponse>, Status> {
+        Ok(Response::new(self.search_index_response.clone()))
     }
 
     async fn read(&self, _request: Request<ReadRequest>) -> Result<Response<ReadResponse>, Status> {

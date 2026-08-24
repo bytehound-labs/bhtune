@@ -1,0 +1,40 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc-search-index-search 1  "bhtune-opc-search-index-search "
+.SH NAME
+bhtune\-opc\-search\-index\-search \- Search the persistent namespace index without traversing the live OPC tree
+.SH SYNOPSIS
+\fBbhtune\-opc\-search\-index\-search\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-match\-mode\fR] [\fB\-\-max\-results\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIQUERY\fR>
+.SH DESCRIPTION
+Search the persistent namespace index without traversing the live OPC tree
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+
+.TP
+\fB\-\-server\fR \fI<SERVER>\fR
+
+.TP
+\fB\-\-match\-mode\fR \fI<MATCH_MODE>\fR [default: contains]
+How the query should match
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+exact
+.IP \(bu 2
+prefix
+.IP \(bu 2
+contains
+.RE
+.TP
+\fB\-\-max\-results\fR \fI<MAX_RESULTS>\fR [default: 50]
+Maximum number of matches
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIQUERY\fR>
+Text to find in indexed node labels/item IDs

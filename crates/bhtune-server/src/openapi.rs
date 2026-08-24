@@ -49,6 +49,10 @@ use crate::routes::{config, draft, health, history, opc, runs, stream, templates
         opc::browse,
         opc::close_browse_session,
         opc::search,
+        opc::search_index_status,
+        opc::search_index,
+        opc::refresh_search_index,
+        opc::control_search_index,
         opc::read,
     ),
     components(schemas(
@@ -78,6 +82,10 @@ use crate::routes::{config, draft, health, history, opc, runs, stream, templates
         opc::OpcBrowseNodeResponse,
         opc::OpcBrowseResponse,
         opc::OpcCloseBrowseSessionResponse,
+        opc::OpcIndexedSearchProgressResponse,
+        opc::OpcSearchIndexStatusResponse,
+        opc::OpcIndexedSearchMatchResponse,
+        opc::OpcSearchIndexResponse,
         opc::OpcReadResponse,
         ErrorBody,
     )),
@@ -86,7 +94,7 @@ use crate::routes::{config, draft, health, history, opc, runs, stream, templates
         (name = "templates", description = "DCS/PLC template catalog (built-in, community-catalog, and user-created)"),
         (name = "runs", description = "Start, cancel, and browse the history of tune runs"),
         (name = "config", description = "Global TOML-backed configuration"),
-        (name = "opc", description = "Read-only OPC DA server/tag diagnostics: server discovery, tag-tree browsing, and single-tag reads"),
+        (name = "opc", description = "OPC DA server/tag diagnostics and gateway-owned namespace search"),
     ),
 )]
 pub struct ApiDoc;
@@ -107,5 +115,37 @@ mod tests {
         let spec = ApiDoc::openapi();
         let json = spec.to_json().expect("spec must serialize to JSON");
         assert!(json.contains("\"title\":\"BHTune API\""));
+    }
+
+    #[test]
+    fn generated_spec_includes_indexed_search_routes_and_schemas() {
+        let spec = ApiDoc::openapi();
+        let document: serde_json::Value =
+            serde_json::from_str(&spec.to_json().expect("spec must serialize to JSON"))
+                .expect("generated spec must be valid JSON");
+
+        for (path, method) in [
+            ("/api/opc/search-index/status", "get"),
+            ("/api/opc/search-index/search", "get"),
+            ("/api/opc/search-index/refresh", "post"),
+            ("/api/opc/search-index/control", "post"),
+        ] {
+            assert!(
+                document["paths"][path][method].is_object(),
+                "missing {method} {path}"
+            );
+        }
+
+        for schema in [
+            "OpcIndexedSearchProgressResponse",
+            "OpcSearchIndexStatusResponse",
+            "OpcIndexedSearchMatchResponse",
+            "OpcSearchIndexResponse",
+        ] {
+            assert!(
+                document["components"]["schemas"][schema].is_object(),
+                "missing schema {schema}"
+            );
+        }
     }
 }

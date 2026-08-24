@@ -18,7 +18,7 @@ async-trait = "0.1"
 # through the `Driver` trait instead -- so this stays local rather than promoted to
 # `[workspace.dependencies]`, matching the single-consumer convention already used for
 # `async-trait` above.
-opcda-bridge = "0.3"
+opcda-bridge = "0.4"
 tonic = "0.14"
 # Needed for `tokio::sync::Mutex`: `opcda_bridge::Client`'s methods take `&mut self` (it
 # buffers per-call gRPC codec state), but `Driver`'s methods take `&self` (required so a
@@ -62,5 +62,5 @@ bhtune-core.workspace = true
 # against, and the generated `tonic`/`prost` types on both sides of that connection (the mock
 # service here, `opcda_bridge::Client`'s generated stub on the other) must agree on the exact
 # wire types or they won't type-check against each other.
-opcda-bridge-proto = "0.3"
+opcda-bridge-proto = "0.4"
 tokio-stream = "0.1"

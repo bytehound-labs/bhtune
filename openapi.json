@@ -473,6 +473,241 @@
         }
       }
     },
+    "/api/opc/search-index/control": {
+      "post": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "control_search_index",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The control action or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/refresh": {
+      "post": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "refresh_search_index",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The refresh request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/search": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "search_index",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "match_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The indexed-search request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/status": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "summary": "Return the persistent namespace-index status for one OPC DA server.",
+        "operationId": "search_index_status",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The bridge or OPC server could not be reached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/opc/servers": {
       "get": {
         "tags": [
@@ -2410,11 +2645,23 @@
           "supports_browse_sessions",
           "supports_search",
           "organization",
-          "source"
+          "source",
+          "supports_indexed_search",
+          "indexed_search_protocol_version",
+          "max_indexed_search_results",
+          "search_index_state"
         ],
         "properties": {
           "application_version": {
             "type": "string"
+          },
+          "indexed_search_protocol_version": {
+            "type": "string"
+          },
+          "max_indexed_search_results": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           },
           "max_page_size": {
             "type": "integer",
@@ -2427,10 +2674,16 @@
           "protocol_version": {
             "type": "string"
           },
+          "search_index_state": {
+            "type": "string"
+          },
           "source": {
             "type": "string"
           },
           "supports_browse_sessions": {
+            "type": "boolean"
+          },
+          "supports_indexed_search": {
             "type": "boolean"
           },
           "supports_search": {
@@ -2446,6 +2699,82 @@
         "properties": {
           "closed": {
             "type": "boolean"
+          }
+        }
+      },
+      "OpcIndexedSearchMatchResponse": {
+        "type": "object",
+        "required": [
+          "item_id",
+          "display_name",
+          "kind",
+          "breadcrumbs"
+        ],
+        "properties": {
+          "breadcrumbs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OpcBrowseNodeKind"
+          }
+        }
+      },
+      "OpcIndexedSearchProgressResponse": {
+        "type": "object",
+        "required": [
+          "branches_visited",
+          "entries_seen",
+          "unique_items",
+          "active_time_ms",
+          "paused_time_ms",
+          "items_per_second"
+        ],
+        "properties": {
+          "active_time_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "branches_visited": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "entries_seen": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "estimated_remaining_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "items_per_second": {
+            "type": "number",
+            "format": "double"
+          },
+          "paused_time_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unique_items": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -2474,6 +2803,107 @@
           },
           "value": {
             "type": "string"
+          }
+        }
+      },
+      "OpcSearchIndexResponse": {
+        "type": "object",
+        "required": [
+          "matches",
+          "has_more",
+          "status"
+        ],
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpcIndexedSearchMatchResponse"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+          }
+        }
+      },
+      "OpcSearchIndexStatusResponse": {
+        "type": "object",
+        "required": [
+          "server",
+          "state",
+          "configured",
+          "active_generation",
+          "entry_count",
+          "unique_item_count",
+          "database_bytes",
+          "organization",
+          "source"
+        ],
+        "properties": {
+          "active_generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "database_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "entry_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organization": {
+            "type": "string"
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OpcIndexedSearchProgressResponse"
+              }
+            ]
+          },
+          "server": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "unique_item_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -3451,7 +3881,7 @@
     },
     {
       "name": "opc",
-      "description": "Read-only OPC DA server/tag diagnostics: server discovery, tag-tree browsing, and single-tag reads"
+      "description": "OPC DA server/tag diagnostics and gateway-owned namespace search"
     }
   ]
 }

@@ -164,7 +164,7 @@ libc = "0.2"
 # `smoke_tests` module. Pinned to the exact same versions that module (and `opcda-bridge`
 # itself) use, for the same reason: the mock service's generated `tonic`/`prost` types must
 # agree on the wire format with `opcda_bridge::Client`'s generated stub on the other end.
-opcda-bridge-proto = "0.3"
+opcda-bridge-proto = "0.4"
 tonic = "0.14"
 tokio-stream = "0.1"
 

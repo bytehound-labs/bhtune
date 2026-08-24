@@ -26,6 +26,11 @@ This document contains the help content for the `bhtune` command-line program.
 * [`bhtune opc browse`↴](#bhtune-opc-browse)
 * [`bhtune opc close`↴](#bhtune-opc-close)
 * [`bhtune opc search`↴](#bhtune-opc-search)
+* [`bhtune opc search-index`↴](#bhtune-opc-search-index)
+* [`bhtune opc search-index status`↴](#bhtune-opc-search-index-status)
+* [`bhtune opc search-index search`↴](#bhtune-opc-search-index-search)
+* [`bhtune opc search-index refresh`↴](#bhtune-opc-search-index-refresh)
+* [`bhtune opc search-index control`↴](#bhtune-opc-search-index-control)
 
 ## `bhtune`
 
@@ -477,6 +482,7 @@ Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassi
 * `browse` — Browse one bounded page of tags. Without a session, lists the root level
 * `close` — Explicitly release a gateway browse session returned by `opc browse`
 * `search` — Search the OPC DA namespace without downloading the whole tree
+* `search-index` — Query and manage the gateway's persistent namespace search index
 
 ###### **Options:**
 
@@ -604,6 +610,94 @@ Search the OPC DA namespace without downloading the whole tree
 * `--scope-node-key <SCOPE_NODE_KEY>` — Opaque node key limiting the search scope
 * `--include-branches` — Include branch nodes as search results
 * `--refresh` — Ask the gateway to refresh its namespace view
+
+
+
+## `bhtune opc search-index`
+
+Query and manage the gateway's persistent namespace search index
+
+**Usage:** `bhtune opc search-index <COMMAND>`
+
+###### **Subcommands:**
+
+* `status` — Show persistent namespace-index status
+* `search` — Search the persistent namespace index without traversing the live OPC tree
+* `refresh` — Start or coalesce a persistent namespace-index refresh
+* `control` — Pause, resume, or cancel a persistent namespace-index build
+
+
+
+## `bhtune opc search-index status`
+
+Show persistent namespace-index status
+
+**Usage:** `bhtune opc search-index status [OPTIONS]`
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>`
+* `--server <SERVER>`
+
+
+
+## `bhtune opc search-index search`
+
+Search the persistent namespace index without traversing the live OPC tree
+
+**Usage:** `bhtune opc search-index search [OPTIONS] <QUERY>`
+
+###### **Arguments:**
+
+* `<QUERY>` — Text to find in indexed node labels/item IDs
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>`
+* `--server <SERVER>`
+* `--match-mode <MATCH_MODE>` — How the query should match
+
+  Default value: `contains`
+
+  Possible values: `exact`, `prefix`, `contains`
+
+* `--max-results <MAX_RESULTS>` — Maximum number of matches
+
+  Default value: `50`
+
+
+
+## `bhtune opc search-index refresh`
+
+Start or coalesce a persistent namespace-index refresh
+
+**Usage:** `bhtune opc search-index refresh [OPTIONS]`
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>`
+* `--server <SERVER>`
+* `--force` — Start a refresh even when the active index is already current
+
+
+
+## `bhtune opc search-index control`
+
+Pause, resume, or cancel a persistent namespace-index build
+
+**Usage:** `bhtune opc search-index control [OPTIONS] <ACTION>`
+
+###### **Arguments:**
+
+* `<ACTION>`
+
+  Possible values: `pause`, `resume`, `cancel`
+
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>`
+* `--server <SERVER>`
 
 
 

@@ -1,6 +1,7 @@
 //! Plain data types moved across the [`crate::Driver`] trait boundary.
 
 use chrono::{DateTime, Utc};
+use std::fmt;
 
 /// An identifier for one tag/item a [`crate::Driver`] knows how to read or write. For OPC
 /// DA this is the fully-qualified item name (e.g. `"Area1.LIC101.PV"`, matching
@@ -153,6 +154,10 @@ pub struct DriverCapabilities {
     pub supports_search: bool,
     pub organization: NamespaceOrganization,
     pub source: BrowseSource,
+    pub supports_indexed_search: bool,
+    pub indexed_search_protocol_version: String,
+    pub max_indexed_search_results: u32,
+    pub search_index_state: SearchIndexState,
 }
 
 /// One child returned by a browse page.
@@ -245,6 +250,112 @@ pub enum SearchMatchMode {
     Exact,
     Prefix,
     Contains,
+}
+
+/// Readiness of a gateway-owned persistent namespace index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchIndexState {
+    Unspecified,
+    NotIndexed,
+    Partial,
+    Ready,
+    Stale,
+    Refreshing,
+    Failed,
+}
+
+impl SearchIndexState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::NotIndexed => "not_indexed",
+            Self::Partial => "partial",
+            Self::Ready => "ready",
+            Self::Stale => "stale",
+            Self::Refreshing => "refreshing",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl fmt::Display for SearchIndexState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Operator action applied to an active namespace-index build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchIndexControlAction {
+    Pause,
+    Resume,
+    Cancel,
+}
+
+/// Parameters for one persistent-index query. The connected driver supplies its configured
+/// OPC DA server, just as it does for [`SearchRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchIndexRequest {
+    pub query: String,
+    pub match_mode: SearchMatchMode,
+    pub max_results: u32,
+}
+
+impl SearchIndexRequest {
+    pub fn new(query: impl Into<String>, match_mode: SearchMatchMode, max_results: u32) -> Self {
+        Self {
+            query: query.into(),
+            match_mode,
+            max_results,
+        }
+    }
+}
+
+/// Progress reported for a running persistent namespace inventory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexedSearchProgress {
+    pub branches_visited: u64,
+    pub entries_seen: u64,
+    pub unique_items: u64,
+    pub active_time_ms: u64,
+    pub paused_time_ms: u64,
+    pub items_per_second: f64,
+    pub estimated_remaining_ms: Option<u64>,
+}
+
+/// Persistent namespace-index state and build metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchIndexStatus {
+    pub server: String,
+    pub state: SearchIndexState,
+    pub configured: bool,
+    pub active_generation: u64,
+    pub entry_count: u64,
+    pub unique_item_count: u64,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub last_error: Option<String>,
+    pub database_bytes: u64,
+    pub organization: NamespaceOrganization,
+    pub source: BrowseSource,
+    pub progress: Option<IndexedSearchProgress>,
+}
+
+/// One selectable result from the persistent namespace index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedSearchMatch {
+    pub item_id: String,
+    pub display_name: String,
+    pub kind: BrowseNodeKind,
+    pub breadcrumbs: Vec<String>,
+}
+
+/// Ranked persistent-index matches plus snapshot readiness metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchIndexResponse {
+    pub matches: Vec<IndexedSearchMatch>,
+    pub has_more: bool,
+    pub status: SearchIndexStatus,
 }
 
 /// Parameters for a bounded namespace search.

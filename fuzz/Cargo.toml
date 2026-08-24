@@ -12,7 +12,7 @@ libfuzzer-sys = "0.4"
 bhtune-cli = { path = "../crates/bhtune-cli" }
 bhtune-core = { path = "../crates/bhtune-core" }
 bhtune-driver = { path = "../crates/bhtune-driver" }
-opcda-bridge = "0.3"
+opcda-bridge = "0.4"
 
 [[bin]]
 name = "config"

@@ -40,11 +40,14 @@ pub(crate) async fn in_memory_state() -> AppState {
 pub(crate) mod mock_bridge {
     use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
     use opcda_bridge_proto::bridge::{
-        BrowsePage, BrowseRequest, CloseBrowseSessionRequest, GetCapabilitiesRequest,
-        GetCapabilitiesResponse, ListServersRequest, ListServersResponse, ReadRequest,
-        ReadResponse, SearchEvent, SearchRequest, WriteRequest, WriteResponse,
+        BrowsePage, BrowseRequest, CloseBrowseSessionRequest, ControlSearchIndexRequest,
+        GetCapabilitiesRequest, GetCapabilitiesResponse, GetSearchIndexStatusRequest,
+        ListServersRequest, ListServersResponse, ReadRequest, ReadResponse,
+        RefreshSearchIndexRequest, SearchEvent, SearchIndexResponse, SearchIndexStatus,
+        SearchRequest, WriteRequest, WriteResponse,
     };
     use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
     use tonic::transport::Server;
     use tonic::{Request, Response, Status};
@@ -58,6 +61,17 @@ pub(crate) mod mock_bridge {
         pub(crate) capabilities_error: Option<Status>,
         pub(crate) search_events: Vec<SearchEvent>,
         pub(crate) search_error: Option<Status>,
+        pub(crate) search_index_status_response: SearchIndexStatus,
+        pub(crate) search_index_status_error: Option<Status>,
+        pub(crate) search_index_status_requests: Arc<Mutex<Vec<GetSearchIndexStatusRequest>>>,
+        pub(crate) search_index_response: SearchIndexResponse,
+        pub(crate) search_index_error: Option<Status>,
+        pub(crate) search_index_requests:
+            Arc<Mutex<Vec<opcda_bridge_proto::bridge::SearchIndexRequest>>>,
+        pub(crate) refresh_search_index_error: Option<Status>,
+        pub(crate) refresh_search_index_requests: Arc<Mutex<Vec<RefreshSearchIndexRequest>>>,
+        pub(crate) control_search_index_error: Option<Status>,
+        pub(crate) control_search_index_requests: Arc<Mutex<Vec<ControlSearchIndexRequest>>>,
         pub(crate) read_response: ReadResponse,
         pub(crate) read_error: Option<Status>,
         pub(crate) write_response: WriteResponse,
@@ -75,16 +89,29 @@ pub(crate) mod mock_bridge {
                 },
                 browse_error: None,
                 capabilities_response: GetCapabilitiesResponse {
-                    application_version: "0.3.2".to_string(),
+                    application_version: "0.4.0".to_string(),
                     protocol_version: "2".to_string(),
                     max_page_size: 1000,
                     supports_browse_sessions: true,
                     supports_search: true,
+                    supports_indexed_search: true,
+                    indexed_search_protocol_version: "1".to_string(),
+                    max_indexed_search_results: 50,
                     ..Default::default()
                 },
                 capabilities_error: None,
                 search_events: Vec::new(),
                 search_error: None,
+                search_index_status_response: SearchIndexStatus::default(),
+                search_index_status_error: None,
+                search_index_status_requests: Arc::new(Mutex::new(Vec::new())),
+                search_index_response: SearchIndexResponse::default(),
+                search_index_error: None,
+                search_index_requests: Arc::new(Mutex::new(Vec::new())),
+                refresh_search_index_error: None,
+                refresh_search_index_requests: Arc::new(Mutex::new(Vec::new())),
+                control_search_index_error: None,
+                control_search_index_requests: Arc::new(Mutex::new(Vec::new())),
                 read_response: ReadResponse::default(),
                 read_error: None,
                 write_response: WriteResponse::default(),
@@ -151,6 +178,62 @@ pub(crate) mod mock_bridge {
                 }
             });
             Ok(Response::new(ReceiverStream::new(rx)))
+        }
+
+        async fn get_search_index_status(
+            &self,
+            request: Request<GetSearchIndexStatusRequest>,
+        ) -> Result<Response<SearchIndexStatus>, Status> {
+            self.search_index_status_requests
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            if let Some(status) = self.search_index_status_error.clone() {
+                return Err(status);
+            }
+            Ok(Response::new(self.search_index_status_response.clone()))
+        }
+
+        async fn refresh_search_index(
+            &self,
+            request: Request<RefreshSearchIndexRequest>,
+        ) -> Result<Response<SearchIndexStatus>, Status> {
+            self.refresh_search_index_requests
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            if let Some(status) = self.refresh_search_index_error.clone() {
+                return Err(status);
+            }
+            Ok(Response::new(self.search_index_status_response.clone()))
+        }
+
+        async fn control_search_index(
+            &self,
+            request: Request<ControlSearchIndexRequest>,
+        ) -> Result<Response<SearchIndexStatus>, Status> {
+            self.control_search_index_requests
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            if let Some(status) = self.control_search_index_error.clone() {
+                return Err(status);
+            }
+            Ok(Response::new(self.search_index_status_response.clone()))
+        }
+
+        async fn search_index(
+            &self,
+            request: Request<opcda_bridge_proto::bridge::SearchIndexRequest>,
+        ) -> Result<Response<SearchIndexResponse>, Status> {
+            self.search_index_requests
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            if let Some(status) = self.search_index_error.clone() {
+                return Err(status);
+            }
+            Ok(Response::new(self.search_index_response.clone()))
         }
 
         async fn read(

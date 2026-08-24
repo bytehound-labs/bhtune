@@ -130,6 +130,71 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/opc/search-index/control": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["control_search_index"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["refresh_search_index"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["search_index"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Return the persistent namespace-index status for one OPC DA server. */
+    get: operations["search_index_status"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/opc/servers": {
     parameters: {
       query?: never;
@@ -817,16 +882,43 @@ export interface components {
     };
     OpcCapabilitiesResponse: {
       application_version: string;
+      indexed_search_protocol_version: string;
+      /** Format: int32 */
+      max_indexed_search_results: number;
       /** Format: int32 */
       max_page_size: number;
       organization: string;
       protocol_version: string;
+      search_index_state: string;
       source: string;
       supports_browse_sessions: boolean;
+      supports_indexed_search: boolean;
       supports_search: boolean;
     };
     OpcCloseBrowseSessionResponse: {
       closed: boolean;
+    };
+    OpcIndexedSearchMatchResponse: {
+      breadcrumbs: string[];
+      display_name: string;
+      item_id: string;
+      kind: components["schemas"]["OpcBrowseNodeKind"];
+    };
+    OpcIndexedSearchProgressResponse: {
+      /** Format: int64 */
+      active_time_ms: number;
+      /** Format: int64 */
+      branches_visited: number;
+      /** Format: int64 */
+      entries_seen: number;
+      /** Format: int64 */
+      estimated_remaining_ms?: number | null;
+      /** Format: double */
+      items_per_second: number;
+      /** Format: int64 */
+      paused_time_ms: number;
+      /** Format: int64 */
+      unique_items: number;
     };
     /**
      * @description Response body of `GET /api/opc/read`.
@@ -851,6 +943,31 @@ export interface components {
        */
       timestamp?: string | null;
       value: string;
+    };
+    OpcSearchIndexResponse: {
+      has_more: boolean;
+      matches: components["schemas"]["OpcIndexedSearchMatchResponse"][];
+      status: components["schemas"]["OpcSearchIndexStatusResponse"];
+    };
+    OpcSearchIndexStatusResponse: {
+      /** Format: int64 */
+      active_generation: number;
+      completed_at?: string | null;
+      configured: boolean;
+      /** Format: int64 */
+      database_bytes: number;
+      /** Format: int64 */
+      entry_count: number;
+      last_error?: string | null;
+      organization: string;
+      progress?:
+        null | components["schemas"]["OpcIndexedSearchProgressResponse"];
+      server: string;
+      source: string;
+      started_at?: string | null;
+      state: string;
+      /** Format: int64 */
+      unique_item_count: number;
     };
     /** @description Response body of `GET /api/opc/servers`. */
     OpcServersResponse: {
@@ -1607,6 +1724,135 @@ export interface operations {
         content?: never;
       };
       /** @description The search request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  control_search_index: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        action: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The control action or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  refresh_search_index: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+        force?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The refresh request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  search_index: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        query: string;
+        match_mode?: string;
+        max_results?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexResponse"];
+        };
+      };
+      /** @description The indexed-search request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  search_index_status: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The bridge or OPC server could not be reached. */
       400: {
         headers: {
           [name: string]: unknown;

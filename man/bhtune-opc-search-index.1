@@ -1,0 +1,29 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc-search-index 1  "bhtune-opc-search-index "
+.SH NAME
+bhtune\-opc\-search\-index \- Query and manage the gateway\*(Aqs persistent namespace search index
+.SH SYNOPSIS
+\fBbhtune\-opc\-search\-index\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Query and manage the gateway\*(Aqs persistent namespace search index
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+bhtune\-opc\-search\-index\-status(1)
+Show persistent namespace\-index status
+.TP
+bhtune\-opc\-search\-index\-search(1)
+Search the persistent namespace index without traversing the live OPC tree
+.TP
+bhtune\-opc\-search\-index\-refresh(1)
+Start or coalesce a persistent namespace\-index refresh
+.TP
+bhtune\-opc\-search\-index\-control(1)
+Pause, resume, or cancel a persistent namespace\-index build
+.TP
+bhtune\-opc\-search\-index\-help(1)
+Print this message or the help of the given subcommand(s)

@@ -8,6 +8,12 @@ export type OpcTagNodeResponse = components["schemas"]["OpcBrowseNodeResponse"];
 export type OpcBrowseResponse = components["schemas"]["OpcBrowseResponse"];
 export type OpcReadResponse = components["schemas"]["OpcReadResponse"];
 export type OpcServersResponse = components["schemas"]["OpcServersResponse"];
+export type OpcSearchIndexStatusResponse =
+  components["schemas"]["OpcSearchIndexStatusResponse"];
+export type OpcIndexedSearchMatchResponse =
+  components["schemas"]["OpcIndexedSearchMatchResponse"];
+export type OpcSearchIndexResponse =
+  components["schemas"]["OpcSearchIndexResponse"];
 export type OpcSearchMatchMode = "exact" | "prefix" | "contains";
 
 export interface OpcBrowseBreadcrumbResponse {
@@ -334,6 +340,158 @@ export function useOpcSearch() {
         return (await response.json()) as OpcSearchResponse;
       }
       return parseOpcSearchStream(response, params.onEvent);
+    },
+  });
+}
+
+/** `GET /api/opc/search-index/status` -- returns persistent namespace-index readiness. */
+export function useOpcSearchIndexStatus(
+  bridgeHost: string,
+  opcServer: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["opc", "search-index", "status", bridgeHost, opcServer],
+    queryFn: async () => {
+      const { data, error, response } = await apiClient.GET(
+        "/api/opc/search-index/status",
+        {
+          params: {
+            query: {
+              bridge_host: bridgeHost || undefined,
+              opc_server: opcServer || undefined,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    enabled,
+    retry: false,
+    staleTime: 5_000,
+  });
+}
+
+/** `GET /api/opc/search-index/search` -- fast unary fzf-style namespace search. */
+export function useOpcIndexedSearch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      query: string;
+      matchMode: OpcSearchMatchMode;
+      maxResults?: number;
+      signal?: AbortSignal;
+    }) => {
+      const { data, error, response } = await apiClient.GET(
+        "/api/opc/search-index/search",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              query: params.query,
+              match_mode: params.matchMode,
+              max_results: params.maxResults,
+            },
+            signal: params.signal,
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data.status,
+      );
+    },
+  });
+}
+
+/** `POST /api/opc/search-index/refresh` -- starts or coalesces an index refresh. */
+export function useRefreshOpcSearchIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      force?: boolean;
+    }) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/opc/search-index/refresh",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              force: params.force,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
+    },
+  });
+}
+
+/** `POST /api/opc/search-index/control` -- controls a running index build. */
+export function useControlOpcSearchIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      action: "pause" | "resume" | "cancel";
+    }) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/opc/search-index/control",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              action: params.action,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
     },
   });
 }
