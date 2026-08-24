@@ -4034,6 +4034,12 @@ The repository now has a layered hardening gate for both source changes and rele
 - **Coverage**: `cargo llvm-cov --workspace --lcov --output-path lcov.info`
 - **Frontend build**: `pnpm --filter bhtune-frontend run build` (`tsc -b` typecheck + Vite
   production bundle)
+- **Local UI restart**: after every source, frontend, or generated-artifact change, rebuild the
+  frontend and `bhtune-server`, stop the old UI process, and restart the newest server before
+  manual testing or browser automation. Verify `GET /api/health` and the relevant API route
+  before continuing. Do not test against stale copied binaries (especially `/tmp` binaries such
+  as `bhtune-ui-server-config`) because they may embed an older frontend and link an incompatible
+  `opcda-bridge` version.
 - **Frontend lint/format**: `pnpm --filter bhtune-frontend run lint` (oxlint) and
   `pnpm --filter bhtune-frontend run format:check` (Prettier, configured by the repo-root
   `.prettierrc.json`/`.prettierignore` — see "Key architectural decisions" above)
