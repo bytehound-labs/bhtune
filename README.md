@@ -142,6 +142,8 @@ live `search`; `bhtune opc search-index status|search|refresh|control` manages a
 persistent index. `bhtune opc browse --all` explicitly drains continuation pages instead of
 silently downloading an entire namespace. A browse session remains available for continuation
 after the command exits; release it explicitly with `bhtune opc close <session-id>`.
+An index can remain usable after a completed inventory reports a non-fatal gateway warning;
+the browser and diagnostic CLI show that warning separately from a failed index state.
 
 The New tune form's collapsible **Loop mapping** section is the single place to inspect and
 adjust the effective mapping. Every row shows its effective value and source. Tag mappings use

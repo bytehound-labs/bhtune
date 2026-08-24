@@ -1079,6 +1079,21 @@ export function OpcTagBrowserModal({
                 </span>
               )}
             </div>
+            {indexStatus?.last_error && (
+              <p
+                role="status"
+                className={
+                  indexStatus.state === "failed"
+                    ? "text-xs text-red-300"
+                    : "text-xs text-amber-300"
+                }
+              >
+                {indexStatus.state === "failed"
+                  ? "Index error: "
+                  : "Index warning: "}
+                {indexStatus.last_error}
+              </p>
+            )}
             {!indexSearchAvailable && (
               <p role="status" className="text-xs text-slate-400">
                 {indexConfigurationHint ? (

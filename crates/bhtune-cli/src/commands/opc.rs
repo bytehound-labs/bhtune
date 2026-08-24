@@ -623,8 +623,13 @@ fn print_search_index_status(
             progress.entries_seen, progress.items_per_second
         );
     }
-    if let Some(error) = &status.last_error {
-        println!("Last error: {error}");
+    if let Some(diagnostic) = &status.last_error {
+        let label = if status.state != bhtune_driver::SearchIndexState::Failed {
+            "Last warning"
+        } else {
+            "Last error"
+        };
+        println!("{label}: {diagnostic}");
     }
     Ok(())
 }
