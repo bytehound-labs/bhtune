@@ -3,7 +3,6 @@ import { apiClient } from "./client";
 import { toApiError } from "./errors";
 import type { components } from "./schema";
 
-export type TemplateResponse = components["schemas"]["TemplateResponse"];
 export type DcsTemplate = components["schemas"]["DcsTemplate"];
 
 const templatesKey = ["templates"] as const;

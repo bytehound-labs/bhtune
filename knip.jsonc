@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/knip/schema-jsonc.json",
+  "workspaces": {
+    ".": {
+      "ignoreDependencies": ["prettier"],
+    },
+    "frontend": {
+      "entry": ["e2e/start-server.mjs"],
+      "ignoreIssues": {
+        "src/api/schema.d.ts": ["types"],
+      },
+    },
+    "website": {
+      "ignoreDependencies": ["@easyops-cn/docusaurus-search-local"],
+      "ignoreIssues": {
+        "docusaurus.config.ts": ["unlisted"],
+      },
+    },
+  },
+}

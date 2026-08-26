@@ -49,6 +49,9 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   `deny.toml`; `pnpm run check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the
   equivalent allow-list for npm dependencies. If either fails on a new dependency, look for an
   open-source alternative rather than widening the allow-list.
+- Run `pnpm run check:dead-code` to use Knip across the root, frontend, and documentation-site
+  workspaces. Treat unused files, dependencies, and exports as cleanup candidates; configuration
+  exceptions are intentionally narrow and belong in `knip.jsonc`.
 
 ## Dependency updates
 
@@ -108,7 +111,8 @@ suite above in CI on every push/PR, uploading the HTML report as an artifact if 
 touching `docs/` or `website/` must pass `pnpm --filter bhtune-website run format:check`,
 `run lint`, `run typecheck`, and `run build` — the build step doubles as a broken-link/anchor
 check across `docs/`, since Docusaurus fails the build rather than shipping a dead link or
-a heading reference that no longer exists.
+a heading reference that no longer exists. Knip runs as the required `Knip dead-code analysis`
+status for changes affecting the pnpm workspaces, their dependency metadata, or its configuration.
 
 ## Security and compatibility checks
 

@@ -4,14 +4,11 @@ import { apiClient } from "./client";
 import { toApiError } from "./errors";
 import type { components, operations } from "./schema";
 
-export type RunSummaryResponse = components["schemas"]["RunSummaryResponse"];
 export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
 export type SampleResponse = components["schemas"]["SampleResponse"];
-export type ResultResponse = components["schemas"]["ResultResponse"];
-export type WriteResponse = components["schemas"]["WriteResponse"];
 export type StartRunRequest = components["schemas"]["StartRunRequest"];
 export type NewRunDraft = components["schemas"]["NewRunDraft"];
-export type TuneOutcome = components["schemas"]["TuneOutcome"];
+type TuneOutcome = components["schemas"]["TuneOutcome"];
 export type ResponseLevel = components["schemas"]["ResponseLevel"];
 
 /** Query params accepted by `GET /api/runs` — every field optional (see `RunListQuery`). */

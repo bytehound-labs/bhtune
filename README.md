@@ -471,6 +471,18 @@ Fuzzing requires [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz); for ex
 cargo fuzz run config
 ```
 
+Knip provides deeper dead-code and dependency analysis across the root pnpm workspace,
+`frontend/`, and `website/`:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm run check:dead-code
+```
+
+The check examines unused files, dependencies, and exports, plus unresolved and unlisted
+imports. CI runs it on every pull request and push that changes the JavaScript/TypeScript
+workspace, its configuration, or the workflow that invokes it; it is not a weekly-only check.
+
 ## Roadmap
 
 - OPC UA and Modbus `Driver` implementations, alongside OPC DA.
