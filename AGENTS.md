@@ -3912,6 +3912,8 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
 - **Trunk-based git flow**: single long-lived `main`, short-lived PR branches
   (`<type>/<short-description>`), squash merges, no `develop`/release branches. Releases are
   tagged directly off `main`.
+- **Agent workflow**: Always work on a feature branch, open a pull request, and merge only after
+  all required CI/CD checks pass. Never commit directly to `main`.
 - **Commits**: [Conventional Commits](https://www.conventionalcommits.org/).
 - **Formatting/linting**: `cargo fmt --check --all` and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
