@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/bytehound-labs/bhtune/actions/workflows/checks.yml/badge.svg)](https://github.com/bytehound-labs/bhtune/actions/workflows/checks.yml)
 [![codecov](https://codecov.io/gh/bytehound-labs/bhtune/branch/main/graph/badge.svg?token=)](https://codecov.io/gh/bytehound-labs/bhtune)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=bytehound-labs_bhtune&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=bytehound-labs_bhtune)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Docs](https://img.shields.io/badge/docs-bytehound--labs.github.io%2Fbhtune-blue.svg)](https://bytehound-labs.github.io/bhtune/)
