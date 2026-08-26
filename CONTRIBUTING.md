@@ -52,6 +52,12 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 - Run `pnpm run check:dead-code` to use Knip across the root, frontend, and documentation-site
   workspaces. Treat unused files, dependencies, and exports as cleanup candidates; configuration
   exceptions are intentionally narrow and belong in `knip.jsonc`.
+- SonarQube Cloud analyzes Rust, TypeScript/TSX, the documentation site, and repository scripts.
+  To reproduce its Rust coverage input locally, run
+  `cargo llvm-cov --workspace --locked --lcov --output-path lcov.info` followed by
+  `sonar-scanner` with `SONAR_TOKEN` exported. The Sonar workflow runs for relevant pull
+  requests and pushes to `main`, plus a Wednesday 04:17 UTC weekly scan; fork pull requests
+  intentionally skip the secret-bearing analysis.
 
 ## Dependency updates
 
@@ -113,6 +119,9 @@ touching `docs/` or `website/` must pass `pnpm --filter bhtune-website run forma
 check across `docs/`, since Docusaurus fails the build rather than shipping a dead link or
 a heading reference that no longer exists. Knip runs as the required `Knip dead-code analysis`
 status for changes affecting the pnpm workspaces, their dependency metadata, or its configuration.
+SonarQube runs as a separate `Required Sonar quality status` check for relevant changes; its
+quality-gate result is blocking when analysis runs, while documentation-only and fork pull
+requests receive an explicit successful skip status.
 
 ## Security and compatibility checks
 

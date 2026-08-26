@@ -288,6 +288,17 @@ Knip dead-code analysis is also done: `pnpm run check:dead-code` scans the root 
 unlisted dependencies. The dedicated `Knip dead-code analysis` job runs on relevant pull
 requests, pushes to `main`, and manual `checks.yml` dispatches; it is deliberately not a
 weekly-only job because the analysis is deterministic and fast.
+SonarQube Cloud analysis is also configured for BHTune. `sonar-project.properties` indexes the
+Rust, frontend, documentation-site, and repository-script sources, imports the Rust LCOV report
+from `cargo llvm-cov`, and excludes generated/build/test/fuzz/documentation artifacts plus
+frontend and website coverage until JavaScript LCOV generation exists. The dedicated
+`SonarQube` workflow runs on relevant pull requests and pushes to `main`, supports manual
+dispatch, and performs a full weekly scan on Wednesdays at 04:17 UTC. Its
+`Required Sonar quality status` aggregate passes intentional documentation-only skips and fork
+pull-request skips (repository secrets are unavailable there), while failing when an applicable
+analysis or the Sonar quality gate fails. Sonar is configured for BHTune only at this stage;
+`opcda-bridge` remains a separate rollout increment because it is Rust-only and needs its own
+project configuration.
 Phase 10's `history-retention` is now done: age-based deletion of `tune_runs` (and their
 cascaded samples/results/write-back audit rows) older than a configurable number of days,
 off by default (retain forever). `resolve_retention_days` (`bhtune-cli`'s `config.rs`)
@@ -4314,7 +4325,11 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `-p` flag mismatch, and a missing-output-directory bug only CI itself caught).
    Knip dead-code analysis is also done: `pnpm run check:dead-code` scans all three pnpm
    workspaces and is required on relevant changes through `checks.yml` — see "Knip dead-code
-   analysis" above. Remaining:
+   analysis" above. SonarQube Cloud analysis is configured for BHTune through
+   `sonar-project.properties` and `.github/workflows/sonar.yml`, with Rust LCOV coverage,
+   multi-language maintainability analysis, a weekly Wednesday scan, and a required aggregate
+   quality status. The `opcda-bridge` SonarQube increment remains separate because it needs its
+   own project key and Rust-only source configuration. Remaining:
    release-time
    version snapshots (`docs-versioning`, deferred until `release-v1`), and the rest of
    packaging: `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s

@@ -1,0 +1,119 @@
+name: SonarQube
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 3"
+
+concurrency:
+  group: sonar-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect SonarQube changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || steps.filter.outputs.sonar == 'true' }}
+      fork: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Detect changed paths
+        id: filter
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        with:
+          filters: |
+            sonar:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'sonar-project.properties'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/**'
+              - 'crates/**'
+              - 'frontend/src/**'
+              - 'frontend/e2e/**'
+              - 'website/**'
+              - 'scripts/**'
+
+  analyze:
+    name: SonarQube analysis
+    needs: changes
+    if: >-
+      needs.changes.outputs.run == 'true' &&
+      needs.changes.outputs.fork != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb
+        with:
+          components: clippy,llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
+        with:
+          tool: cargo-llvm-cov,protoc
+
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Install JavaScript and TypeScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Rust coverage
+        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+
+      - name: Run SonarQube analysis
+        uses: SonarSource/sonarqube-scan-action@c7ee0f9df90b7aa20e8dcf9695dcfe2e7da5b4f2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+
+  status:
+    name: Required Sonar quality status
+    if: always()
+    needs: [changes, analyze]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail if change detection failed
+        if: needs.changes.result != 'success'
+        run: |
+          echo "SonarQube change detection did not complete successfully."
+          exit 1
+
+      - name: Report skipped analysis
+        if: needs.changes.outputs.run != 'true'
+        run: echo "No SonarQube-affecting files changed; analysis skipped."
+
+      - name: Report fork pull request skip
+        if: needs.changes.outputs.run == 'true' && needs.changes.outputs.fork == 'true'
+        run: echo "SonarQube analysis skipped for a fork pull request because repository secrets are unavailable."
+
+      - name: Verify analysis result
+        if: needs.changes.outputs.run == 'true' && needs.changes.outputs.fork != 'true' && needs.analyze.result != 'success'
+        run: |
+          echo "SonarQube analysis ended with: ${{ needs.analyze.result }}"
+          exit 1
