@@ -159,7 +159,9 @@ running server: the chart streamed the live relay square-wave/PV-oscillation in 
 time, the SSE connection opened exactly once and closed cleanly on `done` (confirmed via
 the browser's network log — no reconnect storm), and the chart handed off to the
 historical `samples` array with an identical rendered trend once the run completed, zero
-console errors.
+console errors. Short trends reserve 12 configured poll intervals on the x-axis, leaving
+unused future space blank; once the elapsed data span that horizon, the same range function
+fits the complete run without fabricating samples.
 `server-embed-spa` is now done: the built SPA (`frontend/dist/`) is embedded directly into
 the `bhtune-server` binary via `rust-embed`, so a release build is a single self-contained
 executable — no separate static file server, Node, or nginx needed on the target host — see
@@ -323,8 +325,9 @@ all; `--dry-run` to report a count and cutoff without deleting anything, via
 completes the four-subcommand `history` surface (`list`/`show`/`revert`/`prune`) started
 under `cli-commands`/`safety-writeback-rollback`. `history-explorer-ui` is now done, closing
 out Phase 10: the filterable/sortable run list, full run detail, and the PV/MV trend chart
-(including presentation-only initial-reading and terminal restored-MV boundary points) were
-already in place from `frontend-screens`/`frontend-live-stream`; the remaining piece —
+(including presentation-only initial-reading and terminal restored-MV boundary points plus a
+12-poll-interval left-anchored startup horizon) were already in place from
+`frontend-screens`/`frontend-live-stream`; the remaining piece —
 export and delete actions on the run detail screen — is now shipped too. `GET
 /api/runs/{id}/export?format=csv|json` (`export_run`, reusing `bhtune-cli`'s own
 `samples_to_bytes`, so the HTTP and CLI export paths can never disagree on the CSV/JSON
@@ -3822,11 +3825,13 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     calculated/persisted value this affects, only how a number is rendered, so exact legacy
     parity was judged not worth replicating here.
 16. **`[new feature, not a legacy bug]` A live PV/MV trend chart is a core UX expectation for the
-    web GUI** — plan for high-rate
-    streaming updates (multiple times per second) from the start; see "Chart library" below. The
-    legacy app never had a trend chart at all (`Telerik.WinControls.ChartView` was referenced in
-    the `.csproj` but no chart control was ever built), so this is new scope, not parity work —
-    shipped via `frontend-live-stream`'s `TrendChart` (uPlot).
+    web GUI** — plan for high-rate streaming updates (multiple times per second) from the start;
+    see "Chart library" below. The legacy app never had a trend chart at all
+    (`Telerik.WinControls.ChartView` was referenced in the `.csproj` but no chart control was ever
+    built), so this is new scope, not parity work — shipped via `frontend-live-stream`'s
+    `TrendChart` (uPlot). Short trends reserve 12 configured poll intervals before the x-axis
+    switches to full elapsed-history fitting; the blank future area is intentional and no
+    synthetic points are added.
 17. **`[not applicable — feature dropped]` A licensing/loop-locking ledger's connection-open
     logic must handle a missing database file without throwing from an unobserved async task.**
     Legacy: `SQLock.CheckDB()` called `.Open()` on a `null` `SQLiteConnection` whenever
