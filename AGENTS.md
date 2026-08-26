@@ -283,6 +283,11 @@ README's roadmap section. `docs-api-rustdoc` is also done: `cargo doc` output fo
 crate/binary targets is published under `/api/` on that same site, indexed from a
 hand-written `docs/reference/api.md` — see "`docs-api-rustdoc`: publishing the Rust API
 reference" below.
+Knip dead-code analysis is also done: `pnpm run check:dead-code` scans the root pnpm workspace,
+`frontend/`, and `website/` for unused files, dependencies, exports, unresolved imports, and
+unlisted dependencies. The dedicated `Knip dead-code analysis` job runs on relevant pull
+requests, pushes to `main`, and manual `checks.yml` dispatches; it is deliberately not a
+weekly-only job because the analysis is deterministic and fast.
 Phase 10's `history-retention` is now done: age-based deletion of `tune_runs` (and their
 cascaded samples/results/write-back audit rows) older than a configurable number of days,
 off by default (retain forever). `resolve_retention_days` (`bhtune-cli`'s `config.rs`)
@@ -3867,6 +3872,25 @@ it. It cannot judge whether documentation is actually _good_, and it has no way 
 in behavior that never touched `crates/**` at all (a `frontend/`-only or CI-workflow-only
 change with real user-visible impact, for instance).
 
+## Knip dead-code analysis (`knip`, done)
+
+Knip runs full analysis across the root pnpm workspace, `frontend/`, and `website/` through the
+root `check:dead-code` script. It checks unused files, dependencies, exports, duplicate exports,
+unresolved imports, and unlisted dependencies rather than limiting the scan to production code.
+
+`knip.jsonc` keeps the configuration narrow: the Playwright server helper is an explicit entry,
+generated OpenAPI declarations have their unused generated types ignored, and the Docusaurus
+search theme plus root Prettier have documented exceptions for dynamic resolution and lefthook's
+runtime invocation. Genuine findings are fixed in the manifests or source instead of being
+hidden behind broad issue suppression.
+
+The `checks.yml` workflow runs Knip on every relevant pull request and push to `main`, plus
+manual workflow dispatch. Change detection covers the pnpm manifests, lockfile, workspace
+configuration, Knip configuration, frontend, website, scripts, lefthook configuration, and
+workflow files. The job is required through the existing `Required validation status` aggregate;
+no new branch-protection context is needed. Knip applies to BHTune's JavaScript/TypeScript
+workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
+
 ## Conventions
 
 - **Trunk-based git flow**: single long-lived `main`, short-lived PR branches
@@ -4287,7 +4311,10 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `cargo-binstall` metadata on `bhtune-cli`, and a prepared-but-inert Homebrew formula —
    see "`pkg-evaluate-others`: the remaining distribution channels" above for the full
    design, including two real tooling gotchas the `.rpm` path surfaced (a path-vs-name
-   `-p` flag mismatch, and a missing-output-directory bug only CI itself caught). Remaining:
+   `-p` flag mismatch, and a missing-output-directory bug only CI itself caught).
+   Knip dead-code analysis is also done: `pnpm run check:dead-code` scans all three pnpm
+   workspaces and is required on relevant changes through `checks.yml` — see "Knip dead-code
+   analysis" above. Remaining:
    release-time
    version snapshots (`docs-versioning`, deferred until `release-v1`), and the rest of
    packaging: `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s

@@ -4,3 +4,5 @@ packages:
 allowBuilds:
   "@swc/core": true
   core-js: true
+minimumReleaseAgeExclude:
+  - knip@6.32.3
