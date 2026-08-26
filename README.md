@@ -483,6 +483,26 @@ The check examines unused files, dependencies, and exports, plus unresolved and 
 imports. CI runs it on every pull request and push that changes the JavaScript/TypeScript
 workspace, its configuration, or the workflow that invokes it; it is not a weekly-only check.
 
+SonarQube Cloud provides broader maintainability analysis for the Rust, TypeScript/TSX,
+documentation-site, and repository-script sources:
+
+- Rust coverage is imported from the `cargo llvm-cov` LCOV report.
+- Generated files, build output, tests, fuzz targets, and documentation artifacts are excluded
+  from the source analysis.
+- Frontend and documentation-site code is analyzed for issues and duplication, but is excluded
+  from coverage until those packages produce JavaScript LCOV reports.
+- Relevant pull requests and pushes to `main` run the analysis, with a full scan every Wednesday
+  at 04:17 UTC and an available manual dispatch. Fork pull requests report an intentional skip
+  because repository secrets are unavailable.
+
+With the SonarScanner CLI installed and `SONAR_TOKEN` exported, reproduce the analysis locally
+after generating the Rust report:
+
+```sh
+cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+sonar-scanner
+```
+
 ## Roadmap
 
 - OPC UA and Modbus `Driver` implementations, alongside OPC DA.
