@@ -6,6 +6,8 @@ import type { components, operations } from "./schema";
 
 export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
 export type SampleResponse = components["schemas"]["SampleResponse"];
+export type InitialReadingsResponse =
+  components["schemas"]["InitialReadingsResponse"];
 export type StartRunRequest = components["schemas"]["StartRunRequest"];
 export type NewRunDraft = components["schemas"]["NewRunDraft"];
 type TuneOutcome = components["schemas"]["TuneOutcome"];
@@ -132,6 +134,9 @@ export function useSaveRunDraft() {
 
 /** State kept by {@link useRunStream}. */
 export interface RunStreamState {
+  /** The initial driver snapshot, sent as soon as it is persisted -- before the first MRFT
+   * sample and before any mode-transition delay completes. */
+  initialReadings: InitialReadingsResponse | null;
   /** Every `sample` event received so far, in tick order. The stream always replays every
    * sample from tick 0 on connect (see `bhtune-server`'s `routes::stream` module doc), so
    * this array is a complete, standalone trend the moment the first event arrives — it
@@ -147,6 +152,7 @@ export interface RunStreamState {
 }
 
 const emptyRunStreamState: RunStreamState = {
+  initialReadings: null,
   samples: [],
   outcome: null,
   reconnecting: false,
@@ -177,6 +183,16 @@ export function useRunStream(id: number, enabled: boolean): RunStreamState {
 
     setState(emptyRunStreamState);
     const source = new EventSource(`/api/runs/${id}/stream`);
+
+    source.addEventListener("initial", (event) => {
+      const initialReadings = JSON.parse(
+        (event as MessageEvent<string>).data,
+      ) as InitialReadingsResponse;
+      setState((prev) => ({
+        ...prev,
+        initialReadings,
+      }));
+    });
 
     source.addEventListener("sample", (event) => {
       const sample = JSON.parse(

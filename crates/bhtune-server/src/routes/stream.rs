@@ -32,7 +32,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::error::ApiError;
-use crate::routes::history::SampleResponse;
+use crate::routes::history::{InitialReadingsResponse, SampleResponse};
 use crate::state::AppState;
 
 /// How often the stream re-polls the database for newly recorded samples or a changed run
@@ -64,13 +64,15 @@ fn ok_event(event: Event) -> Result<Event, Infallible> {
 
 /// Stream per-tick engine state for one run over Server-Sent Events.
 ///
-/// `GET /api/runs/{id}/stream` -- 404 if no run has that id. Emits a `sample` event (JSON
-/// body: [`SampleResponse`], the same shape `GET /api/runs/{id}`'s `samples` array already
-/// uses) for every tick recorded so far, and every new tick recorded while connected, followed
-/// by exactly one final `done` event (JSON body: [`RunStreamDone`]) once the run reaches a
-/// terminal outcome -- after which the connection closes. Safe to open at any point in a run's
-/// lifecycle, including after it has already finished: in that case every sample is replayed
-/// once as a burst of `sample` events, immediately followed by `done`.
+/// `GET /api/runs/{id}/stream` -- 404 if no run has that id. Emits one `initial` event (JSON
+/// body: [`InitialReadingsResponse`]) as soon as the driver's initial snapshot is persisted,
+/// then a `sample` event (JSON body: [`SampleResponse`], the same shape
+/// `GET /api/runs/{id}`'s `samples` array already uses) for every tick recorded so far and
+/// every new tick recorded while connected, followed by exactly one final `done` event (JSON
+/// body: [`RunStreamDone`]) once the run reaches a terminal outcome -- after which the
+/// connection closes. Safe to open at any point in a run's lifecycle, including after it has
+/// already finished: the initial snapshot (when available) and every sample are replayed once,
+/// immediately followed by `done`.
 #[utoipa::path(
     get,
     path = "/api/runs/{id}/stream",
@@ -81,8 +83,9 @@ fn ok_event(event: Event) -> Result<Event, Infallible> {
     responses(
         (
             status = 200,
-            description = "A `text/event-stream` of `sample` events (data: SampleResponse) \
-                followed by one final `done` event (data: RunStreamDone).",
+            description = "A `text/event-stream` with an optional `initial` event \
+                (data: InitialReadingsResponse), `sample` events (data: SampleResponse), \
+                and one final `done` event (data: RunStreamDone).",
             content_type = "text/event-stream",
             body = SampleResponse,
         ),
@@ -103,7 +106,41 @@ pub(crate) async fn stream_run(
         // far -- see `TuneSampleRow::list_for_run_since`'s own doc comment for why `-1` is a
         // safe "everything" sentinel (`tick` is always `>= 0`).
         let mut last_tick: i64 = -1;
+        let mut sent_initial = false;
         loop {
+            let run_outcome = match TuneRunRow::get(&pool, run_id).await {
+                Ok(Some(run)) => {
+                    if !sent_initial && let Some(initial) = run.initial_readings.as_ref() {
+                        let response = InitialReadingsResponse::from(initial.clone());
+                        match Event::default().event("initial").json_data(response) {
+                            Ok(event) => {
+                                sent_initial = true;
+                                yield ok_event(event);
+                            }
+                            Err(err) => tracing::error!(
+                                run_id,
+                                error = %err,
+                                "failed to encode initial readings as an SSE event"
+                            ),
+                        }
+                    }
+                    Some(run.outcome)
+                }
+                // Still running (or -- defensively -- the run vanished from under us mid-
+                // stream, which cannot happen in practice since nothing ever deletes a
+                // `tune_runs` row): continue to the sample query.
+                Ok(_) => None,
+                Err(err) => {
+                    tracing::error!(
+                        run_id,
+                        error = %err,
+                        "failed to poll tune_runs for the run stream; ending the stream"
+                    );
+                    yield ok_event(Event::default().event("error").data(err.to_string()));
+                    break;
+                }
+            };
+
             match TuneSampleRow::list_for_run_since(&pool, run_id, last_tick).await {
                 Ok(samples) => {
                     for sample in &samples {
@@ -130,27 +167,14 @@ pub(crate) async fn stream_run(
                 }
             }
 
-            match TuneRunRow::get(&pool, run_id).await {
-                Ok(Some(run)) if run.outcome != TuneOutcome::Running => {
-                    let done = RunStreamDone { outcome: run.outcome };
-                    if let Ok(event) = Event::default().event("done").json_data(done) {
-                        yield ok_event(event);
-                    }
-                    break;
+            if let Some(outcome) = run_outcome
+                && outcome != TuneOutcome::Running
+            {
+                let done = RunStreamDone { outcome };
+                if let Ok(event) = Event::default().event("done").json_data(done) {
+                    yield ok_event(event);
                 }
-                // Still running (or -- defensively -- the run vanished from under us mid-
-                // stream, which cannot happen in practice since nothing ever deletes a
-                // `tune_runs` row): keep polling.
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::error!(
-                        run_id,
-                        error = %err,
-                        "failed to poll tune_runs for the run stream; ending the stream"
-                    );
-                    yield ok_event(Event::default().event("error").data(err.to_string()));
-                    break;
-                }
+                break;
             }
 
             tokio::time::sleep(POLL_INTERVAL).await;
@@ -170,7 +194,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use bhtune_core::{ControllerType, LoopConfig, LoopTags, MrftState, ProcessType, Tick};
-    use bhtune_db::models::{SampleQuality, TuneDriver};
+    use bhtune_db::models::{SampleQuality, TuneDriver, TuneRunInitialReadings};
     use chrono::Utc;
     use tower::ServiceExt;
 
@@ -227,6 +251,27 @@ mod tests {
             sample,
             mrft_state,
             SampleQuality::Good,
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn record_initial_readings(state: &AppState, run_id: i64) {
+        TuneRunRow::record_initial_readings(
+            &state.pool,
+            run_id,
+            TuneRunInitialReadings {
+                pv_ini: 48.0,
+                mv_ini: 42.0,
+                mv_range_low: 0.0,
+                mv_range_high: 100.0,
+                pv_range_high: 100.0,
+                pv_range_low: 0.0,
+                controller_direction: bhtune_core::ControllerDirection::Reverse,
+                mode_raw: Some("AUTO".to_string()),
+                mode_attribute_raw: None,
+                setpoint_ini: Some(50.0),
+            },
         )
         .await
         .unwrap();
@@ -317,6 +362,36 @@ mod tests {
         assert_eq!(last_event, "done");
         let done: serde_json::Value = serde_json::from_str(last_data).unwrap();
         assert_eq!(done["outcome"], "completed");
+    }
+
+    #[tokio::test]
+    async fn streaming_emits_initial_readings_before_replayed_samples() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_running_run(&state, "LIC-STREAM-INITIAL").await;
+        record_initial_readings(&state, run_id).await;
+        insert_sample(&state, run_id, 0).await;
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+
+        let app = crate::build_router(state);
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{run_id}/stream"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events = parse_sse(core::str::from_utf8(&bytes).unwrap());
+
+        assert_eq!(events[0].0, "initial");
+        let initial: serde_json::Value = serde_json::from_str(&events[0].1).unwrap();
+        assert_eq!(initial["pv_ini"], 48.0);
+        assert_eq!(initial["mv_ini"], 42.0);
+        assert_eq!(events[1].0, "sample");
+        assert_eq!(events[2].0, "done");
     }
 
     #[tokio::test]

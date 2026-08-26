@@ -134,21 +134,24 @@ warning state) against a real running server, zero console errors. This closed o
 `frontend-live-stream` is now done: `GET /api/runs/{id}/stream` (Server-Sent Events) polls
 `TuneSampleRow::list_for_run_since` (a new `bhtune-db` query — `tick > after_tick`, with
 `-1` as the "everything" sentinel) and `TuneRunRow::get` every 300ms inside an
-`async-stream::stream!` generator, replaying every sample from tick 0 on every connection
-and terminating with exactly one `done` event (`RunStreamDone { outcome }`) once the run
-leaves `Running` — see `crates/bhtune-server/src/routes/stream.rs`'s module doc for why
-this polls the same database every other reader uses rather than adding a broadcast
-channel (zero risk to the already-tested CLI/server tick loop). On the frontend, a new
+`async-stream::stream!` generator, emitting the persisted initial-readings snapshot as an
+`initial` event before replaying every sample from tick 0 on every connection, and
+collecting independent startup tag-backed values in one deduplicated driver read; a
+mode-dependent setpoint remains a separate read only when the original mode is Auto.
+terminating with exactly one `done` event (`RunStreamDone { outcome }`) once the run leaves
+`Running` — see `crates/bhtune-server/src/routes/stream.rs`'s module doc for why this polls
+the same database every other reader uses rather than adding a broadcast channel (zero risk
+to the already-tested CLI/server tick loop). On the frontend, a new
 `useRunStream` hook (`frontend/src/api/runs.ts`) consumes it via a plain `EventSource`
 (untyped — SSE has no typed-client support, unlike the rest of the API — with events
 manually parsed against the generated `SampleResponse`/`TuneOutcome` schema types),
 closing the connection and invalidating `useRun`'s query cache the instant `done` arrives.
 A new reusable `TrendChart` component (`frontend/src/components/TrendChart.tsx`) renders
-the resulting `samples` array with `uPlot` (PV on the left scale, MV on a right `mv`
-scale), using a `useRef`-held instance and `setData` for incremental updates rather than
-recreating the plot on every sample — the same component will later serve
-`history-explorer-ui`, differing only in whether `samples` comes from the live stream or
-a finished run's REST payload. `RunDetailPage` now switches between the two sources based
+the resulting normalized point series with `uPlot` (PV on the left scale, MV on a right
+`mv` scale), using a `useRef`-held instance and `setData` for incremental updates rather
+than recreating the plot on every sample. The same component renders live and historical
+runs, with presentation-only initial-reading and terminal restored-MV boundary points added
+by `composeTrendPoints`. `RunDetailPage` now switches between the two sources based
 on `outcome`, and `useRun`'s own polling was relaxed from a 1s to a 5s fallback now that
 the SSE stream (with its `done`-triggered invalidation) is the primary live-update
 mechanism, not a once-a-second full-`samples`-refetch. Manually verified against a real
@@ -309,7 +312,8 @@ all; `--dry-run` to report a count and cutoff without deleting anything, via
 completes the four-subcommand `history` surface (`list`/`show`/`revert`/`prune`) started
 under `cli-commands`/`safety-writeback-rollback`. `history-explorer-ui` is now done, closing
 out Phase 10: the filterable/sortable run list, full run detail, and the PV/MV trend chart
-were already in place from `frontend-screens`/`frontend-live-stream`; the remaining piece —
+(including presentation-only initial-reading and terminal restored-MV boundary points) were
+already in place from `frontend-screens`/`frontend-live-stream`; the remaining piece —
 export and delete actions on the run detail screen — is now shipped too. `GET
 /api/runs/{id}/export?format=csv|json` (`export_run`, reusing `bhtune-cli`'s own
 `samples_to_bytes`, so the HTTP and CLI export paths can never disagree on the CSV/JSON
@@ -1053,10 +1057,11 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
 after_tick)` (`bhtune-db`) is a new query — `tick > after_tick`, with `-1` as the
   documented "everything" sentinel since `tick >= 0` always — polled by a new
   `GET /api/runs/{id}/stream` handler (`crates/bhtune-server/src/routes/stream.rs`) inside
-  an `async-stream::stream!` generator on a 300ms interval, emitting a `sample` SSE event
-  per new tick (same `SampleResponse` DTO `history.rs` already used) and exactly one final
-  `done` event (`RunStreamDone { outcome }`) once the run leaves `Running`. Polls the
-  database rather than adding a broadcast channel deliberately — zero risk to the
+  an `async-stream::stream!` generator on a 300ms interval, emitting one `initial` SSE event
+  with the persisted initial-readings snapshot before `sample` events per new tick (the same
+  `SampleResponse` DTO `history.rs` already used) and exactly one final `done` event
+  (`RunStreamDone { outcome }`) once the run leaves `Running`. Polls the database rather than
+  adding a broadcast channel deliberately — zero risk to the
   already-tested CLI/server tick loop, and the endpoint replays every sample from tick 0
   on every connection, so it behaves identically whether a client connects mid-run or
   reconnects after a drop. Returning `Result<impl IntoResponse, ApiError>` (never naming
@@ -4331,7 +4336,8 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
     `prune` give the same data and the same retention policy headless, with `prune --dry-run`
     to preview a sweep on demand. `history-explorer-ui` is done: a filterable/sortable run
     list, a PV/MV trend chart per run (the same `TrendChart`/uPlot component the live view
-    uses), the run's full parameters/calculated-constants/write-back-audit trail, and export
+    uses, with initial-reading and terminal restored-MV boundary points), the run's full
+    parameters/calculated-constants/write-back-audit trail, and export
     (CSV/JSON download) and delete actions, all on the web GUI's run detail screen. This
     closes out Phase 10 — see `docs/roadmap.md` for what's deliberately left as an
     open-ended roadmap item instead (continuous historization, cross-run comparison/overlay).

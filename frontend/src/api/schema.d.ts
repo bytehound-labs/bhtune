@@ -334,13 +334,15 @@ export interface paths {
     };
     /**
      * Stream per-tick engine state for one run over Server-Sent Events.
-     * @description `GET /api/runs/{id}/stream` -- 404 if no run has that id. Emits a `sample` event (JSON
-     *     body: [`SampleResponse`], the same shape `GET /api/runs/{id}`'s `samples` array already
-     *     uses) for every tick recorded so far, and every new tick recorded while connected, followed
-     *     by exactly one final `done` event (JSON body: [`RunStreamDone`]) once the run reaches a
-     *     terminal outcome -- after which the connection closes. Safe to open at any point in a run's
-     *     lifecycle, including after it has already finished: in that case every sample is replayed
-     *     once as a burst of `sample` events, immediately followed by `done`.
+     * @description `GET /api/runs/{id}/stream` -- 404 if no run has that id. Emits one `initial` event (JSON
+     *     body: [`InitialReadingsResponse`]) as soon as the driver's initial snapshot is persisted,
+     *     then a `sample` event (JSON body: [`SampleResponse`], the same shape
+     *     `GET /api/runs/{id}`'s `samples` array already uses) for every tick recorded so far and
+     *     every new tick recorded while connected, followed by exactly one final `done` event (JSON
+     *     body: [`RunStreamDone`]) once the run reaches a terminal outcome -- after which the
+     *     connection closes. Safe to open at any point in a run's lifecycle, including after it has
+     *     already finished: the initial snapshot (when available) and every sample are replayed once,
+     *     immediately followed by `done`.
      */
     get: operations["stream_run"];
     put?: never;
@@ -1911,7 +1913,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description A `text/event-stream` of `sample` events (data: SampleResponse) followed by one final `done` event (data: RunStreamDone). */
+      /** @description A `text/event-stream` with an optional `initial` event (data: InitialReadingsResponse), `sample` events (data: SampleResponse), and one final `done` event (data: RunStreamDone). */
       200: {
         headers: {
           [name: string]: unknown;

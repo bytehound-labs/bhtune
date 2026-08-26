@@ -9,6 +9,7 @@
 //! setpoint/mode/mode-attribute/PID-constant tags at all (see `build_loop_tags` below) — no
 //! separate "is this the simulator?" branching is needed in that logic.
 
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
@@ -22,7 +23,7 @@ use bhtune_db::models::{
     DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TuneDriver, TuneResultRow,
     TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind, WriteReadback,
 };
-use bhtune_driver::{Driver, TagWrite};
+use bhtune_driver::{Driver, TagValue, TagWrite};
 use chrono::{DateTime, Utc};
 
 use crate::args::{DriverKindArg, TuneArgs};
@@ -1171,14 +1172,7 @@ async fn read_raw(driver: &dyn Driver, tag: &str, allow_uncertain: bool) -> anyh
 
 async fn read_f32(driver: &dyn Driver, tag: &str, allow_uncertain: bool) -> anyhow::Result<f32> {
     let raw = read_raw(driver, tag, allow_uncertain).await?;
-    let value: f32 = raw
-        .trim()
-        .parse::<f32>()
-        .map_err(|_| anyhow::anyhow!("tag '{tag}' value '{raw}' is not a number"))?;
-    if !value.is_finite() {
-        anyhow::bail!("tag '{tag}' value '{raw}' is not a finite number");
-    }
-    Ok(value)
+    parse_f32_value(tag, &raw)
 }
 
 async fn resolve_f32(
@@ -1207,6 +1201,71 @@ async fn resolve_direction(
         TagOrValue::Value(d) => Ok(*d),
         TagOrValue::Tag(tag) => {
             let raw = read_raw(driver, tag, allow_uncertain).await?;
+            Ok(ControllerDirection::from_raw_tag_value(
+                &raw,
+                &template.controller_action_direct_value,
+            ))
+        }
+    }
+}
+
+fn parse_f32_value(tag: &str, raw: &str) -> anyhow::Result<f32> {
+    let value: f32 = raw
+        .trim()
+        .parse::<f32>()
+        .map_err(|_| anyhow::anyhow!("tag '{tag}' value '{raw}' is not a number"))?;
+    if !value.is_finite() {
+        anyhow::bail!("tag '{tag}' value '{raw}' is not a finite number");
+    }
+    Ok(value)
+}
+
+fn read_batch_raw(
+    values: &HashMap<String, TagValue>,
+    tag: &str,
+    allow_uncertain: bool,
+) -> anyhow::Result<String> {
+    let value = values
+        .get(tag)
+        .ok_or_else(|| anyhow::anyhow!("driver returned no value for tag '{tag}'"))?;
+    check_quality(tag, value.quality, allow_uncertain)?;
+    Ok(value.value.clone())
+}
+
+fn read_batch_f32(
+    values: &HashMap<String, TagValue>,
+    tag: &str,
+    allow_uncertain: bool,
+) -> anyhow::Result<f32> {
+    let raw = read_batch_raw(values, tag, allow_uncertain)?;
+    parse_f32_value(tag, &raw)
+}
+
+async fn resolve_f32_from_batch(
+    driver: &dyn Driver,
+    values: &HashMap<String, TagValue>,
+    tag_or_value: &TagOrValue<f32>,
+    allow_uncertain: bool,
+) -> anyhow::Result<f32> {
+    match tag_or_value {
+        TagOrValue::Value(_) => resolve_f32(driver, tag_or_value, allow_uncertain).await,
+        TagOrValue::Tag(tag) => read_batch_f32(values, tag, allow_uncertain),
+    }
+}
+
+async fn resolve_direction_from_batch(
+    driver: &dyn Driver,
+    values: &HashMap<String, TagValue>,
+    tag_or_value: &TagOrValue<ControllerDirection>,
+    template: &DcsTemplate,
+    allow_uncertain: bool,
+) -> anyhow::Result<ControllerDirection> {
+    match tag_or_value {
+        TagOrValue::Value(_) => {
+            resolve_direction(driver, tag_or_value, template, allow_uncertain).await
+        }
+        TagOrValue::Tag(tag) => {
+            let raw = read_batch_raw(values, tag, allow_uncertain)?;
             Ok(ControllerDirection::from_raw_tag_value(
                 &raw,
                 &template.controller_action_direct_value,
@@ -1279,15 +1338,52 @@ async fn read_initial_values(
     template: &DcsTemplate,
     allow_uncertain: bool,
 ) -> anyhow::Result<InitialState> {
-    let pv_ini = read_f32(driver, &tags.process_variable, allow_uncertain).await?;
-    let mv_ini = read_f32(driver, &tags.manipulated_variable, allow_uncertain).await?;
+    let mut requested_tags = Vec::new();
+    let mut seen_tags = HashSet::new();
+    let mut request_tag = |tag: &str| {
+        if seen_tags.insert(tag.to_string()) {
+            requested_tags.push(tag.to_string());
+        }
+    };
+
+    request_tag(&tags.process_variable);
+    request_tag(&tags.manipulated_variable);
+    if let Some(tag) = &tags.controller_mode {
+        request_tag(tag);
+    }
+    if let Some(tag) = &tags.mode_attribute {
+        request_tag(tag);
+    }
+    if let TagOrValue::Tag(tag) = &tags.controller_direction {
+        request_tag(tag.as_str());
+    }
+    for tag_or_value in [
+        &tags.upper_pv_range,
+        &tags.lower_pv_range,
+        &tags.upper_mv_range,
+        &tags.lower_mv_range,
+    ] {
+        if let TagOrValue::Tag(tag) = tag_or_value {
+            request_tag(tag.as_str());
+        }
+    }
+
+    let values_by_tag: HashMap<String, TagValue> = driver
+        .read(&requested_tags)
+        .await?
+        .into_iter()
+        .map(|value| (value.tag.clone(), value))
+        .collect();
+
+    let pv_ini = read_batch_f32(&values_by_tag, &tags.process_variable, allow_uncertain)?;
+    let mv_ini = read_batch_f32(&values_by_tag, &tags.manipulated_variable, allow_uncertain)?;
 
     let mode_raw = match &tags.controller_mode {
-        Some(tag) => Some(read_raw(driver, tag, allow_uncertain).await?),
+        Some(tag) => Some(read_batch_raw(&values_by_tag, tag, allow_uncertain)?),
         None => None,
     };
     let mode_attribute_raw = match &tags.mode_attribute {
-        Some(tag) => Some(read_raw(driver, tag, allow_uncertain).await?),
+        Some(tag) => Some(read_batch_raw(&values_by_tag, tag, allow_uncertain)?),
         None => None,
     };
 
@@ -1301,17 +1397,42 @@ async fn read_initial_values(
         _ => None,
     };
 
-    let direction = resolve_direction(
+    let direction = resolve_direction_from_batch(
         driver,
+        &values_by_tag,
         &tags.controller_direction,
         template,
         allow_uncertain,
     )
     .await?;
-    let pv_range_high = resolve_f32(driver, &tags.upper_pv_range, allow_uncertain).await?;
-    let pv_range_low = resolve_f32(driver, &tags.lower_pv_range, allow_uncertain).await?;
-    let mv_range_high = resolve_f32(driver, &tags.upper_mv_range, allow_uncertain).await?;
-    let mv_range_low = resolve_f32(driver, &tags.lower_mv_range, allow_uncertain).await?;
+    let pv_range_high = resolve_f32_from_batch(
+        driver,
+        &values_by_tag,
+        &tags.upper_pv_range,
+        allow_uncertain,
+    )
+    .await?;
+    let pv_range_low = resolve_f32_from_batch(
+        driver,
+        &values_by_tag,
+        &tags.lower_pv_range,
+        allow_uncertain,
+    )
+    .await?;
+    let mv_range_high = resolve_f32_from_batch(
+        driver,
+        &values_by_tag,
+        &tags.upper_mv_range,
+        allow_uncertain,
+    )
+    .await?;
+    let mv_range_low = resolve_f32_from_batch(
+        driver,
+        &values_by_tag,
+        &tags.lower_mv_range,
+        allow_uncertain,
+    )
+    .await?;
 
     Ok(InitialState {
         pv_ini,
@@ -3164,6 +3285,7 @@ mod tests {
     #[derive(Default)]
     struct MockDriver {
         values: std::sync::Mutex<std::collections::HashMap<String, String>>,
+        read_batches: std::sync::Mutex<Vec<Vec<String>>>,
         writes: std::sync::Mutex<Vec<(String, String)>>,
         reject_writes: std::collections::HashSet<String>,
         error_reads: std::collections::HashSet<String>,
@@ -3324,6 +3446,10 @@ mod tests {
         fn write_log(&self) -> Vec<(String, String)> {
             self.writes.lock().unwrap().clone()
         }
+
+        fn read_batches(&self) -> Vec<Vec<String>> {
+            self.read_batches.lock().unwrap().clone()
+        }
     }
 
     #[async_trait::async_trait]
@@ -3332,6 +3458,7 @@ mod tests {
             &self,
             tags: &[String],
         ) -> bhtune_driver::DriverResult<Vec<bhtune_driver::TagValue>> {
+            self.read_batches.lock().unwrap().push(tags.to_vec());
             if tags.iter().any(|tag| self.hang_reads.contains(tag)) {
                 std::future::pending::<()>().await;
             }
@@ -3535,6 +3662,17 @@ mod tests {
         LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &honeywell_template())
     }
 
+    fn yokogawa_template() -> DcsTemplate {
+        bhtune_core::built_in_templates()
+            .into_iter()
+            .find(|t| t.name == "Yokogawa CentumVP")
+            .expect("Yokogawa CentumVP is a built-in template")
+    }
+
+    fn yokogawa_tags() -> LoopTags {
+        LoopTags::derive_from_pv_tag("Unit1.FIC101.PV", &yokogawa_template())
+    }
+
     /// A `MockDriver` pre-populated with every tag `honeywell_tags()` derives, using values
     /// that make the loop initially Auto (`MODE=1`) with its Mode Attribute not yet at the
     /// Program value (`MODEATTR=1`, program value is `"2"`) — the common starting point most
@@ -3558,7 +3696,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_initial_values_reads_the_full_opcda_tag_set() {
+    async fn read_initial_values_batches_the_opcda_tag_set_before_auto_setpoint() {
         let template = honeywell_template();
         let tags = honeywell_tags();
         let driver = honeywell_driver_auto();
@@ -3575,6 +3713,86 @@ mod tests {
         assert_eq!(initial.direction, ControllerDirection::Direct);
         assert_eq!(initial.mode_raw.as_deref(), Some("1"));
         assert_eq!(initial.mode_attribute_raw.as_deref(), Some("1"));
+        assert_eq!(
+            driver.read_batches(),
+            vec![
+                vec![
+                    "Unit1.LIC101.PV".to_string(),
+                    "Unit1.LIC101.OP".to_string(),
+                    "Unit1.LIC101.MODE".to_string(),
+                    "Unit1.LIC101.MODEATTR".to_string(),
+                    "Unit1.LIC101.CTLACTN".to_string(),
+                    "Unit1.LIC101.PVEUHI".to_string(),
+                    "Unit1.LIC101.PVEULO".to_string(),
+                    "Unit1.LIC101.CVEUHI".to_string(),
+                    "Unit1.LIC101.CVEULO".to_string(),
+                ],
+                vec!["Unit1.LIC101.SP".to_string()],
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_initial_values_batches_manual_tags_without_reading_setpoint() {
+        let template = yokogawa_template();
+        let tags = yokogawa_tags();
+        let driver = MockDriver::new(&[
+            ("Unit1.FIC101.PV", "50.0"),
+            ("Unit1.FIC101.MV", "45.0"),
+            ("Unit1.FIC101.MODE", "MAN"),
+            ("Unit1.FIC101.DR", "0"),
+            ("Unit1.FIC101.SH", "100.0"),
+            ("Unit1.FIC101.SL", "0.0"),
+            ("Unit1.FIC101.MSH", "100.0"),
+            ("Unit1.FIC101.MSL", "0.0"),
+        ]);
+
+        let initial = read_initial_values(&driver, &tags, &template, false)
+            .await
+            .unwrap();
+
+        assert_eq!(initial.mode_raw.as_deref(), Some("MAN"));
+        assert_eq!(initial.setpoint_ini, None);
+        assert_eq!(
+            driver.read_batches(),
+            vec![vec![
+                "Unit1.FIC101.PV".to_string(),
+                "Unit1.FIC101.MV".to_string(),
+                "Unit1.FIC101.MODE".to_string(),
+                "Unit1.FIC101.DR".to_string(),
+                "Unit1.FIC101.SH".to_string(),
+                "Unit1.FIC101.SL".to_string(),
+                "Unit1.FIC101.MSH".to_string(),
+                "Unit1.FIC101.MSL".to_string(),
+            ]]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_initial_values_deduplicates_tags_and_skips_fixed_overrides() {
+        let template = honeywell_template();
+        let mut tags = honeywell_tags();
+        tags.manipulated_variable = tags.process_variable.clone();
+        tags.controller_mode = None;
+        tags.mode_attribute = None;
+        tags.controller_direction = TagOrValue::Value(ControllerDirection::Reverse);
+        tags.upper_pv_range = TagOrValue::Value(100.0);
+        tags.lower_pv_range = TagOrValue::Value(0.0);
+        tags.upper_mv_range = TagOrValue::Value(100.0);
+        tags.lower_mv_range = TagOrValue::Value(0.0);
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "50.0")]);
+
+        let initial = read_initial_values(&driver, &tags, &template, false)
+            .await
+            .unwrap();
+
+        assert_eq!(initial.pv_ini, 50.0);
+        assert_eq!(initial.mv_ini, 50.0);
+        assert_eq!(initial.direction, ControllerDirection::Reverse);
+        assert_eq!(
+            driver.read_batches(),
+            vec![vec!["Unit1.LIC101.PV".to_string()]]
+        );
     }
 
     #[tokio::test]

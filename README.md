@@ -212,7 +212,9 @@ Binds `127.0.0.1:8787` by default (see the `bind` setting below) and exposes a J
 and `GET`/`PUT`/`DELETE /api/templates/{name}`;
 `GET /api/runs`/`GET /api/runs/{id}`/`DELETE /api/runs/{id}` for run history,
 `GET /api/runs/{id}/export` for CSV/JSON sample export, `GET /api/runs/{id}/stream` for a live
-per-tick Server-Sent Events feed of an in-progress run, `GET`/`PUT /api/runs/draft` for the
+Server-Sent Events feed of an in-progress run (initial readings are sent as soon as they are
+recorded, before per-tick samples; independent OPC DA startup tags are collected in one
+batched read, while mode-dependent setpoint reads remain conditional), `GET`/`PUT /api/runs/draft` for the
 app-wide autosaved New tune form draft (all fields except Notes), and
 `GET /api/runs/last-request` for the newest run's settings as a one-time fallback when no draft
 exists. A missing draft is a normal first-use state and quietly falls back to the newest run or
@@ -495,8 +497,9 @@ workspace, its configuration, or the workflow that invokes it; it is not a weekl
 - Cross-run comparison and overlay in the history explorer — charting several past runs of
   the same loop together (e.g. "has this valve degraded since last year?"). Everything else
   in the history explorer is already shipped: age-based retention, headless `history list`/
-  `show`/`prune`, and a GUI run list/detail screen with a PV/MV trend chart, export
-  (CSV/JSON), and delete — see [`docs/roadmap.md`](docs/roadmap.md#history-explorer).
+  `show`/`prune`, and a GUI run list/detail screen with a PV/MV trend chart that includes the
+  initial readings and terminal restored-MV boundary, export (CSV/JSON), and delete — see
+  [`docs/roadmap.md`](docs/roadmap.md#history-explorer).
 
 See the [full roadmap](docs/roadmap.md) for the reasoning behind each item and its current
 status.
