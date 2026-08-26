@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import {
   runExportUrl,
@@ -10,6 +10,7 @@ import {
   useRunStream,
   useUpdateRunNotes,
   useWriteRun,
+  type SampleResponse,
   type RunDetailResponse,
 } from "../../api/runs";
 import { userFacingErrorMessage } from "../../api/errors";
@@ -33,6 +34,7 @@ import {
   TextAreaField,
 } from "../../components/ui";
 import { TrendChart } from "../../components/TrendChart";
+import { composeTrendPoints } from "../../lib/trend";
 
 const originTone = {
   builtin: "success",
@@ -51,6 +53,8 @@ const restoreTone = {
   confirmed: "success",
   incomplete: "warning",
 } as const;
+
+const EMPTY_TREND_SAMPLES: readonly SampleResponse[] = [];
 
 /** Trims a float to a stable, readable precision without trailing zeros. */
 function num(value: number | null | undefined): string {
@@ -127,11 +131,24 @@ export function RunDetailPage() {
     lastWrite.kind === "write" &&
     lastWrite.success;
   const stream = useRunStream(runId, isRunning);
+  const initialReadings = stream.initialReadings ?? run.data?.initial_readings;
   // While running, the live SSE feed is the source of truth (it replays every sample from
-  // tick 0, so it's a complete trend on its own); once terminal, fall back to `useRun`'s
-  // plain REST `samples`, which is cheaper than keeping a stream open for a run that's
-  // already over.
-  const trendSamples = isRunning ? stream.samples : (run.data?.samples ?? []);
+  // tick 0); once terminal, fall back to `useRun`'s plain REST `samples`, which is cheaper
+  // than keeping a stream open for a run that's already over.
+  const trendSamples = isRunning
+    ? stream.samples
+    : (run.data?.samples ?? EMPTY_TREND_SAMPLES);
+  const trendPoints = useMemo(() => {
+    if (!run.data) return [];
+
+    return composeTrendPoints(
+      trendSamples,
+      initialReadings,
+      run.data.started_at,
+      run.data.completed_at,
+      !isRunning && run.data.restore_status !== "incomplete",
+    );
+  }, [initialReadings, isRunning, run.data, trendSamples]);
   const [notes, setNotes] = useState("");
   const [notesDirty, setNotesDirty] = useState(false);
 
@@ -321,7 +338,9 @@ export function RunDetailPage() {
                 })()
               ) : (
                 <p className="mt-2 text-slate-500">
-                  No measurements recorded yet.
+                  {stream.initialReadings
+                    ? "Initial readings captured; waiting for the first measurement."
+                    : "No measurements recorded yet."}
                 </p>
               )}
             </div>
@@ -331,12 +350,12 @@ export function RunDetailPage() {
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
               Trend
             </h2>
-            {trendSamples.length === 0 ? (
+            {trendPoints.length === 0 ? (
               <p className="text-sm text-slate-500">
                 No measurements recorded yet.
               </p>
             ) : (
-              <TrendChart samples={trendSamples} />
+              <TrendChart points={trendPoints} />
             )}
           </section>
 
@@ -455,43 +474,33 @@ export function RunDetailPage() {
             />
           </Section>
 
-          {run.data.initial_readings && (
+          {initialReadings && (
             <Section title="Initial readings">
-              <Field
-                label="PV initial"
-                value={num(run.data.initial_readings.pv_ini)}
-              />
-              <Field
-                label="MV initial"
-                value={num(run.data.initial_readings.mv_ini)}
-              />
+              <Field label="PV initial" value={num(initialReadings.pv_ini)} />
+              <Field label="MV initial" value={num(initialReadings.mv_ini)} />
               <Field
                 label="PV range"
-                value={`${num(run.data.initial_readings.pv_range_low)} – ${num(run.data.initial_readings.pv_range_high)}`}
+                value={`${num(initialReadings.pv_range_low)} – ${num(initialReadings.pv_range_high)}`}
               />
               <Field
                 label="MV range"
-                value={`${num(run.data.initial_readings.mv_range_low)} – ${num(run.data.initial_readings.mv_range_high)}`}
+                value={`${num(initialReadings.mv_range_low)} – ${num(initialReadings.mv_range_high)}`}
               />
               <Field
                 label="Controller direction"
-                value={
-                  DIRECTION_LABELS[
-                    run.data.initial_readings.controller_direction
-                  ]
-                }
+                value={DIRECTION_LABELS[initialReadings.controller_direction]}
               />
               <Field
                 label="Setpoint initial"
-                value={num(run.data.initial_readings.setpoint_ini)}
+                value={num(initialReadings.setpoint_ini)}
               />
               <Field
                 label="Mode (raw)"
-                value={run.data.initial_readings.mode_raw ?? "—"}
+                value={initialReadings.mode_raw ?? "—"}
               />
               <Field
                 label="Mode attribute (raw)"
-                value={run.data.initial_readings.mode_attribute_raw ?? "—"}
+                value={initialReadings.mode_attribute_raw ?? "—"}
               />
             </Section>
           )}

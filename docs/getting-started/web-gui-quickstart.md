@@ -123,7 +123,12 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
    in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current
-   relay switch count and cycles remaining. A **Cancel** button stops the run early (the same
+   relay switch count and cycles remaining. The initial PV/MV snapshot appears as soon as the
+   server records it, before the first MRFT sample, so the chart does not wait for a complete
+   relay tick to become visible. Independent OPC DA startup values are collected in one
+   batched read; a setpoint is read separately only when the original mode is Auto. It ends
+   with a terminal point at the original MV after the run restores the loop. A
+   **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
    [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
    - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own

@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
 use opcda_bridge_proto::bridge::{
     BrowseRequest, BrowseResponse, ListServersRequest, ListServersResponse, ReadRequest,
-    ReadResponse, WriteRequest, WriteResponse,
+    ReadResponse, TagValue as ProtoTagValue, WriteRequest, WriteResponse,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -72,14 +72,27 @@ impl Bridge for MockBridgeService {
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-    async fn read(&self, _request: Request<ReadRequest>) -> Result<Response<ReadResponse>, Status> {
+    async fn read(&self, request: Request<ReadRequest>) -> Result<Response<ReadResponse>, Status> {
         let call = self.read_calls.fetch_add(1, Ordering::SeqCst) + 1;
         if let Some(fail_from) = self.fail_read_from_call
             && call >= fail_from
         {
             return Err(Status::unavailable("mock bridge: simulated read failure"));
         }
-        Ok(Response::new(self.read_response.clone()))
+        let request = request.into_inner();
+        let mut response = self.read_response.clone();
+        if response.values.len() == 1 && response.values[0].tag_id == "ignored" {
+            let template = response.values[0].clone();
+            response.values = request
+                .tag_ids
+                .into_iter()
+                .map(|tag_id| ProtoTagValue {
+                    tag_id,
+                    ..template.clone()
+                })
+                .collect();
+        }
+        Ok(Response::new(response))
     }
 
     async fn write(
@@ -209,6 +222,39 @@ mod tests {
         drop(response);
         tokio::task::yield_now().await;
         tokio::task::yield_now().await;
+    }
+
+    #[tokio::test]
+    async fn read_expands_the_ignored_fixture_to_every_requested_tag() {
+        let service = MockBridgeService {
+            read_response: ReadResponse {
+                values: vec![ProtoTagValue {
+                    tag_id: "ignored".to_string(),
+                    value: "42.5".to_string(),
+                    quality: "Good".to_string(),
+                    timestamp: "2024-01-15 10:23:45".to_string(),
+                }],
+            },
+            ..Default::default()
+        };
+        let response = service
+            .read(Request::new(ReadRequest {
+                server: "MockServer".to_string(),
+                tag_ids: vec!["Unit1.PV".to_string(), "Unit1.MV".to_string()],
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(
+            response
+                .values
+                .iter()
+                .map(|value| value.tag_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Unit1.PV", "Unit1.MV"]
+        );
+        assert!(response.values.iter().all(|value| value.value == "42.5"));
     }
 
     #[tokio::test]

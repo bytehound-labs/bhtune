@@ -1,20 +1,20 @@
 import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import type { SampleResponse } from "../api/runs";
+import type { TrendPoint } from "../lib/trend";
 import { useTheme } from "../useTheme";
 
 export interface TrendChartProps {
-  samples: SampleResponse[];
+  points: TrendPoint[];
   height?: number;
 }
 
 /** uPlot wants columnar `[x[], y1[], y2[]]` data, not an array of per-tick objects. */
-function toAlignedData(samples: SampleResponse[]): uPlot.AlignedData {
+function toAlignedData(points: readonly TrendPoint[]): uPlot.AlignedData {
   // uPlot's time scale expects unix seconds, not the milliseconds `Date.getTime()` returns.
-  const time = samples.map((s) => new Date(s.sample.time).getTime() / 1000);
-  const pv = samples.map((s) => s.sample.pv);
-  const mv = samples.map((s) => s.state.mv_value_current);
+  const time = points.map((point) => new Date(point.time).getTime() / 1000);
+  const pv = points.map((point) => point.pv);
+  const mv = points.map((point) => point.mv);
   return [time, pv, mv];
 }
 
@@ -25,13 +25,12 @@ function toAlignedData(samples: SampleResponse[]): uPlot.AlignedData {
  * `useRunStream`'s SSE feed without fighting React's virtual-DOM diffing (see AGENTS.md's
  * "Chart library choice" note).
  *
- * Deliberately takes a plain `samples` array rather than an `id`/hook of its own, so the
- * exact same component renders a live-updating run (`RunDetailPage`, fed by
- * `useRunStream`) today and, later, a completed run loaded from history
- * (`history-explorer-ui`) — the two differ only in *how* the `samples` prop is produced,
- * never in how it's drawn.
+ * Deliberately takes plain trend points rather than an `id`/hook of its own, so the exact same
+ * component renders a live-updating run (`RunDetailPage`, fed by `useRunStream`) and a
+ * completed run loaded from history — the two differ only in how their points are produced,
+ * never in how they're drawn.
  */
-export function TrendChart({ samples, height = 320 }: TrendChartProps) {
+export function TrendChart({ points, height = 320 }: TrendChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
   const { theme } = useTheme();
@@ -72,7 +71,7 @@ export function TrendChart({ samples, height = 320 }: TrendChartProps) {
       legend: { show: true },
     };
 
-    const plot = new uPlot(options, toAlignedData(samples), container);
+    const plot = new uPlot(options, toAlignedData(points), container);
     plotRef.current = plot;
 
     const resizeObserver = new ResizeObserver(([entry]) => {
@@ -85,19 +84,19 @@ export function TrendChart({ samples, height = 320 }: TrendChartProps) {
       plot.destroy();
       plotRef.current = null;
     };
-    // Only `height` and `theme` feed the initial `options`; `samples` is deliberately not
+    // Only `height` and `theme` feed the initial `options`; `points` is deliberately not
     // a dependency here -- the second effect below owns feeding new data into the
     // already-created instance via `setData`, so recreating the whole plot on every new
-    // sample isn't needed.
+    // point isn't needed.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [height, theme]);
 
-  // Feeds new samples into the already-created instance rather than recreating the plot --
+  // Feeds new points into the already-created instance rather than recreating the plot --
   // `setData` is uPlot's own incremental-update path, and is what makes multiple updates
   // per second (live streaming) affordable.
   useEffect(() => {
-    plotRef.current?.setData(toAlignedData(samples));
-  }, [samples]);
+    plotRef.current?.setData(toAlignedData(points));
+  }, [points]);
 
   return <div ref={containerRef} />;
 }
