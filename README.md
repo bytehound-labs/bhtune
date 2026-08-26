@@ -519,8 +519,9 @@ sonar-scanner
   the same loop together (e.g. "has this valve degraded since last year?"). Everything else
   in the history explorer is already shipped: age-based retention, headless `history list`/
   `show`/`prune`, and a GUI run list/detail screen with a PV/MV trend chart that includes the
-  initial readings and terminal restored-MV boundary, export (CSV/JSON), and delete — see
-  [`docs/roadmap.md`](docs/roadmap.md#history-explorer).
+  initial readings and terminal restored-MV boundary, keeps short runs left-anchored for
+  12 configured poll intervals without synthetic points, and supports export (CSV/JSON) and
+  delete — see [`docs/roadmap.md`](docs/roadmap.md#history-explorer).
 
 See the [full roadmap](docs/roadmap.md) for the reasoning behind each item and its current
 status.

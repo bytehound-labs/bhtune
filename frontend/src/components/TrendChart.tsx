@@ -1,12 +1,13 @@
 import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import type { TrendPoint } from "../lib/trend";
+import { trendXRange, type TrendPoint } from "../lib/trend";
 import { useTheme } from "../useTheme";
 
 export interface TrendChartProps {
   points: TrendPoint[];
   height?: number;
+  pollIntervalMs?: number | null;
 }
 
 /** uPlot wants columnar `[x[], y1[], y2[]]` data, not an array of per-tick objects. */
@@ -30,7 +31,11 @@ function toAlignedData(points: readonly TrendPoint[]): uPlot.AlignedData {
  * completed run loaded from history — the two differ only in how their points are produced,
  * never in how they're drawn.
  */
-export function TrendChart({ points, height = 320 }: TrendChartProps) {
+export function TrendChart({
+  points,
+  height = 320,
+  pollIntervalMs,
+}: TrendChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
   const { theme } = useTheme();
@@ -55,7 +60,11 @@ export function TrendChart({ points, height = 320 }: TrendChartProps) {
       width: container.clientWidth || 600,
       height,
       scales: {
-        x: { time: true },
+        x: {
+          time: true,
+          range: (_self, initMin, initMax) =>
+            trendXRange(initMin, initMax, pollIntervalMs),
+        },
         mv: {},
       },
       series: [
@@ -84,12 +93,11 @@ export function TrendChart({ points, height = 320 }: TrendChartProps) {
       plot.destroy();
       plotRef.current = null;
     };
-    // Only `height` and `theme` feed the initial `options`; `points` is deliberately not
-    // a dependency here -- the second effect below owns feeding new data into the
-    // already-created instance via `setData`, so recreating the whole plot on every new
-    // point isn't needed.
+    // Only chart configuration feeds the initial `options`; `points` is deliberately not a
+    // dependency here -- the second effect below owns feeding new data into the already-created
+    // instance via `setData`, so recreating the whole plot on every new point isn't needed.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [height, theme]);
+  }, [height, pollIntervalMs, theme]);
 
   // Feeds new points into the already-created instance rather than recreating the plot --
   // `setData` is uPlot's own incremental-update path, and is what makes multiple updates

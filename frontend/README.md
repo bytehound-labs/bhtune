@@ -69,8 +69,10 @@ Server-Sent Events (`GET /api/runs/:id/stream`) while a run is active. The strea
 initial PV/MV snapshot as soon as the server records it, before the first MRFT sample, then
 replays every sample recorded so far and switches seamlessly to the completed run's stored
 samples once it finishes. The chart starts with the run's initial PV/MV readings and ends
-with a terminal point at the original MV after restoration; the same `TrendChart` component
-renders live and historical cases identically.
+with a terminal point at the original MV after restoration; short trends reserve 12 configured
+poll intervals on the x-axis and leave unused future space blank, then fit the full elapsed
+run once that horizon is reached. The same `TrendChart` component renders live and historical
+cases identically without fabricating samples.
 
 ## Scripts
 

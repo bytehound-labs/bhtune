@@ -138,6 +138,7 @@ export function RunDetailPage() {
   const trendSamples = isRunning
     ? stream.samples
     : (run.data?.samples ?? EMPTY_TREND_SAMPLES);
+  const trendPollIntervalMs = run.data?.original_request?.poll_interval_ms;
   const trendPoints = useMemo(() => {
     if (!run.data) return [];
 
@@ -355,7 +356,10 @@ export function RunDetailPage() {
                 No measurements recorded yet.
               </p>
             ) : (
-              <TrendChart points={trendPoints} />
+              <TrendChart
+                points={trendPoints}
+                pollIntervalMs={trendPollIntervalMs}
+              />
             )}
           </section>
 

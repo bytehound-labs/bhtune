@@ -6,6 +6,29 @@ export interface TrendPoint {
   mv: number;
 }
 
+export const DEFAULT_TREND_POLL_INTERVAL_MS = 800;
+export const TREND_STARTUP_INTERVALS = 12;
+
+/**
+ * Keeps short trends left-anchored by reserving a horizon of expected samples. The values
+ * are Unix seconds because this helper is used by uPlot's time scale.
+ */
+export function trendXRange(
+  dataMin: number,
+  dataMax: number,
+  pollIntervalMs: number | null | undefined,
+): [number, number] {
+  const intervalMs =
+    typeof pollIntervalMs === "number" &&
+    Number.isFinite(pollIntervalMs) &&
+    pollIntervalMs > 0
+      ? pollIntervalMs
+      : DEFAULT_TREND_POLL_INTERVAL_MS;
+  const startupHorizonSeconds = (TREND_STARTUP_INTERVALS * intervalMs) / 1000;
+
+  return [dataMin, Math.max(dataMax, dataMin + startupHorizonSeconds)];
+}
+
 /**
  * Builds the points shown by a run trend. Initial readings and the terminal restored-MV
  * point are presentation-only boundaries; persisted samples remain unchanged for history
