@@ -75,7 +75,9 @@ jobs:
           tool: cargo-mutants@27.1.0,protoc
 
       - name: Run cargo-mutants
-        run: cargo mutants --package "${{ matrix.package }}" --in-place --no-shuffle --timeout 180
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: cargo mutants --package "$PACKAGE" --in-place --no-shuffle --timeout 180
 
       - name: Upload mutation report
         if: always()
