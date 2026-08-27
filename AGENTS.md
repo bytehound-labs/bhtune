@@ -3915,8 +3915,20 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
 - **Trunk-based git flow**: single long-lived `main`, short-lived PR branches
   (`<type>/<short-description>`), squash merges, no `develop`/release branches. Releases are
   tagged directly off `main`.
-- **Agent workflow**: Always work on a feature branch, open a pull request, and merge only after
-  all required CI/CD checks pass. Never commit directly to `main`.
+- **Standard change protocol**: Start from a clean checkout with local `main` synchronized to
+  `origin/main`, then create a short-lived `<type>/<short-description>` branch. Keep each pull
+  request to one logical change group, run the smallest targeted checks followed by every
+  applicable repository gate, and update the relevant user-facing documentation in the same
+  change. Commit with Conventional Commits, push the branch, and open a focused pull request.
+  Monitor every required CI/CD and SonarQube status; repair failures on the same branch and
+  repeat until all checks pass. If branch protection reports the branch behind `main`, update it
+  before merging. A merge is allowed only when the applicable PR Sonar analysis reports zero
+  `OPEN`/`CONFIRMED` issues; intentional Accepted or False Positive findings must have a durable
+  rationale and related PR or documentation link. Squash-merge only after the complete green
+  result, wait for the resulting `main` workflows and Sonar analysis, and verify the intended
+  findings disappeared without introducing new ones before starting dependent work. Never commit
+  or push directly to `main`, bypass branch protection, use `NOSONAR`, or silence a real finding
+  merely to clean a dashboard.
 - **Commits**: [Conventional Commits](https://www.conventionalcommits.org/).
 - **Formatting/linting**: `cargo fmt --check --all` and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
