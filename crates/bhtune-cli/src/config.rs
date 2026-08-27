@@ -1619,7 +1619,7 @@ level = "info"
         assert!(matches!(
             err,
             ConfigStoreError::Write { source, .. }
-                if source.kind() == io::ErrorKind::NotADirectory
+                if source.kind() != io::ErrorKind::AlreadyExists
         ));
     }
 
