@@ -522,8 +522,10 @@ are supported. For a PR-focused diagnostic, limit the run to a diff with
 [`Cargo Mutants`](.github/workflows/cargo-mutants.yml) workflow runs all five packages every
 Saturday at 02:17 UTC and supports a single-package manual dispatch. Mutation reports are
 retained as workflow artifacts; the package suite includes focused failure-path and output
-assertions in addition to the normal behavioral tests. The slow weekly analysis is intentionally
-separate from required PR validation.
+assertions in addition to the normal behavioral tests. The server shard builds `frontend/dist/`
+before mutation testing so its SPA fallback and asset-serving assertions run instead of being
+skipped on a Rust-only runner. The slow weekly analysis is intentionally separate from required
+PR validation.
 
 ## Roadmap
 

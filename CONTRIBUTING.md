@@ -61,8 +61,9 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 - Cargo-mutants measures whether tests catch behavioral changes. Use
   `cargo mutants --package <package> --in-place --no-shuffle --timeout 180` for a package or
   `cargo mutants --in-diff <diff-file> --in-place` for a focused diagnostic; shared defaults
-  are in `.cargo/mutants.toml`. It is intentionally a weekly/manual, non-blocking workflow
-  rather than a required pull-request status.
+  are in `.cargo/mutants.toml`. The server mutation shard builds `frontend/dist/` first because
+  the SPA fallback tests exercise real built assets. It is intentionally a weekly/manual,
+  non-blocking workflow rather than a required pull-request status.
 
 ## Dependency updates
 
@@ -147,7 +148,8 @@ artifact provenance. Do not add release artifacts that bypass those steps.
 The weekly/manual Cargo Mutants workflow runs every workspace package independently with
 annotations and a retained `mutants.out/` artifact. A missed or timed-out mutant fails its
 package shard, but mutation testing remains separate from the required coverage and validation
-statuses because it is deliberately slow.
+statuses because it is deliberately slow. The `bhtune-server` shard builds the frontend before
+running its tests so asset-serving mutations are observable.
 
 ## Documentation
 

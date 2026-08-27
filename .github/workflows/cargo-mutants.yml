@@ -74,6 +74,19 @@ jobs:
         with:
           tool: cargo-mutants@27.1.0,protoc
 
+      # `bhtune-server`'s SPA fallback tests intentionally exercise real files from
+      # `frontend/dist/`; build them here so the mutation shard does not skip every
+      # asset-serving assertion on a Rust-only runner.
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+        if: matrix.package == 'bhtune-server'
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Build frontend for server mutation tests
+        if: matrix.package == 'bhtune-server'
+        run: pnpm --filter bhtune-frontend run build
+
       - name: Run cargo-mutants
         env:
           PACKAGE: ${{ matrix.package }}
