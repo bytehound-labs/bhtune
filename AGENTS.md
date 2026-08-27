@@ -3933,7 +3933,10 @@ The dedicated `.github/workflows/cargo-mutants.yml` workflow runs a fail-fast-di
 02:17 UTC, with a single-package selector for manual dispatch. Each shard has a bounded job
 timeout, keeps GitHub annotations enabled, uploads `mutants.out/` for 14 days, and fails when a
 mutant is missed or times out. It is intentionally non-blocking for ordinary pull requests
-because a complete mutation pass is substantially slower than required validation.
+because a complete mutation pass is substantially slower than required validation. The
+`bhtune-server` shard builds `frontend/dist/` before running its tests, since the SPA fallback
+tests exercise real built assets and otherwise skip every asset-serving assertion on a Rust-only
+runner.
 
 Install the pinned local tool and run one package with:
 
