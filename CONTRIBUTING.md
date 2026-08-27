@@ -58,12 +58,6 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   `sonar-scanner` with `SONAR_TOKEN` exported. The Sonar workflow runs for relevant pull
   requests and pushes to `main`, plus a Wednesday 04:17 UTC weekly scan; fork pull requests
   intentionally skip the secret-bearing analysis.
-- Cargo-mutants measures whether tests catch behavioral changes. Use
-  `cargo mutants --package <package> --in-place --no-shuffle --timeout 180` for a package or
-  `cargo mutants --in-diff <diff-file> --in-place` for a focused diagnostic; shared defaults
-  are in `.cargo/mutants.toml`. The server mutation shard builds `frontend/dist/` first because
-  the SPA fallback tests exercise real built assets. It is intentionally a weekly/manual,
-  non-blocking workflow rather than a required pull-request status.
 
 ## Dependency updates
 
@@ -144,12 +138,6 @@ include a representative upgrade test when they alter an existing schema.
 
 Release tags publish checksums, a CycloneDX SBOM, Sigstore blob-signature bundles, and GitHub
 artifact provenance. Do not add release artifacts that bypass those steps.
-
-The weekly/manual Cargo Mutants workflow runs every workspace package independently with
-annotations and a retained `mutants.out/` artifact. A missed or timed-out mutant fails its
-package shard, but mutation testing remains separate from the required coverage and validation
-statuses because it is deliberately slow. The `bhtune-server` shard builds the frontend before
-running its tests so asset-serving mutations are observable.
 
 ## Documentation
 

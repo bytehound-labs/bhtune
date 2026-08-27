@@ -506,27 +506,6 @@ cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
 sonar-scanner
 ```
 
-Cargo-mutants measures test effectiveness by checking whether focused tests detect intentional
-behavior changes. It complements Codecov's line-coverage gate and SonarQube's maintainability
-analysis rather than replacing either:
-
-```sh
-cargo install cargo-mutants --version 27.1.0
-cargo mutants --package bhtune-core --in-place --no-shuffle --timeout 180
-```
-
-The shared defaults and narrow exclusions live in [`.cargo/mutants.toml`](.cargo/mutants.toml).
-Run another package by changing `--package`; `bhtune-server` and the other workspace packages
-are supported. For a PR-focused diagnostic, limit the run to a diff with
-`cargo mutants --in-diff <diff-file> --in-place`. The scheduled
-[`Cargo Mutants`](.github/workflows/cargo-mutants.yml) workflow runs all five packages every
-Saturday at 02:17 UTC and supports a single-package manual dispatch. Mutation reports are
-retained as workflow artifacts; the package suite includes focused failure-path and output
-assertions in addition to the normal behavioral tests. The server shard builds `frontend/dist/`
-before mutation testing so its SPA fallback and asset-serving assertions run instead of being
-skipped on a Rust-only runner. The slow weekly analysis is intentionally separate from required
-PR validation.
-
 ## Roadmap
 
 - OPC UA and Modbus `Driver` implementations, alongside OPC DA.
