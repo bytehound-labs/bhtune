@@ -263,6 +263,12 @@ mod tests {
     use super::*;
     use bhtune_db::connect_in_memory;
 
+    #[test]
+    fn shutdown_and_retention_intervals_match_the_documented_policy() {
+        assert_eq!(SHUTDOWN_RUN_CANCEL_TIMEOUT, Duration::from_secs(35));
+        assert_eq!(RETENTION_SWEEP_INTERVAL, Duration::from_secs(24 * 60 * 60));
+    }
+
     #[tokio::test]
     async fn build_server_propagates_a_malformed_config_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -288,12 +294,10 @@ mod tests {
         assert!(error.to_string().contains("templates file not found"));
     }
 
-    #[tokio::test]
-    async fn retention_tick_deletes_runs_past_the_cutoff_and_logs_nothing_fatal() {
+    async fn insert_old_run(pool: &bhtune_db::SqlitePool) -> i64 {
         use bhtune_core::{ControllerType, LoopConfig, LoopTags, ProcessType, built_in_templates};
         use bhtune_db::models::{TemplateOrigin, TuneDriver, TuneRunRow};
 
-        let pool = connect_in_memory().await.unwrap();
         let template = built_in_templates().remove(0);
         let tags = LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &template);
         let config = LoopConfig {
@@ -306,8 +310,8 @@ mod tests {
             mrft_delay_secs: 0,
         };
         let old_started_at = chrono::Utc::now() - chrono::Duration::days(100);
-        let old_run = TuneRunRow::start(
-            &pool,
+        TuneRunRow::start(
+            pool,
             None,
             "LIC-X",
             TuneDriver::Simulator,
@@ -318,11 +322,23 @@ mod tests {
             old_started_at,
         )
         .await
-        .unwrap();
+        .unwrap()
+        .id
+    }
+
+    #[tokio::test]
+    async fn retention_tick_deletes_runs_past_the_cutoff_and_logs_nothing_fatal() {
+        let pool = connect_in_memory().await.unwrap();
+        let old_run_id = insert_old_run(&pool).await;
 
         retention_tick(&pool, 30).await;
 
-        assert!(TuneRunRow::get(&pool, old_run.id).await.unwrap().is_none());
+        assert!(
+            bhtune_db::models::TuneRunRow::get(&pool, old_run_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -355,6 +371,7 @@ mod tests {
     #[tokio::test]
     async fn retention_tick_live_runs_when_retention_is_configured() {
         let pool = connect_in_memory().await.unwrap();
+        let old_run_id = insert_old_run(&pool).await;
         let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
             path: None,
             missing_is_allowed: true,
@@ -368,6 +385,13 @@ mod tests {
         }));
 
         retention_tick_live(&pool, &store).await;
+
+        assert!(
+            bhtune_db::models::TuneRunRow::get(&pool, old_run_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -430,21 +454,33 @@ mod tests {
     async fn spawned_retention_sweeper_runs_a_periodic_tick() {
         tokio::time::resume();
         let pool = connect_in_memory().await.unwrap();
+        let old_run_id = insert_old_run(&pool).await;
         tokio::time::pause();
         let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
             path: None,
             missing_is_allowed: true,
             original_raw: None,
-            config: Default::default(),
+            config: bhtune_cli::config::BhtuneConfig {
+                retention_days: Some(30),
+                ..Default::default()
+            },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
         }));
 
-        spawn_retention_sweeper(pool, store);
+        spawn_retention_sweeper(pool.clone(), store);
         tokio::task::yield_now().await;
         tokio::time::advance(RETENTION_SWEEP_INTERVAL + Duration::from_secs(1)).await;
+        tokio::time::resume();
         for _ in 0..3 {
             tokio::task::yield_now().await;
         }
+
+        assert!(
+            bhtune_db::models::TuneRunRow::get(&pool, old_run_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

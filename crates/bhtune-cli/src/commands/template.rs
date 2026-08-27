@@ -156,25 +156,33 @@ async fn import_catalog(pool: &SqlitePool, templates: Vec<DcsTemplate>) -> anyho
         imported.push(template.name);
     }
 
+    for message in catalog_import_messages(&imported, &skipped) {
+        println!("{message}");
+    }
+    Ok(())
+}
+
+fn catalog_import_messages(imported: &[String], skipped: &[String]) -> Vec<String> {
+    let mut messages = Vec::new();
     if imported.is_empty() {
-        println!("Imported no new templates.");
+        messages.push("Imported no new templates.".to_string());
     } else {
-        println!(
+        messages.push(format!(
             "Imported {} template{}: {}.",
             imported.len(),
             if imported.len() == 1 { "" } else { "s" },
             imported.join(", ")
-        );
+        ));
     }
     if !skipped.is_empty() {
-        println!(
+        messages.push(format!(
             "Skipped {} already-existing template{}: {}.",
             skipped.len(),
             if skipped.len() == 1 { "" } else { "s" },
             skipped.join(", ")
-        );
+        ));
     }
-    Ok(())
+    messages
 }
 
 async fn export(
@@ -258,6 +266,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_propagates_database_errors() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        pool.close().await;
+
+        assert!(list(&pool).await.is_err());
+    }
+
+    #[tokio::test]
     async fn list_shows_a_dash_for_a_template_with_no_recorded_versions() {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
         let mut template = bhtune_core::built_in_templates().remove(0);
@@ -269,6 +285,27 @@ mod tests {
         // Exercises the empty-`versions` "-" formatting branch; `list` itself only prints,
         // so success here (rather than a panic on the empty-vec join) is what matters.
         list(&pool).await.unwrap();
+    }
+
+    #[test]
+    fn catalog_import_messages_report_imports_and_skips() {
+        let imported = vec!["New Site".to_string()];
+        let skipped = vec!["Existing Site".to_string(), "Another Site".to_string()];
+        assert_eq!(
+            catalog_import_messages(&imported, &skipped),
+            vec![
+                "Imported 1 template: New Site.".to_string(),
+                "Skipped 2 already-existing templates: Existing Site, Another Site.".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn catalog_import_messages_omit_the_skip_line_when_nothing_was_skipped() {
+        assert_eq!(
+            catalog_import_messages(&[], &[]),
+            vec!["Imported no new templates.".to_string()]
+        );
     }
 
     #[tokio::test]

@@ -397,6 +397,12 @@ mod tests {
         }
 
         #[test]
+        fn unclamped_amplitude_uses_the_mv_span() {
+            let amp = clamp_relay_amplitude(10.0, 50.0, 20.0, 100.0, MrftCompat::default());
+            assert_eq!(amp, 8.0); // 10% of (100-20)
+        }
+
+        #[test]
         fn upper_clamp_engages_near_ceiling() {
             let amp = clamp_relay_amplitude(10.0, 95.0, 0.0, 100.0, MrftCompat::default());
             assert_eq!(amp, 5.0); // mv_range_high - mv_ini
@@ -442,6 +448,14 @@ mod tests {
             // below the floor, so the fixed clamp gives mv_ini - mv_range_low = 5.
             let amp = clamp_relay_amplitude(10.0, 10.0, 5.0, 100.0, MrftCompat::default());
             assert_eq!(amp, 5.0);
+        }
+
+        #[test]
+        fn lower_clamp_boundary_uses_subtraction() {
+            let relay_amp_percent = 100.0 * 1.1 / 91.0;
+            let amp =
+                clamp_relay_amplitude(relay_amp_percent, 10.0, 9.0, 100.0, MrftCompat::default());
+            assert_eq!(amp, 1.0);
         }
     }
 
@@ -586,6 +600,93 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn direct_action_hysteresis_uses_previous_sign_and_subtracts() {
+        let mut engine = MrftEngine::new(
+            config(),
+            ControllerDirection::Direct,
+            0.3,
+            initial(),
+            t(0),
+            MrftCompat::default(),
+        );
+
+        assert_eq!(
+            engine.step(Tick {
+                time: t(1),
+                pv: 40.0,
+            }),
+            vec![Action::WriteMv(40.0)]
+        );
+        assert_eq!(engine.mv_sign_init, -1);
+
+        // Keep the previous sign at -1 while building a nonzero hysteresis from a
+        // second sample after the switch.
+        assert!(
+            engine
+                .step(Tick {
+                    time: t(2),
+                    pv: 40.0,
+                })
+                .is_empty()
+        );
+
+        // The previous MV is still below the initial MV, so its sign is -1. With
+        // the subtraction and multiplication intact, the next relay target
+        // remains 40 and no switch is needed.
+        assert!(
+            engine
+                .step(Tick {
+                    time: t(3),
+                    pv: 49.0,
+                })
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn direct_hysteresis_switch_sign_uses_multiplication() {
+        let mut engine = MrftEngine::new(
+            LoopConfig {
+                noise_protection_secs: 100,
+                ..config()
+            },
+            ControllerDirection::Direct,
+            0.3,
+            initial(),
+            t(0),
+            MrftCompat::default(),
+        );
+
+        assert_eq!(
+            engine.step(Tick {
+                time: t(1),
+                pv: 40.0,
+            }),
+            vec![Action::WriteMv(40.0)]
+        );
+        assert!(
+            engine
+                .step(Tick {
+                    time: t(2),
+                    pv: 60.0,
+                })
+                .is_empty()
+        );
+        assert!(
+            engine
+                .step(Tick {
+                    time: t(3),
+                    pv: 53.0,
+                })
+                .is_empty()
+        );
+
+        assert_eq!(engine.hysteresis, 3.0);
+        assert_eq!(engine.mv_sign_next_step, 1);
+        assert_eq!(engine.mv_value_next_step, 60.0);
     }
 
     /// With `num_cycles_skip=1`, the first `NumSwitchesSkip = 1*2+1 = 3` switches must not

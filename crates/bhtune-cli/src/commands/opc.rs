@@ -267,6 +267,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn browse_connect_failure_surfaces_as_an_error() {
+        let err = browse("127.0.0.1:1", "Sim.Server", "").await.unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[tokio::test]
     async fn connect_failure_surfaces_as_an_error() {
         // Port 1 is a privileged/unlikely-bound port; connecting should fail promptly.
         let err = read(

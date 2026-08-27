@@ -1716,20 +1716,20 @@ async fn attempt_restore(
                 let reason = report
                     .failure_summary()
                     .unwrap_or_else(|| "one or more restore steps failed".to_string());
-                warn_restore_incomplete(tags, initial, &reason);
+                let _ = warn_restore_incomplete(tags, initial, &reason);
                 RestoreAttempt::Incomplete { reason }
             }
         }
         () = ctrl_c.signalled() => {
             let reason = "a second Ctrl+C was received while restoring the loop".to_string();
-            warn_restore_incomplete(tags, initial, &reason);
+            let _ = warn_restore_incomplete(tags, initial, &reason);
             RestoreAttempt::Incomplete { reason }
         }
         () = tokio::time::sleep(Duration::from_secs(restore_timeout_secs)) => {
             let reason = format!(
                 "the restore did not complete within the {restore_timeout_secs}s --restore-timeout-secs limit"
             );
-            warn_restore_incomplete(tags, initial, &reason);
+            let _ = warn_restore_incomplete(tags, initial, &reason);
             RestoreAttempt::Incomplete { reason }
         }
     }
@@ -1742,17 +1742,27 @@ async fn attempt_restore(
 /// mode/setpoint/mode-attribute steps -- but the MV is called out specifically since it is
 /// the one value every template has and the one most directly consequential if left at a
 /// relay-test extreme.
-fn warn_restore_incomplete(tags: &LoopTags, initial: &InitialState, reason: &str) {
-    eprintln!(
+fn restore_incomplete_warning_message(
+    tags: &LoopTags,
+    initial: &InitialState,
+    reason: &str,
+) -> String {
+    format!(
         "WARNING: could not confirm the loop was fully restored ({reason}). Tag '{}' may still be at its last relay-test value instead of its pre-test value {}. Check it -- and the loop's mode -- by hand.",
         tags.manipulated_variable, initial.mv_ini
-    );
+    )
+}
+
+fn warn_restore_incomplete(tags: &LoopTags, initial: &InitialState, reason: &str) -> String {
+    let message = restore_incomplete_warning_message(tags, initial, reason);
+    eprintln!("{message}");
     tracing::error!(
         mv_tag = %tags.manipulated_variable,
         mv_ini = initial.mv_ini,
         reason,
         "loop restore could not be confirmed"
     );
+    message
 }
 
 /// Best-effort records a restore attempt's outcome on the run (`safety-restore-guard`,
@@ -2355,7 +2365,7 @@ async fn maybe_write_back(
         &tags.derivative_constant,
     ) else {
         let detail = "no PID constant tags configured for this run's driver/template";
-        if output == OutputFormat::Table {
+        if prints_table_output(output) {
             println!(
                 "No PID constant tags configured for this run's driver/template; skipping write-back."
             );
@@ -2374,7 +2384,7 @@ async fn maybe_write_back(
     let selected = match write_pid {
         Some(level) => match results.iter().find(|r| r.response_level == level) {
             Some(r) => {
-                if output == OutputFormat::Table {
+                if prints_table_output(output) {
                     println!(
                         "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
                     );
@@ -2383,7 +2393,7 @@ async fn maybe_write_back(
             }
             None => {
                 let detail = format!("no calculated result recorded for response level {level:?}");
-                if output == OutputFormat::Table {
+                if prints_table_output(output) {
                     println!(
                         "No calculated result recorded for response level {level:?}; skipping write-back."
                     );
@@ -2391,7 +2401,7 @@ async fn maybe_write_back(
                 return Ok((WriteBackOutcome::Failed, Some(detail)));
             }
         },
-        None if output == OutputFormat::Json => {
+        None if skips_interactive_prompt(write_pid, output) => {
             return Ok((
                 WriteBackOutcome::Skipped,
                 Some(
@@ -2472,18 +2482,26 @@ async fn maybe_write_back(
 
     match outcome {
         PidWriteOutcome::Written => {
-            if output == OutputFormat::Table {
+            if prints_table_output(output) {
                 println!("Wrote and confirmed {response_level:?} PID parameters.");
             }
             Ok((WriteBackOutcome::Written { response_level }, None))
         }
         PidWriteOutcome::Failed { detail } => {
-            if output == OutputFormat::Table {
+            if prints_table_output(output) {
                 println!("PID write-back failed: {detail}");
             }
             Ok((WriteBackOutcome::Failed, Some(detail)))
         }
     }
+}
+
+fn prints_table_output(output: OutputFormat) -> bool {
+    matches!(output, OutputFormat::Table)
+}
+
+fn skips_interactive_prompt(write_pid: Option<ResponseLevel>, output: OutputFormat) -> bool {
+    write_pid.is_none() && matches!(output, OutputFormat::Json)
 }
 
 #[cfg(test)]
@@ -2541,7 +2559,9 @@ mod tests {
             direction: Some(DirectionArg::Reverse),
             tag_overrides: None,
             poll_interval_ms: 5,
-            timeout_secs: 3600,
+            // Keep ordinary tune tests bounded even when a mutation prevents the
+            // simulator from completing. The dedicated timeout test overrides this.
+            timeout_secs: 5,
             op_timeout_secs: 30,
             restore_timeout_secs: 30,
             notes: Some("test note".to_string()),
@@ -2601,6 +2621,20 @@ mod tests {
         // skipped entirely rather than hanging on stdin.
         let writes = TuneWriteRow::list_for_run(&pool, runs[0].id).await.unwrap();
         assert!(writes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prepared_tune_run_id_matches_the_persisted_run_id() {
+        let pool = seeded_pool().await;
+        let first = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let second = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+
+        assert!(first.run_id() > 0);
+        assert_eq!(second.run_id(), first.run_id() + 1);
     }
 
     /// Every range/direction override is CLI-supplied below, so `read_initial_values` never
@@ -2774,6 +2808,86 @@ mod tests {
             .await
             .unwrap();
         assert!(samples.len() > 100);
+    }
+
+    #[tokio::test]
+    async fn mrft_delay_keeps_the_engine_idle_during_pre_test_padding() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let mut args = fast_simulator_args();
+        args.mrft_delay = 1;
+        args.cycles_count = Some(1_000);
+        let config = build_loop_config(&args).unwrap();
+        let started_at = Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "pre-delay",
+            TuneDriver::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
+        .await
+        .unwrap();
+        let driver = honeywell_driver_auto();
+        let initial = sample_initial_state();
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            lookup(
+                config.process_type,
+                config.controller_type,
+                ResponseLevel::Aggressive,
+            )
+            .beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(1);
+        });
+
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            started_at,
+            &mut ctrl_c,
+            &mut MutationGuard::default(),
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::UserInterrupt)
+        ));
+        assert!(
+            !TuneSampleRow::list_for_run(&pool, run.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            driver.write_log().is_empty(),
+            "MRFT writes must not occur during pre-test padding"
+        );
     }
 
     #[tokio::test]
@@ -4306,6 +4420,11 @@ mod tests {
         assert!(err.to_string().contains("not a number"));
     }
 
+    #[test]
+    fn parse_f32_value_accepts_trimmed_finite_numbers() {
+        assert_eq!(parse_f32_value("Unit1.LIC101.PV", " 42.5 ").unwrap(), 42.5);
+    }
+
     /// Rust's `f32::from_str` happily parses the literal strings `"nan"`/`"inf"` --
     /// confirming this gap is what motivated hardening `read_f32` (finding 4 of the
     /// live-plant safety review): a driver tag returning either string used to flow
@@ -4347,6 +4466,24 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("finite"));
+    }
+
+    #[test]
+    fn read_batch_f32_returns_a_good_numeric_value() {
+        let values = HashMap::from([(
+            "Unit1.LIC101.PV".to_string(),
+            TagValue {
+                tag: "Unit1.LIC101.PV".to_string(),
+                value: "42.5".to_string(),
+                quality: bhtune_driver::Quality::Good,
+                timestamp: None,
+            },
+        )]);
+
+        assert_eq!(
+            read_batch_f32(&values, "Unit1.LIC101.PV", false).unwrap(),
+            42.5
+        );
     }
 
     #[tokio::test]
@@ -4883,6 +5020,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn maybe_write_back_reports_blank_and_n_as_no_selection() {
+        for input in [b"\n".as_slice(), b"N\n".as_slice()] {
+            let (pool, run_id) = run_with_recorded_results().await;
+            let template = honeywell_template();
+            let tags = honeywell_tags();
+            let driver = honeywell_driver_auto();
+
+            let (outcome, detail) = maybe_write_back(
+                &pool,
+                run_id,
+                &tags,
+                &template,
+                &driver,
+                build_loop_config(&fast_simulator_args()).unwrap(),
+                None,
+                OutputFormat::Table,
+                false,
+                &mut std::io::Cursor::new(input),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(outcome, WriteBackOutcome::Skipped);
+            assert_eq!(
+                detail.as_deref(),
+                Some("skipped interactively (no selection made)")
+            );
+            assert!(
+                TuneWriteRow::list_for_run(&pool, run_id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn maybe_write_back_writes_and_confirms_a_valid_selection() {
         let (outcome, writes) = write_back_with_input(b"2\n").await; // Moderate (index 1)
         assert_eq!(
@@ -5397,6 +5571,44 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn output_predicates_match_table_and_json_write_back_modes() {
+        assert!(prints_table_output(OutputFormat::Table));
+        assert!(!prints_table_output(OutputFormat::Json));
+        assert!(skips_interactive_prompt(None, OutputFormat::Json));
+        assert!(!skips_interactive_prompt(
+            Some(ResponseLevel::Aggressive),
+            OutputFormat::Json
+        ));
+        assert!(!skips_interactive_prompt(None, OutputFormat::Table));
+    }
+
+    #[test]
+    fn restore_incomplete_warning_message_names_the_reason_and_mv_restore_target() {
+        let message = restore_incomplete_warning_message(
+            &honeywell_tags(),
+            &sample_initial_state(),
+            "restore timed out",
+        );
+
+        assert!(message.contains("restore timed out"));
+        assert!(message.contains("Unit1.LIC101.OP"));
+        assert!(message.contains("45"));
+        assert!(message.contains("loop's mode"));
+    }
+
+    #[test]
+    fn warn_restore_incomplete_returns_the_message_it_emits() {
+        let tags = honeywell_tags();
+        let initial = sample_initial_state();
+        let message = warn_restore_incomplete(&tags, &initial, "restore timed out");
+
+        assert_eq!(
+            message,
+            restore_incomplete_warning_message(&tags, &initial, "restore timed out")
         );
     }
 

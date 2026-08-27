@@ -64,6 +64,7 @@ pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Driver>> {
 mod tests {
     use super::*;
     use crate::args::DirectionArg;
+    use bhtune_driver::TagWrite;
 
     fn sim_args() -> TuneArgs {
         TuneArgs {
@@ -108,6 +109,31 @@ mod tests {
         let driver = build(&sim_args()).await.unwrap();
         let values = driver.read(&[SIMULATOR_MV_TAG.to_string()]).await.unwrap();
         assert_eq!(values[0].value, "50");
+    }
+
+    #[tokio::test]
+    async fn simulator_uses_poll_interval_in_seconds_for_process_dynamics() {
+        let mut args = sim_args();
+        args.sim_tau = 1_000.0;
+        args.sim_dead_time = 0.0;
+        args.sim_initial_pv = 0.0;
+        args.sim_initial_mv = 0.0;
+        args.poll_interval_ms = 800;
+
+        let driver = build(&args).await.unwrap();
+        let outcome = driver
+            .write(&SIMULATOR_MV_TAG.to_string(), TagWrite::Float(100.0))
+            .await
+            .unwrap();
+        assert!(outcome.success);
+
+        let values = driver.read(&[SIMULATOR_PV_TAG.to_string()]).await.unwrap();
+        let pv = values[0].value.parse::<f32>().unwrap();
+        let expected = 100.0 * (1.0 - (-0.8_f32 / 1_000.0).exp());
+        assert!(
+            (pv - expected).abs() < 0.001,
+            "expected one 800 ms process step ({expected}), got {pv}"
+        );
     }
 
     #[tokio::test]

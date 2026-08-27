@@ -244,7 +244,9 @@ mod tests {
     async fn manual_handle_second_trigger_resolves_signalled_again() {
         let (mut ctrl_c, handle) = CtrlC::manual();
         handle.trigger();
-        ctrl_c.signalled().await;
+        tokio::time::timeout(Duration::from_millis(200), ctrl_c.signalled())
+            .await
+            .expect("the first trigger should resolve signalled()");
         handle.trigger();
         tokio::time::timeout(Duration::from_millis(200), ctrl_c.signalled())
             .await

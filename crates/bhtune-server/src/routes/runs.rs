@@ -1091,10 +1091,9 @@ mod tests {
         );
     }
 
-    /// Omits every field with a `#[serde(default = "...")]` custom default function
-    /// (`sim_gain`, `sim_tau`, `sim_dead_time`, `poll_interval_ms`) -- every other test in
-    /// this module always sets these explicitly (for fast, deterministic convergence), which
-    /// left the default-value functions themselves untested. Cancels immediately after
+    /// Omits every field with a `#[serde(default = "...")]` custom default function. Every
+    /// other test in this module sets these explicitly (for fast, deterministic convergence),
+    /// which left the default-value functions themselves untested. Cancels immediately after
     /// starting rather than waiting for completion, since `poll_interval_ms` here really is
     /// the slow, real CLI default (800ms/tick).
     #[tokio::test]
@@ -1105,7 +1104,23 @@ mod tests {
         object.remove("sim_gain");
         object.remove("sim_tau");
         object.remove("sim_dead_time");
+        object.remove("sim_initial_pv");
+        object.remove("sim_initial_mv");
         object.remove("poll_interval_ms");
+        object.remove("timeout_secs");
+        object.remove("op_timeout_secs");
+        object.remove("restore_timeout_secs");
+
+        let parsed: StartRunRequest = serde_json::from_value(request.clone()).unwrap();
+        assert_eq!(parsed.sim_gain, 1.0);
+        assert_eq!(parsed.sim_tau, 2.0);
+        assert_eq!(parsed.sim_dead_time, 5.0);
+        assert_eq!(parsed.sim_initial_pv, 50.0);
+        assert_eq!(parsed.sim_initial_mv, 50.0);
+        assert_eq!(parsed.poll_interval_ms, 800);
+        assert_eq!(parsed.timeout_secs, 3600);
+        assert_eq!(parsed.op_timeout_secs, 30);
+        assert_eq!(parsed.restore_timeout_secs, 30);
 
         let response = post_json(crate::build_router(state.clone()), "/api/runs", request).await;
         assert_eq!(response.status(), StatusCode::CREATED);
@@ -1569,6 +1584,55 @@ mod tests {
                 .unwrap()
                 .contains("no PID constant tags configured")
         );
+    }
+
+    #[tokio::test]
+    async fn each_missing_pid_constant_tag_is_rejected_individually() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+        let base = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+
+        for missing_tag in ["proportional", "integral", "derivative"] {
+            let mut run = base.clone();
+            match missing_tag {
+                "proportional" => run.tags.proportional_constant = None,
+                "integral" => run.tags.integral_constant = None,
+                "derivative" => run.tags.derivative_constant = None,
+                _ => unreachable!(),
+            }
+
+            let Err(ApiError::BadRequest(error)) = require_writable_run(&run) else {
+                panic!("missing {missing_tag} tag should produce a bad-request error");
+            };
+            assert!(
+                error.contains("no PID constant tags configured"),
+                "missing {missing_tag} tag should be rejected: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn each_missing_recorded_connection_field_is_rejected_individually() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+        let base = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+
+        for missing_field in ["opc_server", "bridge_host"] {
+            let mut run = base.clone();
+            match missing_field {
+                "opc_server" => run.opc_server = None,
+                "bridge_host" => run.bridge_host = None,
+                _ => unreachable!(),
+            }
+
+            let Err(ApiError::BadRequest(error)) = require_writable_run(&run) else {
+                panic!("missing {missing_field} should produce a bad-request error");
+            };
+            assert!(
+                error.contains("no recorded OPC server"),
+                "missing {missing_field} should be rejected: {error}"
+            );
+        }
     }
 
     #[tokio::test]

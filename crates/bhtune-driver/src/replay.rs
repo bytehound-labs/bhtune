@@ -638,7 +638,7 @@ mod tests {
         );
 
         let mut completion = None;
-        loop {
+        for _ in 0..total_samples {
             let tick = match pending_tick.take() {
                 Some(tick) => tick,
                 None => {

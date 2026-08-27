@@ -75,6 +75,8 @@ fn run_fast_simulator_tune(extra_args: &[&str]) -> (Option<i32>, String, String)
             "reverse",
             "--poll-interval-ms",
             "5",
+            "--timeout-secs",
+            "10",
             "--notes",
             "json-contract-test",
         ])
