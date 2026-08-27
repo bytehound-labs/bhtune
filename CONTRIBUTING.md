@@ -19,10 +19,10 @@ the CLA itself for exactly what rights you are and are not granting.
   the commit convention below.
 - No `develop` branch and no long-lived `release` branches. Releases are tagged directly off
   `main` ([SemVer](https://semver.org/)).
-- Incomplete or experimental work that must land before it's fully ready goes behind a Cargo
+- Incomplete or experimental work that must land before it is fully ready goes behind a Cargo
   feature flag rather than sitting unmerged on a branch.
-- Trivial fixes (typos, doc tweaks) may be pushed directly to `main`; everything else goes
-  through a PR so CI runs.
+- Every change goes through a feature branch and pull request, including documentation and
+  one-line fixes, so CI runs consistently and concurrent work does not bypass review.
 
 ## Commit messages
 
@@ -58,6 +58,11 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   `sonar-scanner` with `SONAR_TOKEN` exported. The Sonar workflow runs for relevant pull
   requests and pushes to `main`, plus a Wednesday 04:17 UTC weekly scan; fork pull requests
   intentionally skip the secret-bearing analysis.
+- Cargo-mutants measures whether tests catch behavioral changes. Use
+  `cargo mutants --package <package> --in-place --no-shuffle --timeout 180` for a package or
+  `cargo mutants --in-diff <diff-file> --in-place` for a focused diagnostic; shared defaults
+  are in `.cargo/mutants.toml`. It is intentionally a weekly/manual, non-blocking workflow
+  rather than a required pull-request status.
 
 ## Dependency updates
 
@@ -138,6 +143,11 @@ include a representative upgrade test when they alter an existing schema.
 
 Release tags publish checksums, a CycloneDX SBOM, Sigstore blob-signature bundles, and GitHub
 artifact provenance. Do not add release artifacts that bypass those steps.
+
+The weekly/manual Cargo Mutants workflow runs every workspace package independently with
+annotations and a retained `mutants.out/` artifact. A missed or timed-out mutant fails its
+package shard, but mutation testing remains separate from the required coverage and validation
+statuses because it is deliberately slow.
 
 ## Documentation
 

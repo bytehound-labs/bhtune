@@ -411,7 +411,9 @@ mod tests {
                 direction: Some(crate::args::DirectionArg::Reverse),
                 tag_overrides: None,
                 poll_interval_ms: 800,
-                timeout_secs: 3600,
+                // Keep this dispatch test bounded even if a mutation prevents the
+                // simulator from completing.
+                timeout_secs: 30,
                 notes: None,
                 yes: false,
                 write_pid: None,
@@ -487,7 +489,9 @@ mod tests {
             sim_initial_pv: 50.0,
             sim_initial_mv: 50.0,
             poll_interval_ms: 5,
-            timeout_secs: 3600,
+            // Keep this dispatch test bounded even if a mutation prevents the
+            // simulator from completing.
+            timeout_secs: 5,
             notes: Some("dispatch test".to_string()),
             yes: false,
             write_pid: None,

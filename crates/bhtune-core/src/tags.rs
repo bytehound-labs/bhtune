@@ -492,4 +492,13 @@ mod tests {
         let back: TagOverrides = serde_json::from_str(&json).unwrap();
         assert_eq!(overrides, back);
     }
+
+    #[test]
+    fn populated_tag_overrides_report_non_empty() {
+        let overrides = TagOverrides {
+            process_variable: Some("Unit1.LIC101.PV".to_string()),
+            ..TagOverrides::default()
+        };
+        assert!(!overrides.is_empty());
+    }
 }

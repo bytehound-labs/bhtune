@@ -1,0 +1,34 @@
+# Shared defaults for local and CI mutation runs.
+all_features = true
+additional_cargo_args = ["--locked"]
+minimum_test_timeout = 20.0
+
+# These mutations are equivalent for the constrained values represented by the
+# surrounding code:
+# - the signs used by measure_oscillation and perform_switch are always +/-1;
+# - every default cycle-skip entry is currently 1.
+# - the clamp comparisons assign the same boundary value on equality.
+# - zero noise amplitude and zero derivative time are already neutral at their
+#   respective comparison boundaries; the alternative guards have no observable
+#   effect for those values.
+# - filesystem sync calls have no portable, test-observable result beyond the
+#   returned I/O error; the generic write helper tests its error handling.
+# - Windows SCM glue is compiled and exercised by the repository's Windows CI job,
+#   but cannot execute on the Ubuntu mutation runner without a live SCM.
+# - binary entry-point bodies are covered by graceful-shutdown subprocess tests,
+#   but cargo-mutants' package test harness runs those subprocesses from the
+#   unmutated binary target, so their mutations are not observable here.
+exclude_re = [
+    'mrft.rs:82:31: replace > with >= in clamp_relay_amplitude',
+    'mrft.rs:84:38: replace < with <= in clamp_relay_amplitude',
+    'mrft.rs:336:46: replace \* with / in MrftEngine::perform_switch',
+    'sync_config',
+    'config.rs:709:5: replace sync_parent_dir with \(\)',
+    'config.rs:711:26: delete ! in sync_parent_dir',
+    'process_type.rs:50:9: replace ProcessType::default_cycles_skip -> u32 with 1',
+    'tuning_math.rs:125:52: replace \* with / in measure_oscillation',
+    'simulator.rs:178:40: replace > with >= in FopdtProcess::step',
+    'simulator.rs:253:45: replace > with >= in VirtualPid::step',
+    'service.rs:.*windows_impl::',
+    'main.rs:.*',
+]

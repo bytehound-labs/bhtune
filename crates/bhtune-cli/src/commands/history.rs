@@ -273,6 +273,18 @@ async fn list(
     Ok(())
 }
 
+fn has_rows<T>(rows: &[T]) -> bool {
+    !rows.is_empty()
+}
+
+fn has_recorded_connection(opc_server: Option<&str>, bridge_host: Option<&str>) -> bool {
+    opc_server.is_some() || bridge_host.is_some()
+}
+
+fn is_table_output(output: OutputFormat) -> bool {
+    output == OutputFormat::Table
+}
+
 /// `bhtune history prune` -- applies `history-retention`'s age-based policy on demand,
 /// instead of waiting for the next startup or (for `bhtune-server`) the next periodic sweep.
 ///
@@ -391,7 +403,7 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 "  Template:         {} ({:?})",
                 run.template.name, run.template_origin
             );
-            if run.opc_server.is_some() || run.bridge_host.is_some() {
+            if has_recorded_connection(run.opc_server.as_deref(), run.bridge_host.as_deref()) {
                 println!(
                     "  Connection:       server={} bridge_host={}",
                     run.opc_server.as_deref().unwrap_or("-"),
@@ -439,7 +451,7 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 (None, _) => {}
             }
 
-            if !results.is_empty() {
+            if has_rows(&results) {
                 println!("  Calculated results:");
                 println!(
                     "    {:<12} {:<10} {:<10} {:<10} {:<12} {:<10} {:<10}",
@@ -459,7 +471,7 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
                 }
             }
 
-            if !writes.is_empty() {
+            if has_rows(&writes) {
                 println!("  PID write-back audit:");
                 for w in &writes {
                     println!(
@@ -674,7 +686,7 @@ async fn revert(
         resolve_revert_connection(&run, bridge_host.as_deref(), server.as_deref())?;
     let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
 
-    if output == OutputFormat::Table {
+    if is_table_output(output) {
         println!(
             "Reverting run {run_id}'s {response_level:?} PID write-back on tag '{}' to \
              P={:.4} I={:.4} D={:.4}...",
@@ -759,11 +771,45 @@ mod tests {
         LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &sample_template())
     }
 
+    #[test]
+    fn row_and_connection_display_decisions_match_their_data() {
+        assert!(!has_rows::<u8>(&[]));
+        assert!(has_rows(&[1_u8]));
+        assert!(!has_recorded_connection(None, None));
+        assert!(has_recorded_connection(Some("Sim.Server"), None));
+        assert!(has_recorded_connection(None, Some("127.0.0.1:7600")));
+        assert!(has_recorded_connection(
+            Some("Sim.Server"),
+            Some("127.0.0.1:7600")
+        ));
+    }
+
+    #[test]
+    fn table_output_decision_matches_the_requested_format() {
+        assert!(is_table_output(OutputFormat::Table));
+        assert!(!is_table_output(OutputFormat::Json));
+    }
+
+    #[test]
+    fn fmt_opt_f32_formats_values_and_missing_fields() {
+        assert_eq!(fmt_opt_f32(Some(1.23456)), "1.2346");
+        assert_eq!(fmt_opt_f32(Some(-0.5)), "-0.5000");
+        assert_eq!(fmt_opt_f32(None), "-");
+    }
+
     #[tokio::test]
     async fn list_handles_an_empty_database() {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
         list(&pool, None, 50, 0, OutputFormat::Table).await.unwrap();
         list(&pool, None, 50, 0, OutputFormat::Json).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_propagates_database_errors() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        pool.close().await;
+
+        assert!(list(&pool, None, 50, 0, OutputFormat::Table).await.is_err());
     }
 
     #[tokio::test]

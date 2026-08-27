@@ -293,17 +293,19 @@ Knip dead-code analysis is also done: `pnpm run check:dead-code` scans the root 
 unlisted dependencies. The dedicated `Knip dead-code analysis` job runs on relevant pull
 requests, pushes to `main`, and manual `checks.yml` dispatches; it is deliberately not a
 weekly-only job because the analysis is deterministic and fast.
-SonarQube Cloud analysis is also configured for BHTune. `sonar-project.properties` indexes the
-Rust, frontend, documentation-site, and repository-script sources, imports the Rust LCOV report
-from `cargo llvm-cov`, and excludes generated/build/test/fuzz/documentation artifacts plus
-frontend and website coverage until JavaScript LCOV generation exists. The dedicated
-`SonarQube` workflow runs on relevant pull requests and pushes to `main`, supports manual
-dispatch, and performs a full weekly scan on Wednesdays at 04:17 UTC. Its
-`Required Sonar quality status` aggregate passes intentional documentation-only skips and fork
-pull-request skips (repository secrets are unavailable there), while failing when an applicable
-analysis or the Sonar quality gate fails. Sonar is configured for BHTune only at this stage;
-`opcda-bridge` remains a separate rollout increment because it is Rust-only and needs its own
-project configuration.
+SonarQube Cloud analysis is configured for both BHTune and `opcda-bridge`. BHTune's
+`sonar-project.properties` indexes the Rust, frontend, documentation-site, and repository-script
+sources, imports the Rust LCOV report from `cargo llvm-cov`, and excludes generated/build/test/
+fuzz/documentation artifacts plus frontend and website coverage until JavaScript LCOV generation
+exists. Each repository's dedicated `SonarQube` workflow runs on relevant pull requests and pushes
+to `main`, supports manual dispatch, and performs a full weekly scan; its required aggregate status
+passes intentional documentation-only skips and fork pull-request skips while failing when an
+applicable analysis or the Sonar quality gate fails. The two projects use separate Sonar
+configurations because `opcda-bridge` is Rust-only.
+Cargo-mutants mutation testing is complete for BHTune: the full workspace package pass reports
+no missed or timed-out mutants, with only explicitly unviable mutations remaining. The separate,
+non-blocking weekly/manual workflow described above keeps this regression gate running as the
+code evolves.
 Phase 10's `history-retention` is now done: age-based deletion of `tune_runs` (and their
 cascaded samples/results/write-back audit rows) older than a configurable number of days,
 off by default (retain forever). `resolve_retention_days` (`bhtune-cli`'s `config.rs`)
@@ -3912,6 +3914,38 @@ workflow files. The job is required through the existing `Required validation st
 no new branch-protection context is needed. Knip applies to BHTune's JavaScript/TypeScript
 workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
 
+## Cargo-mutants mutation testing (`cargo-mutants`, done)
+
+Cargo-mutants measures test effectiveness by mutating one behavior at a time and checking whether
+the package's tests detect it. It complements Codecov's line-coverage enforcement and SonarQube's
+maintainability analysis; none of these tools replaces the others.
+
+The shared `.cargo/mutants.toml` enables all features, passes `--locked` to Cargo, sets a
+minimum test timeout, and contains only narrow exclusions for demonstrably equivalent or
+unreachable mutations. The BHTune package pass has no missed or timed-out mutants; the remaining
+unviable cases are build-time or otherwise untestable mutations reported by cargo-mutants.
+Meaningful survivors are test gaps and should receive focused behavioral tests before an
+exclusion is considered. `--in-place` is appropriate for this repository's workspace size, but
+do not edit a source file while a mutation run is active.
+
+The dedicated `.github/workflows/cargo-mutants.yml` workflow runs a fail-fast-disabled matrix over
+`bhtune-core`, `bhtune-driver`, `bhtune-db`, `bhtune-cli`, and `bhtune-server` every Saturday at
+02:17 UTC, with a single-package selector for manual dispatch. Each shard has a bounded job
+timeout, keeps GitHub annotations enabled, uploads `mutants.out/` for 14 days, and fails when a
+mutant is missed or times out. It is intentionally non-blocking for ordinary pull requests
+because a complete mutation pass is substantially slower than required validation.
+
+Install the pinned local tool and run one package with:
+
+```sh
+cargo install cargo-mutants --version 27.1.0
+cargo mutants --package bhtune-core --in-place --no-shuffle --timeout 180
+```
+
+The optional PR-focused form is `cargo mutants --in-diff <diff-file> --in-place`. The configuration
+already supplies `--locked`; passing another `--locked` directly to cargo-mutants is invalid
+unless it appears after Cargo's `--` separator.
+
 ## Conventions
 
 - **Trunk-based git flow**: single long-lived `main`, short-lived PR branches
@@ -4337,11 +4371,12 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `-p` flag mismatch, and a missing-output-directory bug only CI itself caught).
    Knip dead-code analysis is also done: `pnpm run check:dead-code` scans all three pnpm
    workspaces and is required on relevant changes through `checks.yml` — see "Knip dead-code
-   analysis" above. SonarQube Cloud analysis is configured for BHTune through
-   `sonar-project.properties` and `.github/workflows/sonar.yml`, with Rust LCOV coverage,
-   multi-language maintainability analysis, a weekly Wednesday scan, and a required aggregate
-   quality status. The `opcda-bridge` SonarQube increment remains separate because it needs its
-   own project key and Rust-only source configuration. Remaining:
+   analysis" above. SonarQube Cloud analysis is configured for both BHTune and `opcda-bridge`
+   through repository-specific `sonar-project.properties` and `.github/workflows/sonar.yml`
+   files, with Rust LCOV coverage, maintainability analysis, weekly scans, and required aggregate
+   quality statuses. Cargo-mutants mutation testing is done for BHTune: its separate
+   `.github/workflows/cargo-mutants.yml` matrix covers every workspace package on a weekly/manual,
+   non-blocking schedule and the full package pass has no missed or timed-out mutants. Remaining:
    release-time
    version snapshots (`docs-versioning`, deferred until `release-v1`), and the rest of
    packaging: `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
