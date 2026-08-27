@@ -528,8 +528,13 @@ status.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Contributions require signing the
-[Contributor License Agreement](CLA.md).
+All changes use a short-lived feature branch and pull request, including documentation and
+one-line fixes. Keep each pull request focused, run the applicable Rust/frontend/website checks,
+and update the branch if `main` advances before merging. Pull requests are squash-merged only
+after every required check and the applicable SonarQube analysis pass; a PR analysis must report
+zero `OPEN`/`CONFIRMED` issues, while any intentional Accepted or False Positive finding needs a
+documented rationale and related link. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the complete
+workflow. Contributions require signing the [Contributor License Agreement](CLA.md).
 
 ## License
 

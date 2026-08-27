@@ -23,6 +23,9 @@ the CLA itself for exactly what rights you are and are not granting.
   feature flag rather than sitting unmerged on a branch.
 - Every change goes through a feature branch and pull request, including documentation and
   one-line fixes, so CI runs consistently and concurrent work does not bypass review.
+- After opening a pull request, keep repairing the same branch until every applicable required
+  check passes. If a check reports that the branch is behind `main`, update the branch before
+  merging; do not bypass the protection rule with a direct push.
 
 ## Commit messages
 
@@ -121,7 +124,9 @@ a heading reference that no longer exists. Knip runs as the required `Knip dead-
 status for changes affecting the pnpm workspaces, their dependency metadata, or its configuration.
 SonarQube runs as a separate `Required Sonar quality status` check for relevant changes; its
 quality-gate result is blocking when analysis runs, while documentation-only and fork pull
-requests receive an explicit successful skip status.
+requests receive an explicit successful skip status. Applicable PR analyses must also report zero
+`OPEN`/`CONFIRMED` issues; Accepted and False Positive findings require a documented rationale
+and a link to the related pull request or documentation.
 
 ## Security and compatibility checks
 
@@ -153,7 +158,10 @@ substitute for doing this deliberately.
 
 - Keep PRs small and focused — one logical change each.
 - Describe what changed and why; link an issue if one exists.
-- Squash-merge once CI is green and the CLA check passes.
+- Include the targeted validation performed and any manual verification needed for the change.
+- Squash-merge only after every applicable required check, the CLA check, and the applicable
+  SonarQube zero-issue check pass. Do not use `NOSONAR` or a dashboard status change to hide a
+  real unresolved code issue.
 
 ## Contributing a DCS/PLC template
 
