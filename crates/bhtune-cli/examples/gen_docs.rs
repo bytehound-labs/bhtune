@@ -39,7 +39,7 @@ fn main() {
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .and_then(|p| p.parent())
+        .and_then(Path::parent)
         .expect("crates/bhtune-cli must be nested two levels under the workspace root")
         .to_path_buf()
 }

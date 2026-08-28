@@ -816,7 +816,7 @@ pub fn save_config_store(
             });
         }
     };
-    let loaded_bytes = state.original_raw.as_ref().map(|raw| raw.as_bytes());
+    let loaded_bytes = state.original_raw.as_ref().map(String::as_bytes);
     let disk_matches_loaded = match (loaded_bytes, current_bytes.as_deref()) {
         (None, None) => true,
         (Some(loaded), Some(current)) => loaded == current,
