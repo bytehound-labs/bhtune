@@ -6,6 +6,7 @@
 //! individual runs. Exposed to both the CLI and the GUI.
 
 use std::{
+    ffi::OsStr,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -261,7 +262,7 @@ fn pre_restore_backup_path(db_path: &Path, now: DateTime<Utc>) -> PathBuf {
 fn sibling_path(db_path: &Path, suffix: &str) -> PathBuf {
     let file_name = db_path
         .file_name()
-        .and_then(|name| name.to_str())
+        .and_then(OsStr::to_str)
         .unwrap_or("bhtune.db");
     db_path.with_file_name(format!("{file_name}{suffix}"))
 }

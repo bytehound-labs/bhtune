@@ -463,6 +463,8 @@ The repository also validates high-risk boundaries and delivery artifacts automa
   `tests/golden/` tree.
 - Pull requests compare the generated `openapi.json` with the base branch and reject removed
   operations, response shapes, enum values, or newly required request fields.
+- SonarCloud analyzes each applicable pull request and requires its Open/Confirmed issue count to
+  be zero before merge.
 - Databases created before the current migration set are upgraded in a compatibility test that
   verifies representative settings survive the forward migration.
 - CodeQL, Semgrep, Gitleaks, actionlint, and zizmor run in GitHub Actions with immutable action
