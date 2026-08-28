@@ -132,8 +132,9 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    batched read; a setpoint is read separately only when the original mode is Auto. It ends
    with a terminal point at the original MV after the run restores the loop. Short runs keep
    their first point at the left edge by reserving 12 configured poll intervals of x-axis
-   horizon; unused future space stays blank until the trend is long enough to fit normally. A
-   **Cancel** button stops the run early (the same
+   horizon; unused future space stays blank until the trend is long enough to fit normally. The
+   initial-reading and restored-MV boundary markers are presentation-only and do not alter
+   persisted samples or CSV/JSON exports. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
    [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
    - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own
