@@ -462,7 +462,8 @@ The repository also validates high-risk boundaries and delivery artifacts automa
   repository checkout, keeping captured logs and generated fixtures within the documented
   `tests/golden/` tree.
 - Pull requests compare the generated `openapi.json` with the base branch and reject removed
-  operations, response shapes, enum values, or newly required request fields.
+  operations, response shapes, enum values, or newly required request fields. Only explicitly
+  allowlisted pre-v1 request-property removals are treated as compatible.
 - SonarCloud analyzes each applicable pull request and requires its Open/Confirmed issue count to
   be zero before merge.
 - Databases created before the current migration set are upgraded in a compatibility test that
