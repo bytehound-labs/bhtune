@@ -458,6 +458,9 @@ The repository also validates high-risk boundaries and delivery artifacts automa
 
 - `proptest` covers configuration, template catalogs, bridge payload mappings, and template
   imports; standalone `cargo-fuzz` targets cover the same parsers with arbitrary byte streams.
+- The developer-only golden-trace converter accepts input and output paths only inside the
+  repository checkout, keeping captured logs and generated fixtures within the documented
+  `tests/golden/` tree.
 - Pull requests compare the generated `openapi.json` with the base branch and reject removed
   operations, response shapes, enum values, or newly required request fields.
 - Databases created before the current migration set are upgraded in a compatibility test that
