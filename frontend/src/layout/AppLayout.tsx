@@ -28,9 +28,9 @@ function HealthIndicator() {
         title={status.detail}
         className={`health-indicator-dot h-2.5 w-2.5 shrink-0 -translate-y-px rounded-full ${status.dot}`}
       />
-      <span className="sr-only" role="status">
+      <output className="sr-only">
         {status.label}: {status.detail}
-      </span>
+      </output>
       {health.data && (
         <span className="font-mono text-xs leading-none text-slate-500">
           v{health.data.version}

@@ -47,7 +47,7 @@ test.describe("app shell", () => {
     ).toBeVisible();
 
     // The health indicator polls a real `/api/health` -- confirms this isn't a static mock.
-    const healthStatus = page.locator('[role="status"]');
+    const healthStatus = page.locator("output");
     await expect(healthStatus).toHaveText(
       "Connected to BHTune server: Connected — the BHTune HTTP service is reachable. This does not test OPC DA connectivity.",
     );
