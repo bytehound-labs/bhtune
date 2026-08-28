@@ -100,11 +100,12 @@ The library communicates with the separate Windows-side
 `bhtune-driver` uses the published `opcda-bridge` crate for its `OpcDaDriver` implementation.
 
 The web form's **Browse servers** button opens an on-demand picker for the OPC DA servers
-registered on the gateway. Its tag browser expands one namespace level at a time and supports
-both dotted and slash-separated OPC item IDs. The first node is selected automatically when
-the tree loads, and the selection panel remains in place while browsing. With a template
-selected, confirming a tag selection replaces its final component with that template's
-process-variable suffix before writing the value into the Tag name field. Use a
+registered on the gateway. Its tag browser expands one namespace level at a time, reuses
+already-loaded levels, and supports both dotted and slash-separated OPC item IDs. The first
+node is selected automatically when the tree loads, and the selection panel remains in place
+while browsing. With a template selected, confirming a tag selection replaces its final
+component with that template's process-variable suffix before writing the value into the Tag
+name field. Use a
 gateway release with recursive hierarchical browsing for servers that expose branch names
 through `OPC_FLAT` without returning their descendants.
 Both browser dialogs expose accessible dialog semantics and can be closed with their Close

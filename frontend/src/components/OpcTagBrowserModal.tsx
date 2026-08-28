@@ -9,14 +9,21 @@ import { Badge, Button, ErrorBanner, Modal } from "./ui";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
 type QualityWarning = {
-  selectedTag: string;
-  reading: OpcReadResponse;
+  readonly selectedTag: string;
+  readonly reading: OpcReadResponse;
 };
 
 type PathState =
   | { status: "loading" }
   | { status: "loaded"; nodes: OpcTagNodeResponse[] }
   | { status: "error"; message: string };
+
+type FetchPath = (path: string) => Promise<OpcTagNodeResponse[]>;
+type LoadPath = (path: string) => Promise<OpcTagNodeResponse[] | null>;
+type SetPathState = (
+  updater: (previous: Record<string, PathState>) => Record<string, PathState>,
+) => void;
+type SetExpanded = (updater: (previous: Set<string>) => Set<string>) => void;
 
 /** Indentation step per tree depth; matches the width of the expand chevron column so a
  * leaf's label lines up under its parent branch's label, not under its chevron. */
@@ -54,16 +61,16 @@ function TreeLevel({
   selectedNodeRef,
   disabled,
 }: {
-  path: string;
-  depth: number;
-  pathState: Record<string, PathState>;
-  expanded: Set<string>;
-  onToggle: (tag: string) => void;
-  onSelect: (tag: string) => void;
-  onConfirm: (tag: string) => void;
-  selectedTag: string | null;
-  selectedNodeRef: RefObject<HTMLButtonElement | null>;
-  disabled: boolean;
+  readonly path: string;
+  readonly depth: number;
+  readonly pathState: Readonly<Record<string, PathState>>;
+  readonly expanded: ReadonlySet<string>;
+  readonly onToggle: (tag: string) => void;
+  readonly onSelect: (tag: string) => void;
+  readonly onConfirm: (tag: string) => void;
+  readonly selectedTag: string | null;
+  readonly selectedNodeRef: RefObject<HTMLButtonElement | null>;
+  readonly disabled: boolean;
 }) {
   const state = pathState[path];
   if (!state) return null;
@@ -159,6 +166,321 @@ function TreeLevel({
   );
 }
 
+async function loadPath(
+  path: string,
+  fetchPath: FetchPath,
+  setPathState: SetPathState,
+): Promise<OpcTagNodeResponse[] | null> {
+  setPathState((prev) => ({ ...prev, [path]: { status: "loading" } }));
+  try {
+    const nodes = await fetchPath(path);
+    setPathState((prev) => ({
+      ...prev,
+      [path]: { status: "loaded", nodes },
+    }));
+    return nodes;
+  } catch (err) {
+    setPathState((prev) => ({
+      ...prev,
+      [path]: {
+        status: "error",
+        message: userFacingErrorMessage(
+          err,
+          "Unable to load tags at this level.",
+        ),
+      },
+    }));
+    return null;
+  }
+}
+
+async function revealInitialTag(
+  rootNodes: readonly OpcTagNodeResponse[],
+  target: string,
+  isCancelled: () => boolean,
+  load: LoadPath,
+  setExpanded: SetExpanded,
+  setSelectedTag: (tag: string | null) => void,
+): Promise<boolean> {
+  let nodes = rootNodes;
+  while (!isCancelled()) {
+    const matchingNode = nodes.find((node) => node.tag === target);
+    if (matchingNode) {
+      setSelectedTag(matchingNode.tag);
+      return true;
+    }
+
+    const branch = nodes.find(
+      (node) => node.is_branch && isNamespaceDescendant(node.tag, target),
+    );
+    if (!branch) return false;
+
+    setExpanded((previous) => {
+      if (previous.has(branch.tag)) return previous;
+      const next = new Set(previous);
+      next.add(branch.tag);
+      return next;
+    });
+
+    const childNodes = await load(branch.tag);
+    if (!childNodes) return false;
+    nodes = childNodes;
+  }
+  return false;
+}
+
+async function initializeBrowser({
+  initialTag,
+  load,
+  setExpanded,
+  setSelectedTag,
+  isCancelled,
+}: {
+  readonly initialTag: string;
+  readonly load: LoadPath;
+  readonly setExpanded: SetExpanded;
+  readonly setSelectedTag: (tag: string | null) => void;
+  readonly isCancelled: () => boolean;
+}): Promise<void> {
+  const rootNodes = await load("");
+  if (isCancelled() || !rootNodes) return;
+
+  const target = initialTag.trim();
+  if (
+    target &&
+    (await revealInitialTag(
+      rootNodes,
+      target,
+      isCancelled,
+      load,
+      setExpanded,
+      setSelectedTag,
+    ))
+  ) {
+    return;
+  }
+  if (!isCancelled()) {
+    setExpanded(() => new Set());
+    setSelectedTag(rootNodes[0]?.tag ?? null);
+  }
+}
+
+function readButtonLabel(isChecking: boolean, isReading: boolean): string {
+  if (isChecking) return "Checking…";
+  if (isReading) return "Reading…";
+  return "Read selected tag";
+}
+
+function QualityWarningPanel({
+  warning,
+  onChooseDifferent,
+  onProceed,
+}: {
+  readonly warning: QualityWarning;
+  readonly onChooseDifferent: () => void;
+  readonly onProceed: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-amber-800 bg-amber-950/50 p-3 text-sm text-amber-200">
+        <p className="font-medium">This tag returned a non-Good OPC quality.</p>
+        <p className="mt-2">
+          The live value for{" "}
+          <span className="font-mono">{warning.selectedTag}</span> was{" "}
+          <span className="font-mono">{warning.reading.value}</span> with
+          quality{" "}
+          <Badge tone={SAMPLE_QUALITY_TONE[warning.reading.quality]}>
+            {SAMPLE_QUALITY_LABELS[warning.reading.quality]}
+          </Badge>
+          .
+        </p>
+        <p className="mt-2">
+          Non-Good values may be stale or invalid. Choose another tag, or
+          proceed anyway if you understand the risk.
+        </p>
+        <p className="mt-2">
+          Proceeding only selects this item for the form; a tune still requires
+          trustworthy quality for its live readings.
+        </p>
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button onClick={onChooseDifferent}>Choose a different tag</Button>
+        <Button variant="primary" onClick={onProceed}>
+          Proceed anyway
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function TagSelectionPanel({
+  selectedTag,
+  reading,
+  readError,
+  selectionReadError,
+  isReading,
+  isChecking,
+  onRead,
+  onClose,
+  onConfirm,
+}: {
+  readonly selectedTag: string | null;
+  readonly reading: OpcReadResponse | undefined;
+  readonly readError: unknown;
+  readonly selectionReadError: string | null;
+  readonly isReading: boolean;
+  readonly isChecking: boolean;
+  readonly onRead: () => void;
+  readonly onClose: () => void;
+  readonly onConfirm: () => void;
+}) {
+  if (!selectedTag) {
+    return (
+      <div className="mt-4 min-h-[10rem] rounded-md border border-slate-700 bg-slate-900 p-3">
+        <p className="text-sm text-slate-400">
+          Select a tag to test its live value and quality.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 min-h-[10rem] rounded-md border border-slate-700 bg-slate-900 p-3">
+      <p className="text-sm text-slate-200">
+        Selected: <span className="font-mono">{selectedTag}</span>
+      </p>
+      <p className="mt-1 text-xs text-slate-500">
+        Select tag applies the active template&apos;s process-variable suffix.
+        Review or override the rest of the mapping in the collapsed section on
+        the main tune form.
+      </p>
+
+      <div className="mt-3 flex items-center gap-2">
+        <Button disabled={isReading || isChecking} onClick={onRead}>
+          {readButtonLabel(isChecking, isReading)}
+        </Button>
+        {reading && (
+          <span className="text-xs text-slate-300">
+            {reading.value}{" "}
+            <Badge tone={SAMPLE_QUALITY_TONE[reading.quality]}>
+              {SAMPLE_QUALITY_LABELS[reading.quality]}
+            </Badge>
+          </span>
+        )}
+        {readError !== undefined && !selectionReadError && (
+          <span className="text-xs text-red-400">
+            {userFacingErrorMessage(
+              readError,
+              "Unable to read the selected tag.",
+            )}
+          </span>
+        )}
+        {selectionReadError && <ErrorBanner message={selectionReadError} />}
+      </div>
+
+      <div className="mt-3 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          variant="primary"
+          disabled={isReading || isChecking}
+          onClick={onConfirm}
+        >
+          {isChecking ? "Checking…" : "Select tag"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function BrowserContent({
+  opcServer,
+  qualityWarning,
+  pathState,
+  expanded,
+  onToggle,
+  onSelect,
+  onConfirm,
+  selectedTag,
+  selectedNodeRef,
+  disabled,
+  reading,
+  readError,
+  selectionReadError,
+  isReading,
+  isChecking,
+  onRead,
+  onClose,
+  onChooseDifferent,
+  onProceed,
+}: {
+  readonly opcServer: string;
+  readonly qualityWarning: QualityWarning | null;
+  readonly pathState: Readonly<Record<string, PathState>>;
+  readonly expanded: ReadonlySet<string>;
+  readonly onToggle: (tag: string) => void;
+  readonly onSelect: (tag: string) => void;
+  readonly onConfirm: (tag: string) => void;
+  readonly selectedTag: string | null;
+  readonly selectedNodeRef: RefObject<HTMLButtonElement | null>;
+  readonly disabled: boolean;
+  readonly reading: OpcReadResponse | undefined;
+  readonly readError: unknown;
+  readonly selectionReadError: string | null;
+  readonly isReading: boolean;
+  readonly isChecking: boolean;
+  readonly onRead: () => void;
+  readonly onClose: () => void;
+  readonly onChooseDifferent: () => void;
+  readonly onProceed: () => void;
+}) {
+  if (qualityWarning) {
+    return (
+      <QualityWarningPanel
+        warning={qualityWarning}
+        onChooseDifferent={onChooseDifferent}
+        onProceed={onProceed}
+      />
+    );
+  }
+  if (!opcServer) {
+    return (
+      <p className="text-sm text-slate-400">
+        Enter an OPC DA server ProgID above before browsing its tags.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <div className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
+        <TreeLevel
+          path=""
+          depth={0}
+          pathState={pathState}
+          expanded={expanded}
+          onToggle={onToggle}
+          onSelect={onSelect}
+          onConfirm={onConfirm}
+          selectedTag={selectedTag}
+          selectedNodeRef={selectedNodeRef}
+          disabled={disabled}
+        />
+      </div>
+      <TagSelectionPanel
+        selectedTag={selectedTag}
+        reading={reading}
+        readError={readError}
+        selectionReadError={selectionReadError}
+        isReading={isReading}
+        isChecking={isChecking}
+        onRead={onRead}
+        onClose={onClose}
+        onConfirm={() => onConfirm(selectedTag ?? "")}
+      />
+    </>
+  );
+}
+
 /**
  * The OPC tag-tree browser modal (`ui-opc-browser`): a lazily-expanding tree fed one level
  * at a time from `GET /api/opc/browse`, a per-node "Read selected tag" action backed by
@@ -190,12 +512,12 @@ export function OpcTagBrowserModal({
   onClose,
   onSelect,
 }: {
-  bridgeHost: string;
-  opcServer: string;
-  template: TemplateResponse | undefined;
-  initialTag: string;
-  onClose: () => void;
-  onSelect: (tag: string) => void;
+  readonly bridgeHost: string;
+  readonly opcServer: string;
+  readonly template: TemplateResponse | undefined;
+  readonly initialTag: string;
+  readonly onClose: () => void;
+  readonly onSelect: (tag: string) => void;
 }) {
   const fetchPath = useOpcBrowseFetcher(bridgeHost, opcServer);
   const testConnection = useTestOpcConnection();
@@ -211,62 +533,6 @@ export function OpcTagBrowserModal({
     null,
   );
 
-  async function load(path: string): Promise<OpcTagNodeResponse[] | null> {
-    setPathState((prev) => ({ ...prev, [path]: { status: "loading" } }));
-    try {
-      const nodes = await fetchPath(path);
-      setPathState((prev) => ({
-        ...prev,
-        [path]: { status: "loaded", nodes },
-      }));
-      return nodes;
-    } catch (err) {
-      setPathState((prev) => ({
-        ...prev,
-        [path]: {
-          status: "error",
-          message: userFacingErrorMessage(
-            err,
-            "Unable to load tags at this level.",
-          ),
-        },
-      }));
-      return null;
-    }
-  }
-
-  async function revealInitialTag(
-    rootNodes: OpcTagNodeResponse[],
-    target: string,
-    isCancelled: () => boolean,
-  ): Promise<boolean> {
-    let nodes = rootNodes;
-    while (!isCancelled()) {
-      const matchingNode = nodes.find((node) => node.tag === target);
-      if (matchingNode) {
-        setSelectedTag(matchingNode.tag);
-        return true;
-      }
-
-      const branch = nodes.find(
-        (node) => node.is_branch && isNamespaceDescendant(node.tag, target),
-      );
-      if (!branch) return false;
-
-      setExpanded((previous) => {
-        if (previous.has(branch.tag)) return previous;
-        const next = new Set(previous);
-        next.add(branch.tag);
-        return next;
-      });
-
-      const childNodes = await load(branch.tag);
-      if (!childNodes) return false;
-      nodes = childNodes;
-    }
-    return false;
-  }
-
   // Loads the root level once, as soon as there's a server to browse. `opcServer` is the
   // only variable in `fetchPath`'s closure that can plausibly change while this effect's
   // owner is mounted (see the doc comment above for why it otherwise can't) -- an empty
@@ -275,23 +541,14 @@ export function OpcTagBrowserModal({
   useEffect(() => {
     if (!opcServer) return;
     let cancelled = false;
-    async function initialize() {
-      const rootNodes = await load("");
-      if (cancelled || !rootNodes) return;
-
-      const target = initialTag.trim();
-      if (
-        target &&
-        (await revealInitialTag(rootNodes, target, () => cancelled))
-      ) {
-        return;
-      }
-      if (!cancelled) {
-        setExpanded(new Set());
-        setSelectedTag(rootNodes[0]?.tag ?? null);
-      }
-    }
-    void initialize();
+    const load = (path: string) => loadPath(path, fetchPath, setPathState);
+    void initializeBrowser({
+      initialTag,
+      load,
+      setExpanded,
+      setSelectedTag,
+      isCancelled: () => cancelled,
+    });
     return () => {
       cancelled = true;
     };
@@ -313,7 +570,7 @@ export function OpcTagBrowserModal({
         next.delete(tag);
       } else {
         next.add(tag);
-        if (!pathState[tag]) void load(tag);
+        if (!pathState[tag]) void loadPath(tag, fetchPath, setPathState);
       }
       return next;
     });
@@ -379,134 +636,34 @@ export function OpcTagBrowserModal({
       onClose={onClose}
       widthClassName="max-w-2xl"
     >
-      {qualityWarning ? (
-        <div className="space-y-4">
-          <div className="rounded-md border border-amber-800 bg-amber-950/50 p-3 text-sm text-amber-200">
-            <p className="font-medium">
-              This tag returned a non-Good OPC quality.
-            </p>
-            <p className="mt-2">
-              The live value for{" "}
-              <span className="font-mono">{qualityWarning.selectedTag}</span>{" "}
-              was{" "}
-              <span className="font-mono">{qualityWarning.reading.value}</span>{" "}
-              with quality{" "}
-              <Badge tone={SAMPLE_QUALITY_TONE[qualityWarning.reading.quality]}>
-                {SAMPLE_QUALITY_LABELS[qualityWarning.reading.quality]}
-              </Badge>
-              .
-            </p>
-            <p className="mt-2">
-              Non-Good values may be stale or invalid. Choose another tag, or
-              proceed anyway if you understand the risk.
-            </p>
-            <p className="mt-2">
-              Proceeding only selects this item for the form; a tune still
-              requires trustworthy quality for its live readings.
-            </p>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button onClick={() => setQualityWarning(null)}>
-              Choose a different tag
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                const tag = qualityWarning.selectedTag;
-                setQualityWarning(null);
-                applyTag(tag);
-              }}
-            >
-              Proceed anyway
-            </Button>
-          </div>
-        </div>
-      ) : !opcServer ? (
-        <p className="text-sm text-slate-400">
-          Enter an OPC DA server ProgID above before browsing its tags.
-        </p>
-      ) : (
-        <>
-          <div className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
-            <TreeLevel
-              path=""
-              depth={0}
-              pathState={pathState}
-              expanded={expanded}
-              onToggle={toggle}
-              onSelect={selectTag}
-              onConfirm={confirmTag}
-              selectedTag={selectedTag}
-              selectedNodeRef={selectedNodeRef}
-              disabled={testConnection.isPending || selectionCheckPending}
-            />
-          </div>
-
-          <div className="mt-4 min-h-[10rem] rounded-md border border-slate-700 bg-slate-900 p-3">
-            {!selectedTag ? (
-              <p className="text-sm text-slate-400">
-                Select a tag to test its live value and quality.
-              </p>
-            ) : (
-              <>
-                <p className="text-sm text-slate-200">
-                  Selected: <span className="font-mono">{selectedTag}</span>
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Select tag applies the active template&apos;s process-variable
-                  suffix. Review or override the rest of the mapping in the
-                  collapsed section on the main tune form.
-                </p>
-
-                <div className="mt-3 flex items-center gap-2">
-                  <Button
-                    disabled={testConnection.isPending || selectionCheckPending}
-                    onClick={readSelectedTag}
-                  >
-                    {selectionCheckPending
-                      ? "Checking…"
-                      : testConnection.isPending
-                        ? "Reading…"
-                        : "Read selected tag"}
-                  </Button>
-                  {testConnection.isSuccess && (
-                    <span className="text-xs text-slate-300">
-                      {testConnection.data.value}{" "}
-                      <Badge
-                        tone={SAMPLE_QUALITY_TONE[testConnection.data.quality]}
-                      >
-                        {SAMPLE_QUALITY_LABELS[testConnection.data.quality]}
-                      </Badge>
-                    </span>
-                  )}
-                  {testConnection.isError && !selectionReadError && (
-                    <span className="text-xs text-red-400">
-                      {userFacingErrorMessage(
-                        testConnection.error,
-                        "Unable to read the selected tag.",
-                      )}
-                    </span>
-                  )}
-                  {selectionReadError && (
-                    <ErrorBanner message={selectionReadError} />
-                  )}
-                </div>
-
-                <div className="mt-3 flex justify-end gap-2">
-                  <Button onClick={onClose}>Cancel</Button>
-                  <Button
-                    variant="primary"
-                    disabled={testConnection.isPending || selectionCheckPending}
-                    onClick={() => void confirmTag(selectedTag)}
-                  >
-                    {selectionCheckPending ? "Checking…" : "Select tag"}
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
+      <BrowserContent
+        opcServer={opcServer}
+        qualityWarning={qualityWarning}
+        pathState={pathState}
+        expanded={expanded}
+        onToggle={toggle}
+        onSelect={selectTag}
+        onConfirm={confirmTag}
+        selectedTag={selectedTag}
+        selectedNodeRef={selectedNodeRef}
+        disabled={testConnection.isPending || selectionCheckPending}
+        reading={testConnection.isSuccess ? testConnection.data : undefined}
+        readError={testConnection.isError ? testConnection.error : undefined}
+        selectionReadError={selectionReadError}
+        isReading={testConnection.isPending}
+        isChecking={selectionCheckPending}
+        onRead={readSelectedTag}
+        onClose={onClose}
+        onChooseDifferent={() => {
+          setQualityWarning(null);
+        }}
+        onProceed={() => {
+          if (!qualityWarning) return;
+          const tag = qualityWarning.selectedTag;
+          setQualityWarning(null);
+          applyTag(tag);
+        }}
+      />
     </Modal>
   );
 }
