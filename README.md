@@ -132,6 +132,9 @@ as an accessible pressed-button set.
 The selected source and values are retained in the saved draft. Simulator direction and ranges
 are stored separately from OPC fixed overrides, so changing drivers cannot turn simulator
 settings into live OPC overrides.
+The New tune page keeps Connection, Test parameters, Loop mapping, Simulator parameters, and
+Automatic PID settings in independently collapsible sections; controls that do not apply to
+the selected driver are disabled with an explanation.
 
 In **Simulator** mode, the form disables the OPC DA connection, tag, quality, timeout, and
 automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
