@@ -5,7 +5,7 @@ import { trendXRange, type TrendPoint } from "../lib/trend";
 import { useTheme } from "../useTheme";
 
 export interface TrendChartProps {
-  readonly points: TrendPoint[];
+  readonly points: readonly TrendPoint[];
   readonly height?: number;
   readonly pollIntervalMs?: number | null;
 }
