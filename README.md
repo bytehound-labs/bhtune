@@ -366,9 +366,9 @@ Windows Task Scheduler, CI):
   the interactive write-back prompt entirely when `--write-pid` wasn't also given, since
   there's no human present in a scripted run to answer it.
 - **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
-  (bad flags, unreachable driver/database), `2` aborted (Ctrl+C or `--timeout-secs` elapsing),
-  `3` the test completed but the requested PID write-back failed, `4` the test was forcibly
-  stopped for running past `--timeout-secs`, `5` a poor-quality OPC reading aborted the run, and
+  (bad flags, unreachable driver/database), `2` aborted by Ctrl+C, `3` the test completed but
+  the requested PID write-back failed, `4` the test was forcibly stopped for running past
+  `--timeout-secs`, `5` a poor-quality OPC reading aborted the run, and
   `6` the post-run restore could not be confirmed (a second Ctrl+C, or `--restore-timeout-secs`
   elapsing) — distinct from `2` since "aborted and restored" and "aborted, restore abandoned"
   call for very different alerting. A caller never has to parse stdout just to find out whether

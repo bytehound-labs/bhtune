@@ -1577,49 +1577,12 @@ async fn restore(
     initial: &InitialState,
     guard: &MutationGuard,
 ) -> RestoreReport {
-    let mv = match write_value(driver, &tags.manipulated_variable, initial.mv_ini).await {
-        Ok(()) => RestoreStepOutcome::Succeeded,
-        Err(e) => RestoreStepOutcome::Failed(e.to_string()),
-    };
+    let mv = restore_value_step(driver, &tags.manipulated_variable, initial.mv_ini).await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
-    let mut mode = RestoreStepOutcome::NotNeeded;
-    if let Some(mode_tag) = &tags.controller_mode {
-        let mode_raw = initial.mode_raw.as_deref().unwrap_or_default();
-        if guard.mode_written && template.revert_mode && mode_raw != template.mode_manual_value {
-            mode = match write_raw(driver, mode_tag, mode_raw.to_string()).await {
-                Ok(()) => RestoreStepOutcome::Succeeded,
-                Err(e) => RestoreStepOutcome::Failed(e.to_string()),
-            };
-        }
-    }
-
-    let mut setpoint = RestoreStepOutcome::NotNeeded;
-    if guard.mode_written
-        && template.revert_mode
-        && let (Some(sv_tag), Some(sv_ini)) = (&tags.setpoint_variable, initial.setpoint_ini)
-    {
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-        setpoint = match write_value(driver, sv_tag, sv_ini).await {
-            Ok(()) => RestoreStepOutcome::Succeeded,
-            Err(e) => RestoreStepOutcome::Failed(e.to_string()),
-        };
-    }
-
-    let mut mode_attribute = RestoreStepOutcome::NotNeeded;
-    if let Some(attr_tag) = &tags.mode_attribute {
-        let attr_raw = initial.mode_attribute_raw.as_deref().unwrap_or_default();
-        let program_value = template
-            .mode_attribute_program_value
-            .as_deref()
-            .unwrap_or_default();
-        if guard.mode_attribute_written && attr_raw != program_value {
-            mode_attribute = match write_raw(driver, attr_tag, attr_raw.to_string()).await {
-                Ok(()) => RestoreStepOutcome::Succeeded,
-                Err(e) => RestoreStepOutcome::Failed(e.to_string()),
-            };
-        }
-    }
+    let mode = restore_mode_step(driver, tags, template, initial, guard).await;
+    let setpoint = restore_setpoint_step(driver, tags, template, initial, guard).await;
+    let mode_attribute = restore_mode_attribute_step(driver, tags, template, initial, guard).await;
 
     RestoreReport {
         mv,
@@ -1627,6 +1590,75 @@ async fn restore(
         setpoint,
         mode_attribute,
     }
+}
+
+async fn restore_value_step(driver: &dyn Driver, tag: &str, value: f32) -> RestoreStepOutcome {
+    match write_value(driver, tag, value).await {
+        Ok(()) => RestoreStepOutcome::Succeeded,
+        Err(e) => RestoreStepOutcome::Failed(e.to_string()),
+    }
+}
+
+async fn restore_raw_step(driver: &dyn Driver, tag: &str, value: &str) -> RestoreStepOutcome {
+    match write_raw(driver, tag, value.to_string()).await {
+        Ok(()) => RestoreStepOutcome::Succeeded,
+        Err(e) => RestoreStepOutcome::Failed(e.to_string()),
+    }
+}
+
+async fn restore_mode_step(
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+) -> RestoreStepOutcome {
+    let Some(mode_tag) = &tags.controller_mode else {
+        return RestoreStepOutcome::NotNeeded;
+    };
+    let mode_raw = initial.mode_raw.as_deref().unwrap_or_default();
+    if !guard.mode_written || !template.revert_mode || mode_raw == template.mode_manual_value {
+        return RestoreStepOutcome::NotNeeded;
+    }
+    restore_raw_step(driver, mode_tag, mode_raw).await
+}
+
+async fn restore_setpoint_step(
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+) -> RestoreStepOutcome {
+    if !guard.mode_written || !template.revert_mode {
+        return RestoreStepOutcome::NotNeeded;
+    }
+    let (Some(sv_tag), Some(sv_ini)) = (&tags.setpoint_variable, initial.setpoint_ini) else {
+        return RestoreStepOutcome::NotNeeded;
+    };
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    restore_value_step(driver, sv_tag, sv_ini).await
+}
+
+async fn restore_mode_attribute_step(
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+) -> RestoreStepOutcome {
+    let Some(attr_tag) = &tags.mode_attribute else {
+        return RestoreStepOutcome::NotNeeded;
+    };
+    let attr_raw = initial.mode_attribute_raw.as_deref().unwrap_or_default();
+    let program_value = template
+        .mode_attribute_program_value
+        .as_deref()
+        .unwrap_or_default();
+    if !guard.mode_attribute_written || attr_raw == program_value {
+        return RestoreStepOutcome::NotNeeded;
+    }
+    restore_raw_step(driver, attr_tag, attr_raw).await
 }
 
 /// The outcome of racing one driver call ([`read_pv_sample`]/[`write_value`], during a poll
@@ -2313,6 +2345,118 @@ pub async fn write_pid_values(
     }
 }
 
+/// Represents the selected calculated PID parameters and any reason they were not written.
+///
+/// The write-back operation itself is documented on [`maybe_write_back`].
+enum WriteBackSelection<'a> {
+    Selected(&'a TuneResultRow),
+    Skipped(String),
+    Failed(String),
+}
+
+fn select_named_write_back_result<'a>(
+    results: &'a [TuneResultRow],
+    level: ResponseLevel,
+    output: OutputFormat,
+) -> WriteBackSelection<'a> {
+    match results.iter().find(|r| r.response_level == level) {
+        Some(result) => {
+            if prints_table_output(output) {
+                println!(
+                    "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
+                );
+            }
+            WriteBackSelection::Selected(result)
+        }
+        None => {
+            let detail = format!("no calculated result recorded for response level {level:?}");
+            if prints_table_output(output) {
+                println!(
+                    "No calculated result recorded for response level {level:?}; skipping write-back."
+                );
+            }
+            WriteBackSelection::Failed(detail)
+        }
+    }
+}
+
+fn select_interactive_write_back_result<'a>(
+    results: &'a [TuneResultRow],
+    reader: &mut impl std::io::BufRead,
+) -> WriteBackSelection<'a> {
+    eprintln!("\nCalculated PID parameters:");
+    for (i, result) in results.iter().enumerate() {
+        eprintln!(
+            "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
+            i + 1,
+            result.response_level,
+            result.proportional,
+            result.integral,
+            result.derivative
+        );
+    }
+    eprintln!(
+        "Write which response level's PID parameters back to the DCS? [1-{}, or Enter/n to skip]:",
+        results.len()
+    );
+
+    let mut input = String::new();
+    let bytes_read = reader.read_line(&mut input).unwrap_or(0);
+    let input = input.trim();
+    if bytes_read == 0 || input.is_empty() || input.eq_ignore_ascii_case("n") {
+        eprintln!("Skipping PID write-back.");
+        return WriteBackSelection::Skipped(
+            "skipped interactively (no selection made)".to_string(),
+        );
+    }
+
+    match input.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= results.len() => WriteBackSelection::Selected(&results[n - 1]),
+        _ => {
+            eprintln!("Invalid selection; skipping PID write-back.");
+            WriteBackSelection::Skipped("invalid response level selection".to_string())
+        }
+    }
+}
+
+fn select_write_back_result<'a>(
+    results: &'a [TuneResultRow],
+    write_pid: Option<ResponseLevel>,
+    output: OutputFormat,
+    reader: &mut impl std::io::BufRead,
+) -> WriteBackSelection<'a> {
+    match write_pid {
+        Some(level) => select_named_write_back_result(results, level, output),
+        None if skips_interactive_prompt(write_pid, output) => WriteBackSelection::Skipped(
+            "--output json was set without --write-pid; skipped the interactive \
+             write-back prompt since there is no human present to answer it"
+                .to_string(),
+        ),
+        None => select_interactive_write_back_result(results, reader),
+    }
+}
+
+fn finish_write_back(
+    output: OutputFormat,
+    response_level: ResponseLevel,
+    outcome: PidWriteOutcome,
+) -> (WriteBackOutcome, Option<String>) {
+    match outcome {
+        PidWriteOutcome::Written => {
+            if prints_table_output(output) {
+                println!("Wrote and confirmed {response_level:?} PID parameters.");
+            }
+            (WriteBackOutcome::Written { response_level }, None)
+        }
+        PidWriteOutcome::Failed { detail } => {
+            if prints_table_output(output) {
+                println!("PID write-back failed: {detail}");
+            }
+            (WriteBackOutcome::Failed, Some(detail))
+        }
+    }
+}
+
 /// Writes back the calculated PID parameters for one response level -- chosen either
 /// interactively (prompting on `reader`) or non-interactively via `write_pid`
 /// (`--write-pid`; the caller has already validated `--yes` was also given before the tune
@@ -2381,74 +2525,13 @@ async fn maybe_write_back(
         ));
     }
 
-    let selected = match write_pid {
-        Some(level) => match results.iter().find(|r| r.response_level == level) {
-            Some(r) => {
-                if prints_table_output(output) {
-                    println!(
-                        "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
-                    );
-                }
-                r
-            }
-            None => {
-                let detail = format!("no calculated result recorded for response level {level:?}");
-                if prints_table_output(output) {
-                    println!(
-                        "No calculated result recorded for response level {level:?}; skipping write-back."
-                    );
-                }
-                return Ok((WriteBackOutcome::Failed, Some(detail)));
-            }
-        },
-        None if skips_interactive_prompt(write_pid, output) => {
-            return Ok((
-                WriteBackOutcome::Skipped,
-                Some(
-                    "--output json was set without --write-pid; skipped the interactive \
-                     write-back prompt since there is no human present to answer it"
-                        .to_string(),
-                ),
-            ));
+    let selected = match select_write_back_result(&results, write_pid, output, reader) {
+        WriteBackSelection::Selected(result) => result,
+        WriteBackSelection::Skipped(detail) => {
+            return Ok((WriteBackOutcome::Skipped, Some(detail)));
         }
-        None => {
-            eprintln!("\nCalculated PID parameters:");
-            for (i, r) in results.iter().enumerate() {
-                eprintln!(
-                    "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
-                    i + 1,
-                    r.response_level,
-                    r.proportional,
-                    r.integral,
-                    r.derivative
-                );
-            }
-            eprintln!(
-                "Write which response level's PID parameters back to the DCS? [1-{}, or Enter/n to skip]:",
-                results.len()
-            );
-
-            let mut input = String::new();
-            let bytes_read = reader.read_line(&mut input).unwrap_or(0);
-            let input = input.trim();
-            if bytes_read == 0 || input.is_empty() || input.eq_ignore_ascii_case("n") {
-                eprintln!("Skipping PID write-back.");
-                return Ok((
-                    WriteBackOutcome::Skipped,
-                    Some("skipped interactively (no selection made)".to_string()),
-                ));
-            }
-
-            match input.parse::<usize>() {
-                Ok(n) if n >= 1 && n <= results.len() => &results[n - 1],
-                _ => {
-                    eprintln!("Invalid selection; skipping PID write-back.");
-                    return Ok((
-                        WriteBackOutcome::Skipped,
-                        Some("invalid response level selection".to_string()),
-                    ));
-                }
-            }
+        WriteBackSelection::Failed(detail) => {
+            return Ok((WriteBackOutcome::Failed, Some(detail)));
         }
     };
 
@@ -2480,20 +2563,7 @@ async fn maybe_write_back(
     )
     .await?;
 
-    match outcome {
-        PidWriteOutcome::Written => {
-            if prints_table_output(output) {
-                println!("Wrote and confirmed {response_level:?} PID parameters.");
-            }
-            Ok((WriteBackOutcome::Written { response_level }, None))
-        }
-        PidWriteOutcome::Failed { detail } => {
-            if prints_table_output(output) {
-                println!("PID write-back failed: {detail}");
-            }
-            Ok((WriteBackOutcome::Failed, Some(detail)))
-        }
-    }
+    Ok(finish_write_back(output, response_level, outcome))
 }
 
 fn prints_table_output(output: OutputFormat) -> bool {
