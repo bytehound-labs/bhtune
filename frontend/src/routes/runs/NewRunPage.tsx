@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type SubmitEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   useLastRunRequest,
@@ -1196,7 +1196,7 @@ export function NewRunPage() {
     });
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
     submitTune();
   }

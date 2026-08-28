@@ -15,13 +15,19 @@ type TemplateResponse = components["schemas"]["TemplateResponse"];
  */
 export function deriveTag(tag: string, suffix: string): string | null {
   if (suffix.trim() === "") return null;
-  const dotIndex = tag.lastIndexOf(".");
-  const bangIndex = tag.lastIndexOf("!");
-  const slashIndex = tag.lastIndexOf("/");
-  const cut =
-    dotIndex >= 0 ? dotIndex : bangIndex >= 0 ? bangIndex : slashIndex;
+  const cut = lastTagSeparatorIndex(tag);
   if (cut < 0) return suffix;
   return `${tag.slice(0, cut + 1)}${suffix}`;
+}
+
+function lastTagSeparatorIndex(tag: string): number {
+  const dotIndex = tag.lastIndexOf(".");
+  if (dotIndex >= 0) return dotIndex;
+
+  const bangIndex = tag.lastIndexOf("!");
+  if (bangIndex >= 0) return bangIndex;
+
+  return tag.lastIndexOf("/");
 }
 
 /**

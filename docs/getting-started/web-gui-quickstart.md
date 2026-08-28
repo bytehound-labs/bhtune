@@ -29,6 +29,9 @@ run.
 The header's theme button switches between light and dark palettes. The selected palette is
 remembered by the browser.
 
+The header also shows whether the BHTune HTTP service is reachable. Its status includes
+screen-reader text and a tooltip; a healthy server indicator does not test OPC DA connectivity.
+
 `bhtune-server` has no command-line flags of its own (unlike `bhtune`, it doesn't use `clap`
 yet). Every setting — including which port it binds — is resolved from a config file or
 environment variable, the same way the CLI resolves its own flags:

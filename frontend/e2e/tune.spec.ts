@@ -31,7 +31,7 @@ async function startTune(page: Page) {
       return;
     }
     if (await startError.isVisible()) {
-      await page.waitForTimeout(250);
+      await expect(startButton).toBeEnabled();
       continue;
     }
     // Neither navigated nor showed the generic start error -- a real failure. Let the
