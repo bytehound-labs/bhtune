@@ -42,10 +42,9 @@ against the built-in simulator with no setup at all, or against a real OPC DA lo
 [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) — including calculating PID
 constants, writing them back with confirmation and rollback, and recording full run history.
 See [Getting started](#getting-started) below to try it. No versioned release or prebuilt
-binaries exist yet (see [Installation](#installation)), and golden-master validation against
-the legacy application's captured traces is still in progress — track both via the
-[issues](https://github.com/bytehound-labs/bhtune/issues) and
-[`AGENTS.md`](AGENTS.md), which records the full phased implementation plan.
+binaries exist yet (see [Installation](#installation)). The tuning engine's golden-master
+validation against a captured legacy trace is complete; [`AGENTS.md`](AGENTS.md) records the
+full phased implementation plan.
 
 ## Getting started
 
@@ -98,8 +97,7 @@ opcda-bridge = "0.2"
 
 The library communicates with the separate Windows-side
 [`opcda-bridge-gateway`](https://crates.io/crates/opcda-bridge-gateway) process over the network.
-The dependency is added to `bhtune-driver` when its OPC DA implementation is introduced; the
-scaffolding workspace intentionally does not declare unused dependencies.
+`bhtune-driver` uses the published `opcda-bridge` crate for its `OpcDaDriver` implementation.
 
 The web form's **Browse servers** button opens an on-demand picker for the OPC DA servers
 registered on the gateway. Its tag browser expands one namespace level at a time and supports
@@ -109,6 +107,8 @@ selected, confirming a tag selection replaces its final component with that temp
 process-variable suffix before writing the value into the Tag name field. Use a
 gateway release with recursive hierarchical browsing for servers that expose branch names
 through `OPC_FLAT` without returning their descendants.
+Both browser dialogs expose accessible dialog semantics and can be closed with their Close
+button, the backdrop, or Escape.
 Changing templates replaces a tag's final component with the new template's process-variable
 suffix, regardless of what the previous component was, while preserving the tag path.
 Confirming a tag selection performs a fresh read of the original item selected in the browser
@@ -442,11 +442,10 @@ way.
 
 BHTune's tuning engine is validated by golden-master replay: recorded input/output traces are
 replayed through the engine and the results are asserted to match exactly, so future changes can
-never silently alter tuning behavior. The first real trace, captured from the legacy application
-against a simulated process, replays tick-for-tick and result-for-result through the Rust engine
-(`crates/bhtune-core/tests/golden_replay.rs`) — proving the port behaviorally matches the
-original, not just arguing that it should. The full v1 feature checklist — what's required, what's
-deferred, and what's deliberately not planned — lives at
+never silently alter tuning behavior. The captured legacy trace replays tick-for-tick and
+result-for-result through the Rust engine (`crates/bhtune-core/tests/golden_replay.rs`) —
+proving the port behaviorally matches the original, not just arguing that it should. The full v1
+feature checklist — what's required, what's deferred, and what's deliberately not planned — lives at
 [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md).
 
 The repository also validates high-risk boundaries and delivery artifacts automatically:

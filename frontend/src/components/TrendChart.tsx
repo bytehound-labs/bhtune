@@ -5,9 +5,9 @@ import { trendXRange, type TrendPoint } from "../lib/trend";
 import { useTheme } from "../useTheme";
 
 export interface TrendChartProps {
-  points: TrendPoint[];
-  height?: number;
-  pollIntervalMs?: number | null;
+  readonly points: TrendPoint[];
+  readonly height?: number;
+  readonly pollIntervalMs?: number | null;
 }
 
 /** uPlot wants columnar `[x[], y1[], y2[]]` data, not an array of per-tick objects. */
