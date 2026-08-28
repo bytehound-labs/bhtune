@@ -123,7 +123,8 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      does not display an error. **Duplicate this run** takes precedence over both sources, and
      **Reset to defaults** replaces the saved draft with the built-in defaults. Connection, Test
      parameters, Loop mapping, Simulator parameters, and Automatic PID settings are independently
-     collapsible and open by default.
+     collapsible and open by default. Controls that do not apply to the selected driver stay
+     visible but disabled with an explanation.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
    in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current
