@@ -378,6 +378,182 @@ fn fmt_opt_f32(value: Option<f32>) -> String {
     }
 }
 
+fn print_show_table(
+    run: &TuneRunRow,
+    samples: &[TuneSampleRow],
+    results: &[TuneResultRow],
+    writes: &[TuneWriteRow],
+) {
+    println!("Run #{} — Tag name: {}", run.id, run.loop_name);
+    println!("  Notes:           {}", run.notes.as_deref().unwrap_or("—"));
+    println!("  Driver:          {:?}", run.driver);
+    println!("  Outcome:          {:?}", run.outcome);
+    if let Some(reason) = &run.failure_reason {
+        println!("  Failure reason:   {reason}");
+    }
+    println!("  Started at:       {}", run.started_at.to_rfc3339());
+    if let Some(completed_at) = run.completed_at {
+        println!("  Completed at:     {}", completed_at.to_rfc3339());
+    }
+    println!(
+        "  Template:         {} ({:?})",
+        run.template.name, run.template_origin
+    );
+    if has_recorded_connection(run.opc_server.as_deref(), run.bridge_host.as_deref()) {
+        println!(
+            "  Connection:       server={} bridge_host={}",
+            run.opc_server.as_deref().unwrap_or("-"),
+            run.bridge_host.as_deref().unwrap_or("-"),
+        );
+    }
+    println!(
+        "  Process/controller: {:?} / {:?}",
+        run.config.process_type, run.config.controller_type
+    );
+    println!("  Relay amplitude:  {}%", run.config.relay_amp_percent);
+    println!(
+        "  Cycles skip/count: {} / {}",
+        run.config.num_cycles_skip, run.config.num_cycles_count
+    );
+
+    if let Some(readings) = &run.initial_readings {
+        println!(
+            "  Initial PV / MV:  {} / {}",
+            readings.pv_ini, readings.mv_ini
+        );
+        println!(
+            "  MV range:         {} - {}",
+            readings.mv_range_low, readings.mv_range_high
+        );
+        println!(
+            "  PV range:         {} - {}",
+            readings.pv_range_low, readings.pv_range_high
+        );
+        println!("  Direction:        {:?}", readings.controller_direction);
+    }
+
+    println!("  Samples recorded: {}", samples.len());
+
+    match (run.restore_status, &run.restore_detail) {
+        (Some(bhtune_db::models::RestoreStatus::Confirmed), _) => {
+            println!("  Restore:          confirmed");
+        }
+        (Some(bhtune_db::models::RestoreStatus::Incomplete), detail) => {
+            println!(
+                "  Restore:          INCOMPLETE -- {}",
+                detail.as_deref().unwrap_or("no detail recorded")
+            );
+        }
+        (None, _) => {}
+    }
+
+    print_show_results(results);
+    print_show_writes(writes);
+}
+
+fn print_show_results(results: &[TuneResultRow]) {
+    if !has_rows(results) {
+        return;
+    }
+    println!("  Calculated results:");
+    println!(
+        "    {:<12} {:<10} {:<10} {:<10} {:<12} {:<10} {:<10}",
+        "LEVEL", "KP", "TI(min)", "TD(min)", "PROP", "INTEGRAL", "DERIV"
+    );
+    for result in results {
+        println!(
+            "    {:<12} {:<10.4} {:<10.4} {:<10.4} {:<12.4} {:<10.4} {:<10.4}",
+            format!("{:?}", result.response_level),
+            result.kp,
+            result.ti_minutes,
+            result.td_minutes,
+            result.proportional,
+            result.integral,
+            result.derivative
+        );
+    }
+}
+
+fn print_show_writes(writes: &[TuneWriteRow]) {
+    if !has_rows(writes) {
+        return;
+    }
+    println!("  PID write-back audit:");
+    for write in writes {
+        println!(
+            "    [{}] {:?} ({:?} level): success={} previous(P={} I={} D={}) \
+             written(P={} I={} D={}) readback(P={} I={} D={}){}",
+            write.written_at.to_rfc3339(),
+            write.kind,
+            write.response_level,
+            write.success,
+            fmt_opt_f32(write.previous.map(|p| p.proportional)),
+            fmt_opt_f32(write.previous.map(|p| p.integral)),
+            fmt_opt_f32(write.previous.map(|p| p.derivative)),
+            fmt_opt_f32(write.proportional_written),
+            fmt_opt_f32(write.integral_written),
+            fmt_opt_f32(write.derivative_written),
+            fmt_opt_f32(write.proportional_readback),
+            fmt_opt_f32(write.integral_readback),
+            fmt_opt_f32(write.derivative_readback),
+            write
+                .error_message
+                .as_ref()
+                .map(|message| format!(" error={message}"))
+                .unwrap_or_default(),
+        );
+        print_show_rollback(write);
+    }
+}
+
+fn print_show_rollback(write: &TuneWriteRow) {
+    let Some(rollback_state) = write.rollback_state else {
+        return;
+    };
+    println!(
+        "        rollback: {rollback_state:?}{}",
+        write
+            .rollback_error
+            .as_ref()
+            .map(|message| format!(" error={message}"))
+            .unwrap_or_default(),
+    );
+}
+
+fn print_show_json(
+    run: &TuneRunRow,
+    samples: &[TuneSampleRow],
+    results: &[TuneResultRow],
+    writes: &[TuneWriteRow],
+) -> anyhow::Result<()> {
+    let json = RunDetailJson {
+        id: run.id,
+        tag_name: run.loop_name.clone(),
+        notes: run.notes.clone(),
+        driver: run.driver,
+        outcome: run.outcome,
+        failure_reason: run.failure_reason.clone(),
+        started_at: run.started_at,
+        completed_at: run.completed_at,
+        template_name: run.template.name.clone(),
+        template_origin: run.template_origin,
+        config: run.config,
+        opc_server: run.opc_server.clone(),
+        bridge_host: run.bridge_host.clone(),
+        initial_readings: run
+            .initial_readings
+            .as_ref()
+            .map(|readings| InitialReadingsJson::from(readings.clone())),
+        samples_recorded: samples.len(),
+        results: results.iter().map(ResultJson::from).collect(),
+        writes: writes.iter().map(WriteJson::from).collect(),
+        restore_status: run.restore_status,
+        restore_detail: run.restore_detail.clone(),
+    };
+    println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
+}
+
 async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::Result<()> {
     let run = TuneRunRow::get(pool, run_id)
         .await?
@@ -387,150 +563,8 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
     let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
 
     match output {
-        OutputFormat::Table => {
-            println!("Run #{} — Tag name: {}", run.id, run.loop_name);
-            println!("  Notes:           {}", run.notes.as_deref().unwrap_or("—"));
-            println!("  Driver:          {:?}", run.driver);
-            println!("  Outcome:          {:?}", run.outcome);
-            if let Some(reason) = &run.failure_reason {
-                println!("  Failure reason:   {reason}");
-            }
-            println!("  Started at:       {}", run.started_at.to_rfc3339());
-            if let Some(completed_at) = run.completed_at {
-                println!("  Completed at:     {}", completed_at.to_rfc3339());
-            }
-            println!(
-                "  Template:         {} ({:?})",
-                run.template.name, run.template_origin
-            );
-            if has_recorded_connection(run.opc_server.as_deref(), run.bridge_host.as_deref()) {
-                println!(
-                    "  Connection:       server={} bridge_host={}",
-                    run.opc_server.as_deref().unwrap_or("-"),
-                    run.bridge_host.as_deref().unwrap_or("-"),
-                );
-            }
-            println!(
-                "  Process/controller: {:?} / {:?}",
-                run.config.process_type, run.config.controller_type
-            );
-            println!("  Relay amplitude:  {}%", run.config.relay_amp_percent);
-            println!(
-                "  Cycles skip/count: {} / {}",
-                run.config.num_cycles_skip, run.config.num_cycles_count
-            );
-
-            if let Some(readings) = run.initial_readings {
-                println!(
-                    "  Initial PV / MV:  {} / {}",
-                    readings.pv_ini, readings.mv_ini
-                );
-                println!(
-                    "  MV range:         {} - {}",
-                    readings.mv_range_low, readings.mv_range_high
-                );
-                println!(
-                    "  PV range:         {} - {}",
-                    readings.pv_range_low, readings.pv_range_high
-                );
-                println!("  Direction:        {:?}", readings.controller_direction);
-            }
-
-            println!("  Samples recorded: {}", samples.len());
-
-            match (run.restore_status, &run.restore_detail) {
-                (Some(bhtune_db::models::RestoreStatus::Confirmed), _) => {
-                    println!("  Restore:          confirmed");
-                }
-                (Some(bhtune_db::models::RestoreStatus::Incomplete), detail) => {
-                    println!(
-                        "  Restore:          INCOMPLETE -- {}",
-                        detail.as_deref().unwrap_or("no detail recorded")
-                    );
-                }
-                (None, _) => {}
-            }
-
-            if has_rows(&results) {
-                println!("  Calculated results:");
-                println!(
-                    "    {:<12} {:<10} {:<10} {:<10} {:<12} {:<10} {:<10}",
-                    "LEVEL", "KP", "TI(min)", "TD(min)", "PROP", "INTEGRAL", "DERIV"
-                );
-                for r in &results {
-                    println!(
-                        "    {:<12} {:<10.4} {:<10.4} {:<10.4} {:<12.4} {:<10.4} {:<10.4}",
-                        format!("{:?}", r.response_level),
-                        r.kp,
-                        r.ti_minutes,
-                        r.td_minutes,
-                        r.proportional,
-                        r.integral,
-                        r.derivative
-                    );
-                }
-            }
-
-            if has_rows(&writes) {
-                println!("  PID write-back audit:");
-                for w in &writes {
-                    println!(
-                        "    [{}] {:?} ({:?} level): success={} previous(P={} I={} D={}) \
-                         written(P={} I={} D={}) readback(P={} I={} D={}){}",
-                        w.written_at.to_rfc3339(),
-                        w.kind,
-                        w.response_level,
-                        w.success,
-                        fmt_opt_f32(w.previous.map(|p| p.proportional)),
-                        fmt_opt_f32(w.previous.map(|p| p.integral)),
-                        fmt_opt_f32(w.previous.map(|p| p.derivative)),
-                        fmt_opt_f32(w.proportional_written),
-                        fmt_opt_f32(w.integral_written),
-                        fmt_opt_f32(w.derivative_written),
-                        fmt_opt_f32(w.proportional_readback),
-                        fmt_opt_f32(w.integral_readback),
-                        fmt_opt_f32(w.derivative_readback),
-                        w.error_message
-                            .as_ref()
-                            .map(|m| format!(" error={m}"))
-                            .unwrap_or_default(),
-                    );
-                    if let Some(rollback_state) = w.rollback_state {
-                        println!(
-                            "        rollback: {rollback_state:?}{}",
-                            w.rollback_error
-                                .as_ref()
-                                .map(|m| format!(" error={m}"))
-                                .unwrap_or_default(),
-                        );
-                    }
-                }
-            }
-        }
-        OutputFormat::Json => {
-            let json = RunDetailJson {
-                id: run.id,
-                tag_name: run.loop_name.clone(),
-                notes: run.notes.clone(),
-                driver: run.driver,
-                outcome: run.outcome,
-                failure_reason: run.failure_reason.clone(),
-                started_at: run.started_at,
-                completed_at: run.completed_at,
-                template_name: run.template.name.clone(),
-                template_origin: run.template_origin,
-                config: run.config,
-                opc_server: run.opc_server.clone(),
-                bridge_host: run.bridge_host.clone(),
-                initial_readings: run.initial_readings.map(InitialReadingsJson::from),
-                samples_recorded: samples.len(),
-                results: results.iter().map(ResultJson::from).collect(),
-                writes: writes.iter().map(WriteJson::from).collect(),
-                restore_status: run.restore_status,
-                restore_detail: run.restore_detail.clone(),
-            };
-            println!("{}", serde_json::to_string_pretty(&json)?);
-        }
+        OutputFormat::Table => print_show_table(&run, &samples, &results, &writes),
+        OutputFormat::Json => print_show_json(&run, &samples, &results, &writes)?,
     }
 
     Ok(())
