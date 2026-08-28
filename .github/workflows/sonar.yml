@@ -117,3 +117,59 @@ jobs:
         run: |
           echo "SonarQube analysis ended with: ${{ needs.analyze.result }}"
           exit 1
+
+      - name: Check pull request for unresolved SonarQube issues
+        if: >-
+          github.event_name == 'pull_request' &&
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.fork != 'true' &&
+          needs.analyze.result == 'success'
+        env:
+          SONAR_PROJECT_KEY: bytehound-labs_bhtune
+          SONAR_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          page=1
+          page_size=500
+          total=-1
+          details_file="$(mktemp)"
+          trap 'rm -f "$details_file"' EXIT
+
+          while :; do
+            response="$(curl --fail --silent --show-error --get \
+              --data-urlencode "componentKeys=${SONAR_PROJECT_KEY}" \
+              --data-urlencode "pullRequest=${SONAR_PR_NUMBER}" \
+              --data-urlencode "issueStatuses=OPEN,CONFIRMED" \
+              --data-urlencode "p=${page}" \
+              --data-urlencode "ps=${page_size}" \
+              https://sonarcloud.io/api/issues/search)"
+            page_total="$(jq -er '.total' <<<"$response")"
+
+            if (( total < 0 )); then
+              total="$page_total"
+            elif (( total != page_total )); then
+              echo "SonarQube returned inconsistent issue totals across pages."
+              exit 1
+            fi
+
+            jq -r '.issues[] | [.key, .rule, (.component | sub("^[^:]*:"; ""))] | @tsv' \
+              <<<"$response" >>"$details_file"
+            issues_on_page="$(jq -er '.issues | length' <<<"$response")"
+
+            if (( page * page_size >= total || issues_on_page == 0 )); then
+              break
+            fi
+            page=$((page + 1))
+          done
+
+          if (( total > 0 )); then
+            echo "::error title=Unresolved SonarQube issues::$total OPEN/CONFIRMED issue(s) remain on PR #${SONAR_PR_NUMBER}."
+            echo "Review and resolve every issue before merging:"
+            echo "https://sonarcloud.io/project/issues?id=${SONAR_PROJECT_KEY}&pullRequest=${SONAR_PR_NUMBER}&issueStatuses=OPEN%2CCONFIRMED"
+            printf 'Issue key\tRule\tFile\n'
+            cat "$details_file"
+            exit 1
+          fi
+
+          echo "SonarQube PR #${SONAR_PR_NUMBER} has zero OPEN/CONFIRMED issues."
