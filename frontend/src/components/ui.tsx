@@ -482,8 +482,8 @@ export function Modal({
         onClick={onClose}
         className="absolute inset-0 cursor-default"
       />
-      <div
-        role="dialog"
+      <dialog
+        open
         aria-modal="true"
         aria-labelledby={titleId}
         className={`relative z-10 w-full ${widthClassName} rounded-lg border border-slate-700 bg-slate-900 shadow-xl`}
@@ -502,7 +502,7 @@ export function Modal({
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
-      </div>
+      </dialog>
     </div>
   );
 }
