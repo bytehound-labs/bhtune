@@ -4,6 +4,9 @@ import unittest
 
 from check_openapi_breaking import find_breaking_changes
 
+JSON_CONTENT_TYPE = "application/json"
+RUNS_PATH = "/api/runs"
+
 
 def spec(*, required=False, include_path=True):
     paths = {}
@@ -13,7 +16,7 @@ def spec(*, required=False, include_path=True):
                 "requestBody": {
                     "required": False,
                     "content": {
-                        "application/json": {
+                        JSON_CONTENT_TYPE: {
                             "schema": {
                                 "type": "object",
                                 "properties": {"name": {"type": "string"}},
@@ -25,7 +28,7 @@ def spec(*, required=False, include_path=True):
                 "responses": {
                     "200": {
                         "content": {
-                            "application/json": {
+                            JSON_CONTENT_TYPE: {
                                 "schema": {
                                     "type": "object",
                                     "properties": {"id": {"type": "integer"}},
@@ -61,12 +64,12 @@ def spec_with_quality_field(*, remove_quality=False, remove_unrelated=False):
     return {
         "openapi": "3.1.0",
         "paths": {
-            "/api/runs": {
+            RUNS_PATH: {
                 "post": {
                     "requestBody": {
                         "required": True,
                         "content": {
-                            "application/json": {
+                            JSON_CONTENT_TYPE: {
                                 "schema": {"$ref": "#/components/schemas/StartRunRequest"}
                             }
                         },
@@ -95,7 +98,7 @@ class OpenApiBreakingTests(unittest.TestCase):
         old = spec()
         new = spec()
         del new["paths"]["/api/example"]["post"]["responses"]["200"]["content"][
-            "application/json"
+            JSON_CONTENT_TYPE
         ]["schema"]["properties"]["id"]
         self.assertTrue(any("response property" in error for error in find_breaking_changes(old, new)))
 
@@ -120,8 +123,8 @@ class OpenApiBreakingTests(unittest.TestCase):
     def test_quality_removal_on_another_operation_remains_breaking(self):
         old = spec_with_quality_field()
         new = spec_with_quality_field(remove_quality=True)
-        old["paths"]["/api/other"] = old["paths"].pop("/api/runs")
-        new["paths"]["/api/other"] = new["paths"].pop("/api/runs")
+        old["paths"]["/api/other"] = old["paths"].pop(RUNS_PATH)
+        new["paths"]["/api/other"] = new["paths"].pop(RUNS_PATH)
         errors = find_breaking_changes(old, new)
         self.assertTrue(any("'allow_uncertain_quality' was removed" in error for error in errors))
 
