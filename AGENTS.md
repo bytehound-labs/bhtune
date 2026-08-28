@@ -3948,11 +3948,13 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
 
 ### Deferred setup (deliberate, not oversights)
 
-- **No `.envsync.yaml`/dotenv-sync (`ds`) hooks yet.** There is no real secret or test-env value
-  to manage until a phase needs a live OPC test target (mirroring opcda-bridge's
-  `OPC_TEST_HOST`/`OPC_TEST_SERVER`/`OPC_TEST_TAG` pattern). Add the `ds-sync` pre-commit command
-  and `ds-sync-pull` post-merge command (see opcda-bridge's `.lefthook.yml` for the exact shape)
-  at that point.
+- **dotenv-sync (`ds`) is configured for repository secrets.** `.env.example` is committed with
+  `SONAR_TOKEN=` while the real token remains in the ignored `.env` file and the `bhtune`
+  Bitwarden note configured by `.envsync.yaml`. `ds sync` restores the local file and `ds push`
+  updates the note; the existing `.lefthook.yml` runs the latter through `ds-sync` on pre-commit
+  and restores it through `ds-sync-pull` after successful pulls. Keep `rbw` unlocked for those
+  operations, never print or commit secret values, and add new keys to `.env.example` through
+  `ds reverse` rather than hand-maintaining a divergent schema.
 - **No `release-plz.yml`/`auto-merge.yml` workflows yet**, though `release-plz.toml` exists.
   These require a `RELEASE_PLZ_TOKEN` repo secret (a PAT with more permission than the default
   `GITHUB_TOKEN`, so the release PR itself can trigger further CI). Shipping the workflow without

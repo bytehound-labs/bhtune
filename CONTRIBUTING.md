@@ -61,6 +61,10 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   `sonar-scanner` with `SONAR_TOKEN` exported. The Sonar workflow runs for relevant pull
   requests and pushes to `main`, plus a Wednesday 04:17 UTC weekly scan; fork pull requests
   intentionally skip the secret-bearing analysis.
+- Maintainers can restore the local Sonar token with `rbw unlock && ds sync`; it lives in the
+  ignored `.env` file and is never committed or printed. Use `ds push` to update the Bitwarden
+  note after changing it. The committed `.env.example` contains only the key names and the
+  repository's Lefthook hooks keep the schema and local file synchronized.
 
 ## Dependency updates
 
