@@ -83,7 +83,8 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      registered on it as clickable buttons — no need to already know (or spell correctly) a
      ProgID like `Matrikon.OPC.Simulation`. A **Browse tags** button next to the Tag name field
      (enabled once a ProgID is entered) opens a lazily-expanding tag tree fetched one level at
-     a time from the gateway. Hierarchical servers such as Yokogawa CSHIS can be expanded
+     a time from the gateway. Already-loaded levels are reused when you revisit an expanded
+     branch. Hierarchical servers such as Yokogawa CSHIS can be expanded
      through nested controller/block levels until their PV leaves; dotted and slash-separated
      item IDs are supported. The first node is selected automatically when the tree loads, and
      the selection panel stays in place while browsing. The main form's collapsible **Loop
