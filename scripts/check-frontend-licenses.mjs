@@ -80,17 +80,33 @@ const licenses = JSON.parse(raw);
 // "(MIT OR CC0-1.0)") or AND (every arm's terms apply simultaneously, e.g.
 // "Apache-2.0 AND MIT" for a dual-licensed package) -- an AND expression is
 // safe iff *all* arms are already individually allowed.
+function splitOnOperator(tokens, operator) {
+  const arms = [];
+  let current = [];
+  for (const token of tokens) {
+    if (token.toUpperCase() === operator) {
+      arms.push(current.join(" "));
+      current = [];
+    } else {
+      current.push(token);
+    }
+  }
+  arms.push(current.join(" "));
+  return arms;
+}
+
 function isAllowed(licenseExpr) {
-  const stripped = licenseExpr.replace(/[()]/g, "");
-  if (/\s+OR\s+/i.test(stripped)) {
-    const arms = stripped.split(/\s+OR\s+/i).map((arm) => arm.trim());
+  const stripped = licenseExpr.replaceAll("(", "").replaceAll(")", "").trim();
+  const tokens = stripped.length === 0 ? [] : stripped.split(/\s+/);
+  if (tokens.some((token) => token.toUpperCase() === "OR")) {
+    const arms = splitOnOperator(tokens, "OR");
     return arms.some((arm) => ALLOWED_LICENSES.has(arm));
   }
-  if (/\s+AND\s+/i.test(stripped)) {
-    const arms = stripped.split(/\s+AND\s+/i).map((arm) => arm.trim());
+  if (tokens.some((token) => token.toUpperCase() === "AND")) {
+    const arms = splitOnOperator(tokens, "AND");
     return arms.every((arm) => ALLOWED_LICENSES.has(arm));
   }
-  return ALLOWED_LICENSES.has(stripped.trim());
+  return ALLOWED_LICENSES.has(stripped);
 }
 
 const violations = [];
