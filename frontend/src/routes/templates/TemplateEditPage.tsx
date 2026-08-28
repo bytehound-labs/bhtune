@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type SubmitEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useTemplate, useUpdateTemplate } from "../../api/templates";
 import { userFacingErrorMessage } from "../../api/errors";
@@ -39,7 +39,7 @@ export function TemplateEditPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
     const updated = templateFormStateToTemplate(form);
     updateTemplate.mutate(

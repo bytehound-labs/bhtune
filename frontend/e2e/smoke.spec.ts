@@ -47,11 +47,12 @@ test.describe("app shell", () => {
     ).toBeVisible();
 
     // The health indicator polls a real `/api/health` -- confirms this isn't a static mock.
-    const healthIndicator = page.getByRole("img", {
-      name: "Connected to BHTune server",
-    });
-    await expect(healthIndicator).toBeVisible();
-    await expect(healthIndicator).toHaveAttribute(
+    const healthStatus = page.locator('[role="status"]');
+    await expect(healthStatus).toHaveText(
+      "Connected to BHTune server: Connected — the BHTune HTTP service is reachable. This does not test OPC DA connectivity.",
+    );
+    await expect(page.locator(".health-indicator-dot")).toBeVisible();
+    await expect(page.locator(".health-indicator-dot")).toHaveAttribute(
       "title",
       "Connected — the BHTune HTTP service is reachable. This does not test OPC DA connectivity.",
     );

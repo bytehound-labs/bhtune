@@ -209,7 +209,8 @@ cargo run --bin bhtune-server
 ```
 
 Binds `127.0.0.1:8787` by default (see the `bind` setting below) and exposes a JSON HTTP API —
-`GET /api/health` (including the running application version); `GET`/`POST /api/templates`
+`GET /api/health` (including the running application version). The GUI header presents this
+health state with an accessible text label. `GET`/`POST /api/templates`
 and `GET`/`PUT`/`DELETE /api/templates/{name}`;
 `GET /api/runs`/`GET /api/runs/{id}`/`DELETE /api/runs/{id}` for run history,
 `GET /api/runs/{id}/export` for CSV/JSON sample export, `GET /api/runs/{id}/stream` for a live
