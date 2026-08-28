@@ -127,7 +127,8 @@ adjust the effective mapping. Every row shows its effective value and source. Ta
 or **Fixed value**. Switching to a custom tag starts from the
 template-derived value; fixed direction/range values must be entered explicitly. Per-row
 **Reset** actions return to template/live values, and **Reset all mapping overrides** restores
-every row.
+every row. Each mapping row is presented as a labeled group, and its source choices are exposed
+as an accessible pressed-button set.
 The selected source and values are retained in the saved draft. Simulator direction and ranges
 are stored separately from OPC fixed overrides, so changing drivers cannot turn simulator
 settings into live OPC overrides.

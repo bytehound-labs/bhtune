@@ -159,33 +159,50 @@ type MappingValueState = {
   simMvRangeLow: NumOrBlank;
 };
 
+type ValueChangeKey =
+  | "opcDirection"
+  | "opcPvRangeHigh"
+  | "opcPvRangeLow"
+  | "opcMvRangeHigh"
+  | "opcMvRangeLow"
+  | "simDirection"
+  | "simPvRangeHigh"
+  | "simPvRangeLow"
+  | "simMvRangeHigh"
+  | "simMvRangeLow";
+
 type Props = {
-  state: MappingValueState;
-  template: TemplateResponse | undefined;
-  onTagSourceChange: (key: TagOverrideKey, source: TagMappingSource) => void;
-  onTagChange: (key: TagOverrideKey, value: string) => void;
-  onValueSourceChange: (
+  readonly state: MappingValueState;
+  readonly template: TemplateResponse | undefined;
+  readonly onTagSourceChange: (
+    key: TagOverrideKey,
+    source: TagMappingSource,
+  ) => void;
+  readonly onTagChange: (key: TagOverrideKey, value: string) => void;
+  readonly onValueSourceChange: (
     key: ValueMappingKey,
     source: ValueMappingSource,
   ) => void;
-  onValueTagChange: (key: ValueMappingKey, value: string) => void;
-  onValueChange: (
-    key:
-      | "opcDirection"
-      | "opcPvRangeHigh"
-      | "opcPvRangeLow"
-      | "opcMvRangeHigh"
-      | "opcMvRangeLow"
-      | "simDirection"
-      | "simPvRangeHigh"
-      | "simPvRangeLow"
-      | "simMvRangeHigh"
-      | "simMvRangeLow",
-    value: NumOrBlank | "" | ControllerDirection,
+  readonly onValueTagChange: (key: ValueMappingKey, value: string) => void;
+  readonly onValueChange: (
+    key: ValueChangeKey,
+    value: NumOrBlank | ControllerDirection,
   ) => void;
-  onResetTag: (key: TagOverrideKey) => void;
-  onResetValue: (key: ValueMappingKey) => void;
-  onResetAll: () => void;
+  readonly onResetTag: (key: TagOverrideKey) => void;
+  readonly onResetValue: (key: ValueMappingKey) => void;
+  readonly onResetAll: () => void;
+};
+
+type SourceToggleProps<T extends string> = {
+  readonly label: string;
+  readonly value: T;
+  readonly options: readonly {
+    readonly value: T;
+    readonly label: string;
+    readonly disabled?: boolean;
+  }[];
+  readonly onChange: (value: T) => void;
+  readonly disabled?: boolean;
 };
 
 function SourceToggle<T extends string>({
@@ -194,19 +211,10 @@ function SourceToggle<T extends string>({
   options,
   onChange,
   disabled = false,
-}: {
-  label: string;
-  value: T;
-  options: readonly { value: T; label: string; disabled?: boolean }[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-}) {
+}: SourceToggleProps<T>) {
   return (
-    <div
-      className="inline-flex rounded-md border border-slate-700"
-      role="group"
-      aria-label={`${label} source`}
-    >
+    <fieldset className="inline-flex rounded-md border border-slate-700">
+      <legend className="sr-only">{label} source</legend>
       {options.map((option) => (
         <button
           key={option.value}
@@ -223,7 +231,7 @@ function SourceToggle<T extends string>({
           {option.label}
         </button>
       ))}
-    </div>
+    </fieldset>
   );
 }
 
@@ -240,16 +248,24 @@ function displayTag(tag: string | null, missingTemplateMessage: string) {
   );
 }
 
+function templateTagPreview(
+  tagname: string,
+  template: TemplateResponse | undefined,
+  label: string,
+) {
+  if (!template) return null;
+  return (
+    derivedTagPreview(tagname, template).find((item) => item.label === label)
+      ?.tag ?? null
+  );
+}
+
 function tagValue(
   row: TagRow,
   state: MappingValueState,
   template: TemplateResponse | undefined,
 ) {
-  const preview = template
-    ? derivedTagPreview(state.tagname, template).find(
-        (item) => item.label === row.previewLabel,
-      )?.tag
-    : null;
+  const preview = templateTagPreview(state.tagname, template, row.previewLabel);
   const source = state.tagSources[row.key];
   const custom = state.tagOverrides[row.key].trim();
   return {
@@ -260,49 +276,75 @@ function tagValue(
   };
 }
 
-function valueState(
+type ValueFieldKey =
+  | "opcDirection"
+  | "opcPvRangeHigh"
+  | "opcPvRangeLow"
+  | "opcMvRangeHigh"
+  | "opcMvRangeLow"
+  | "simDirection"
+  | "simPvRangeHigh"
+  | "simPvRangeLow"
+  | "simMvRangeHigh"
+  | "simMvRangeLow";
+
+const OPC_VALUE_FIELDS: Record<ValueMappingKey, ValueFieldKey> = {
+  direction: "opcDirection",
+  pvRangeHigh: "opcPvRangeHigh",
+  pvRangeLow: "opcPvRangeLow",
+  mvRangeHigh: "opcMvRangeHigh",
+  mvRangeLow: "opcMvRangeLow",
+};
+
+const SIMULATOR_VALUE_FIELDS: Record<ValueMappingKey, ValueFieldKey> = {
+  direction: "simDirection",
+  pvRangeHigh: "simPvRangeHigh",
+  pvRangeLow: "simPvRangeLow",
+  mvRangeHigh: "simMvRangeHigh",
+  mvRangeLow: "simMvRangeLow",
+};
+
+const OPC_VALUE_CHANGE_KEYS: Record<ValueMappingKey, ValueChangeKey> = {
+  direction: "opcDirection",
+  pvRangeHigh: "opcPvRangeHigh",
+  pvRangeLow: "opcPvRangeLow",
+  mvRangeHigh: "opcMvRangeHigh",
+  mvRangeLow: "opcMvRangeLow",
+};
+
+const SIMULATOR_VALUE_CHANGE_KEYS: Record<ValueMappingKey, ValueChangeKey> = {
+  direction: "simDirection",
+  pvRangeHigh: "simPvRangeHigh",
+  pvRangeLow: "simPvRangeLow",
+  mvRangeHigh: "simMvRangeHigh",
+  mvRangeLow: "simMvRangeLow",
+};
+
+function valueField(
+  state: MappingValueState,
   key: ValueMappingKey,
+  simulator: boolean,
+) {
+  const fields = simulator ? SIMULATOR_VALUE_FIELDS : OPC_VALUE_FIELDS;
+  return state[fields[key]];
+}
+
+function valueState(
+  row: ValueRow,
   state: MappingValueState,
   template: TemplateResponse | undefined,
 ) {
-  const preview = template
-    ? derivedTagPreview(state.tagname, template).find(
-        (item) =>
-          item.label ===
-          VALUE_ROWS.find((row) => row.key === key)?.previewLabel,
-      )?.tag
-    : null;
-  const source = state.valueSources[key];
-  if (state.driver === "simulator") {
-    return {
-      source: "fixed" as const,
-      preview: preview ?? null,
-      value:
-        key === "direction"
-          ? state.simDirection
-          : key === "pvRangeHigh"
-            ? state.simPvRangeHigh
-            : key === "pvRangeLow"
-              ? state.simPvRangeLow
-              : key === "mvRangeHigh"
-                ? state.simMvRangeHigh
-                : state.simMvRangeLow,
-    };
-  }
+  const simulator = state.driver === "simulator";
   return {
-    source,
-    preview: preview ?? null,
-    value:
-      key === "direction"
-        ? state.opcDirection
-        : key === "pvRangeHigh"
-          ? state.opcPvRangeHigh
-          : key === "pvRangeLow"
-            ? state.opcPvRangeLow
-            : key === "mvRangeHigh"
-              ? state.opcMvRangeHigh
-              : state.opcMvRangeLow,
+    source: simulator ? "fixed" : state.valueSources[row.key],
+    preview: templateTagPreview(state.tagname, template, row.previewLabel),
+    value: valueField(state, row.key, simulator),
   };
+}
+
+function valueChangeKey(key: ValueMappingKey, simulator: boolean) {
+  const keys = simulator ? SIMULATOR_VALUE_CHANGE_KEYS : OPC_VALUE_CHANGE_KEYS;
+  return keys[key];
 }
 
 function valueText(value: NumOrBlank | "" | ControllerDirection) {
@@ -311,6 +353,352 @@ function valueText(value: NumOrBlank | "" | ControllerDirection) {
     return DIRECTION_LABELS[value];
   }
   return String(value);
+}
+
+function missingTemplateMessage(template: TemplateResponse | undefined) {
+  if (template) return "Not used by this template";
+  return "Choose a template";
+}
+
+function EffectiveValue({
+  tag,
+  template,
+}: {
+  readonly tag: string | null;
+  readonly template: TemplateResponse | undefined;
+}) {
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-wide text-slate-500">
+        Effective value
+      </div>
+      <div className="mt-1 min-h-8 cursor-not-allowed rounded-md border border-slate-700 bg-slate-800/70 px-3 py-1.5 text-slate-300">
+        {displayTag(tag, missingTemplateMessage(template))}
+      </div>
+    </div>
+  );
+}
+
+function tagSourceDescription(inactive: boolean, source: TagMappingSource) {
+  if (inactive) return "Inactive for Simulator";
+  if (source === "custom") return "Custom tag";
+  return "Template-derived tag";
+}
+
+function tagResetTitle(inactive: boolean, source: TagMappingSource) {
+  if (inactive) return "Simulator mode does not use OPC tag overrides.";
+  if (source === "template")
+    return "This row already uses the template-derived tag.";
+  return "Reset this row to the template-derived tag.";
+}
+
+function tagValueHint(preview: string | null) {
+  if (preview) return "Reset returns to the template-derived value.";
+  return "This template has no default for this item; enter a site-specific tag if needed.";
+}
+
+type TagValueControlProps = {
+  readonly row: TagRow;
+  readonly tags: ReturnType<typeof tagValue>;
+  readonly state: MappingValueState;
+  readonly template: TemplateResponse | undefined;
+  readonly inactive: boolean;
+  readonly onTagChange: (key: TagOverrideKey, value: string) => void;
+};
+
+function TagValueControl({
+  row,
+  tags,
+  state,
+  template,
+  inactive,
+  onTagChange,
+}: TagValueControlProps) {
+  if (tags.source === "custom") {
+    return (
+      <TextField
+        label={`${row.label} custom tag`}
+        value={state.tagOverrides[row.key]}
+        onChange={(value) => onTagChange(row.key, value)}
+        disabled={inactive}
+        placeholder={tags.preview ?? "Enter a custom OPC item ID"}
+        hint={tagValueHint(tags.preview)}
+      />
+    );
+  }
+
+  return <EffectiveValue tag={tags.effective} template={template} />;
+}
+
+type TagMappingRowProps = {
+  readonly row: TagRow;
+  readonly state: MappingValueState;
+  readonly template: TemplateResponse | undefined;
+  readonly onTagSourceChange: (
+    key: TagOverrideKey,
+    source: TagMappingSource,
+  ) => void;
+  readonly onTagChange: (key: TagOverrideKey, value: string) => void;
+  readonly onResetTag: (key: TagOverrideKey) => void;
+};
+
+function TagMappingRow({
+  row,
+  state,
+  template,
+  onTagSourceChange,
+  onTagChange,
+  onResetTag,
+}: TagMappingRowProps) {
+  const inactive = state.driver === "simulator";
+  const tags = tagValue(row, state, template);
+
+  return (
+    <fieldset
+      className={`m-0 rounded-md border border-slate-800 p-3 ${
+        inactive ? "opacity-65" : ""
+      }`}
+    >
+      <legend className="sr-only">{row.label}</legend>
+      <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(10rem,1fr)_auto_minmax(14rem,2fr)_auto] lg:items-start lg:gap-4">
+        <div>
+          <div className="text-sm font-medium text-slate-200">{row.label}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            {tagSourceDescription(inactive, tags.source)}
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-slate-500">
+            {row.description}
+          </p>
+        </div>
+        <SourceToggle
+          label={row.label}
+          value={tags.source}
+          options={[
+            { value: "template", label: "Template tag" },
+            { value: "custom", label: "Custom tag" },
+          ]}
+          disabled={inactive}
+          onChange={(source) => onTagSourceChange(row.key, source)}
+        />
+        <div className="min-w-0">
+          <TagValueControl
+            row={row}
+            tags={tags}
+            state={state}
+            template={template}
+            inactive={inactive}
+            onTagChange={onTagChange}
+          />
+        </div>
+        <Button
+          onClick={() => onResetTag(row.key)}
+          disabled={inactive || tags.source === "template"}
+          title={tagResetTitle(inactive, tags.source)}
+        >
+          Reset
+        </Button>
+      </div>
+    </fieldset>
+  );
+}
+
+function valueSourceDescription(
+  simulator: boolean,
+  source: ValueMappingSource,
+) {
+  if (simulator) return "Simulator value";
+  if (source === "custom") return "Custom read tag";
+  if (source === "fixed") return "Fixed value";
+  return "Template-derived read tag";
+}
+
+function valueResetTitle(simulator: boolean, source: ValueMappingSource) {
+  if (simulator)
+    return "Simulator values are independent of OPC mapping overrides.";
+  if (source === "tag")
+    return "This row already reads its value from the template-derived OPC tag.";
+  return "Reset this row to read its value from the OPC tag.";
+}
+
+function fixedValueHint(simulator: boolean, kind: ValueRow["kind"]) {
+  if (simulator)
+    return "Used by the simulator; not sent as an OPC DA override.";
+  if (kind === "direction")
+    return "Replaces the live controller-direction tag for this tune.";
+  return "Replaces the live range-tag read for this tune.";
+}
+
+function directionValue(value: NumOrBlank | ControllerDirection) {
+  if (value === "" || value === "direct" || value === "reverse") {
+    return value;
+  }
+  return "";
+}
+
+function numberValue(value: NumOrBlank | ControllerDirection): NumOrBlank {
+  if (typeof value === "number" || value === "") return value;
+  return "";
+}
+
+type ValueEditorProps = {
+  readonly row: ValueRow;
+  readonly values: ReturnType<typeof valueState>;
+  readonly state: MappingValueState;
+  readonly template: TemplateResponse | undefined;
+  readonly simulator: boolean;
+  readonly valueKey: ValueChangeKey;
+  readonly onValueTagChange: (key: ValueMappingKey, value: string) => void;
+  readonly onValueChange: (
+    key: ValueChangeKey,
+    value: NumOrBlank | ControllerDirection,
+  ) => void;
+};
+
+function ValueEditor({
+  row,
+  values,
+  state,
+  template,
+  simulator,
+  valueKey,
+  onValueTagChange,
+  onValueChange,
+}: ValueEditorProps) {
+  if (values.source === "custom") {
+    return (
+      <TextField
+        label={`${row.label} custom read tag`}
+        value={state.valueTagOverrides[row.key]}
+        onChange={(value) => onValueTagChange(row.key, value)}
+        placeholder={values.preview ?? "Enter a custom OPC item ID"}
+        hint={
+          values.preview
+            ? "Reset returns to the template-derived read tag."
+            : "This template has no default read tag; enter a site-specific tag."
+        }
+      />
+    );
+  }
+
+  if (values.source !== "fixed") {
+    return <EffectiveValue tag={values.preview} template={template} />;
+  }
+
+  if (row.kind === "direction") {
+    return (
+      <SelectField
+        label={`${row.label} fixed value`}
+        value={directionValue(values.value)}
+        onChange={(value) => onValueChange(valueKey, value)}
+        options={["direct", "reverse"]}
+        displayLabel={(value) => DIRECTION_LABELS[value]}
+        placeholder="Choose direction"
+        required
+        hint={fixedValueHint(simulator, row.kind)}
+      />
+    );
+  }
+
+  return (
+    <NumberField
+      label={`${row.label} fixed value`}
+      value={numberValue(values.value)}
+      onChange={(value) => onValueChange(valueKey, value)}
+      required
+      step="any"
+      hint={fixedValueHint(simulator, row.kind)}
+    />
+  );
+}
+
+type ValueMappingRowProps = {
+  readonly row: ValueRow;
+  readonly state: MappingValueState;
+  readonly template: TemplateResponse | undefined;
+  readonly onValueSourceChange: (
+    key: ValueMappingKey,
+    source: ValueMappingSource,
+  ) => void;
+  readonly onValueTagChange: (key: ValueMappingKey, value: string) => void;
+  readonly onValueChange: (
+    key: ValueChangeKey,
+    value: NumOrBlank | ControllerDirection,
+  ) => void;
+  readonly onResetValue: (key: ValueMappingKey) => void;
+};
+
+function ValueMappingRow({
+  row,
+  state,
+  template,
+  onValueSourceChange,
+  onValueTagChange,
+  onValueChange,
+  onResetValue,
+}: ValueMappingRowProps) {
+  const simulator = state.driver === "simulator";
+  const values = valueState(row, state, template);
+  const fixed = values.source === "fixed";
+  const valueKey = valueChangeKey(row.key, simulator);
+
+  return (
+    <fieldset className="m-0 rounded-md border border-slate-800 p-3">
+      <legend className="sr-only">{row.label}</legend>
+      <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(10rem,1fr)_auto_minmax(14rem,2fr)_auto] lg:items-start lg:gap-4">
+        <div>
+          <div className="text-sm font-medium text-slate-200">{row.label}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            {valueSourceDescription(simulator, values.source)}
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-slate-500">
+            {row.description}
+          </p>
+        </div>
+        <SourceToggle
+          label={row.label}
+          value={values.source}
+          options={[
+            {
+              value: "tag",
+              label: "Template tag",
+              disabled: simulator,
+            },
+            {
+              value: "custom",
+              label: "Custom tag",
+              disabled: simulator,
+            },
+            { value: "fixed", label: "Fixed value" },
+          ]}
+          onChange={(source) => onValueSourceChange(row.key, source)}
+        />
+        <div className="min-w-0">
+          <ValueEditor
+            row={row}
+            values={values}
+            state={state}
+            template={template}
+            simulator={simulator}
+            valueKey={valueKey}
+            onValueTagChange={onValueTagChange}
+            onValueChange={onValueChange}
+          />
+          {fixed && (
+            <div className="mt-1 text-xs text-slate-500">
+              Current value: {valueText(values.value)}
+            </div>
+          )}
+        </div>
+        <Button
+          onClick={() => onResetValue(row.key)}
+          disabled={simulator || values.source === "tag"}
+          title={valueResetTitle(simulator, values.source)}
+        >
+          Reset
+        </Button>
+      </div>
+    </fieldset>
+  );
 }
 
 export function LoopMappingEditor({
@@ -347,246 +735,30 @@ export function LoopMappingEditor({
       </div>
 
       <div className="space-y-3">
-        {TAG_ROWS.map((row) => {
-          const tags = tagValue(row, state, template);
-          const inactive = simulator;
-          return (
-            <div
-              key={row.key}
-              role="group"
-              aria-label={row.label}
-              className={`rounded-md border border-slate-800 p-3 ${
-                inactive ? "opacity-65" : ""
-              }`}
-            >
-              <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(10rem,1fr)_auto_minmax(14rem,2fr)_auto] lg:items-start lg:gap-4">
-                <div>
-                  <div className="text-sm font-medium text-slate-200">
-                    {row.label}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {inactive
-                      ? "Inactive for Simulator"
-                      : tags.source === "custom"
-                        ? "Custom tag"
-                        : "Template-derived tag"}
-                  </div>
-                  <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                    {row.description}
-                  </p>
-                </div>
-                <SourceToggle
-                  label={row.label}
-                  value={tags.source}
-                  options={[
-                    { value: "template", label: "Template tag" },
-                    { value: "custom", label: "Custom tag" },
-                  ]}
-                  disabled={inactive}
-                  onChange={(source) => onTagSourceChange(row.key, source)}
-                />
-                <div className="min-w-0">
-                  {tags.source === "custom" ? (
-                    <TextField
-                      label={`${row.label} custom tag`}
-                      value={state.tagOverrides[row.key]}
-                      onChange={(value) => onTagChange(row.key, value)}
-                      disabled={inactive}
-                      placeholder={tags.preview ?? "Enter a custom OPC item ID"}
-                      hint={
-                        tags.preview
-                          ? "Reset returns to the template-derived value."
-                          : "This template has no default for this item; enter a site-specific tag if needed."
-                      }
-                    />
-                  ) : (
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-slate-500">
-                        Effective value
-                      </div>
-                      <div className="mt-1 min-h-8 cursor-not-allowed rounded-md border border-slate-700 bg-slate-800/70 px-3 py-1.5 text-slate-300">
-                        {displayTag(
-                          tags.effective,
-                          template
-                            ? "Not used by this template"
-                            : "Choose a template",
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <Button
-                  onClick={() => onResetTag(row.key)}
-                  disabled={inactive || tags.source === "template"}
-                  title={
-                    inactive
-                      ? "Simulator mode does not use OPC tag overrides."
-                      : tags.source === "template"
-                        ? "This row already uses the template-derived tag."
-                        : "Reset this row to the template-derived tag."
-                  }
-                >
-                  Reset
-                </Button>
-              </div>
-            </div>
-          );
-        })}
+        {TAG_ROWS.map((row) => (
+          <TagMappingRow
+            key={row.key}
+            row={row}
+            state={state}
+            template={template}
+            onTagSourceChange={onTagSourceChange}
+            onTagChange={onTagChange}
+            onResetTag={onResetTag}
+          />
+        ))}
 
-        {VALUE_ROWS.map((row) => {
-          const values = valueState(row.key, state, template);
-          const fixed = values.source === "fixed";
-          const valueKey = simulator
-            ? row.key === "direction"
-              ? "simDirection"
-              : `sim${row.key[0].toUpperCase()}${row.key.slice(1)}`
-            : row.key === "direction"
-              ? "opcDirection"
-              : `opc${row.key[0].toUpperCase()}${row.key.slice(1)}`;
-          return (
-            <div
-              key={row.key}
-              role="group"
-              aria-label={row.label}
-              className="rounded-md border border-slate-800 p-3"
-            >
-              <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(10rem,1fr)_auto_minmax(14rem,2fr)_auto] lg:items-start lg:gap-4">
-                <div>
-                  <div className="text-sm font-medium text-slate-200">
-                    {row.label}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {simulator
-                      ? "Simulator value"
-                      : values.source === "custom"
-                        ? "Custom read tag"
-                        : fixed
-                          ? "Fixed value"
-                          : "Template-derived read tag"}
-                  </div>
-                  <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                    {row.description}
-                  </p>
-                </div>
-                <SourceToggle
-                  label={row.label}
-                  value={values.source}
-                  options={[
-                    {
-                      value: "tag",
-                      label: "Template tag",
-                      disabled: simulator,
-                    },
-                    {
-                      value: "custom",
-                      label: "Custom tag",
-                      disabled: simulator,
-                    },
-                    { value: "fixed", label: "Fixed value" },
-                  ]}
-                  onChange={(source) => onValueSourceChange(row.key, source)}
-                />
-                <div className="min-w-0">
-                  {values.source === "custom" ? (
-                    <TextField
-                      label={`${row.label} custom read tag`}
-                      value={state.valueTagOverrides[row.key]}
-                      onChange={(value) => onValueTagChange(row.key, value)}
-                      placeholder={
-                        values.preview ?? "Enter a custom OPC item ID"
-                      }
-                      hint={
-                        values.preview
-                          ? "Reset returns to the template-derived read tag."
-                          : "This template has no default read tag; enter a site-specific tag."
-                      }
-                    />
-                  ) : fixed ? (
-                    row.kind === "direction" ? (
-                      <SelectField
-                        label={`${row.label} fixed value`}
-                        value={values.value as "" | ControllerDirection}
-                        onChange={(value) =>
-                          onValueChange(
-                            valueKey as "opcDirection" | "simDirection",
-                            value,
-                          )
-                        }
-                        options={["direct", "reverse"]}
-                        displayLabel={(value) => DIRECTION_LABELS[value]}
-                        placeholder="Choose direction"
-                        required
-                        hint={
-                          simulator
-                            ? "Used by the simulator; not sent as an OPC DA override."
-                            : "Replaces the live controller-direction tag for this tune."
-                        }
-                      />
-                    ) : (
-                      <NumberField
-                        label={`${row.label} fixed value`}
-                        value={values.value as NumOrBlank}
-                        onChange={(value) =>
-                          onValueChange(
-                            valueKey as
-                              | "opcPvRangeHigh"
-                              | "opcPvRangeLow"
-                              | "opcMvRangeHigh"
-                              | "opcMvRangeLow"
-                              | "simPvRangeHigh"
-                              | "simPvRangeLow"
-                              | "simMvRangeHigh"
-                              | "simMvRangeLow",
-                            value,
-                          )
-                        }
-                        required
-                        step="any"
-                        hint={
-                          simulator
-                            ? "Used by the simulator; not sent as an OPC DA override."
-                            : "Replaces the live range-tag read for this tune."
-                        }
-                      />
-                    )
-                  ) : (
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-slate-500">
-                        Effective value
-                      </div>
-                      <div className="mt-1 min-h-8 cursor-not-allowed rounded-md border border-slate-700 bg-slate-800/70 px-3 py-1.5 text-slate-300">
-                        {displayTag(
-                          values.preview,
-                          template
-                            ? "Not used by this template"
-                            : "Choose a template",
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  {fixed && (
-                    <div className="mt-1 text-xs text-slate-500">
-                      Current value: {valueText(values.value)}
-                    </div>
-                  )}
-                </div>
-                <Button
-                  onClick={() => onResetValue(row.key)}
-                  disabled={simulator || values.source === "tag"}
-                  title={
-                    simulator
-                      ? "Simulator values are independent of OPC mapping overrides."
-                      : values.source === "tag"
-                        ? "This row already reads its value from the template-derived OPC tag."
-                        : "Reset this row to read its value from the OPC tag."
-                  }
-                >
-                  Reset
-                </Button>
-              </div>
-            </div>
-          );
-        })}
+        {VALUE_ROWS.map((row) => (
+          <ValueMappingRow
+            key={row.key}
+            row={row}
+            state={state}
+            template={template}
+            onValueSourceChange={onValueSourceChange}
+            onValueTagChange={onValueTagChange}
+            onValueChange={onValueChange}
+            onResetValue={onResetValue}
+          />
+        ))}
       </div>
     </div>
   );
