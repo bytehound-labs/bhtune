@@ -933,6 +933,36 @@ mod tests {
         show(&pool, run.id, OutputFormat::Json).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn show_prints_incomplete_restore_status() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "Unit1.LIC101.PV",
+            TuneDriver::Simulator,
+            sample_config(),
+            TemplateOrigin::Builtin,
+            &sample_template(),
+            &sample_tags(),
+            now,
+        )
+        .await
+        .unwrap();
+        TuneRunRow::complete(&pool, run.id, now).await.unwrap();
+        TuneRunRow::record_restore_status(
+            &pool,
+            run.id,
+            bhtune_db::models::RestoreStatus::Incomplete,
+            Some("MV: write failed"),
+        )
+        .await
+        .unwrap();
+
+        show(&pool, run.id, OutputFormat::Table).await.unwrap();
+    }
+
     /// A run carrying at least one `TuneResultRow` and one `TuneWriteRow`, so `show`'s
     /// "Calculated results" and "PID write-back audit" print blocks (otherwise never
     /// exercised, since every other fixture in this file completes with no results/writes
