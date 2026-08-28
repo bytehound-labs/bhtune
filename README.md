@@ -517,6 +517,18 @@ cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
 sonar-scanner
 ```
 
+Maintainers can restore `SONAR_TOKEN` with the repository's dotenv-sync setup:
+
+```sh
+rbw unlock
+ds sync
+```
+
+The token is stored only in the ignored `.env` file and the `bhtune` Bitwarden note; `.env.example`
+documents the required key without containing its value. Use `ds push` after changing the local
+environment, and run `lefthook install` after cloning to enable the automatic pre-commit and
+post-merge synchronization hooks. CI uses the repository's GitHub Actions secret instead.
+
 ## Roadmap
 
 - OPC UA and Modbus `Driver` implementations, alongside OPC DA.
