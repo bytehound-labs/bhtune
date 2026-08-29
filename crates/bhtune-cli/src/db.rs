@@ -59,11 +59,13 @@ pub async fn open(
 /// `Some("")` in that case, and `std::fs::create_dir_all("")` is a documented no-op success,
 /// so this never needs to special-case "no parent" separately from "empty parent".
 fn ensure_parent_dir(path: &Path) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| anyhow::anyhow!("failed to create database directory {parent:?}: {e}"))?;
-    }
-    Ok(())
+    path.parent()
+        .map(|parent| {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("failed to create database directory {parent:?}: {e}"))
+        })
+        .transpose()
+        .map(|_| ())
 }
 
 #[cfg(test)]

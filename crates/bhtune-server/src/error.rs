@@ -143,4 +143,10 @@ mod tests {
         let response = api_err.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
+
+    #[test]
+    fn anyhow_errors_map_to_internal() {
+        let api_err: ApiError = anyhow::anyhow!("unexpected failure").into();
+        assert!(matches!(api_err, ApiError::Internal(_)));
+    }
 }

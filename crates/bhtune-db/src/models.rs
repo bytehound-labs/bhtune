@@ -2201,6 +2201,35 @@ mod tests {
     use super::*;
     use crate::convert::{enum_to_text, text_to_enum};
 
+    async fn sample_run() -> (crate::SqlitePool, i64) {
+        let pool = crate::connect_in_memory().await.unwrap();
+        let template = bhtune_core::built_in_templates().remove(0);
+        let tags = bhtune_core::LoopTags::derive_from_pv_tag("Unit1.FIC101.PV", &template);
+        let config = bhtune_core::LoopConfig {
+            process_type: bhtune_core::ProcessType::Flow,
+            controller_type: bhtune_core::ControllerType::Pi,
+            relay_amp_percent: 5.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 3,
+            mrft_delay_secs: 0,
+        };
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "Unit1.FIC101.PV",
+            TuneDriver::Simulator,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
+        (pool, run.id)
+    }
+
     #[test]
     fn tune_driver_round_trips_and_matches_check_constraint() {
         let cases = [
@@ -2268,5 +2297,98 @@ mod tests {
             derivative: 0.0,
         };
         TuneResultRow::from_calculated(1, tuning, pid);
+    }
+
+    #[tokio::test]
+    async fn record_restore_status_round_trips_both_status_shapes() {
+        let (pool, run_id) = sample_run().await;
+        let confirmed =
+            TuneRunRow::record_restore_status(&pool, run_id, RestoreStatus::Confirmed, None)
+                .await
+                .unwrap();
+        assert_eq!(confirmed.restore_status, Some(RestoreStatus::Confirmed));
+        assert_eq!(confirmed.restore_detail, None);
+
+        let incomplete = TuneRunRow::record_restore_status(
+            &pool,
+            run_id,
+            RestoreStatus::Incomplete,
+            Some("MV restore failed"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(incomplete.restore_status, Some(RestoreStatus::Incomplete));
+        assert_eq!(
+            incomplete.restore_detail.as_deref(),
+            Some("MV restore failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn tune_run_delete_reports_both_existing_and_missing_ids() {
+        let (pool, run_id) = sample_run().await;
+        assert!(TuneRunRow::delete(&pool, run_id).await.unwrap());
+        assert!(!TuneRunRow::delete(&pool, run_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn malformed_tune_run_json_is_reported_with_the_respective_column() {
+        for (column, expected) in [
+            ("template_snapshot_json", "template_snapshot_json"),
+            ("tags_json", "tags_json"),
+            ("timing_metrics_json", "timing_metrics_json"),
+        ] {
+            let (pool, run_id) = sample_run().await;
+            let query = match column {
+                "template_snapshot_json" => {
+                    sqlx::query("UPDATE tune_runs SET template_snapshot_json = ? WHERE id = ?")
+                }
+                "tags_json" => sqlx::query("UPDATE tune_runs SET tags_json = ? WHERE id = ?"),
+                "timing_metrics_json" => {
+                    sqlx::query("UPDATE tune_runs SET timing_metrics_json = ? WHERE id = ?")
+                }
+                _ => unreachable!(),
+            };
+            query
+                .bind("\"wrong-shape\"")
+                .bind(run_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let err = TuneRunRow::get(&pool, run_id).await.unwrap_err();
+            assert!(matches!(
+                err,
+                DbError::InvalidJsonShape { column: actual, .. } if actual == expected
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_setting_json_is_reported_as_invalid_shape() {
+        let pool = crate::connect_in_memory().await.unwrap();
+        sqlx::query("CREATE TABLE malformed_settings (key TEXT, value TEXT, updated_at TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO malformed_settings (key, value, updated_at) VALUES (?, ?, ?)")
+            .bind("draft")
+            .bind("{not-json")
+            .bind(chrono::Utc::now())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let row = sqlx::query("SELECT key, value, updated_at FROM malformed_settings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let err = setting_from_row(row).unwrap_err();
+        assert!(matches!(
+            err,
+            DbError::InvalidJsonShape {
+                column: "settings.value",
+                ..
+            }
+        ));
     }
 }

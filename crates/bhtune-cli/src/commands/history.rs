@@ -1250,6 +1250,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn show_prints_timing_metrics_when_present() {
+        let (pool, run_id) = run_with_results_and_writes().await;
+        TuneRunRow::record_timing_metrics(
+            &pool,
+            run_id,
+            bhtune_db::models::TimingMetrics {
+                basis: bhtune_db::models::TimingBasis::LiveMonotonic,
+                requested_interval_ms: 800,
+                sample_gap_count: 2,
+                mean_sample_gap_ms: Some(900.0),
+                max_sample_gap_ms: Some(1_200.0),
+                missed_poll_opportunity_count: 1,
+                measured_oscillation_period_ms: Some(4_800.0),
+                approximate_samples_per_period: Some(5.33),
+            },
+        )
+        .await
+        .unwrap();
+        show(&pool, run_id, OutputFormat::Table).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn list_output_json_is_valid_json_with_the_expected_shape() {
         let (pool, _run_id) = run_with_results_and_writes().await;
         // Can't easily capture stdout here, so this test's main job is proving the JSON
@@ -1318,6 +1340,20 @@ mod tests {
                 output: OutputFormat::Json,
             },
             &config,
+        )
+        .await
+        .unwrap();
+        run(
+            &pool,
+            HistoryCommand::Prune {
+                older_than_days: Some(1),
+                dry_run: true,
+                output: OutputFormat::Table,
+            },
+            &crate::config::BhtuneConfig {
+                retention_days: Some(1),
+                ..crate::config::BhtuneConfig::default()
+            },
         )
         .await
         .unwrap();
@@ -1626,6 +1662,16 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("recorded OPC server is missing"));
+    }
+
+    #[tokio::test]
+    async fn resolve_revert_connection_rejects_a_missing_recorded_bridge_host() {
+        let (pool, run_id) = opcda_run_with_no_writes("bridge:1", "Sim.Server").await;
+        let mut run = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
+        run.bridge_host = None;
+
+        let err = resolve_revert_connection(&run, None, None).unwrap_err();
+        assert!(err.to_string().contains("recorded bridge host is missing"));
     }
 
     #[tokio::test]

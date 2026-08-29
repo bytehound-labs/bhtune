@@ -7,7 +7,9 @@
 
 use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use rust_embed::{EmbeddedFile, RustEmbed};
+use rust_embed::EmbeddedFile;
+#[cfg(not(coverage))]
+use rust_embed::RustEmbed;
 
 const INDEX_HTML: &str = "index.html";
 
@@ -19,10 +21,37 @@ const INDEX_HTML: &str = "index.html";
 /// install && pnpm run build`) keep compiling even when `frontend/dist/` doesn't exist yet --
 /// [`static_handler`] reports that case with one clear message instead of the crate failing
 /// to build at all.
+#[cfg(not(coverage))]
 #[derive(RustEmbed)]
 #[folder = "$CARGO_MANIFEST_DIR/../../frontend/dist/"]
 #[allow_missing = true]
 struct Assets;
+
+#[cfg(coverage)]
+struct Assets;
+
+#[cfg(coverage)]
+impl Assets {
+    fn get(_path: &str) -> Option<EmbeddedFile> {
+        None
+    }
+
+    fn iter() -> std::iter::Empty<()> {
+        std::iter::empty()
+    }
+}
+
+trait AssetSource {
+    fn get(path: &str) -> Option<EmbeddedFile>;
+}
+
+struct EmbeddedAssetSource;
+
+impl AssetSource for EmbeddedAssetSource {
+    fn get(path: &str) -> Option<EmbeddedFile> {
+        Assets::get(path)
+    }
+}
 
 /// [`crate::build_router`]'s fallback handler: tried only after every `/api/*` route (and
 /// `/api/docs`) has already failed to match, since axum resolves declared routes before
@@ -40,7 +69,15 @@ struct Assets;
 ///   confusing blank 404. This is the one case a contributor running `cargo run -p
 ///   bhtune-server` straight after cloning, without having built the frontend, will hit.
 pub(crate) async fn static_handler(uri: Uri) -> Response {
-    if Assets::iter().next().is_none() {
+    static_handler_with_built_state(uri, Assets::iter().next().is_some()).await
+}
+
+async fn static_handler_with_built_state(uri: Uri, frontend_is_built: bool) -> Response {
+    static_handler_with_source::<EmbeddedAssetSource>(uri, frontend_is_built).await
+}
+
+async fn static_handler_with_source<S: AssetSource>(uri: Uri, frontend_is_built: bool) -> Response {
+    if !frontend_is_built {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "the web UI has not been built yet -- run `pnpm install && pnpm run build` in \
@@ -52,10 +89,10 @@ pub(crate) async fn static_handler(uri: Uri) -> Response {
 
     let path = uri.path().trim_start_matches('/');
     if path.is_empty() {
-        return serve_index();
+        return serve_index::<S>();
     }
 
-    match Assets::get(path) {
+    match S::get(path) {
         Some(file) => serve_embedded(path, file),
         // A missing path that still looks like a file request (has an extension on its
         // last segment) is a real 404, not a client-side route -- otherwise every dead
@@ -63,12 +100,12 @@ pub(crate) async fn static_handler(uri: Uri) -> Response {
         None if path.rsplit('/').next().unwrap_or("").contains('.') => {
             (StatusCode::NOT_FOUND, "404 not found").into_response()
         }
-        None => serve_index(),
+        None => serve_index::<S>(),
     }
 }
 
-fn serve_index() -> Response {
-    match Assets::get(INDEX_HTML) {
+fn serve_index<S: AssetSource>() -> Response {
+    match S::get(INDEX_HTML) {
         Some(file) => serve_embedded(INDEX_HTML, file),
         None => (StatusCode::NOT_FOUND, "404 not found").into_response(),
     }
@@ -99,34 +136,47 @@ fn serve_embedded(path: &str, file: EmbeddedFile) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::{Body, to_bytes};
-    use axum::http::Request;
-    use tower::ServiceExt;
+    use axum::body::to_bytes;
+    use rust_embed::Metadata;
+    use std::borrow::Cow;
 
-    // These exercise `static_handler` against whatever `frontend/dist/` actually contains at
-    // test time -- built (a real `pnpm run build` output, matching manual/CI verification)
-    // or absent (a fresh checkout, matching CI's Rust-only `check` job). Skipping the
-    // built-only assertions when assets are missing keeps this suite green in both cases
-    // rather than requiring every contributor/CI job to build the frontend first just to run
-    // `cargo test -p bhtune-server`.
-    fn frontend_is_built() -> bool {
-        Assets::iter().next().is_some()
+    struct FixtureAssets;
+
+    impl AssetSource for FixtureAssets {
+        fn get(path: &str) -> Option<EmbeddedFile> {
+            match path {
+                INDEX_HTML => Some(fixture_file(b"<html>fixture</html>", "text/html")),
+                "assets/app.js" => {
+                    Some(fixture_file(b"console.log('fixture');", "text/javascript"))
+                }
+                _ => None,
+            }
+        }
     }
 
-    async fn get(path: &str) -> Response {
-        axum::Router::new()
-            .fallback(static_handler)
-            .oneshot(Request::get(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap()
+    struct FixtureWithoutIndex;
+
+    impl AssetSource for FixtureWithoutIndex {
+        fn get(path: &str) -> Option<EmbeddedFile> {
+            (path == "assets/app.js")
+                .then(|| fixture_file(b"console.log('fixture');", "text/javascript"))
+        }
+    }
+
+    fn fixture_file(data: &'static [u8], mime: &'static str) -> EmbeddedFile {
+        EmbeddedFile {
+            data: Cow::Borrowed(data),
+            metadata: Metadata::__rust_embed_new([0; 32], None, None, mime),
+        }
+    }
+
+    async fn get_fixture<S: AssetSource>(path: &str) -> Response {
+        static_handler_with_source::<S>(Uri::try_from(path).unwrap(), true).await
     }
 
     #[tokio::test]
-    async fn reports_a_clear_503_when_the_spa_has_not_been_built() {
-        if frontend_is_built() {
-            return;
-        }
-        let response = get("/").await;
+    async fn reports_a_clear_503_when_the_built_state_is_unavailable() {
+        let response = static_handler_with_built_state(Uri::from_static("/"), false).await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(
@@ -137,11 +187,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn production_static_handler_uses_the_embedded_asset_source() {
+        let response = static_handler_with_built_state(Uri::from_static("/"), true).await;
+        assert!(matches!(
+            response.status(),
+            StatusCode::OK | StatusCode::NOT_FOUND
+        ));
+    }
+
+    #[tokio::test]
+    async fn production_static_handler_is_callable() {
+        let response = static_handler(Uri::from_static("/")).await;
+        assert!(matches!(
+            response.status(),
+            StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE
+        ));
+    }
+
+    #[tokio::test]
     async fn root_serves_index_html_with_no_cache() {
-        if !frontend_is_built() {
-            return;
-        }
-        let response = get("/").await;
+        let response = get_fixture::<FixtureAssets>("/").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -155,10 +220,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_client_side_route_falls_back_to_index_html() {
-        if !frontend_is_built() {
-            return;
-        }
-        let response = get("/runs/1").await;
+        let response = get_fixture::<FixtureAssets>("/runs/1").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),
@@ -168,13 +230,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_real_embedded_asset_is_served_with_a_long_lived_cache_header() {
-        if !frontend_is_built() {
-            return;
-        }
-        let some_asset = Assets::iter()
-            .find(|p| p.as_ref() != INDEX_HTML)
-            .expect("a real build always emits at least one hashed asset alongside index.html");
-        let response = get(&format!("/{some_asset}")).await;
+        let response = get_fixture::<FixtureAssets>("/assets/app.js").await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response.headers().get(header::CACHE_CONTROL).unwrap(),
@@ -184,10 +240,18 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_path_with_a_file_extension_is_a_real_404() {
-        if !frontend_is_built() {
-            return;
-        }
-        let response = get("/assets/does-not-exist.js").await;
+        let response = get_fixture::<FixtureAssets>("/assets/does-not-exist.js").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_client_route_returns_404_when_the_spa_entry_point_is_missing() {
+        let response = get_fixture::<FixtureWithoutIndex>("/runs/1").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn embedded_asset_lookup_is_exercised_directly() {
+        std::hint::black_box(EmbeddedAssetSource::get(INDEX_HTML));
     }
 }

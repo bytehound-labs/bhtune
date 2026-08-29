@@ -133,7 +133,8 @@ a trusted network.
      visible but disabled with an explanation.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
-   in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current
+   in real time over Server-Sent Events (`GET /api/runs/:id/stream`), with line-only PV/MV series
+   alongside the current
    relay switch count and cycles remaining. The initial PV/MV snapshot appears as soon as the
    server records it, before the first MRFT sample, so the chart does not wait for a complete
    relay tick to become visible. Independent OPC DA startup values are collected in one

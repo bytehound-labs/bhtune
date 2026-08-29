@@ -82,6 +82,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "doesn't serialize to a bare string")]
+    fn enum_to_text_rejects_non_string_serialization() {
+        enum_to_text(&42u8);
+    }
+
+    #[test]
     fn controller_type_round_trips_and_matches_check_constraint() {
         let cases = [
             (ControllerType::P, "p"),
@@ -192,12 +198,12 @@ mod tests {
     #[test]
     fn unrecognized_value_is_a_typed_error_not_a_panic() {
         let err = text_to_enum::<ProcessType>("process_type", "not_a_real_variant").unwrap_err();
-        match err {
-            DbError::InvalidEnumValue { column, value } => {
-                assert_eq!(column, "process_type");
-                assert_eq!(value, "not_a_real_variant");
-            }
-            other => panic!("expected InvalidEnumValue, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            DbError::InvalidEnumValue {
+                column: "process_type",
+                value,
+            } if value == "not_a_real_variant"
+        ));
     }
 }

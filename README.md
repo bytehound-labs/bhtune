@@ -580,7 +580,7 @@ post-merge synchronization hooks. CI uses the repository's GitHub Actions secret
 - Cross-run comparison and overlay in the history explorer — charting several past runs of
   the same loop together (e.g. "has this valve degraded since last year?"). Everything else
   in the history explorer is already shipped: age-based retention, headless `history list`/
-  `show`/`prune`, and a GUI run list/detail screen with a PV/MV trend chart that includes the
+  `show`/`prune`, and a GUI run list/detail screen with a line-only PV/MV trend chart that includes the
   initial readings and terminal restored-MV boundary, keeps short runs left-anchored for
   12 configured poll intervals without synthetic points, and supports export (CSV/JSON) and
   delete — the boundary markers are presentation-only and do not change persisted samples or

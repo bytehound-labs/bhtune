@@ -88,3 +88,29 @@ fn dispatch_service_command(command: ServiceCommand, cli: &Cli) -> anyhow::Resul
         ServiceCommand::Status => service::status(),
     }
 }
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatches_each_service_command_to_the_non_windows_stub() {
+        let cli = Cli {
+            command: None,
+            config: None,
+        };
+        for (command, action) in [
+            (ServiceCommand::Install, "install"),
+            (ServiceCommand::Uninstall, "uninstall"),
+            (ServiceCommand::Start, "start"),
+            (ServiceCommand::Stop, "stop"),
+            (ServiceCommand::Status, "status"),
+        ] {
+            let error = dispatch_service_command(command, &cli).unwrap_err();
+            assert!(
+                error.to_string().contains(action),
+                "stub error should identify {action}: {error}"
+            );
+        }
+    }
+}

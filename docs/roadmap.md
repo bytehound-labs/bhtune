@@ -77,7 +77,7 @@ age-based retention, headless access, and a browsable GUI screen — is done:
   (`prune` applies the configured retention policy on demand, with `--dry-run` to preview the
   count first and `--older-than-days` to override the configured policy for one invocation),
   so all of this is reachable without the web GUI.
-- **A GUI history screen** — done. A filterable/sortable run list, a PV/MV trend chart per
+- **A GUI history screen** — done. A filterable/sortable run list, a line-only PV/MV trend chart per
   run (the same chart component the live view uses, with initial-reading and terminal
   restored-MV boundary points), the run's full parameters, calculated constants, and
   write-back audit trail in one place, plus export (CSV or JSON download) and delete actions

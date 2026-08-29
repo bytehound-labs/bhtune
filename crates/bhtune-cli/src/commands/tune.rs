@@ -1536,9 +1536,7 @@ async fn finish_completed_run<R: std::io::BufRead>(
             error,
         )
         .await;
-        if let Some(timing_metrics) = timing_metrics_without_period {
-            record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
-        }
+        record_timing_metrics_if_present(pool, run_id, timing_metrics_without_period).await;
         return Err(error);
     }
 
@@ -1680,9 +1678,7 @@ async fn finish_failed_run(
         error,
     )
     .await;
-    if let Some(timing_metrics) = timing_metrics_without_period {
-        record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
-    }
+    record_timing_metrics_if_present(pool, run_id, timing_metrics_without_period).await;
     Err(error)
 }
 
@@ -3637,6 +3633,15 @@ async fn record_timing_metrics_best_effort(pool: &SqlitePool, run_id: i64, metri
     }
 }
 
+async fn record_timing_metrics_if_present(
+    pool: &SqlitePool,
+    run_id: i64,
+    metrics: Option<TimingMetrics>,
+) {
+    let Some(metrics) = metrics else { return };
+    record_timing_metrics_best_effort(pool, run_id, metrics).await;
+}
+
 /// Attempts a best-effort restore, records its outcome, then returns `err` **unchanged** --
 /// the single choke point every early-return error path in `execute` funnels through, so a
 /// partial mutation is never left un-restored just because the step that failed came before
@@ -4777,6 +4782,71 @@ mod tests {
         assert_eq!(second.run_id(), first.run_id() + 1);
     }
 
+    #[tokio::test]
+    async fn prepare_rejects_invalid_tag_overrides_before_creating_a_run() {
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.tag_overrides = Some(TagOverrides {
+            process_variable: Some("bad\0tag".to_string()),
+            ..TagOverrides::default()
+        });
+
+        let result = prepare(&pool, args, &test_config()).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.to_string().contains("process_variable"));
+        assert!(
+            TuneRunRow::list(
+                &pool,
+                &bhtune_db::models::TuneRunFilter::default(),
+                bhtune_db::models::Pagination::first(10),
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_completes_a_prepared_simulator_run() {
+        let pool = seeded_pool().await;
+        let prepared = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let run_id = prepared.run_id();
+
+        let outcome = drive(&pool, prepared, &mut CtrlC::never()).await.unwrap();
+
+        assert_eq!(outcome, TuneOutcome::Completed);
+        assert_eq!(
+            TuneRunRow::get(&pool, run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome,
+            bhtune_db::models::TuneOutcome::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_marks_a_prepared_run_failed_when_execution_errors() {
+        let pool = seeded_pool().await;
+        let mut prepared = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let run_id = prepared.run_id();
+        prepared.driver = Box::new(MockDriver::default().empty_read(SIMULATOR_PV_TAG));
+
+        let err = drive(&pool, prepared, &mut CtrlC::never())
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("no value"));
+        let run = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
+        assert_eq!(run.outcome, bhtune_db::models::TuneOutcome::Failed);
+        assert!(run.failure_reason.is_some());
+    }
+
     /// Every range/direction override is CLI-supplied below, so `read_initial_values` never
     /// reads them from the driver; the mock only ever needs to answer for `pv_ini`/`mv_ini`
     /// and (for the Yokogawa template) has no mode/mode-attribute tags to read either. Fails
@@ -5304,13 +5374,11 @@ mod tests {
         .await
         .unwrap();
 
-        match outcome {
-            PollOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => {
-                assert_eq!(tag, tags.process_variable);
-                assert_eq!(quality, bhtune_driver::Quality::Bad);
-            }
-            _ => panic!("expected PollOutcome::Aborted(AbortReason::PoorQuality)"),
-        }
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::PoorQuality { ref tag, quality })
+                if tag == &tags.process_variable && quality == bhtune_driver::Quality::Bad
+        ));
 
         // The triggering sample was recorded (with its real, poor quality) before the abort
         // -- finding 5 explicitly requires the operator can see exactly what was seen when
@@ -5500,16 +5568,13 @@ mod tests {
         .await
         .unwrap();
 
-        match outcome {
+        assert!(matches!(
+            outcome,
             PollOutcome::Aborted(AbortReason::OperationTimedOut {
-                tag,
+                ref tag,
                 op_timeout_secs,
-            }) => {
-                assert_eq!(tag, tags.process_variable);
-                assert_eq!(op_timeout_secs, 1);
-            }
-            _ => panic!("expected PollOutcome::Aborted(AbortReason::OperationTimedOut)"),
-        }
+            }) if tag == &tags.process_variable && op_timeout_secs == 1
+        ));
 
         // Unlike the poor-quality/mid-write-cancellation cases, the PV read itself is what
         // stalled -- there is no valid tick/sample to record for this iteration at all.
@@ -8624,6 +8689,119 @@ mod tests {
         assert_eq!(timing.approximate_samples_per_period, None);
     }
 
+    #[derive(Debug)]
+    struct RestoreFailingSimulator {
+        inner: bhtune_driver::SimulatorDriver,
+        writes: std::sync::Mutex<u32>,
+        successful_writes: u32,
+    }
+
+    #[async_trait::async_trait]
+    impl Driver for RestoreFailingSimulator {
+        async fn read(&self, tags: &[String]) -> bhtune_driver::DriverResult<Vec<TagValue>> {
+            self.inner.read(tags).await
+        }
+
+        async fn write(
+            &self,
+            tag: &String,
+            value: TagWrite,
+        ) -> bhtune_driver::DriverResult<bhtune_driver::WriteOutcome> {
+            let reject = {
+                let mut writes = self.writes.lock().unwrap();
+                *writes += 1;
+                *writes > self.successful_writes
+            };
+            if reject {
+                Ok(bhtune_driver::WriteOutcome::failure(
+                    "restore intentionally rejected",
+                ))
+            } else {
+                self.inner.write(tag, value).await
+            }
+        }
+
+        async fn browse(
+            &self,
+            _path: &str,
+        ) -> bhtune_driver::DriverResult<Vec<bhtune_driver::TagNode>> {
+            Err(bhtune_driver::DriverError::Unsupported {
+                operation: "browse",
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_reports_restore_incomplete_after_a_completed_run_cannot_restore_mv() {
+        let pool = seeded_pool().await;
+        let args = fast_simulator_args();
+        let template = bhtune_core::built_in_templates().remove(0);
+        let tags = build_loop_tags(&args, &template).unwrap();
+        let config = build_loop_config(&args).unwrap();
+        let time_anchor = RunTimeAnchor::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "completed-restore-incomplete",
+            TuneDriver::Simulator,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            time_anchor.utc(),
+        )
+        .await
+        .unwrap();
+        let simulator = bhtune_driver::SimulatorDriver::new(
+            SIMULATOR_PV_TAG,
+            SIMULATOR_MV_TAG,
+            bhtune_driver::FopdtConfig::new(
+                args.sim_gain,
+                args.sim_tau,
+                args.sim_dead_time,
+                args.poll_interval_ms as f32 / 1000.0,
+            ),
+            args.sim_initial_pv,
+            args.sim_initial_mv,
+            args.sim_seed,
+        );
+        let driver = RestoreFailingSimulator {
+            inner: simulator,
+            writes: std::sync::Mutex::new(0),
+            successful_writes: 7,
+        };
+
+        let outcome = execute(
+            &pool,
+            run.id,
+            &args,
+            &template,
+            &tags,
+            &driver,
+            config,
+            time_anchor,
+            None,
+            false,
+            &mut CtrlC::never(),
+            &mut std::io::empty(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(outcome, RunOutcome::RestoreIncomplete { .. }));
+        let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.restore_status,
+            Some(bhtune_db::models::RestoreStatus::Incomplete)
+        );
+        assert!(matches!(
+            driver.browse("").await,
+            Err(bhtune_driver::DriverError::Unsupported {
+                operation: "browse"
+            })
+        ));
+    }
+
     /// Covers the `Aborted` branch's `RestoreAttempt::Incomplete` mapping -- the sibling of
     /// the `Completed` branch's equivalent (deliberately not separately covered; see
     /// AGENTS.md's `safety-restore-guard` notes) -- with a real, deterministic abort: the PV
@@ -8677,12 +8855,11 @@ mod tests {
         .await
         .unwrap();
 
-        let RunOutcome::RestoreIncomplete { reason } = outcome else {
-            panic!("expected RunOutcome::RestoreIncomplete, got {outcome:?}");
-        };
-        assert!(reason.contains("run aborted"));
-        assert!(reason.contains("PoorQuality"));
-        assert!(reason.contains("MV"));
+        assert!(matches!(&outcome, RunOutcome::RestoreIncomplete { .. }));
+        let outcome_text = format!("{outcome:?}");
+        assert!(outcome_text.contains("run aborted"));
+        assert!(outcome_text.contains("PoorQuality"));
+        assert!(outcome_text.contains("MV"));
 
         let stored = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
         assert_eq!(
@@ -8736,6 +8913,77 @@ mod tests {
         assert_eq!(value, 42.0);
     }
 
+    #[tokio::test]
+    async fn resolve_f32_reads_a_tag_backed_value() {
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "42.5")]);
+        let value = resolve_f32(
+            &driver,
+            &TagOrValue::Tag("Unit1.LIC101.PV".to_string()),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(value, 42.5);
+    }
+
+    #[tokio::test]
+    async fn resolve_f32_from_batch_reads_a_tag_from_the_batch() {
+        let values = HashMap::from([(
+            "Unit1.LIC101.PV".to_string(),
+            TagValue {
+                tag: "Unit1.LIC101.PV".to_string(),
+                value: "42.5".to_string(),
+                quality: bhtune_driver::Quality::Good,
+                timestamp: None,
+            },
+        )]);
+        let value = resolve_f32_from_batch(
+            &MockDriver::default(),
+            &values,
+            &TagOrValue::Tag("Unit1.LIC101.PV".to_string()),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(value, 42.5);
+    }
+
+    #[tokio::test]
+    async fn resolve_direction_from_batch_reads_and_maps_a_tag() {
+        let template = honeywell_template();
+        let tags = TagOrValue::Tag("Unit1.LIC101.CTLACTN".to_string());
+        let direction_tag = "Unit1.LIC101.CTLACTN".to_string();
+        let values = HashMap::from([(
+            direction_tag.clone(),
+            TagValue {
+                tag: direction_tag,
+                value: "0".to_string(),
+                quality: bhtune_driver::Quality::Good,
+                timestamp: None,
+            },
+        )]);
+        let direction =
+            resolve_direction_from_batch(&MockDriver::default(), &values, &tags, &template, false)
+                .await
+                .unwrap();
+        assert_eq!(direction, ControllerDirection::Direct);
+    }
+
+    #[tokio::test]
+    async fn resolve_direction_reads_and_maps_a_tag_directly() {
+        let template = honeywell_template();
+        let driver = MockDriver::new(&[("Unit1.LIC101.CTLACTN", "0")]);
+        let direction = resolve_direction(
+            &driver,
+            &TagOrValue::Tag("Unit1.LIC101.CTLACTN".to_string()),
+            &template,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(direction, ControllerDirection::Direct);
+    }
+
     /// Defense in depth against a hypothetical future caller (e.g. a `bhtune-server` HTTP
     /// handler) constructing a `TagOrValue::Value` directly without going through clap's
     /// `finite_f32` parser at all -- see `args::finite_f32`.
@@ -8743,6 +8991,15 @@ mod tests {
     async fn resolve_f32_rejects_a_non_finite_direct_value() {
         let driver = MockDriver::new(&[]);
         let err = resolve_f32(&driver, &TagOrValue::Value(f32::NAN), false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("finite"));
+    }
+
+    #[tokio::test]
+    async fn read_pv_sample_rejects_non_finite_values() {
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "nan")]);
+        let err = read_pv_sample(&driver, "Unit1.LIC101.PV")
             .await
             .unwrap_err();
         assert!(err.to_string().contains("finite"));
@@ -8764,6 +9021,48 @@ mod tests {
             read_batch_f32(&values, "Unit1.LIC101.PV", false).unwrap(),
             42.5
         );
+    }
+
+    #[test]
+    fn sample_quality_mapping_covers_all_driver_qualities() {
+        assert_eq!(
+            sample_quality_from_driver(bhtune_driver::Quality::Good),
+            SampleQuality::Good
+        );
+        assert_eq!(
+            sample_quality_from_driver(bhtune_driver::Quality::Uncertain),
+            SampleQuality::Uncertain
+        );
+        assert_eq!(
+            sample_quality_from_driver(bhtune_driver::Quality::Bad),
+            SampleQuality::Bad
+        );
+    }
+
+    #[test]
+    fn completed_oscillation_period_is_reported_for_a_successful_poll_result() {
+        let completion = PollOutcome::Completed(Action::Complete {
+            peaks: vec![52.0, 48.0, 52.0],
+            troughs: vec![46.0, 50.0],
+            switch_times: vec![
+                Utc::now(),
+                Utc::now() + chrono::Duration::seconds(30),
+                Utc::now() + chrono::Duration::seconds(60),
+                Utc::now() + chrono::Duration::seconds(90),
+                Utc::now() + chrono::Duration::seconds(120),
+            ],
+            mv_sign_init: 1,
+        });
+        let result = completed_oscillation_period_ms(
+            &Ok(completion),
+            ControllerDirection::Reverse,
+            build_loop_config(&fast_simulator_args()).unwrap(),
+            PvRange {
+                high: 100.0,
+                low: 0.0,
+            },
+        );
+        assert!(result.is_some());
     }
 
     #[tokio::test]
@@ -9879,6 +10178,17 @@ mod tests {
         record_timing_metrics_best_effort(&pool, 42, delayed_live_timing_metrics()).await;
     }
 
+    #[tokio::test]
+    async fn present_timing_metrics_are_persisted_by_the_optional_wrapper() {
+        let (pool, run_id) = run_with_recorded_results().await;
+        let metrics = delayed_live_timing_metrics();
+
+        record_timing_metrics_if_present(&pool, run_id, Some(metrics)).await;
+
+        let stored = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
+        assert_eq!(stored.timing_metrics, Some(metrics));
+    }
+
     #[test]
     fn restore_incomplete_warning_message_names_the_reason_and_mv_restore_target() {
         let message = restore_incomplete_warning_message(
@@ -10264,9 +10574,11 @@ mod tests {
     async fn bounded_driver_call_returns_cancelled_when_ctrl_c_fires_first() {
         let (mut ctrl_c, tx) = CtrlC::test_pair();
         tx.send(1).unwrap();
-        let result = bounded_driver_call(30, &mut ctrl_c, async {
-            std::future::pending::<anyhow::Result<()>>().await
-        })
+        let result: TickOperation<()> = bounded_driver_call(
+            30,
+            &mut ctrl_c,
+            std::future::pending::<anyhow::Result<()>>(),
+        )
         .await
         .unwrap();
         assert!(matches!(result, TickOperation::Cancelled));
@@ -10277,12 +10589,163 @@ mod tests {
         // No `SqlitePool` involved here (unlike the `run_polling_loop`-level tests), so
         // `start_paused` is safe -- see the precedent/caveat noted on the timeout test above.
         let mut ctrl_c = CtrlC::never();
-        let result = bounded_driver_call(1, &mut ctrl_c, async {
-            std::future::pending::<anyhow::Result<()>>().await
-        })
+        let result: TickOperation<()> =
+            bounded_driver_call(1, &mut ctrl_c, std::future::pending::<anyhow::Result<()>>())
+                .await
+                .unwrap();
+        assert!(matches!(result, TickOperation::TimedOut));
+    }
+
+    #[tokio::test]
+    async fn a_stalled_pv_read_during_a_tick_is_cancelled_without_recording_a_sample() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let driver = honeywell_driver_auto().hanging_read(&tags.process_variable);
+        let mut args = fast_simulator_args();
+        args.op_timeout_secs = 30;
+        let config = build_loop_config(&args).unwrap();
+        let started_at = Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "stalled-pv-read",
+            TuneDriver::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
         .await
         .unwrap();
-        assert!(matches!(result, TickOperation::TimedOut));
+        let initial = sample_initial_state();
+        let beta = lookup(
+            config.process_type,
+            config.controller_type,
+            ResponseLevel::Aggressive,
+        )
+        .beta;
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(1);
+        });
+
+        let mut timing = timing_for_args(&args);
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            time_anchor_at(started_at),
+            &mut ctrl_c,
+            &mut MutationGuard::default(),
+            false,
+            &mut timing,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::UserInterrupt)
+        ));
+        assert!(
+            TuneSampleRow::list_for_run(&pool, run.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stalled_mv_write_during_a_tick_times_out_after_recording_the_sample() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let driver = honeywell_driver_auto().hanging_write(&tags.manipulated_variable);
+        let mut args = fast_simulator_args();
+        args.op_timeout_secs = 1;
+        let config = build_loop_config(&args).unwrap();
+        let started_at = Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "stalled-mv-write-timeout",
+            TuneDriver::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
+        .await
+        .unwrap();
+        let initial = sample_initial_state();
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            lookup(
+                config.process_type,
+                config.controller_type,
+                ResponseLevel::Aggressive,
+            )
+            .beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+
+        let mut timing = timing_for_args(&args);
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            time_anchor_at(started_at),
+            &mut CtrlC::never(),
+            &mut MutationGuard::default(),
+            false,
+            &mut timing,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::OperationTimedOut { ref tag, op_timeout_secs })
+                if tag == &tags.manipulated_variable && op_timeout_secs == 1
+        ));
+        assert_eq!(
+            TuneSampleRow::list_for_run(&pool, run.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     // --- `attempt_restore` / `RestoreAttempt`: confirmed vs. incomplete, and both ways to ---
@@ -10323,6 +10786,12 @@ mod tests {
             driver.value_of(&tags.manipulated_variable).as_deref(),
             Some("45")
         );
+    }
+
+    #[tokio::test]
+    async fn record_restore_status_best_effort_swallows_database_errors() {
+        let pool = seeded_pool().await;
+        record_restore_status_best_effort(&pool, i64::MAX, &RestoreAttempt::Confirmed).await;
     }
 
     #[tokio::test(start_paused = true)]
