@@ -116,7 +116,12 @@ machete`, and a check that the generated OpenAPI spec (`openapi.json`) and CLI r
 (`docs/reference/cli.md`, `man/`, `completions/`) are up to date before merge — run `cargo
 run -p bhtune-server --example gen_openapi` and `cargo run -p bhtune-cli --example gen_docs
 --features schemars` and commit the result after changing an HTTP route/DTO or a `clap`
-argument, respectively. PRs touching `frontend/` must additionally pass `pnpm run
+argument, respectively. The package job runs `cargo package --workspace --locked
+--no-verify` to validate that every release archive can be assembled. Tarball verification
+is deliberately skipped there because Cargo removes local paths and resolves same-version
+workspace dependencies from crates.io, which cannot compile coordinated unpublished API
+changes; the workspace build, Clippy, and test jobs compile the real local dependency graph.
+PRs touching `frontend/` must additionally pass `pnpm run
 check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
 is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`
 (which also typechecks `frontend/e2e/`). `.github/workflows/e2e.yml` runs the Playwright

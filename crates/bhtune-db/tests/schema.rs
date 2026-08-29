@@ -577,6 +577,27 @@ async fn tune_runs_default_and_reject_invalid_request_json() {
     );
 }
 
+#[tokio::test]
+async fn tune_runs_timing_metrics_are_nullable_validated_json_with_a_typed_shape() {
+    let pool = connect_in_memory().await.unwrap();
+    let run_id = seed_failed_run(&pool, None).await;
+
+    let timing_json: Option<String> =
+        sqlx::query_scalar("SELECT timing_metrics_json FROM tune_runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(timing_json.is_none());
+
+    let invalid_json =
+        sqlx::query("UPDATE tune_runs SET timing_metrics_json = 'not json' WHERE id = ?")
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+    assert!(invalid_json.is_err());
+}
+
 /// Covers the `CHECK` constraints `safety-quality` added: `tune_runs.allow_uncertain_quality`
 /// must be `0` or `1`, and `tune_samples.pv_quality` must be one of `good`/`uncertain`/`bad`.
 #[tokio::test]

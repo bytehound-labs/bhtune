@@ -202,8 +202,11 @@ jobs:
         with:
           tool: protoc
 
-      - name: Verify publishable packages
-        run: cargo package --workspace --locked
+      # Cargo's tarball verification removes local paths and resolves same-version workspace
+      # dependencies from crates.io. That cannot validate coordinated, unpublished API changes
+      # between workspace crates; the check/clippy/test jobs compile those local APIs instead.
+      - name: Assemble publishable packages
+        run: cargo package --workspace --locked --no-verify
 
   msrv:
     name: MSRV

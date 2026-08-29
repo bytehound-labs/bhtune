@@ -12,11 +12,13 @@ import {
   OUTCOME_LABELS,
   PROCESS_TYPE_LABELS,
   RESPONSE_LEVEL_LABELS,
+  TIMING_BASIS_LABELS,
 } from "../../lib/enumLabels";
 import { TrendChart } from "../../components/TrendChart";
 import {
   Badge,
   Button,
+  Card,
   ErrorBanner,
   Field,
   Section,
@@ -293,6 +295,68 @@ function InitialReadingsSection({
         value={readings.mode_attribute_raw ?? "—"}
       />
     </Section>
+  );
+}
+
+function TimingSection({
+  timing,
+}: {
+  readonly timing: NonNullable<RunDetailResponse["timing_metrics"]>;
+}) {
+  const missed = timing.missed_poll_opportunity_count;
+
+  return (
+    <section className="mb-6">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+        Timing
+      </h2>
+      {missed > 0 && (
+        <output className="mb-3 block rounded-md border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-300">
+          Timing warning: {missed} sample gap{missed === 1 ? "" : "s"} reached
+          at least twice the requested interval. At least one complete polling
+          opportunity was missed; review host and OPC gateway responsiveness.
+        </output>
+      )}
+      <Card>
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+          <Field label="Time basis" value={TIMING_BASIS_LABELS[timing.basis]} />
+          <Field
+            label="Requested interval"
+            value={`${timing.requested_interval_ms} ms`}
+          />
+          <Field label="Observed sample gaps" value={timing.sample_gap_count} />
+          <Field
+            label="Mean sample gap"
+            value={
+              timing.mean_sample_gap_ms == null
+                ? "—"
+                : `${num(timing.mean_sample_gap_ms)} ms`
+            }
+          />
+          <Field
+            label="Maximum sample gap"
+            value={
+              timing.max_sample_gap_ms == null
+                ? "—"
+                : `${num(timing.max_sample_gap_ms)} ms`
+            }
+          />
+          <Field label="Missed poll opportunities" value={missed} />
+          <Field
+            label="Measured oscillation period"
+            value={
+              timing.measured_oscillation_period_ms == null
+                ? "—"
+                : `${num(timing.measured_oscillation_period_ms)} ms`
+            }
+          />
+          <Field
+            label="Approx. samples per period"
+            value={num(timing.approximate_samples_per_period)}
+          />
+        </dl>
+      </Card>
+    </section>
   );
 }
 
@@ -680,6 +744,7 @@ export function RunDetailContent({
       />
       <ConfigurationSection run={run} />
       {initialReadings && <InitialReadingsSection readings={initialReadings} />}
+      {run.timing_metrics && <TimingSection timing={run.timing_metrics} />}
       <CalculatedResultsSection
         run={run}
         eligibility={eligibility}

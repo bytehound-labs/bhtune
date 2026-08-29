@@ -223,7 +223,13 @@ the subprocess runtime but cannot change its calculated PID values. `live-monoto
 also done: live OPC DA samples are timestamped from actual monotonic elapsed time projected
 onto the run's UTC start, after each successful PV read, so NTP/manual clock changes cannot
 distort MRFT windows or calculated periods while real scheduler and driver latency remains
-visible. `e2e-playwright` is also done: a
+visible. `timing-diagnostics` is also done: every run with at least one successful poll stores a
+typed timing snapshot (`simulated_fixed_step` or `live_monotonic`, requested interval, adjacent
+gap count/mean/maximum, gaps at least twice the requested interval, completed-run oscillation
+period, and approximate samples per period) in `tune_runs.timing_metrics_json`; `history show`,
+`GET /api/runs/{id}`, and the run-detail UI expose it, and live runs emit/show a warning when at
+least one complete poll opportunity was missed without aborting or blocking write-back.
+`e2e-playwright` is also done: a
 Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
 off disk rather than needing a re-embed step — see `server-embed-spa`'s `rust-embed`
@@ -1338,6 +1344,25 @@ derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
   delays remain part of the measured timeline; `MissedTickBehavior::Delay` remains deliberate so
   a late tick never causes catch-up I/O bursts. This makes the algorithm clock-jump-safe, not
   hard-real-time: an overloaded host can still undersample a live oscillation.
+- **Polling timing diagnostics are persisted facts, not a PID-validity policy.**
+  `PollTimingAccumulator` observes only timestamps for successful PV poll samples (not startup
+  readings or presentation-only trend boundaries), records adjacent gap count/mean/maximum, and
+  counts a missed polling opportunity whenever a gap is at least `2 * requested_interval`.
+  Completed runs additionally reuse `measure_oscillation()` for the measured period and divide it
+  by the mean observed gap for an approximate samples-per-period value. The typed
+  `TimingMetrics` snapshot is stored as nullable, `json_valid`-checked
+  `tune_runs.timing_metrics_json`; old rows and attempts with no successful poll remain `NULL`.
+  The database write is deferred until after the safety-critical restore attempt, so a locked
+  SQLite file can never leave the live loop waiting at its relay-test value merely to save
+  diagnostic metadata. Normal completion/abort uses one atomic repository update for the
+  terminal outcome and timing snapshot, so the SSE `done` event can never make the frontend stop
+  polling on a terminal row before its Timing section is visible. Completed-only period fields
+  are included only in that same `completed` update; a failure while saving calculated results
+  records cadence metrics without a period. Standalone failure-path persistence is best-effort so
+  diagnostic metadata can never replace a tune's real completion/abort/error outcome. Only live
+  runs with a nonzero missed-opportunity count log and display a warning; no run abort,
+  result-validity label, or PID write restriction exists until field evidence supports a
+  defensible threshold.
 - **The FOPDT process model uses an exact closed-form discretization, not a ported ODE solver.**
   For the first-order lag `tau*dy/dt = -(y-y0) + Kp*(u-u0)` driven by a zero-order-hold input over
   one tick, the update `pv_new = pv*decay + (1-decay)*(bias + gain*mv_effective)` (`decay =
@@ -4020,13 +4045,19 @@ Pulled into `bhtune` from `opcda-bridge`'s example:
   floor), with a standalone `msrv` CI job pinning `dtolnay/rust-toolchain@1.94.0` and running
   `cargo check --workspace --all-targets --all-features --locked`.
 - **`windows` and `package` CI jobs.** `windows` runs fmt/clippy/test on `windows-latest`
-  (skipping the Linux-only doc/OpenAPI drift `git diff` checks, which are CRLF-sensitive);
-  `package` runs `cargo package --workspace --locked`, which immediately surfaced a real bug —
+  (skipping the Linux-only doc/OpenAPI drift `git diff` checks, which are CRLF-sensitive).
+  `package` runs `cargo package --workspace --locked --no-verify`: this still validates
+  metadata, path/version requirements, and assembly of every publishable tarball, while the
+  ordinary workspace check/Clippy/test jobs compile the real local cross-crate API graph.
+  `--no-verify` is load-bearing for this same-version, not-yet-published workspace: Cargo's
+  tarball verification strips local paths and resolves dependencies such as `bhtune-db
+0.1.0` from crates.io, so a coordinated local API addition otherwise compiles a dependent
+  crate against the older published `0.1.0` instead of the package assembled moments earlier.
+  The original package job still surfaced a real bug before this distinction mattered —
   every workspace-internal path dependency lacked a `version` requirement, which `cargo
-package` refuses to package. Fixed by giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
+package` refuses even to assemble. Giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
   `bhtune-cli` `{ path, version }` entries in `[workspace.dependencies]` and switching every
-  consumer to `.workspace = true`, mirroring `opcda-bridge`'s own already-working pattern
-  exactly.
+  consumer to `.workspace = true` remains required.
 - **`concurrency` groups, `permissions: contents: read`, and `--locked` everywhere** across
   `checks.yml`/`coverage.yml`/`e2e.yml`.
 - **`.github/dependabot.yml`** — weekly grouped updates for `cargo`, `npm` (pnpm workspace
@@ -4333,7 +4364,11 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `smoke.spec.ts` (app shell, health indicator, seeded template list, header nav) and
    `tune.spec.ts` (a full tune through `/runs/new` with `e2e_simulator.rs`'s own
    millisecond-scale simulator parameters, asserting sane/ordered rendered Kp/Ti/Td values,
-   plus cancelling an in-flight run). `.github/workflows/e2e.yml` builds a debug
+   deterministic fixed-step timing diagnostics with zero missed poll opportunities, plus
+   cancelling an in-flight run). Polling timing diagnostics are persisted and exposed through
+   CLI/API/UI for both simulator and live runs; live gaps at least twice the requested interval
+   produce a warning only, without changing tune or write-back outcomes.
+   `.github/workflows/e2e.yml` builds a debug
    `bhtune-server` and the frontend, installs Chromium, and runs the suite in CI, uploading
    the HTML report on failure. A direct dividend of dropping Tauri: `tauri-driver`/WebDriver would
    have been markedly more fragile in CI than plain Playwright against a real browser.

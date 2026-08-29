@@ -22,8 +22,9 @@ use bhtune_core::{
     ControllerDirection, ControllerType, LoopConfig, ProcessType, ResponseLevel, Tick,
 };
 use bhtune_db::models::{
-    Pagination, RestoreStatus, RollbackState, SampleQuality, TemplateOrigin, TuneDriver,
-    TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
+    Pagination, RestoreStatus, RollbackState, SampleQuality, TemplateOrigin, TimingMetrics,
+    TuneDriver, TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
+    WriteKind,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -386,6 +387,7 @@ pub struct RunDetailResponse {
     /// discovering ineligibility only after a failed request (`api-post-run-write`).
     pub pid_constant_tags: Option<PidConstantTagsResponse>,
     pub initial_readings: Option<InitialReadingsResponse>,
+    pub timing_metrics: Option<TimingMetrics>,
     pub samples: Vec<SampleResponse>,
     pub results: Vec<ResultResponse>,
     pub writes: Vec<WriteResponse>,
@@ -445,6 +447,7 @@ pub(crate) async fn build_run_detail(
         bridge_host: run.bridge_host,
         pid_constant_tags,
         initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
+        timing_metrics: run.timing_metrics,
         samples: samples.iter().map(SampleResponse::from).collect(),
         results: results.iter().map(ResultResponse::from).collect(),
         writes: writes.iter().map(WriteResponse::from).collect(),
@@ -737,6 +740,23 @@ mod tests {
         .await
         .unwrap();
 
+        TuneRunRow::record_timing_metrics(
+            &state.pool,
+            run_id,
+            TimingMetrics {
+                basis: bhtune_db::models::TimingBasis::SimulatedFixedStep,
+                requested_interval_ms: 5,
+                sample_gap_count: 9,
+                mean_sample_gap_ms: Some(5.0),
+                max_sample_gap_ms: Some(5.0),
+                missed_poll_opportunity_count: 0,
+                measured_oscillation_period_ms: Some(50.0),
+                approximate_samples_per_period: Some(10.0),
+            },
+        )
+        .await
+        .unwrap();
+
         TuneSampleRow::insert(
             &state.pool,
             run_id,
@@ -888,6 +908,7 @@ mod tests {
         assert!(body["samples"].as_array().unwrap().is_empty());
         assert!(body["results"].as_array().unwrap().is_empty());
         assert!(body["writes"].as_array().unwrap().is_empty());
+        assert!(body["timing_metrics"].is_null());
         // Yokogawa CentumVP always defines P/I/D suffixes, so a run derived from it always
         // has all three PID constant tags -- see `pid_constant_tags`'s doc comment.
         assert_eq!(body["pid_constant_tags"]["proportional"], "Loop1.P");
@@ -988,6 +1009,16 @@ mod tests {
         assert_eq!(initial_readings["mode_raw"], "1");
         assert_eq!(initial_readings["mode_attribute_raw"], "2");
         assert_eq!(initial_readings["setpoint_ini"], 50.0);
+
+        let timing = &body["timing_metrics"];
+        assert_eq!(timing["basis"], "simulated_fixed_step");
+        assert_eq!(timing["requested_interval_ms"], 5);
+        assert_eq!(timing["sample_gap_count"], 9);
+        assert_eq!(timing["mean_sample_gap_ms"], 5.0);
+        assert_eq!(timing["max_sample_gap_ms"], 5.0);
+        assert_eq!(timing["missed_poll_opportunity_count"], 0);
+        assert_eq!(timing["measured_oscillation_period_ms"], 50.0);
+        assert_eq!(timing["approximate_samples_per_period"], 10.0);
 
         let samples = body["samples"].as_array().unwrap();
         assert_eq!(samples.len(), 1);

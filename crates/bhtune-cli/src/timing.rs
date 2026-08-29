@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use bhtune_db::models::{TimingBasis, TimingMetrics};
 use chrono::{DateTime, Utc};
 use tokio::time::Instant;
 
@@ -51,6 +52,102 @@ pub(crate) enum TickTimeSource {
         current: DateTime<Utc>,
         step: chrono::Duration,
     },
+}
+
+/// Accumulates adjacent successful-sample gaps without influencing tune control flow.
+///
+/// Initial readings and presentation-only trend boundary points are deliberately excluded:
+/// only timestamps produced by [`TickTimeSource`] for real polling samples are observed.
+#[derive(Debug)]
+pub(crate) struct PollTimingAccumulator {
+    basis: TimingBasis,
+    requested_interval_ms: u64,
+    previous_timestamp: Option<DateTime<Utc>>,
+    sample_gap_count: u64,
+    total_gap_micros: u128,
+    max_gap_micros: u128,
+    missed_poll_opportunity_count: u64,
+}
+
+impl PollTimingAccumulator {
+    pub(crate) fn new(basis: TimingBasis, requested_interval_ms: u64) -> Self {
+        Self {
+            basis,
+            requested_interval_ms: requested_interval_ms.max(1),
+            previous_timestamp: None,
+            sample_gap_count: 0,
+            total_gap_micros: 0,
+            max_gap_micros: 0,
+            missed_poll_opportunity_count: 0,
+        }
+    }
+
+    pub(crate) fn observe(&mut self, timestamp: DateTime<Utc>) -> anyhow::Result<()> {
+        if let Some(previous) = self.previous_timestamp {
+            let gap = timestamp.signed_duration_since(previous);
+            let gap_micros = gap.num_microseconds().ok_or_else(|| {
+                anyhow::anyhow!("sample gap exceeded chrono's supported microsecond range")
+            })?;
+            let gap_micros = u128::try_from(gap_micros)
+                .map_err(|_| anyhow::anyhow!("sample timestamps moved backward"))?;
+
+            self.sample_gap_count = self
+                .sample_gap_count
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("sample gap count exceeded the supported range"))?;
+            self.total_gap_micros = self
+                .total_gap_micros
+                .checked_add(gap_micros)
+                .ok_or_else(|| anyhow::anyhow!("accumulated sample gaps overflowed"))?;
+            self.max_gap_micros = self.max_gap_micros.max(gap_micros);
+
+            let missed_threshold_micros =
+                u128::from(self.requested_interval_ms).saturating_mul(2_000);
+            if gap_micros >= missed_threshold_micros {
+                self.missed_poll_opportunity_count = self
+                    .missed_poll_opportunity_count
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missed poll opportunity count exceeded the supported range"
+                        )
+                    })?;
+            }
+        }
+
+        self.previous_timestamp = Some(timestamp);
+        Ok(())
+    }
+
+    pub(crate) fn finish(
+        &self,
+        measured_oscillation_period_ms: Option<f64>,
+    ) -> Option<TimingMetrics> {
+        self.previous_timestamp?;
+
+        let mean_sample_gap_ms = (self.sample_gap_count > 0)
+            .then(|| self.total_gap_micros as f64 / self.sample_gap_count as f64 / 1_000.0);
+        let max_sample_gap_ms =
+            (self.sample_gap_count > 0).then(|| self.max_gap_micros as f64 / 1_000.0);
+        let measured_oscillation_period_ms =
+            measured_oscillation_period_ms.filter(|period| period.is_finite() && *period > 0.0);
+        let approximate_samples_per_period = measured_oscillation_period_ms.and_then(|period| {
+            mean_sample_gap_ms
+                .filter(|mean| *mean > 0.0)
+                .map(|mean| period / mean)
+        });
+
+        Some(TimingMetrics {
+            basis: self.basis,
+            requested_interval_ms: self.requested_interval_ms,
+            sample_gap_count: self.sample_gap_count,
+            mean_sample_gap_ms,
+            max_sample_gap_ms,
+            missed_poll_opportunity_count: self.missed_poll_opportunity_count,
+            measured_oscillation_period_ms,
+            approximate_samples_per_period,
+        })
+    }
 }
 
 impl TickTimeSource {
@@ -243,5 +340,126 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("supported range"));
+    }
+
+    #[test]
+    fn timing_metrics_are_empty_until_two_samples_exist() {
+        let empty = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 800);
+        assert_eq!(empty.finish(None), None);
+
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 800);
+        timing.observe(DateTime::UNIX_EPOCH).unwrap();
+
+        let metrics = timing.finish(None).unwrap();
+
+        assert_eq!(metrics.sample_gap_count, 0);
+        assert_eq!(metrics.mean_sample_gap_ms, None);
+        assert_eq!(metrics.max_sample_gap_ms, None);
+        assert_eq!(metrics.missed_poll_opportunity_count, 0);
+        assert_eq!(metrics.measured_oscillation_period_ms, None);
+        assert_eq!(metrics.approximate_samples_per_period, None);
+    }
+
+    #[test]
+    fn timing_metrics_measure_mean_max_and_missed_opportunities() {
+        let start = DateTime::UNIX_EPOCH;
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 10);
+        for offset_ms in [0, 10, 30, 61] {
+            timing
+                .observe(start + chrono::Duration::milliseconds(offset_ms))
+                .unwrap();
+        }
+
+        let metrics = timing.finish(Some(100.0)).unwrap();
+
+        assert_eq!(metrics.sample_gap_count, 3);
+        assert_eq!(metrics.mean_sample_gap_ms, Some(61.0 / 3.0));
+        assert_eq!(metrics.max_sample_gap_ms, Some(31.0));
+        assert_eq!(metrics.missed_poll_opportunity_count, 2);
+        assert_eq!(metrics.measured_oscillation_period_ms, Some(100.0));
+        assert_eq!(
+            metrics.approximate_samples_per_period,
+            Some(100.0 / (61.0 / 3.0))
+        );
+    }
+
+    #[test]
+    fn timing_metrics_count_a_gap_at_exactly_twice_the_requested_interval() {
+        let start = DateTime::UNIX_EPOCH;
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 50);
+        timing.observe(start).unwrap();
+        timing
+            .observe(start + chrono::Duration::milliseconds(100))
+            .unwrap();
+
+        assert_eq!(
+            timing.finish(None).unwrap().missed_poll_opportunity_count,
+            1
+        );
+    }
+
+    #[test]
+    fn timing_metrics_reject_timestamps_that_move_backward() {
+        let start = DateTime::UNIX_EPOCH;
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 50);
+        timing.observe(start).unwrap();
+
+        let error = timing
+            .observe(start - chrono::Duration::milliseconds(1))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("backward"));
+    }
+
+    #[test]
+    fn timing_metrics_reject_a_gap_outside_the_supported_microsecond_range() {
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 50);
+        timing.observe(DateTime::<Utc>::MIN_UTC).unwrap();
+
+        let error = timing.observe(DateTime::<Utc>::MAX_UTC).unwrap_err();
+
+        assert!(error.to_string().contains("microsecond range"));
+    }
+
+    #[test]
+    fn timing_metrics_reject_a_sample_gap_count_overflow() {
+        let start = DateTime::UNIX_EPOCH;
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 50);
+        timing.observe(start).unwrap();
+        timing.sample_gap_count = u64::MAX;
+
+        let error = timing
+            .observe(start + chrono::Duration::milliseconds(1))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("sample gap count"));
+    }
+
+    #[test]
+    fn timing_metrics_reject_an_accumulated_gap_overflow() {
+        let start = DateTime::UNIX_EPOCH;
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 50);
+        timing.observe(start).unwrap();
+        timing.total_gap_micros = u128::MAX;
+
+        let error = timing
+            .observe(start + chrono::Duration::microseconds(1))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("accumulated sample gaps"));
+    }
+
+    #[test]
+    fn timing_metrics_reject_a_missed_opportunity_count_overflow() {
+        let start = DateTime::UNIX_EPOCH;
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 1);
+        timing.observe(start).unwrap();
+        timing.missed_poll_opportunity_count = u64::MAX;
+
+        let error = timing
+            .observe(start + chrono::Duration::milliseconds(2))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("missed poll opportunity count"));
     }
 }

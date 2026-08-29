@@ -897,6 +897,7 @@ export interface components {
        */
       template_name: string;
       template_origin: components["schemas"]["TemplateOrigin"];
+      timing_metrics?: null | components["schemas"]["TimingMetrics"];
       writes: components["schemas"]["WriteResponse"][];
     };
     /**
@@ -1203,6 +1204,38 @@ export interface components {
      * @enum {string}
      */
     TimeUnit: "seconds" | "minutes";
+    /**
+     * @description The clock basis used for a run's persisted polling-cadence diagnostics.
+     * @enum {string}
+     */
+    TimingBasis: "simulated_fixed_step" | "live_monotonic";
+    /**
+     * @description Polling-cadence diagnostics captured over one run's successful PV samples.
+     *
+     *     The two optional gap fields are `None` when fewer than two samples were observed. The
+     *     measured oscillation fields are populated only for a completed MRFT run.
+     */
+    TimingMetrics: {
+      /** Format: double */
+      approximate_samples_per_period?: number | null;
+      basis: components["schemas"]["TimingBasis"];
+      /** Format: double */
+      max_sample_gap_ms?: number | null;
+      /** Format: double */
+      mean_sample_gap_ms?: number | null;
+      /** Format: double */
+      measured_oscillation_period_ms?: number | null;
+      /**
+       * Format: int64
+       * @description Number of adjacent sample gaps at least twice the requested interval. Each such gap
+       *     proves that at least one complete polling opportunity was missed.
+       */
+      missed_poll_opportunity_count: number;
+      /** Format: int64 */
+      requested_interval_ms: number;
+      /** Format: int64 */
+      sample_gap_count: number;
+    };
     /**
      * @description Which [`crate`]-agnostic I/O driver a run used. Lives in `bhtune-db` rather than
      *     `bhtune-core` because it's a persistence/orchestration concept (which adapter drove this

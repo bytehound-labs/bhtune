@@ -16,12 +16,14 @@ use std::time::Duration;
 use bhtune_core::{
     Action, ControllerDirection, ControllerType, DcsTemplate, InitialReadings, LoopConfig,
     LoopTags, MrftCompat, MrftEngine, MvRange, PidParameters, ProcessType, PvRange, ResponseLevel,
-    TagOrValue, TagOverrides, Tick, TuningMathCompat, calculate_all, lookup, opc_write_values,
+    TagOrValue, TagOverrides, Tick, TuningMathCompat, calculate_all, lookup, measure_oscillation,
+    opc_write_values,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TuneDriver, TuneResultRow,
-    TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind, WriteReadback,
+    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TimingBasis, TimingMetrics,
+    TuneDriver, TuneResultRow, TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow,
+    WriteKind, WriteReadback,
 };
 use bhtune_driver::{Driver, TagValue, TagWrite};
 use chrono::{DateTime, Utc};
@@ -30,7 +32,7 @@ use crate::args::{DriverKindArg, TuneArgs};
 use crate::cancel::CtrlC;
 use crate::driver::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
 use crate::output::OutputFormat;
-use crate::timing::{RunTimeAnchor, TickTimeSource};
+use crate::timing::{PollTimingAccumulator, RunTimeAnchor, TickTimeSource};
 
 /// The final disposition of a `tune`/`simulate` run -- drives the printed summary (see
 /// [`print_summary`]) and, via `crate::tune_outcome_exit_code` in `lib.rs`, the process's
@@ -873,11 +875,11 @@ struct MutationGuard {
     mv_written: bool,
 }
 
-/// Small, private helper bundling the two DB writes that follow a completed MRFT test, so
-/// `execute` can route a failure in either one through a single best-effort restore attempt
-/// instead of silently skipping it (`safety-restore-guard`, finding 3 of the live-plant
-/// safety review) -- previously, both ran ahead of `attempt_restore` with a bare `?` each.
-async fn finish_completed_run(
+/// Persists the three calculated response levels after a completed MRFT test. The run's
+/// terminal outcome is deliberately recorded later, after restoration, together with its
+/// timing snapshot; this keeps SSE-triggered readers from seeing a terminal row before those
+/// diagnostics are visible.
+async fn persist_completed_results(
     pool: &SqlitePool,
     run_id: i64,
     completion: Action,
@@ -889,9 +891,7 @@ async fn finish_completed_run(
     persist_results(
         pool, run_id, completion, direction, config, pv_range, template,
     )
-    .await?;
-    TuneRunRow::complete(pool, run_id, Utc::now()).await?;
-    Ok(())
+    .await
 }
 
 /// Generic over `reader` (rather than hardcoding `std::io::stdin().lock()` internally) so
@@ -982,6 +982,11 @@ async fn execute<R: std::io::BufRead>(
         started_at,
         MrftCompat::default(),
     );
+    let timing_basis = match args.driver {
+        DriverKindArg::Opcda => TimingBasis::LiveMonotonic,
+        DriverKindArg::Simulator => TimingBasis::SimulatedFixedStep,
+    };
+    let mut timing = PollTimingAccumulator::new(timing_basis, args.poll_interval_ms);
 
     let poll_result = run_polling_loop(
         pool,
@@ -994,8 +999,22 @@ async fn execute<R: std::io::BufRead>(
         ctrl_c,
         &mut guard,
         allow_uncertain_quality,
+        &mut timing,
     )
     .await;
+    let measured_oscillation_period_ms = completed_oscillation_period_ms(
+        &poll_result,
+        initial.direction,
+        config,
+        PvRange {
+            high: initial.pv_range_high,
+            low: initial.pv_range_low,
+        },
+    );
+    let timing_metrics_without_period = timing.finish(None);
+    if let Some(timing_metrics) = timing_metrics_without_period.as_ref() {
+        warn_on_missed_poll_opportunities(run_id, timing_metrics);
+    }
 
     match poll_result {
         Ok(PollOutcome::Completed(completion)) => {
@@ -1003,7 +1022,7 @@ async fn execute<R: std::io::BufRead>(
                 high: initial.pv_range_high,
                 low: initial.pv_range_low,
             };
-            if let Err(e) = finish_completed_run(
+            if let Err(e) = persist_completed_results(
                 pool,
                 run_id,
                 completion,
@@ -1014,7 +1033,7 @@ async fn execute<R: std::io::BufRead>(
             )
             .await
             {
-                return Err(restore_best_effort_then_propagate(
+                let error = restore_best_effort_then_propagate(
                     pool,
                     run_id,
                     driver,
@@ -1026,7 +1045,11 @@ async fn execute<R: std::io::BufRead>(
                     ctrl_c,
                     e,
                 )
-                .await);
+                .await;
+                if let Some(timing_metrics) = timing_metrics_without_period {
+                    record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
+                }
+                return Err(error);
             }
 
             let restore_attempt = attempt_restore(
@@ -1040,6 +1063,13 @@ async fn execute<R: std::io::BufRead>(
             )
             .await;
             record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
+            TuneRunRow::complete_with_timing_metrics(
+                pool,
+                run_id,
+                Utc::now(),
+                timing.finish(measured_oscillation_period_ms),
+            )
+            .await?;
             match restore_attempt {
                 RestoreAttempt::Confirmed => {
                     let (write_back, write_back_detail) = maybe_write_back(
@@ -1077,7 +1107,13 @@ async fn execute<R: std::io::BufRead>(
             )
             .await;
             record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
-            TuneRunRow::abort(pool, run_id, Utc::now()).await?;
+            TuneRunRow::abort_with_timing_metrics(
+                pool,
+                run_id,
+                Utc::now(),
+                timing_metrics_without_period,
+            )
+            .await?;
             match restore_attempt {
                 RestoreAttempt::Confirmed => Ok(RunOutcome::Aborted(reason)),
                 RestoreAttempt::Incomplete {
@@ -1092,7 +1128,7 @@ async fn execute<R: std::io::BufRead>(
             // though the overall run is going to be reported as failed regardless. Still
             // bounded/interruptible (a second Ctrl+C or `--restore-timeout-secs` still cuts
             // it short) and still warns loudly on an incomplete restore.
-            Err(restore_best_effort_then_propagate(
+            let error = restore_best_effort_then_propagate(
                 pool,
                 run_id,
                 driver,
@@ -1104,7 +1140,11 @@ async fn execute<R: std::io::BufRead>(
                 ctrl_c,
                 e,
             )
-            .await)
+            .await;
+            if let Some(timing_metrics) = timing_metrics_without_period {
+                record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
+            }
+            Err(error)
         }
     }
 }
@@ -1821,13 +1861,67 @@ async fn record_restore_status_best_effort(
     }
 }
 
+fn completed_oscillation_period_ms(
+    poll_result: &anyhow::Result<PollOutcome>,
+    direction: ControllerDirection,
+    config: LoopConfig,
+    pv_range: PvRange,
+) -> Option<f64> {
+    let Ok(PollOutcome::Completed(Action::Complete {
+        peaks,
+        troughs,
+        switch_times,
+        mv_sign_init,
+    })) = poll_result
+    else {
+        return None;
+    };
+
+    let oscillation = measure_oscillation(
+        peaks,
+        troughs,
+        switch_times,
+        *mv_sign_init,
+        direction,
+        config,
+        pv_range,
+        TuningMathCompat::default(),
+    );
+    Some(f64::from(oscillation.period_minutes) * 60_000.0)
+}
+
+fn warn_on_missed_poll_opportunities(run_id: i64, metrics: &TimingMetrics) {
+    if metrics.basis != TimingBasis::LiveMonotonic || metrics.missed_poll_opportunity_count == 0 {
+        return;
+    }
+
+    tracing::warn!(
+        run_id,
+        requested_interval_ms = metrics.requested_interval_ms,
+        sample_gap_count = metrics.sample_gap_count,
+        mean_sample_gap_ms = metrics.mean_sample_gap_ms,
+        max_sample_gap_ms = metrics.max_sample_gap_ms,
+        missed_poll_opportunity_count = metrics.missed_poll_opportunity_count,
+        "live tune missed at least one complete polling opportunity"
+    );
+}
+
+/// Timing diagnostics are observational: every call site defers this database write until
+/// after the safety-critical restore attempt, and a failure here must never replace the
+/// tune's actual completion, abort, or driver-error outcome.
+async fn record_timing_metrics_best_effort(pool: &SqlitePool, run_id: i64, metrics: TimingMetrics) {
+    if let Err(e) = TuneRunRow::record_timing_metrics(pool, run_id, metrics).await {
+        tracing::error!(run_id, error = %e, "failed to record tune timing metrics");
+    }
+}
+
 /// Attempts a best-effort restore, records its outcome, then returns `err` **unchanged** --
 /// the single choke point every early-return error path in `execute` funnels through, so a
 /// partial mutation is never left un-restored just because the step that failed came before
 /// `attempt_restore` was reached (`safety-restore-guard`, finding 3 of the live-plant safety
 /// review, fixing three such gaps: a failed `transition_to_manual`, a failed
-/// `record_initial_readings`/`persist_results`/`complete` after a successful test, and any
-/// other hard failure from `run_polling_loop` itself). Always returns the *original* `err`:
+/// `record_initial_readings`/`persist_results` after a successful test, and any other hard
+/// failure from `run_polling_loop` itself). Always returns the *original* `err`:
 /// neither an incomplete restore nor a failure recording its status should ever mask the
 /// real reason the run is failing.
 #[allow(clippy::too_many_arguments)]
@@ -1892,6 +1986,7 @@ async fn run_polling_loop(
     ctrl_c: &mut CtrlC,
     guard: &mut MutationGuard,
     allow_uncertain_quality: bool,
+    timing: &mut PollTimingAccumulator,
 ) -> anyhow::Result<PollOutcome> {
     let start_time = time_anchor.utc();
     let mut tick_time =
@@ -1945,6 +2040,7 @@ async fn run_polling_loop(
                 // read's real monotonic latency; for the simulator it advances the logical
                 // process clock by exactly one fixed poll step per successful PV sample.
                 let now = tick_time.next_timestamp()?;
+                timing.observe(now)?;
                 let tick = Tick { time: now, pv };
                 let sample_quality = sample_quality_from_driver(quality);
 
@@ -2609,6 +2705,27 @@ mod tests {
         RunTimeAnchor::from_parts(utc, tokio::time::Instant::now())
     }
 
+    fn timing_for_args(args: &TuneArgs) -> PollTimingAccumulator {
+        let basis = match args.driver {
+            DriverKindArg::Opcda => TimingBasis::LiveMonotonic,
+            DriverKindArg::Simulator => TimingBasis::SimulatedFixedStep,
+        };
+        PollTimingAccumulator::new(basis, args.poll_interval_ms)
+    }
+
+    fn delayed_live_timing_metrics() -> TimingMetrics {
+        TimingMetrics {
+            basis: TimingBasis::LiveMonotonic,
+            requested_interval_ms: 800,
+            sample_gap_count: 2,
+            mean_sample_gap_ms: Some(1_200.0),
+            max_sample_gap_ms: Some(1_600.0),
+            missed_poll_opportunity_count: 1,
+            measured_oscillation_period_ms: None,
+            approximate_samples_per_period: None,
+        }
+    }
+
     /// A fast-converging simulator tune: proportionally scaled down from
     /// `bhtune-driver`'s own proven `FopdtConfig::new(1.0, 2.0, 5.0, 1.0)` E2E fixture (2
     /// ticks of lag, 5 ticks of dead time) so the whole test — which polls on a real
@@ -2673,6 +2790,25 @@ mod tests {
         assert_eq!(runs[0].loop_name, "ignored-for-simulator");
         assert_eq!(runs[0].notes.as_deref(), Some("test note"));
         assert!(runs[0].initial_readings.is_some());
+        let timing = runs[0]
+            .timing_metrics
+            .expect("completed simulator run should record timing diagnostics");
+        assert_eq!(timing.basis, TimingBasis::SimulatedFixedStep);
+        assert_eq!(timing.requested_interval_ms, 5);
+        assert!(timing.sample_gap_count > 0);
+        assert_eq!(timing.mean_sample_gap_ms, Some(5.0));
+        assert_eq!(timing.max_sample_gap_ms, Some(5.0));
+        assert_eq!(timing.missed_poll_opportunity_count, 0);
+        assert!(
+            timing
+                .measured_oscillation_period_ms
+                .is_some_and(|period| period > 0.0)
+        );
+        assert!(
+            timing
+                .approximate_samples_per_period
+                .is_some_and(|samples| samples > 1.0)
+        );
 
         // A simulator run has no OPC DA connection at all -- `db-run-request-snapshot`
         // requires both to be `None` here regardless of whatever `--bridge-host` default
@@ -2945,6 +3081,7 @@ mod tests {
             let _ = tx.send(1);
         });
 
+        let mut timing = timing_for_args(&args);
         let outcome = run_polling_loop(
             &pool,
             run.id,
@@ -2956,6 +3093,7 @@ mod tests {
             &mut ctrl_c,
             &mut MutationGuard::default(),
             true,
+            &mut timing,
         )
         .await
         .unwrap();
@@ -3224,6 +3362,7 @@ mod tests {
             MrftCompat::default(),
         );
 
+        let mut timing = timing_for_args(&args);
         let outcome = run_polling_loop(
             &pool,
             run.id,
@@ -3235,6 +3374,7 @@ mod tests {
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
             false,
+            &mut timing,
         )
         .await
         .unwrap();
@@ -3327,6 +3467,7 @@ mod tests {
             MrftCompat::default(),
         );
 
+        let mut timing = timing_for_args(&args);
         let outcome = run_polling_loop(
             &pool,
             run.id,
@@ -3338,6 +3479,7 @@ mod tests {
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
             false,
+            &mut timing,
         )
         .await
         .unwrap();
@@ -3412,6 +3554,7 @@ mod tests {
             MrftCompat::default(),
         );
 
+        let mut timing = timing_for_args(&args);
         let outcome = run_polling_loop(
             &pool,
             run.id,
@@ -3423,6 +3566,7 @@ mod tests {
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
             false,
+            &mut timing,
         )
         .await
         .unwrap();
@@ -3511,6 +3655,7 @@ mod tests {
             let _ = tx.send(1);
         });
 
+        let mut timing = timing_for_args(&args);
         let outcome = run_polling_loop(
             &pool,
             run.id,
@@ -3522,6 +3667,7 @@ mod tests {
             &mut ctrl_c,
             &mut MutationGuard::default(),
             true,
+            &mut timing,
         )
         .await
         .unwrap();
@@ -4444,7 +4590,7 @@ mod tests {
     }
 
     /// Covers `execute`'s second `restore_best_effort_then_propagate` call site: a failure in
-    /// `finish_completed_run` (here, `persist_results` colliding with the
+    /// `persist_completed_results` (here, `persist_results` colliding with the
     /// `UNIQUE (run_id, response_level)` constraint) *after* a real, successful MRFT
     /// completion must still trigger a best-effort restore. Uses the real `SimulatorDriver`
     /// (via `crate::driver::build`, exactly like `a_ctrl_c_style_abort_restores_and_records_aborted`
@@ -4452,7 +4598,7 @@ mod tests {
     /// completion, not just a mocked one -- the simulator's `LoopTags` has no mode/setpoint/
     /// mode-attribute tags at all, so its restore only ever has the MV step to confirm.
     #[tokio::test]
-    async fn execute_attempts_restore_when_finish_completed_run_fails_after_a_successful_test() {
+    async fn execute_attempts_restore_when_persist_completed_results_fails() {
         let pool = seeded_pool().await;
         let template = bhtune_core::built_in_templates().remove(0);
         let args = fast_simulator_args();
@@ -4526,6 +4672,12 @@ mod tests {
             stored.restore_status,
             Some(bhtune_db::models::RestoreStatus::Confirmed)
         );
+        let timing = stored
+            .timing_metrics
+            .expect("cadence metrics should survive a post-poll persistence failure");
+        assert!(timing.sample_gap_count > 0);
+        assert_eq!(timing.measured_oscillation_period_ms, None);
+        assert_eq!(timing.approximate_samples_per_period, None);
     }
 
     /// Covers the `Aborted` branch's `RestoreAttempt::Incomplete` mapping -- the sibling of
@@ -5768,6 +5920,19 @@ mod tests {
             OutputFormat::Json
         ));
         assert!(!skips_interactive_prompt(None, OutputFormat::Table));
+    }
+
+    #[test]
+    fn delayed_live_timing_emits_the_observational_warning() {
+        warn_on_missed_poll_opportunities(42, &delayed_live_timing_metrics());
+    }
+
+    #[tokio::test]
+    async fn timing_persistence_failure_does_not_replace_the_run_outcome() {
+        let pool = seeded_pool().await;
+        pool.close().await;
+
+        record_timing_metrics_best_effort(&pool, 42, delayed_live_timing_metrics()).await;
     }
 
     #[test]

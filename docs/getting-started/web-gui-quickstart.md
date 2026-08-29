@@ -145,6 +145,11 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    persisted samples or CSV/JSON exports. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
    [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
+   - A **Timing** section with the run's time basis, requested interval, observed mean/maximum
+     sample gap, measured oscillation period, and approximate samples per period. Live runs show
+     an amber warning when any sample gap reaches at least twice the requested interval, proving
+     that at least one complete polling opportunity was missed. The warning is informational and
+     does not disable the PID controls.
    - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own
      **Apply** button to send that response level's constants to the loop after the fact —
      independently of any `--write-pid` choice made before the run started. A confirmation

@@ -118,7 +118,10 @@ running this against anything connected to a real process, especially unattended
 timestamps use monotonic elapsed time anchored to UTC, so NTP/manual clock changes cannot distort
 the measured relay period; real host, gateway, and OPC latency remains visible. Keep the host and
 gateway responsive and use a poll interval comfortably shorter than the expected oscillation
-period. To also write the calculated PID constants back:
+period. Afterward, `bhtune history show <run-id>` reports the requested and observed sampling
+cadence, measured oscillation period, and approximate samples per period. A live sample gap at
+least twice the requested interval is reported as a missed-poll warning without aborting the run
+or blocking write-back. To also write the calculated PID constants back:
 
 ```sh
 bhtune tune ... --write-pid moderate --yes
