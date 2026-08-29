@@ -35,6 +35,23 @@ Try it yourself: start a run with a long poll interval and press Ctrl+C while it
 between ticks (works immediately); then point it at an unreachable `--bridge-host` and press
 Ctrl+C — it should abort and report within `--op-timeout-secs`, not hang.
 
+## Timing and host responsiveness
+
+Live OPC DA runs measure MRFT time with a monotonic clock paired to the run's UTC start
+timestamp. The timestamps stored in history remain ordinary UTC values, but their progression
+comes from monotonic elapsed time. An NTP correction or manual system-clock adjustment after the
+run starts therefore cannot shorten, lengthen, reverse, or skip an apparent relay period.
+
+Real delays are not hidden. If the operating system schedules BHTune late, the gateway responds
+slowly, or an OPC read/write takes longer than expected, that elapsed time remains part of the
+sample and switch timeline. The polling loop delays its next schedule instead of issuing a burst
+of catch-up reads or writes against a live controller.
+
+BHTune is not a hard-real-time controller and cannot guarantee identical live samples on an
+overloaded host. Keep the BHTune host and OPC DA gateway responsive, avoid competing heavy work
+during a tune, and choose a poll interval comfortably shorter than the loop's expected oscillation
+period. The whole-run and per-operation safety timeouts remain independent monotonic timers.
+
 ## Input validation
 
 Every number that reaches the tuning engine is validated before any live I/O happens: relay

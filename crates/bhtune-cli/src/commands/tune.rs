@@ -30,7 +30,7 @@ use crate::args::{DriverKindArg, TuneArgs};
 use crate::cancel::CtrlC;
 use crate::driver::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
 use crate::output::OutputFormat;
-use crate::timing::TickTimeSource;
+use crate::timing::{RunTimeAnchor, TickTimeSource};
 
 /// The final disposition of a `tune`/`simulate` run -- drives the printed summary (see
 /// [`print_summary`]) and, via `crate::tune_outcome_exit_code` in `lib.rs`, the process's
@@ -130,7 +130,7 @@ pub(crate) async fn run_with_ctrl_c(
         tags,
         driver,
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
     } = prepared;
@@ -143,7 +143,7 @@ pub(crate) async fn run_with_ctrl_c(
         &tags,
         driver.as_ref(),
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
         ctrl_c,
@@ -193,7 +193,7 @@ pub struct PreparedTune {
     tags: LoopTags,
     driver: Box<dyn Driver>,
     config: LoopConfig,
-    started_at: DateTime<Utc>,
+    time_anchor: RunTimeAnchor,
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
 }
@@ -357,7 +357,8 @@ pub async fn prepare(
     let tags = build_loop_tags(&args, &template)?;
     let driver = crate::driver::build(&args).await?;
 
-    let started_at = Utc::now();
+    let time_anchor = RunTimeAnchor::now();
+    let started_at = time_anchor.utc();
     let run = TuneRunRow::start(
         pool,
         None,
@@ -410,7 +411,7 @@ pub async fn prepare(
         tags,
         driver,
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
     })
@@ -456,7 +457,7 @@ pub async fn drive(
         tags,
         driver,
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
     } = prepared;
@@ -469,7 +470,7 @@ pub async fn drive(
         &tags,
         driver.as_ref(),
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
         ctrl_c,
@@ -912,12 +913,13 @@ async fn execute<R: std::io::BufRead>(
     tags: &LoopTags,
     driver: &dyn Driver,
     config: LoopConfig,
-    started_at: DateTime<Utc>,
+    time_anchor: RunTimeAnchor,
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     reader: &mut R,
 ) -> anyhow::Result<RunOutcome> {
+    let started_at = time_anchor.utc();
     let initial = read_initial_values(driver, tags, template, allow_uncertain_quality).await?;
     validate_initial_state(&initial)?;
 
@@ -988,7 +990,7 @@ async fn execute<R: std::io::BufRead>(
         tags,
         driver,
         &mut engine,
-        started_at,
+        time_anchor,
         ctrl_c,
         &mut guard,
         allow_uncertain_quality,
@@ -1886,12 +1888,14 @@ async fn run_polling_loop(
     tags: &LoopTags,
     driver: &dyn Driver,
     engine: &mut MrftEngine,
-    start_time: DateTime<Utc>,
+    time_anchor: RunTimeAnchor,
     ctrl_c: &mut CtrlC,
     guard: &mut MutationGuard,
     allow_uncertain_quality: bool,
 ) -> anyhow::Result<PollOutcome> {
-    let mut tick_time = TickTimeSource::for_driver(args.driver, start_time, args.poll_interval_ms)?;
+    let start_time = time_anchor.utc();
+    let mut tick_time =
+        TickTimeSource::for_driver(args.driver, time_anchor, args.poll_interval_ms)?;
     let mut interval = tokio::time::interval(Duration::from_millis(args.poll_interval_ms.max(1)));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -1911,7 +1915,6 @@ async fn run_polling_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let now = tick_time.next_timestamp()?;
                 let (pv, quality) = match bounded_driver_call(
                     args.op_timeout_secs,
                     ctrl_c,
@@ -1938,6 +1941,10 @@ async fn run_polling_loop(
                         }));
                     }
                 };
+                // Timestamp the value after it is actually read. For OPC DA this includes the
+                // read's real monotonic latency; for the simulator it advances the logical
+                // process clock by exactly one fixed poll step per successful PV sample.
+                let now = tick_time.next_timestamp()?;
                 let tick = Tick { time: now, pv };
                 let sample_quality = sample_quality_from_driver(quality);
 
@@ -2598,6 +2605,10 @@ mod tests {
         crate::config::BhtuneConfig::default()
     }
 
+    fn time_anchor_at(utc: DateTime<Utc>) -> RunTimeAnchor {
+        RunTimeAnchor::from_parts(utc, tokio::time::Instant::now())
+    }
+
     /// A fast-converging simulator tune: proportionally scaled down from
     /// `bhtune-driver`'s own proven `FopdtConfig::new(1.0, 2.0, 5.0, 1.0)` E2E fixture (2
     /// ticks of lag, 5 ticks of dead time) so the whole test — which polls on a real
@@ -2941,7 +2952,7 @@ mod tests {
             &tags,
             &driver,
             &mut engine,
-            started_at,
+            time_anchor_at(started_at),
             &mut ctrl_c,
             &mut MutationGuard::default(),
             true,
@@ -3220,7 +3231,7 @@ mod tests {
             &tags,
             &driver,
             &mut engine,
-            started_at,
+            time_anchor_at(started_at),
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
             false,
@@ -3267,6 +3278,79 @@ mod tests {
                 .write_log()
                 .iter()
                 .any(|(tag, value)| tag == &tags.manipulated_variable && value == "45")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_sample_timestamp_includes_driver_read_delay() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let driver = honeywell_driver_auto()
+            .delaying_read(&tags.process_variable, Duration::from_millis(50))
+            .with_quality(&tags.process_variable, bhtune_driver::Quality::Bad);
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let config = build_loop_config(&args).unwrap();
+        let started_at = DateTime::UNIX_EPOCH;
+        let time_anchor = time_anchor_at(started_at);
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "delayed-live-read",
+            TuneDriver::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
+        .await
+        .unwrap();
+        let initial = sample_initial_state();
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            lookup(
+                config.process_type,
+                config.controller_type,
+                ResponseLevel::Aggressive,
+            )
+            .beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            time_anchor,
+            &mut CtrlC::never(),
+            &mut MutationGuard::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::PoorQuality { .. })
+        ));
+        let samples = TuneSampleRow::list_for_run(&pool, run.id).await.unwrap();
+        assert_eq!(samples.len(), 1);
+        assert!(
+            samples[0].sample.time - started_at >= chrono::Duration::milliseconds(45),
+            "live sample timestamp should include the driver's 50 ms read delay"
         );
     }
 
@@ -3335,7 +3419,7 @@ mod tests {
             &tags,
             &driver,
             &mut engine,
-            started_at,
+            time_anchor_at(started_at),
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
             false,
@@ -3434,7 +3518,7 @@ mod tests {
             &tags,
             &driver,
             &mut engine,
-            started_at,
+            time_anchor_at(started_at),
             &mut ctrl_c,
             &mut MutationGuard::default(),
             true,
@@ -3482,11 +3566,14 @@ mod tests {
         empty_reads: std::collections::HashSet<String>,
         /// Tags whose `read`/`write` never resolves (`.await`s `std::future::pending`
         /// forever), simulating a stalled OPC DA call (gateway down, DCOM wedged, network
-        /// black-holed) so `--op-timeout-secs`/Ctrl+C-during-a-tick can actually be exercised
-        /// -- every other mock read/write body resolves synchronously and has no real
-        /// `.await` point, so it can never be caught mid-flight by a racing timeout/cancel.
+        /// black-holed) so `--op-timeout-secs`/Ctrl+C-during-a-tick can actually be exercised.
+        /// Finite delays are configured separately below; both delay forms await before any
+        /// mutex guard is acquired.
         hang_reads: std::collections::HashSet<String>,
         hang_writes: std::collections::HashSet<String>,
+        /// Per-tag finite read latency, used to prove that live monotonic sample timestamps
+        /// include the time spent awaiting the driver rather than being captured before it.
+        read_delays: std::collections::HashMap<String, Duration>,
         /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
         /// listed -- matching a healthy real driver and letting most tests ignore quality
         /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
@@ -3571,6 +3658,11 @@ mod tests {
             self
         }
 
+        fn delaying_read(mut self, tag: &str, delay: Duration) -> MockDriver {
+            self.read_delays.insert(tag.to_string(), delay);
+            self
+        }
+
         /// Overrides a single tag's fixture value -- e.g. to make an otherwise-valid
         /// baseline driver (like `honeywell_driver_auto()`) report one bad reading.
         fn with_value(self, tag: &str, value: &str) -> MockDriver {
@@ -3650,6 +3742,13 @@ mod tests {
             self.read_batches.lock().unwrap().push(tags.to_vec());
             if tags.iter().any(|tag| self.hang_reads.contains(tag)) {
                 std::future::pending::<()>().await;
+            }
+            if let Some(delay) = tags
+                .iter()
+                .filter_map(|tag| self.read_delays.get(tag))
+                .max()
+            {
+                tokio::time::sleep(*delay).await;
             }
             let store = self.values.lock().unwrap();
             let mut out = Vec::new();
@@ -4073,6 +4172,7 @@ mod tests {
         let driver = honeywell_driver_auto()
             .with_quality(&tags.process_variable, bhtune_driver::Quality::Bad);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -4082,7 +4182,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -4095,7 +4195,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -4119,6 +4219,7 @@ mod tests {
         let driver = honeywell_driver_auto()
             .with_quality(&tags.process_variable, bhtune_driver::Quality::Uncertain);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -4128,7 +4229,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -4141,7 +4242,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             false,
             &mut CtrlC::never(),
@@ -4214,6 +4315,7 @@ mod tests {
             .with_value("Unit1.LIC101.CVEUHI", "0.0")
             .with_value("Unit1.LIC101.CVEULO", "100.0");
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -4223,7 +4325,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -4236,7 +4338,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -4264,6 +4366,7 @@ mod tests {
         let tags = honeywell_tags();
         let driver = honeywell_driver_auto().erroring_write("Unit1.LIC101.MODEATTR");
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -4273,7 +4376,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -4286,7 +4389,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -4352,6 +4455,7 @@ mod tests {
         let config = build_loop_config(&args).unwrap();
         let tags = build_loop_tags(&args, &template).unwrap();
         let driver = crate::driver::build(&args).await.unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -4361,7 +4465,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -4396,7 +4500,7 @@ mod tests {
             &tags,
             driver.as_ref(),
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -4441,6 +4545,7 @@ mod tests {
             .erroring_write("Unit1.LIC101.OP")
             .degrade_quality_after(&tags.process_variable, 1, bhtune_driver::Quality::Bad);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -4450,7 +4555,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -4463,7 +4568,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
