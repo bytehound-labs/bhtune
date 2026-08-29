@@ -4045,13 +4045,19 @@ Pulled into `bhtune` from `opcda-bridge`'s example:
   floor), with a standalone `msrv` CI job pinning `dtolnay/rust-toolchain@1.94.0` and running
   `cargo check --workspace --all-targets --all-features --locked`.
 - **`windows` and `package` CI jobs.** `windows` runs fmt/clippy/test on `windows-latest`
-  (skipping the Linux-only doc/OpenAPI drift `git diff` checks, which are CRLF-sensitive);
-  `package` runs `cargo package --workspace --locked`, which immediately surfaced a real bug —
+  (skipping the Linux-only doc/OpenAPI drift `git diff` checks, which are CRLF-sensitive).
+  `package` runs `cargo package --workspace --locked --no-verify`: this still validates
+  metadata, path/version requirements, and assembly of every publishable tarball, while the
+  ordinary workspace check/Clippy/test jobs compile the real local cross-crate API graph.
+  `--no-verify` is load-bearing for this same-version, not-yet-published workspace: Cargo's
+  tarball verification strips local paths and resolves dependencies such as `bhtune-db
+0.1.0` from crates.io, so a coordinated local API addition otherwise compiles a dependent
+  crate against the older published `0.1.0` instead of the package assembled moments earlier.
+  The original package job still surfaced a real bug before this distinction mattered —
   every workspace-internal path dependency lacked a `version` requirement, which `cargo
-package` refuses to package. Fixed by giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
+package` refuses even to assemble. Giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
   `bhtune-cli` `{ path, version }` entries in `[workspace.dependencies]` and switching every
-  consumer to `.workspace = true`, mirroring `opcda-bridge`'s own already-working pattern
-  exactly.
+  consumer to `.workspace = true` remains required.
 - **`concurrency` groups, `permissions: contents: read`, and `--locked` everywhere** across
   `checks.yml`/`coverage.yml`/`e2e.yml`.
 - **`.github/dependabot.yml`** — weekly grouped updates for `cargo`, `npm` (pnpm workspace
