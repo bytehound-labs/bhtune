@@ -6954,13 +6954,16 @@ mod tests {
         let (run_id, config, _template, tags) =
             start_opc_test_run(&pool, "actuation-preserve-poll").await;
         let driver = honeywell_driver_auto()
-            .delaying_read(&tags.manipulated_variable, Duration::from_millis(500))
+            .delaying_read(&tags.manipulated_variable, Duration::from_secs(2))
             .degrade_quality_after(&tags.process_variable, 1, bhtune_driver::Quality::Bad);
         let mut args = fast_simulator_args();
         args.driver = DriverKindArg::Opcda;
-        args.poll_interval_ms = 50;
+        // Leave a wide margin between the scheduled verification and the next poll. The
+        // assertion is about preserving that deadline, not about racing a 10ms database/setup
+        // delay, which is especially scheduler-sensitive on Windows CI.
+        args.poll_interval_ms = 1_000;
         args.mrft_delay = 10;
-        args.timeout_secs = 2;
+        args.timeout_secs = 3;
         let initial = sample_initial_state();
         let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
         let commanded_instant = Instant::now();
@@ -6971,7 +6974,7 @@ mod tests {
                 run_id,
                 MvActuationKind::Relay,
                 55.0,
-                commanded_instant + Duration::from_millis(10),
+                commanded_instant + Duration::from_millis(100),
                 commanded_at,
                 commanded_instant,
                 mv_actuation_tolerance(MvActuationKind::Relay, 55.0, 45.0, 100.0).unwrap(),
@@ -7023,7 +7026,7 @@ mod tests {
         ));
         assert!(
             driver.delayed_read_was_cancelled(&tags.manipulated_variable),
-            "the 500ms MV verification read must be dropped at the 50ms PV deadline"
+            "the slow MV verification read must be dropped at the next scheduled PV deadline"
         );
         let reads = driver.read_batches();
         assert_eq!(reads[0], vec![tags.process_variable.clone()]);
