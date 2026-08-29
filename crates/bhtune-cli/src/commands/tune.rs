@@ -3663,6 +3663,16 @@ mod tests {
             self
         }
 
+        async fn apply_read_delay(&self, tags: &[String]) {
+            if let Some(delay) = tags
+                .iter()
+                .filter_map(|tag| self.read_delays.get(tag))
+                .max()
+            {
+                tokio::time::sleep(*delay).await;
+            }
+        }
+
         /// Overrides a single tag's fixture value -- e.g. to make an otherwise-valid
         /// baseline driver (like `honeywell_driver_auto()`) report one bad reading.
         fn with_value(self, tag: &str, value: &str) -> MockDriver {
@@ -3743,13 +3753,7 @@ mod tests {
             if tags.iter().any(|tag| self.hang_reads.contains(tag)) {
                 std::future::pending::<()>().await;
             }
-            if let Some(delay) = tags
-                .iter()
-                .filter_map(|tag| self.read_delays.get(tag))
-                .max()
-            {
-                tokio::time::sleep(*delay).await;
-            }
+            self.apply_read_delay(tags).await;
             let store = self.values.lock().unwrap();
             let mut out = Vec::new();
             for tag in tags {
