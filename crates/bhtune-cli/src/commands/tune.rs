@@ -5653,6 +5653,8 @@ mod tests {
         /// Per-tag finite read latency, used to prove that live monotonic sample timestamps
         /// include the time spent awaiting the driver rather than being captured before it.
         read_delays: std::collections::HashMap<String, Duration>,
+        /// Tags whose configured finite read delay was cancelled before it completed.
+        cancelled_delayed_reads: std::sync::Mutex<std::collections::HashSet<String>>,
         /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
         /// listed -- matching a healthy real driver and letting most tests ignore quality
         /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
@@ -5751,7 +5753,18 @@ mod tests {
                 .filter_map(|tag| self.read_delays.get(tag))
                 .max()
             {
+                let delayed_tags = tags
+                    .iter()
+                    .filter(|tag| self.read_delays.contains_key(*tag))
+                    .cloned()
+                    .collect();
+                let mut observer = DelayedReadObserver {
+                    driver: self,
+                    tags: delayed_tags,
+                    completed: false,
+                };
                 tokio::time::sleep(*delay).await;
+                observer.completed = true;
             }
         }
 
@@ -5841,6 +5854,28 @@ mod tests {
 
         fn read_batches(&self) -> Vec<Vec<String>> {
             self.read_batches.lock().unwrap().clone()
+        }
+
+        fn delayed_read_was_cancelled(&self, tag: &str) -> bool {
+            self.cancelled_delayed_reads.lock().unwrap().contains(tag)
+        }
+    }
+
+    struct DelayedReadObserver<'a> {
+        driver: &'a MockDriver,
+        tags: Vec<String>,
+        completed: bool,
+    }
+
+    impl Drop for DelayedReadObserver<'_> {
+        fn drop(&mut self) {
+            if !self.completed {
+                self.driver
+                    .cancelled_delayed_reads
+                    .lock()
+                    .unwrap()
+                    .extend(self.tags.iter().cloned());
+            }
         }
     }
 
@@ -6490,7 +6525,6 @@ mod tests {
         );
         let mut timing = timing_for_args(&args);
 
-        let started = Instant::now();
         let outcome = run_polling_loop(
             &pool,
             run_id,
@@ -6514,7 +6548,7 @@ mod tests {
             PollOutcome::Aborted(AbortReason::PoorQuality { .. })
         ));
         assert!(
-            started.elapsed() < Duration::from_millis(250),
+            driver.delayed_read_was_cancelled(&tags.manipulated_variable),
             "the 500ms MV verification read must be dropped at the 50ms PV deadline"
         );
         let reads = driver.read_batches();
