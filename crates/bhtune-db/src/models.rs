@@ -957,25 +957,14 @@ impl TuneRunRow {
         completed_at: DateTime<Utc>,
         timing_metrics: Option<TimingMetrics>,
     ) -> DbResult<TuneRunRow> {
-        let timing_metrics_json = timing_metrics.map(|metrics| {
-            serde_json::to_string(&metrics).expect("TimingMetrics serialization is infallible")
-        });
-        let row = sqlx::query(
-            r#"
-            UPDATE tune_runs
-            SET outcome = 'completed', completed_at = ?, timing_metrics_json = ?
-            WHERE id = ?
-            RETURNING *
-            "#,
+        Self::set_terminal_outcome_with_timing_metrics(
+            pool,
+            run_id,
+            completed_at,
+            TuneOutcome::Completed,
+            timing_metrics,
         )
-        .bind(completed_at)
-        .bind(timing_metrics_json)
-        .bind(run_id)
-        .fetch_one(pool)
         .await
-        .map_err(DbError::Query)?;
-
-        row_to_tune_run(row)
     }
 
     /// Marks a run `failed`, recording why. Valid whether or not
@@ -1031,17 +1020,35 @@ impl TuneRunRow {
         completed_at: DateTime<Utc>,
         timing_metrics: Option<TimingMetrics>,
     ) -> DbResult<TuneRunRow> {
+        Self::set_terminal_outcome_with_timing_metrics(
+            pool,
+            run_id,
+            completed_at,
+            TuneOutcome::Aborted,
+            timing_metrics,
+        )
+        .await
+    }
+
+    async fn set_terminal_outcome_with_timing_metrics(
+        pool: &SqlitePool,
+        run_id: i64,
+        completed_at: DateTime<Utc>,
+        outcome: TuneOutcome,
+        timing_metrics: Option<TimingMetrics>,
+    ) -> DbResult<TuneRunRow> {
         let timing_metrics_json = timing_metrics.map(|metrics| {
             serde_json::to_string(&metrics).expect("TimingMetrics serialization is infallible")
         });
         let row = sqlx::query(
             r#"
             UPDATE tune_runs
-            SET outcome = 'aborted', completed_at = ?, timing_metrics_json = ?
+            SET outcome = ?, completed_at = ?, timing_metrics_json = ?
             WHERE id = ?
             RETURNING *
             "#,
         )
+        .bind(enum_to_text(&outcome))
         .bind(completed_at)
         .bind(timing_metrics_json)
         .bind(run_id)

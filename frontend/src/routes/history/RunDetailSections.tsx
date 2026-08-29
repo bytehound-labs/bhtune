@@ -311,14 +311,11 @@ function TimingSection({
         Timing
       </h2>
       {missed > 0 && (
-        <div
-          role="status"
-          className="mb-3 rounded-md border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-300"
-        >
+        <output className="mb-3 block rounded-md border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-300">
           Timing warning: {missed} sample gap{missed === 1 ? "" : "s"} reached
           at least twice the requested interval. At least one complete polling
           opportunity was missed; review host and OPC gateway responsiveness.
-        </div>
+        </output>
       )}
       <Card>
         <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
