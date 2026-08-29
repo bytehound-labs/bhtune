@@ -52,6 +52,14 @@ overloaded host. Keep the BHTune host and OPC DA gateway responsive, avoid compe
 during a tune, and choose a poll interval comfortably shorter than the loop's expected oscillation
 period. The whole-run and per-operation safety timeouts remain independent monotonic timers.
 
+Each run with at least one successful PV poll stores a timing snapshot in history. The CLI's
+`bhtune history show <run>` output and the web run-detail page show the requested interval,
+observed sample-gap count, mean and maximum sample gap, measured oscillation period when the test
+completed, and approximate samples per period. A live run is flagged when an adjacent sample gap
+is at least twice the requested interval, because that objectively means at least one complete
+polling opportunity was missed. This is a warning, not a validity verdict: it does not abort the
+run, change its calculated constants, or prevent an engineer from applying them.
+
 ## Input validation
 
 Every number that reaches the tuning engine is validated before any live I/O happens: relay

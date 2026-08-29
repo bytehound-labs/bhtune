@@ -202,6 +202,7 @@ struct RunDetailJson {
     /// The resolved bridge host this run actually used, matching `opc_server` above.
     bridge_host: Option<String>,
     initial_readings: Option<InitialReadingsJson>,
+    timing_metrics: Option<bhtune_db::models::TimingMetrics>,
     samples_recorded: usize,
     results: Vec<ResultJson>,
     writes: Vec<WriteJson>,
@@ -378,6 +379,13 @@ fn fmt_opt_f32(value: Option<f32>) -> String {
     }
 }
 
+fn fmt_opt_f64(value: Option<f64>) -> String {
+    match value {
+        Some(v) => format!("{v:.3}"),
+        None => "-".to_string(),
+    }
+}
+
 fn print_show_table(
     run: &TuneRunRow,
     samples: &[TuneSampleRow],
@@ -433,6 +441,33 @@ fn print_show_table(
     }
 
     println!("  Samples recorded: {}", samples.len());
+
+    if let Some(timing) = run.timing_metrics {
+        println!("  Timing:");
+        println!("    Basis:                    {:?}", timing.basis);
+        println!(
+            "    Requested interval:       {} ms",
+            timing.requested_interval_ms
+        );
+        println!("    Observed sample gaps:     {}", timing.sample_gap_count);
+        println!(
+            "    Mean / max sample gap:    {} / {} ms",
+            fmt_opt_f64(timing.mean_sample_gap_ms),
+            fmt_opt_f64(timing.max_sample_gap_ms)
+        );
+        println!(
+            "    Missed poll opportunities: {}",
+            timing.missed_poll_opportunity_count
+        );
+        println!(
+            "    Oscillation period:       {} ms",
+            fmt_opt_f64(timing.measured_oscillation_period_ms)
+        );
+        println!(
+            "    Approx. samples / period: {}",
+            fmt_opt_f64(timing.approximate_samples_per_period)
+        );
+    }
 
     match (run.restore_status, &run.restore_detail) {
         (Some(bhtune_db::models::RestoreStatus::Confirmed), _) => {
@@ -544,6 +579,7 @@ fn print_show_json(
             .initial_readings
             .as_ref()
             .map(|readings| InitialReadingsJson::from(readings.clone())),
+        timing_metrics: run.timing_metrics,
         samples_recorded: samples.len(),
         results: results.iter().map(ResultJson::from).collect(),
         writes: writes.iter().map(WriteJson::from).collect(),
@@ -831,6 +867,13 @@ mod tests {
         assert_eq!(fmt_opt_f32(None), "-");
     }
 
+    #[test]
+    fn fmt_opt_f64_formats_values_and_missing_fields() {
+        assert_eq!(fmt_opt_f64(Some(1.23456)), "1.235");
+        assert_eq!(fmt_opt_f64(Some(-0.5)), "-0.500");
+        assert_eq!(fmt_opt_f64(None), "-");
+    }
+
     #[tokio::test]
     async fn list_handles_an_empty_database() {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
@@ -878,6 +921,23 @@ mod tests {
                 mode_raw: Some("1".to_string()),
                 mode_attribute_raw: None,
                 setpoint_ini: Some(50.0),
+            },
+        )
+        .await
+        .unwrap();
+
+        TuneRunRow::record_timing_metrics(
+            &pool,
+            run.id,
+            bhtune_db::models::TimingMetrics {
+                basis: bhtune_db::models::TimingBasis::SimulatedFixedStep,
+                requested_interval_ms: 5,
+                sample_gap_count: 9,
+                mean_sample_gap_ms: Some(5.0),
+                max_sample_gap_ms: Some(5.0),
+                missed_poll_opportunity_count: 0,
+                measured_oscillation_period_ms: Some(50.0),
+                approximate_samples_per_period: Some(10.0),
             },
         )
         .await

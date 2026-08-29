@@ -2409,6 +2409,16 @@
           "template_origin": {
             "$ref": "#/components/schemas/TemplateOrigin"
           },
+          "timing_metrics": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TimingMetrics"
+              }
+            ]
+          },
           "writes": {
             "type": "array",
             "items": {
@@ -2908,6 +2918,73 @@
           "seconds",
           "minutes"
         ]
+      },
+      "TimingBasis": {
+        "type": "string",
+        "description": "The clock basis used for a run's persisted polling-cadence diagnostics.",
+        "enum": [
+          "simulated_fixed_step",
+          "live_monotonic"
+        ]
+      },
+      "TimingMetrics": {
+        "type": "object",
+        "description": "Polling-cadence diagnostics captured over one run's successful PV samples.\n\nThe two optional gap fields are `None` when fewer than two samples were observed. The\nmeasured oscillation fields are populated only for a completed MRFT run.",
+        "required": [
+          "basis",
+          "requested_interval_ms",
+          "sample_gap_count",
+          "missed_poll_opportunity_count"
+        ],
+        "properties": {
+          "approximate_samples_per_period": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/TimingBasis"
+          },
+          "max_sample_gap_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "mean_sample_gap_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "measured_oscillation_period_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "missed_poll_opportunity_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of adjacent sample gaps at least twice the requested interval. Each such gap\nproves that at least one complete polling opportunity was missed.",
+            "minimum": 0
+          },
+          "requested_interval_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "sample_gap_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "TuneDriver": {
         "type": "string",

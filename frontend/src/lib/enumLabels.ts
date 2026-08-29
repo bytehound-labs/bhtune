@@ -71,6 +71,14 @@ export const OUTCOME_LABELS: Record<
   aborted: "Aborted",
 };
 
+export const TIMING_BASIS_LABELS: Record<
+  components["schemas"]["TimingBasis"],
+  string
+> = {
+  simulated_fixed_step: "Simulator fixed step",
+  live_monotonic: "Live monotonic",
+};
+
 export const SAMPLE_QUALITY_LABELS: Record<
   components["schemas"]["SampleQuality"],
   string

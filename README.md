@@ -402,6 +402,12 @@ language, including exactly what happens on the first and second Ctrl+C:
   while real scheduling, gateway, read, and write delays remain visible. BHTune is not a
   hard-real-time controller: keep the host and gateway responsive, and choose a poll interval
   comfortably shorter than the expected oscillation period.
+- **Every polled run records timing diagnostics.** `bhtune history show <run>` and the web run
+  detail page report the requested interval, observed mean/maximum sample gap, measured
+  oscillation period, and approximate samples per period. A live run shows a warning when any
+  adjacent sample gap reaches at least twice the requested interval, proving that at least one
+  complete polling opportunity was missed. The warning is diagnostic only: it does not abort the
+  run or block PID write-back.
 - **`--restore-timeout-secs <seconds>`** (default `30`) bounds putting the loop back afterwards,
   independently of `--timeout-secs`. If the restore can't be confirmed within that time, or a
   _second_ Ctrl+C arrives while it's in progress, the process prints which tag and value to

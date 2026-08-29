@@ -269,5 +269,17 @@ mod tests {
             vec![1, 0],
             "legacy writes inherit the global true default unless their parent run explicitly disabled it"
         );
+
+        let timing_metrics: Vec<Option<String>> = sqlx::query_scalar(
+            "SELECT timing_metrics_json FROM tune_runs WHERE loop_name = 'migration-fixture' ORDER BY id",
+        )
+        .fetch_all(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(
+            timing_metrics,
+            vec![None, None],
+            "pre-diagnostics runs must remain readable with no invented timing metrics"
+        );
     }
 }
