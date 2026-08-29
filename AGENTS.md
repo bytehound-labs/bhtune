@@ -135,21 +135,24 @@ warning state) against a real running server, zero console errors. This closed o
 `frontend-live-stream` is now done: `GET /api/runs/{id}/stream` (Server-Sent Events) polls
 `TuneSampleRow::list_for_run_since` (a new `bhtune-db` query — `tick > after_tick`, with
 `-1` as the "everything" sentinel) and `TuneRunRow::get` every 300ms inside an
-`async-stream::stream!` generator, replaying every sample from tick 0 on every connection
-and terminating with exactly one `done` event (`RunStreamDone { outcome }`) once the run
-leaves `Running` — see `crates/bhtune-server/src/routes/stream.rs`'s module doc for why
-this polls the same database every other reader uses rather than adding a broadcast
-channel (zero risk to the already-tested CLI/server tick loop). On the frontend, a new
+`async-stream::stream!` generator, emitting the persisted initial-readings snapshot as an
+`initial` event before replaying every sample from tick 0 on every connection, and
+collecting independent startup tag-backed values in one deduplicated driver read; a
+mode-dependent setpoint remains a separate read only when the original mode is Auto.
+terminating with exactly one `done` event (`RunStreamDone { outcome }`) once the run leaves
+`Running` — see `crates/bhtune-server/src/routes/stream.rs`'s module doc for why this polls
+the same database every other reader uses rather than adding a broadcast channel (zero risk
+to the already-tested CLI/server tick loop). On the frontend, a new
 `useRunStream` hook (`frontend/src/api/runs.ts`) consumes it via a plain `EventSource`
 (untyped — SSE has no typed-client support, unlike the rest of the API — with events
 manually parsed against the generated `SampleResponse`/`TuneOutcome` schema types),
 closing the connection and invalidating `useRun`'s query cache the instant `done` arrives.
 A new reusable `TrendChart` component (`frontend/src/components/TrendChart.tsx`) renders
-the resulting `samples` array with `uPlot` (PV on the left scale, MV on a right `mv`
-scale), using a `useRef`-held instance and `setData` for incremental updates rather than
-recreating the plot on every sample — the same component will later serve
-`history-explorer-ui`, differing only in whether `samples` comes from the live stream or
-a finished run's REST payload. `RunDetailPage` now switches between the two sources based
+the resulting normalized point series with `uPlot` (PV on the left scale, MV on a right
+`mv` scale), using a `useRef`-held instance and `setData` for incremental updates rather
+than recreating the plot on every sample. The same component renders live and historical
+runs, with presentation-only initial-reading and terminal restored-MV boundary points added
+by `composeTrendPoints`. `RunDetailPage` now switches between the two sources based
 on `outcome`, and `useRun`'s own polling was relaxed from a 1s to a 5s fallback now that
 the SSE stream (with its `done`-triggered invalidation) is the primary live-update
 mechanism, not a once-a-second full-`samples`-refetch. Manually verified against a real
@@ -157,7 +160,9 @@ running server: the chart streamed the live relay square-wave/PV-oscillation in 
 time, the SSE connection opened exactly once and closed cleanly on `done` (confirmed via
 the browser's network log — no reconnect storm), and the chart handed off to the
 historical `samples` array with an identical rendered trend once the run completed, zero
-console errors.
+console errors. Short trends reserve 12 configured poll intervals on the x-axis, leaving
+unused future space blank; once the elapsed data span that horizon, the same range function
+fits the complete run without fabricating samples.
 `server-embed-spa` is now done: the built SPA (`frontend/dist/`) is embedded directly into
 the `bhtune-server` binary via `rust-embed`, so a release build is a single self-contained
 executable — no separate static file server, Node, or nginx needed on the target host — see
@@ -208,11 +213,24 @@ the real-time content was correct and matched Linux's own output exactly). This 
 fully closed out. Phase 8's
 `e2e-simulator` is now done: a genuine, real-subprocess end-to-end test
 (`crates/bhtune-cli/tests/e2e_simulator.rs`) that runs `bhtune tune` against the simulator
-driver across a small process/controller-type matrix and asserts the _calculated_ PID
-results, not just row presence — a gap no earlier test closed (see "Correctness-critical
-design details" below, item 2, for the real `bhtune-core` bug this test caught and fixed
-in the process: the MRFT oscillation period silently lost sub-second precision by default,
-zeroing `ti_minutes`/`td_minutes` even for PI/PID). `e2e-playwright` is also done: a
+driver across a small process/controller-type matrix and compares every persisted calculated
+Kp/Ti/Td and template-converted P/I/D value with reviewed numeric baselines, not just row
+presence — a gap no earlier test closed (see "Correctness-critical design details" below,
+item 2, for the real `bhtune-core` bug this test caught and fixed in the process: the MRFT
+oscillation period silently lost sub-second precision by default, zeroing `ti_minutes`/`td_minutes`
+even for PI/PID). The matrix runs serially with a fixed 5 ms simulator cadence: the FOPDT
+process and MRFT timestamps advance by the same exact step, so scheduler load can lengthen
+the subprocess runtime but cannot change its calculated PID values. `live-monotonic-time` is
+also done: live OPC DA samples are timestamped from actual monotonic elapsed time projected
+onto the run's UTC start, after each successful PV read, so NTP/manual clock changes cannot
+distort MRFT windows or calculated periods while real scheduler and driver latency remains
+visible. `timing-diagnostics` is also done: every run with at least one successful poll stores a
+typed timing snapshot (`simulated_fixed_step` or `live_monotonic`, requested interval, adjacent
+gap count/mean/maximum, gaps at least twice the requested interval, completed-run oscillation
+period, and approximate samples per period) in `tune_runs.timing_metrics_json`; `history show`,
+`GET /api/runs/{id}`, and the run-detail UI expose it, and live runs emit/show a warning when at
+least one complete poll opportunity was missed without aborting or blocking write-back.
+`e2e-playwright` is also done: a
 Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
 off disk rather than needing a re-embed step — see `server-embed-spa`'s `rust-embed`
@@ -284,6 +302,20 @@ README's roadmap section. `docs-api-rustdoc` is also done: `cargo doc` output fo
 crate/binary targets is published under `/api/` on that same site, indexed from a
 hand-written `docs/reference/api.md` — see "`docs-api-rustdoc`: publishing the Rust API
 reference" below.
+Knip dead-code analysis is also done: `pnpm run check:dead-code` scans the root pnpm workspace,
+`frontend/`, and `website/` for unused files, dependencies, exports, unresolved imports, and
+unlisted dependencies. The dedicated `Knip dead-code analysis` job runs on relevant pull
+requests, pushes to `main`, and manual `checks.yml` dispatches; it is deliberately not a
+weekly-only job because the analysis is deterministic and fast.
+SonarQube Cloud analysis is configured for both BHTune and `opcda-bridge`. BHTune's
+`sonar-project.properties` indexes the Rust, frontend, documentation-site, and repository-script
+sources, imports the Rust LCOV report from `cargo llvm-cov`, and excludes generated/build/test/
+fuzz/documentation artifacts plus frontend and website coverage until JavaScript LCOV generation
+exists. Each repository's dedicated `SonarQube` workflow runs on relevant pull requests and pushes
+to `main`, supports manual dispatch, and performs a full weekly scan; its required aggregate status
+passes intentional documentation-only skips and fork pull-request skips while failing when an
+applicable analysis or the Sonar quality gate fails. The two projects use separate Sonar
+configurations because `opcda-bridge` is Rust-only.
 Phase 10's `history-retention` is now done: age-based deletion of `tune_runs` (and their
 cascaded samples/results/write-back audit rows) older than a configurable number of days,
 off by default (retain forever). `resolve_retention_days` (`bhtune-cli`'s `config.rs`)
@@ -305,7 +337,9 @@ all; `--dry-run` to report a count and cutoff without deleting anything, via
 completes the four-subcommand `history` surface (`list`/`show`/`revert`/`prune`) started
 under `cli-commands`/`safety-writeback-rollback`. `history-explorer-ui` is now done, closing
 out Phase 10: the filterable/sortable run list, full run detail, and the PV/MV trend chart
-were already in place from `frontend-screens`/`frontend-live-stream`; the remaining piece —
+(including presentation-only initial-reading and terminal restored-MV boundary points plus a
+12-poll-interval left-anchored startup horizon) were already in place from
+`frontend-screens`/`frontend-live-stream`; the remaining piece —
 export and delete actions on the run detail screen — is now shipped too. `GET
 /api/runs/{id}/export?format=csv|json` (`export_run`, reusing `bhtune-cli`'s own
 `samples_to_bytes`, so the HTTP and CLI export paths can never disagree on the CSV/JSON
@@ -1066,10 +1100,11 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
 after_tick)` (`bhtune-db`) is a new query — `tick > after_tick`, with `-1` as the
   documented "everything" sentinel since `tick >= 0` always — polled by a new
   `GET /api/runs/{id}/stream` handler (`crates/bhtune-server/src/routes/stream.rs`) inside
-  an `async-stream::stream!` generator on a 300ms interval, emitting a `sample` SSE event
-  per new tick (same `SampleResponse` DTO `history.rs` already used) and exactly one final
-  `done` event (`RunStreamDone { outcome }`) once the run leaves `Running`. Polls the
-  database rather than adding a broadcast channel deliberately — zero risk to the
+  an `async-stream::stream!` generator on a 300ms interval, emitting one `initial` SSE event
+  with the persisted initial-readings snapshot before `sample` events per new tick (the same
+  `SampleResponse` DTO `history.rs` already used) and exactly one final `done` event
+  (`RunStreamDone { outcome }`) once the run leaves `Running`. Polls the database rather than
+  adding a broadcast channel deliberately — zero risk to the
   already-tested CLI/server tick loop, and the endpoint replays every sample from tick 0
   on every connection, so it behaves identically whether a client connects mid-run or
   reconnects after a drop. Returning `Result<impl IntoResponse, ApiError>` (never naming
@@ -1309,6 +1344,43 @@ derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
   making the simpler std mutex both sufficient and correct. This is a genuine difference from
   `OpcDaDriver`, not an inconsistency: the tokio mutex there is load-bearing because its guard
   really is held across `.await`.
+- **Simulator MRFT timestamps use the same fixed step as the FOPDT process.** Each simulator PV
+  read advances `FopdtProcess` by exactly `poll_interval_ms`; `bhtune-cli` advances the
+  corresponding `Tick.time` by that same exact duration, with the first sample one step after the
+  logical run start. Host scheduling still controls how quickly the CLI subprocess gets CPU time
+  and the mandatory `--timeout-secs` remains real elapsed time, but scheduler jitter cannot make
+  the synthetic process evolve in one time domain while tuning math measures it in another.
+  Persisted simulator samples use this logical time too, so their trend and calculated period
+  describe the same simulated process.
+- **Live OPC DA MRFT timestamps use monotonic elapsed time projected onto UTC.** `prepare()`
+  captures one `RunTimeAnchor` (`Utc::now()` paired with `tokio::time::Instant::now()`) at the
+  same point `tune_runs.started_at` is recorded. `run_polling_loop` timestamps each successful PV
+  observation after the driver read as `utc_anchor + monotonic_elapsed`, so a slow read is
+  represented in the sample that actually experienced it and subsequent engine switch timestamps
+  reuse that same value. NTP or a manual calendar-clock correction after the anchor is captured
+  has no input path into MRFT timing. Real scheduling, OPC read/write, and SQLite processing
+  delays remain part of the measured timeline; `MissedTickBehavior::Delay` remains deliberate so
+  a late tick never causes catch-up I/O bursts. This makes the algorithm clock-jump-safe, not
+  hard-real-time: an overloaded host can still undersample a live oscillation.
+- **Polling timing diagnostics are persisted facts, not a PID-validity policy.**
+  `PollTimingAccumulator` observes only timestamps for successful PV poll samples (not startup
+  readings or presentation-only trend boundaries), records adjacent gap count/mean/maximum, and
+  counts a missed polling opportunity whenever a gap is at least `2 * requested_interval`.
+  Completed runs additionally reuse `measure_oscillation()` for the measured period and divide it
+  by the mean observed gap for an approximate samples-per-period value. The typed
+  `TimingMetrics` snapshot is stored as nullable, `json_valid`-checked
+  `tune_runs.timing_metrics_json`; old rows and attempts with no successful poll remain `NULL`.
+  The database write is deferred until after the safety-critical restore attempt, so a locked
+  SQLite file can never leave the live loop waiting at its relay-test value merely to save
+  diagnostic metadata. Normal completion/abort uses one atomic repository update for the
+  terminal outcome and timing snapshot, so the SSE `done` event can never make the frontend stop
+  polling on a terminal row before its Timing section is visible. Completed-only period fields
+  are included only in that same `completed` update; a failure while saving calculated results
+  records cadence metrics without a period. Standalone failure-path persistence is best-effort so
+  diagnostic metadata can never replace a tune's real completion/abort/error outcome. Only live
+  runs with a nonzero missed-opportunity count log and display a warning; no run abort,
+  result-validity label, or PID write restriction exists until field evidence supports a
+  defensible threshold.
 - **The FOPDT process model uses an exact closed-form discretization, not a ported ODE solver.**
   For the first-order lag `tau*dy/dt = -(y-y0) + Kp*(u-u0)` driven by a zero-order-hold input over
   one tick, the update `pv_new = pv*decay + (1-decay)*(bias + gain*mv_effective)` (`decay =
@@ -1496,7 +1568,8 @@ Test remains deferred until the bridge exposes a live push/subscription RPC.
 FOPDT (first-order-plus-dead-time) process model plus a standalone virtual PID controller, served
 through the real `Driver` trait as `SimulatorDriver`. No external process, no Windows, no
 network I/O — every tick advances an internal virtual clock rather than sleeping on the wall
-clock, which is what makes it usable for fast CI E2E runs.
+clock. The CLI's MRFT timestamp advances by the same configured fixed step, which is what makes
+numeric simulator results reproducible across differently scheduled hosts.
 
 - **`FopdtConfig`/`FopdtProcess`** — the process model: `gain`, `time_constant_s`, `dead_time_s`,
   `tick_interval_s`, and an optional noise amplitude. `step()` advances the model by exactly one
@@ -1647,10 +1720,12 @@ precedence shipped separately as `cli-config` — see "Config precedence" below.
 
 **Testing approach.** `commands/tune.rs`'s tests use a `MockDriver` (an in-memory
 `Driver` impl with canned/erroring responses) for setup-and-validation-error paths, a real
-`SimulatorDriver` for full happy-path runs (including the `--mrft-delay` padding test, which
-necessarily costs a couple of real wall-clock seconds — `chrono::Utc::now()`, which
-`pre_delay_end`/`post_delay_end` are computed from, is unaffected by tokio's pausable test
-clock), and a shared test-only mock gRPC `Bridge` service (`crate::test_support`, used by
+`SimulatorDriver` for full happy-path runs (including the `--mrft-delay` padding test, whose
+fixed simulator timestamps advance once per real interval tick, so its configured padding still
+costs corresponding real test time unless the whole Tokio/SQLite test environment is made
+pausable; that test overrides the generic fast-fixture timeout to 30 seconds so a loaded Windows
+runner cannot abort its intentional two seconds of padding), and a shared test-only mock gRPC
+`Bridge` service (`crate::test_support`, used by
 `driver.rs`, `tune.rs`, and `commands/opc.rs`) to prove the OPC DA path — connect, initial
 reads, a mid-poll failure, and the `opc` passthrough commands — actually works end-to-end
 without a real gateway or OPC DA server. A single canned mock read response satisfies every
@@ -3613,6 +3688,15 @@ three response-level results against the fixture's `expected_final`. The first f
 (`flow_pi_direct`, Flow/PI/Reverse, from the first real hp-VM capture) passes in full — the Rust
 port reproduces the legacy app's tuning behavior tick-for-tick and result-for-result.
 
+The production CLI's numeric simulator regression is deliberately separate from this
+deterministic replay oracle. `crates/bhtune-cli/tests/e2e_simulator.rs` launches the real
+subprocess and persists a Flow/PI, Temperature (Heat Exchange)/PID, and Level/P matrix through
+the full CLI path, then compares Kp/Ti/Td and template-converted P/I/D values with reviewed
+baselines. It uses a serial 5 ms fixed-step simulator configuration: each PV read advances both
+the FOPDT process and MRFT time by exactly 5 ms, so all nonzero fields use tight
+absolute-plus-relative tolerances with no scheduler-jitter allowance. The browser E2E checks
+server/UI delivery; this CLI test is the numeric envelope check.
+
 Getting there surfaced two genuine data-precision limits of the legacy CSV logger itself (not
 engine defects — confirmed in both cases by reading the actual C# source, not by loosening
 tolerances to make a test pass):
@@ -3711,7 +3795,7 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    `TuningMathCompat.replicate_period_truncation_bug` only gating an additional 24-hour wrap on
    top of the already-truncated value. Every existing unit test used whole-second switch-time
    offsets, so this was lossless in every test and went unnoticed until `e2e-simulator`'s real,
-   millisecond-spaced subprocess timing hit it directly, silently zeroing `ti_minutes`/
+   fixed millisecond-spaced simulator ticks through the production subprocess path hit it directly, silently zeroing `ti_minutes`/
    `td_minutes` even for PI/PID. Fixed by switching to `num_milliseconds()` for the default path;
    see the `measure_oscillation_keeps_sub_second_precision_by_default` regression test in
    `tuning_math.rs` and `e2e_simulator.rs`'s module doc for the full story. The lesson: writing
@@ -3728,7 +3812,8 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    disabled workspace-wide, so `bhtune-core` cannot call `Utc::now()` even by accident — verified
    by temporarily adding such a call and confirming it fails to compile (see `driver-opcda`'s
    notes above for where this was re-verified after `opcda-bridge`/`tonic` entered the dependency
-   graph).
+   graph). The CLI caller uses fixed-step simulator time or UTC-anchored monotonic live time;
+   neither path reads the calendar clock again for an in-flight sample or switch.
 4. **`[structurally impossible]` Lookup tables must be sized to exactly the number of process
    types that exist (6)** — no
    extra, unreachable rows/columns in the tuning-constant or default-cycle data. Legacy:
@@ -3829,11 +3914,13 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     calculated/persisted value this affects, only how a number is rendered, so exact legacy
     parity was judged not worth replicating here.
 16. **`[new feature, not a legacy bug]` A live PV/MV trend chart is a core UX expectation for the
-    web GUI** — plan for high-rate
-    streaming updates (multiple times per second) from the start; see "Chart library" below. The
-    legacy app never had a trend chart at all (`Telerik.WinControls.ChartView` was referenced in
-    the `.csproj` but no chart control was ever built), so this is new scope, not parity work —
-    shipped via `frontend-live-stream`'s `TrendChart` (uPlot).
+    web GUI** — plan for high-rate streaming updates (multiple times per second) from the start;
+    see "Chart library" below. The legacy app never had a trend chart at all
+    (`Telerik.WinControls.ChartView` was referenced in the `.csproj` but no chart control was ever
+    built), so this is new scope, not parity work — shipped via `frontend-live-stream`'s
+    `TrendChart` (uPlot). Short trends reserve 12 configured poll intervals before the x-axis
+    switches to full elapsed-history fitting; the blank future area is intentional and no
+    synthetic points are added.
 17. **`[not applicable — feature dropped]` A licensing/loop-locking ledger's connection-open
     logic must handle a missing database file without throwing from an unobserved async task.**
     Legacy: `SQLock.CheckDB()` called `.Open()` on a `null` `SQLiteConnection` whenever
@@ -3895,11 +3982,44 @@ it. It cannot judge whether documentation is actually _good_, and it has no way 
 in behavior that never touched `crates/**` at all (a `frontend/`-only or CI-workflow-only
 change with real user-visible impact, for instance).
 
+## Knip dead-code analysis (`knip`, done)
+
+Knip runs full analysis across the root pnpm workspace, `frontend/`, and `website/` through the
+root `check:dead-code` script. It checks unused files, dependencies, exports, duplicate exports,
+unresolved imports, and unlisted dependencies rather than limiting the scan to production code.
+
+`knip.jsonc` keeps the configuration narrow: the Playwright server helper is an explicit entry,
+generated OpenAPI declarations have their unused generated types ignored, and the Docusaurus
+search theme plus root Prettier have documented exceptions for dynamic resolution and lefthook's
+runtime invocation. Genuine findings are fixed in the manifests or source instead of being
+hidden behind broad issue suppression.
+
+The `checks.yml` workflow runs Knip on every relevant pull request and push to `main`, plus
+manual workflow dispatch. Change detection covers the pnpm manifests, lockfile, workspace
+configuration, Knip configuration, frontend, website, scripts, lefthook configuration, and
+workflow files. The job is required through the existing `Required validation status` aggregate;
+no new branch-protection context is needed. Knip applies to BHTune's JavaScript/TypeScript
+workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
+
 ## Conventions
 
 - **Trunk-based git flow**: single long-lived `main`, short-lived PR branches
   (`<type>/<short-description>`), squash merges, no `develop`/release branches. Releases are
   tagged directly off `main`.
+- **Standard change protocol**: Start from a clean checkout with local `main` synchronized to
+  `origin/main`, then create a short-lived `<type>/<short-description>` branch. Keep each pull
+  request to one logical change group, run the smallest targeted checks followed by every
+  applicable repository gate, and update the relevant user-facing documentation in the same
+  change. Commit with Conventional Commits, push the branch, and open a focused pull request.
+  Monitor every required CI/CD and SonarQube status; repair failures on the same branch and
+  repeat until all checks pass. If branch protection reports the branch behind `main`, update it
+  before merging. A merge is allowed only when the applicable PR Sonar analysis reports zero
+  `OPEN`/`CONFIRMED` issues; intentional Accepted or False Positive findings must have a durable
+  rationale and related PR or documentation link. Squash-merge only after the complete green
+  result, wait for the resulting `main` workflows and Sonar analysis, and verify the intended
+  findings disappeared without introducing new ones before starting dependent work. Never commit
+  or push directly to `main`, bypass branch protection, use `NOSONAR`, or silence a real finding
+  merely to clean a dashboard.
 - **Commits**: [Conventional Commits](https://www.conventionalcommits.org/).
 - **Formatting/linting**: `cargo fmt --check --all` and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
@@ -3919,11 +4039,13 @@ change with real user-visible impact, for instance).
 
 ### Deferred setup (deliberate, not oversights)
 
-- **No `.envsync.yaml`/dotenv-sync (`ds`) hooks yet.** There is no real secret or test-env value
-  to manage until a phase needs a live OPC test target (mirroring opcda-bridge's
-  `OPC_TEST_HOST`/`OPC_TEST_SERVER`/`OPC_TEST_TAG` pattern). Add the `ds-sync` pre-commit command
-  and `ds-sync-pull` post-merge command (see opcda-bridge's `.lefthook.yml` for the exact shape)
-  at that point.
+- **dotenv-sync (`ds`) is configured for repository secrets.** `.env.example` is committed with
+  `SONAR_TOKEN=` while the real token remains in the ignored `.env` file and the `bhtune`
+  Bitwarden note configured by `.envsync.yaml`. `ds sync` restores the local file and `ds push`
+  updates the note; the existing `.lefthook.yml` runs the latter through `ds-sync` on pre-commit
+  and restores it through `ds-sync-pull` after successful pulls. Keep `rbw` unlocked for those
+  operations, never print or commit secret values, and add new keys to `.env.example` through
+  `ds reverse` rather than hand-maintaining a divergent schema.
 - **No `release-plz.yml`/`auto-merge.yml` workflows yet**, though `release-plz.toml` exists.
   These require a `RELEASE_PLZ_TOKEN` repo secret (a PAT with more permission than the default
   `GITHUB_TOKEN`, so the release PR itself can trigger further CI). Shipping the workflow without
@@ -3951,13 +4073,19 @@ Pulled into `bhtune` from `opcda-bridge`'s example:
   floor), with a standalone `msrv` CI job pinning `dtolnay/rust-toolchain@1.94.0` and running
   `cargo check --workspace --all-targets --all-features --locked`.
 - **`windows` and `package` CI jobs.** `windows` runs fmt/clippy/test on `windows-latest`
-  (skipping the Linux-only doc/OpenAPI drift `git diff` checks, which are CRLF-sensitive);
-  `package` runs `cargo package --workspace --locked`, which immediately surfaced a real bug —
+  (skipping the Linux-only doc/OpenAPI drift `git diff` checks, which are CRLF-sensitive).
+  `package` runs `cargo package --workspace --locked --no-verify`: this still validates
+  metadata, path/version requirements, and assembly of every publishable tarball, while the
+  ordinary workspace check/Clippy/test jobs compile the real local cross-crate API graph.
+  `--no-verify` is load-bearing for this same-version, not-yet-published workspace: Cargo's
+  tarball verification strips local paths and resolves dependencies such as `bhtune-db
+0.1.0` from crates.io, so a coordinated local API addition otherwise compiles a dependent
+  crate against the older published `0.1.0` instead of the package assembled moments earlier.
+  The original package job still surfaced a real bug before this distinction mattered —
   every workspace-internal path dependency lacked a `version` requirement, which `cargo
-package` refuses to package. Fixed by giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
+package` refuses even to assemble. Giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
   `bhtune-cli` `{ path, version }` entries in `[workspace.dependencies]` and switching every
-  consumer to `.workspace = true`, mirroring `opcda-bridge`'s own already-working pattern
-  exactly.
+  consumer to `.workspace = true` remains required.
 - **`concurrency` groups, `permissions: contents: read`, and `--locked` everywhere** across
   `checks.yml`/`coverage.yml`/`e2e.yml`.
 - **`.github/dependabot.yml`** — weekly grouped updates for `cargo`, `npm` (pnpm workspace
@@ -4257,20 +4385,25 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    (`crates/bhtune-cli/tests/e2e_simulator.rs`) spawns the real `bhtune tune` binary against the
    simulator driver across a small process/controller-type matrix (all `direction=reverse`, the
    direction empirically confirmed to actually oscillate against this simulator's fixed FOPDT
-   parameters), then opens the resulting SQLite database directly and asserts the _calculated_
-   PID results are sane — positive, correctly-ordered `kp` across all three response levels,
-   response-level-invariant `ti_minutes`/`td_minutes`, and a non-empty sample trail — closing a
-   real gap no earlier test covered (existing subprocess tests only checked the JSON summary's
-   shape/exit code, and existing in-process tests only checked row presence/counts, never actual
-   values). Writing it surfaced and fixed a real `bhtune-core` bug in the process — see
-   "Correctness-critical design details" above, item 2. `e2e-playwright` is also done: a
+   parameters), then opens the resulting SQLite database directly and compares every persisted
+   Kp/Ti/Td and template-converted P/I/D value with reviewed numeric baselines, alongside
+   positive/ordered-Kp, response-level-invariant, lifecycle, identity, and sample-trail checks.
+   The matrix runs serially with a fixed 5 ms simulator cadence shared by FOPDT process evolution
+   and MRFT timestamps, so host scheduling affects runtime but not the expected numeric results.
+   Writing it surfaced and fixed a real `bhtune-core` bug in the
+   process — see "Correctness-critical design details" above, item 2. `e2e-playwright` is also
+   done: a
    Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
    served by a real `bhtune-server` binary (debug profile -- serves `frontend/dist/` live off
    disk, no re-embed step needed between runs) over the in-process simulator driver --
    `smoke.spec.ts` (app shell, health indicator, seeded template list, header nav) and
    `tune.spec.ts` (a full tune through `/runs/new` with `e2e_simulator.rs`'s own
    millisecond-scale simulator parameters, asserting sane/ordered rendered Kp/Ti/Td values,
-   plus cancelling an in-flight run). `.github/workflows/e2e.yml` builds a debug
+   deterministic fixed-step timing diagnostics with zero missed poll opportunities, plus
+   cancelling an in-flight run). Polling timing diagnostics are persisted and exposed through
+   CLI/API/UI for both simulator and live runs; live gaps at least twice the requested interval
+   produce a warning only, without changing tune or write-back outcomes.
+   `.github/workflows/e2e.yml` builds a debug
    `bhtune-server` and the frontend, installs Chromium, and runs the suite in CI, uploading
    the HTML report on failure. A direct dividend of dropping Tauri: `tauri-driver`/WebDriver would
    have been markedly more fragile in CI than plain Playwright against a real browser.
@@ -4322,8 +4455,13 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `cargo-binstall` metadata on `bhtune-cli`, and a prepared-but-inert Homebrew formula —
    see "`pkg-evaluate-others`: the remaining distribution channels" above for the full
    design, including two real tooling gotchas the `.rpm` path surfaced (a path-vs-name
-   `-p` flag mismatch, and a missing-output-directory bug only CI itself caught). Remaining:
-   release-time
+   `-p` flag mismatch, and a missing-output-directory bug only CI itself caught).
+   Knip dead-code analysis is also done: `pnpm run check:dead-code` scans all three pnpm
+   workspaces and is required on relevant changes through `checks.yml` — see "Knip dead-code
+   analysis" above. SonarQube Cloud analysis is configured for both BHTune and `opcda-bridge`
+   through repository-specific `sonar-project.properties` and `.github/workflows/sonar.yml`
+   files, with Rust LCOV coverage, maintainability analysis, weekly scans, and required aggregate
+   quality statuses. Remaining: release-time
    version snapshots (`docs-versioning`, deferred until `release-v1`), and the rest of
    packaging: `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
    `release.yml`, but cutting the actual first tag is a deliberate call left to the project
@@ -4339,7 +4477,8 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
     `prune` give the same data and the same retention policy headless, with `prune --dry-run`
     to preview a sweep on demand. `history-explorer-ui` is done: a filterable/sortable run
     list, a PV/MV trend chart per run (the same `TrendChart`/uPlot component the live view
-    uses), the run's full parameters/calculated-constants/write-back-audit trail, and export
+    uses, with initial-reading and terminal restored-MV boundary points), the run's full
+    parameters/calculated-constants/write-back-audit trail, and export
     (CSV/JSON download) and delete actions, all on the web GUI's run detail screen. This
     closes out Phase 10 — see `docs/roadmap.md` for what's deliberately left as an
     open-ended roadmap item instead (continuous historization, cross-run comparison/overlay).

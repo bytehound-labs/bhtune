@@ -816,7 +816,7 @@ pub fn save_config_store(
             });
         }
     };
-    let loaded_bytes = state.original_raw.as_ref().map(|raw| raw.as_bytes());
+    let loaded_bytes = state.original_raw.as_ref().map(String::as_bytes);
     let disk_matches_loaded = match (loaded_bytes, current_bytes.as_deref()) {
         (None, None) => true,
         (Some(loaded), Some(current)) => loaded == current,
@@ -1362,6 +1362,36 @@ mod tests {
         assert_eq!(config, BhtuneConfig::default());
     }
 
+    #[test]
+    fn load_discovered_config_reads_a_valid_discovered_file() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        fs::write(file.path(), "bridge_host = \"discovered:7600\"\n").unwrap();
+
+        let config = load_discovered_config(Some(file.path().to_path_buf())).unwrap();
+
+        assert_eq!(config.bridge_host, Some("discovered:7600".to_string()));
+    }
+
+    #[test]
+    fn revision_hash_uses_the_stable_fnv1a_algorithm() {
+        assert_eq!(stable_revision_hash(b"bhtune"), 0xeeeb3aadbd6c2361);
+    }
+
+    #[test]
+    fn unique_suffix_has_process_and_timestamp_components() {
+        let suffix = unique_suffix();
+        let components: Vec<_> = suffix.split('-').collect();
+
+        assert_eq!(components.len(), 3);
+        assert_eq!(components[0], std::process::id().to_string());
+        assert!(components[1].parse::<u64>().is_ok());
+        assert!(
+            components[2]
+                .parse::<u32>()
+                .is_ok_and(|n| n < 1_000_000_000)
+        );
+    }
+
     fn backup_and_temp_siblings(path: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let parent = path.parent().unwrap();
         let file_name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -1573,6 +1603,23 @@ level = "info"
             err,
             ConfigStoreError::Write { source, .. }
                 if source.kind() == io::ErrorKind::AlreadyExists
+        ));
+    }
+
+    #[test]
+    fn create_temp_file_reports_non_collision_errors_immediately() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("not-a-directory");
+        fs::write(&blocker, b"file").unwrap();
+        let path = dir.path().join("bhtune.toml");
+        let candidate = blocker.join("bhtune.toml.tmp");
+
+        let err = create_temp_file_with(&path, || candidate.clone()).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ConfigStoreError::Write { source, .. }
+                if source.kind() != io::ErrorKind::AlreadyExists
         ));
     }
 

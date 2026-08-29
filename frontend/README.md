@@ -48,15 +48,15 @@ can never merge.
 
 ## Routes
 
-| Path                    | Screen                                                                                                                                                                |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/templates`            | Template list, with delete.                                                                                                                                           |
-| `/templates/new`        | Create a template (all `DcsTemplate` fields).                                                                                                                         |
-| `/templates/:name`      | Read-only template detail, with an Edit link for user-owned templates.                                                                                                |
-| `/templates/:name/edit` | Edit a user-owned template (all fields except Name, which is immutable once created).                                                                                 |
-| `/runs`                 | Filterable, paginated tune-run history list.                                                                                                                          |
-| `/runs/new`             | Start a tune: connection, tag mapping, test parameters, simulator parameters, and write-back, all in one form.                                                        |
-| `/runs/:id`             | Run detail: configuration, initial readings, calculated results, write-back audit trail, and (while running) a live-streaming PV/MV trend chart with a cancel button. |
+| Path                    | Screen                                                                                                                                                                     |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/templates`            | Template list, with delete.                                                                                                                                                |
+| `/templates/new`        | Create a template (all `DcsTemplate` fields).                                                                                                                              |
+| `/templates/:name`      | Read-only template detail, with an Edit link for user-owned templates.                                                                                                     |
+| `/templates/:name/edit` | Edit a user-owned template (all fields except Name, which is immutable once created).                                                                                      |
+| `/runs`                 | Filterable, paginated tune-run history list.                                                                                                                               |
+| `/runs/new`             | Start a tune: connection, tag mapping, test parameters, simulator parameters, and write-back, all in one form.                                                             |
+| `/runs/:id`             | Run detail: configuration, initial readings, calculated results, write-back audit trail, and a PV/MV trend chart with initial-reading and terminal restored-MV boundaries. |
 
 For the OPC DA driver, the connection fields are presented in this order: Bridge host, OPC DA
 server ProgID, Tag name, then Notes.
@@ -65,9 +65,14 @@ Built-in and catalog templates can't be edited through the UI — they're re-see
 their source file on every server startup, so an edit would just be discarded — but they
 can still be viewed, and deleting one to make room for a customized replacement works the
 same as for any other template. The run detail screen's trend chart streams live via
-Server-Sent Events (`GET /api/runs/:id/stream`) while a run is active, replaying every
-sample recorded so far and switching seamlessly to the completed run's stored samples once
-it finishes — the same `TrendChart` component renders both cases identically.
+Server-Sent Events (`GET /api/runs/:id/stream`) while a run is active. The stream sends the
+initial PV/MV snapshot as soon as the server records it, before the first MRFT sample, then
+replays every sample recorded so far and switches seamlessly to the completed run's stored
+samples once it finishes. The chart starts with the run's initial PV/MV readings and ends
+with a terminal point at the original MV after restoration; short trends reserve 12 configured
+poll intervals on the x-axis and leave unused future space blank, then fit the full elapsed
+run once that horizon is reached. The same `TrendChart` component renders live and historical
+cases identically without fabricating samples.
 
 ## Scripts
 

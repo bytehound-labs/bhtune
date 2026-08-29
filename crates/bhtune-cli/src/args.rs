@@ -982,6 +982,14 @@ mod tests {
     }
 
     #[test]
+    fn finite_f32_accepts_finite_values_and_rejects_invalid_values() {
+        assert_eq!(finite_f32("2.5").unwrap(), 2.5);
+        assert!(finite_f32("not-a-number").is_err());
+        assert!(finite_f32("nan").is_err());
+        assert!(finite_f32("inf").is_err());
+    }
+
+    #[test]
     fn process_type_arg_converts_to_every_core_variant() {
         assert_eq!(
             bhtune_core::ProcessType::from(ProcessTypeArg::Flow),
@@ -1440,6 +1448,12 @@ mod tests {
         assert_eq!(
             cli.command.output_format(),
             crate::output::OutputFormat::Table
+        );
+
+        let cli = Cli::parse_from(["bhtune", "simulate", "--output", "json"]);
+        assert_eq!(
+            cli.command.output_format(),
+            crate::output::OutputFormat::Json
         );
     }
 

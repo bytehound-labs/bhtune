@@ -6,8 +6,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Suppress routine version-update PRs; security updates remain enabled.
+    open-pull-requests-limit: 0
     groups:
-      # Keep routine updates low-noise; major upgrades stay as focused PRs.
+      # If routine updates are re-enabled, keep minor/patch changes grouped.
       cargo-routine-updates:
         update-types:
           - "minor"
@@ -24,8 +26,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Suppress routine version-update PRs; security updates remain enabled.
+    open-pull-requests-limit: 0
     groups:
-      # Keep routine updates low-noise; major upgrades stay as focused PRs.
+      # If routine updates are re-enabled, keep minor/patch changes grouped.
       npm-routine-updates:
         update-types:
           - "minor"
@@ -40,8 +44,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Suppress routine version-update PRs; security updates remain enabled.
+    open-pull-requests-limit: 0
     groups:
-      # Keep routine updates low-noise; major upgrades stay as focused PRs.
+      # If routine updates are re-enabled, keep minor/patch changes grouped.
       github-actions-routine-updates:
         update-types:
           - "minor"

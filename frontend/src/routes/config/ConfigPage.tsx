@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type SubmitEvent } from "react";
 import { ApiError, apiErrorMessage } from "../../api/errors";
 import {
   type GlobalConfigResponse,
@@ -92,7 +92,7 @@ export function ConfigPage() {
 
   const currentConfig = config.data;
 
-  const save = (event: React.FormEvent<HTMLFormElement>) => {
+  const save = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!currentConfig) {
       return;
@@ -221,7 +221,7 @@ export function ConfigPage() {
                       setSavedFormKey(formKey(loadedForm));
                     }
                   }}
-                />
+                />{" "}
                 Retain forever
               </label>
               <label className="flex items-center gap-2">
@@ -230,7 +230,7 @@ export function ConfigPage() {
                   name="retention"
                   checked={displayedForm.retentionMode === "days"}
                   onChange={() => update("retentionMode", "days")}
-                />
+                />{" "}
                 Delete older runs automatically
               </label>
             </div>

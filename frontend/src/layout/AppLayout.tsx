@@ -19,34 +19,18 @@ function HealthIndicator() {
     refetchInterval: 5000,
   });
 
-  const status = health.isPending
-    ? {
-        label: "Connecting to BHTune server",
-        detail: "Connecting… checking whether the BHTune server is reachable.",
-        dot: "bg-slate-400",
-      }
-    : health.isError
-      ? {
-          label: "BHTune server unavailable",
-          detail:
-            "Connection unavailable — unable to reach the BHTune server. Retrying automatically.",
-          dot: "bg-red-400",
-        }
-      : {
-          label: "Connected to BHTune server",
-          detail:
-            "Connected — the BHTune HTTP service is reachable. This does not test OPC DA connectivity.",
-          dot: "bg-emerald-400",
-        };
+  const status = getHealthStatus(health.isPending, health.isError);
 
   return (
     <div className="flex items-center gap-3 leading-none">
-      <div
-        role="img"
-        aria-label={status.label}
+      <span
+        aria-hidden="true"
         title={status.detail}
         className={`health-indicator-dot h-2.5 w-2.5 shrink-0 -translate-y-px rounded-full ${status.dot}`}
       />
+      <output className="sr-only">
+        {status.label}: {status.detail}
+      </output>
       {health.data && (
         <span className="font-mono text-xs leading-none text-slate-500">
           v{health.data.version}
@@ -54,6 +38,38 @@ function HealthIndicator() {
       )}
     </div>
   );
+}
+
+type HealthStatus = {
+  label: string;
+  detail: string;
+  dot: string;
+};
+
+function getHealthStatus(isPending: boolean, isError: boolean): HealthStatus {
+  if (isPending) {
+    return {
+      label: "Connecting to BHTune server",
+      detail: "Connecting… checking whether the BHTune server is reachable.",
+      dot: "bg-slate-400",
+    };
+  }
+
+  if (isError) {
+    return {
+      label: "BHTune server unavailable",
+      detail:
+        "Connection unavailable — unable to reach the BHTune server. Retrying automatically.",
+      dot: "bg-red-400",
+    };
+  }
+
+  return {
+    label: "Connected to BHTune server",
+    detail:
+      "Connected — the BHTune HTTP service is reachable. This does not test OPC DA connectivity.",
+    dot: "bg-emerald-400",
+  };
 }
 
 function ThemeToggle() {

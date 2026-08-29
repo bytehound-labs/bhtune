@@ -429,6 +429,9 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       page.getByRole("heading", { name: "Browse OPC DA servers" }),
     ).toBeVisible();
     await expect(
+      page.getByRole("dialog", { name: "Browse OPC DA servers" }),
+    ).toBeVisible();
+    await expect(
       page.getByRole("button", { name: "Yokogawa.CSHIS_OPC.1" }),
     ).toBeVisible();
 
@@ -459,6 +462,11 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
 
     await expect(
       page.getByRole("heading", {
+        name: "Browse tags on Matrikon.OPC.Simulation",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog", {
         name: "Browse tags on Matrikon.OPC.Simulation",
       }),
     ).toBeVisible();

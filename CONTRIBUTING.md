@@ -19,10 +19,13 @@ the CLA itself for exactly what rights you are and are not granting.
   the commit convention below.
 - No `develop` branch and no long-lived `release` branches. Releases are tagged directly off
   `main` ([SemVer](https://semver.org/)).
-- Incomplete or experimental work that must land before it's fully ready goes behind a Cargo
+- Incomplete or experimental work that must land before it is fully ready goes behind a Cargo
   feature flag rather than sitting unmerged on a branch.
-- Trivial fixes (typos, doc tweaks) may be pushed directly to `main`; everything else goes
-  through a PR so CI runs.
+- Every change goes through a feature branch and pull request, including documentation and
+  one-line fixes, so CI runs consistently and concurrent work does not bypass review.
+- After opening a pull request, keep repairing the same branch until every applicable required
+  check passes. If a check reports that the branch is behind `main`, update the branch before
+  merging; do not bypass the protection rule with a direct push.
 
 ## Commit messages
 
@@ -49,6 +52,19 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   `deny.toml`; `pnpm run check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the
   equivalent allow-list for npm dependencies. If either fails on a new dependency, look for an
   open-source alternative rather than widening the allow-list.
+- Run `pnpm run check:dead-code` to use Knip across the root, frontend, and documentation-site
+  workspaces. Treat unused files, dependencies, and exports as cleanup candidates; configuration
+  exceptions are intentionally narrow and belong in `knip.jsonc`.
+- SonarQube Cloud analyzes Rust, TypeScript/TSX, the documentation site, and repository scripts.
+  To reproduce its Rust coverage input locally, run
+  `cargo llvm-cov --workspace --locked --lcov --output-path lcov.info` followed by
+  `sonar-scanner` with `SONAR_TOKEN` exported. The Sonar workflow runs for relevant pull
+  requests and pushes to `main`, plus a Wednesday 04:17 UTC weekly scan; fork pull requests
+  intentionally skip the secret-bearing analysis.
+- Maintainers can restore the local Sonar token with `rbw unlock && ds sync`; it lives in the
+  ignored `.env` file and is never committed or printed. Use `ds push` to update the Bitwarden
+  note after changing it. The committed `.env.example` contains only the key names and the
+  repository's Lefthook hooks keep the schema and local file synchronized.
 
 ## Dependency updates
 
@@ -100,7 +116,12 @@ machete`, and a check that the generated OpenAPI spec (`openapi.json`) and CLI r
 (`docs/reference/cli.md`, `man/`, `completions/`) are up to date before merge — run `cargo
 run -p bhtune-server --example gen_openapi` and `cargo run -p bhtune-cli --example gen_docs
 --features schemars` and commit the result after changing an HTTP route/DTO or a `clap`
-argument, respectively. PRs touching `frontend/` must additionally pass `pnpm run
+argument, respectively. The package job runs `cargo package --workspace --locked
+--no-verify` to validate that every release archive can be assembled. Tarball verification
+is deliberately skipped there because Cargo removes local paths and resolves same-version
+workspace dependencies from crates.io, which cannot compile coordinated unpublished API
+changes; the workspace build, Clippy, and test jobs compile the real local dependency graph.
+PRs touching `frontend/` must additionally pass `pnpm run
 check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
 is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`
 (which also typechecks `frontend/e2e/`). `.github/workflows/e2e.yml` runs the Playwright
@@ -108,7 +129,13 @@ suite above in CI on every push/PR, uploading the HTML report as an artifact if 
 touching `docs/` or `website/` must pass `pnpm --filter bhtune-website run format:check`,
 `run lint`, `run typecheck`, and `run build` — the build step doubles as a broken-link/anchor
 check across `docs/`, since Docusaurus fails the build rather than shipping a dead link or
-a heading reference that no longer exists.
+a heading reference that no longer exists. Knip runs as the required `Knip dead-code analysis`
+status for changes affecting the pnpm workspaces, their dependency metadata, or its configuration.
+SonarQube runs as a separate `Required Sonar quality status` check for relevant changes; its
+quality-gate result is blocking when analysis runs, while documentation-only and fork pull
+requests receive an explicit successful skip status. Applicable PR analyses must also report zero
+`OPEN`/`CONFIRMED` issues; Accepted and False Positive findings require a documented rationale
+and a link to the related pull request or documentation.
 
 ## Security and compatibility checks
 
@@ -140,7 +167,10 @@ substitute for doing this deliberately.
 
 - Keep PRs small and focused — one logical change each.
 - Describe what changed and why; link an issue if one exists.
-- Squash-merge once CI is green and the CLA check passes.
+- Include the targeted validation performed and any manual verification needed for the change.
+- Squash-merge only after every applicable required check, the CLA check, and the applicable
+  SonarQube zero-issue check pass. Do not use `NOSONAR` or a dashboard status change to hide a
+  real unresolved code issue.
 
 ## Contributing a DCS/PLC template
 

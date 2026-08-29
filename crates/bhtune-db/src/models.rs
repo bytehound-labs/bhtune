@@ -404,6 +404,38 @@ pub enum TuneOutcome {
     Aborted,
 }
 
+/// The clock basis used for a run's persisted polling-cadence diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TimingBasis {
+    /// Simulator process evolution and MRFT timestamps both advance by one exact configured
+    /// poll interval per successful PV sample.
+    SimulatedFixedStep,
+    /// Live OPC DA timestamps are UTC projections of monotonic elapsed time, preserving real
+    /// scheduling and driver delays without exposure to wall-clock adjustments.
+    LiveMonotonic,
+}
+
+/// Polling-cadence diagnostics captured over one run's successful PV samples.
+///
+/// The two optional gap fields are `None` when fewer than two samples were observed. The
+/// measured oscillation fields are populated only for a completed MRFT run.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct TimingMetrics {
+    pub basis: TimingBasis,
+    pub requested_interval_ms: u64,
+    pub sample_gap_count: u64,
+    pub mean_sample_gap_ms: Option<f64>,
+    pub max_sample_gap_ms: Option<f64>,
+    /// Number of adjacent sample gaps at least twice the requested interval. Each such gap
+    /// proves that at least one complete polling opportunity was missed.
+    pub missed_poll_opportunity_count: u64,
+    pub measured_oscillation_period_ms: Option<f64>,
+    pub approximate_samples_per_period: Option<f64>,
+}
+
 /// The outcome of a best-effort loop-restore attempt made after a run ended --
 /// `safety-restore-guard` (finding 3 of the live-plant safety review). Recorded via
 /// [`TuneRunRow::record_restore_status`]; `NULL` in the database (mapped to `None` on
@@ -507,6 +539,9 @@ pub struct TuneRunRow {
     /// comment for why it's a separate post-`start()` update rather than a `start()`
     /// parameter.
     pub allow_uncertain_quality: bool,
+    /// Polling-cadence diagnostics collected from successful PV samples. `None` for runs
+    /// created before timing diagnostics existed or attempts that ended before polling began.
+    pub timing_metrics: Option<TimingMetrics>,
     /// Outcome of the best-effort restore attempted after this run ended -- `None` if no
     /// restore was ever attempted (the run never mutated the loop, or hasn't ended yet). See
     /// [`RestoreStatus`] and [`TuneRunRow::record_restore_status`].
@@ -832,6 +867,35 @@ impl TuneRunRow {
         row_to_tune_run(row)
     }
 
+    /// Records the polling cadence observed while this run was active. Kept as one typed JSON
+    /// snapshot because these diagnostics are nested, evolve together, and have no SQL-level
+    /// filtering requirement. Normal completed/aborted tune orchestration uses
+    /// [`Self::complete_with_timing_metrics`] or [`Self::abort_with_timing_metrics`] so the
+    /// terminal outcome and diagnostics become visible atomically; this standalone update is
+    /// retained for non-terminal/failure paths and direct repository consumers.
+    pub async fn record_timing_metrics(
+        pool: &SqlitePool,
+        run_id: i64,
+        metrics: TimingMetrics,
+    ) -> DbResult<TuneRunRow> {
+        let metrics_json =
+            serde_json::to_string(&metrics).expect("TimingMetrics serialization is infallible");
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs SET timing_metrics_json = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(metrics_json)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
     /// Records the outcome of a best-effort loop-restore attempt made after this run ended
     /// (`safety-restore-guard`, finding 3 of the live-plant safety review). Called once,
     /// after `complete`/`fail`/`abort` (whichever applies) and after `attempt_restore` has
@@ -884,6 +948,25 @@ impl TuneRunRow {
         row_to_tune_run(row)
     }
 
+    /// Atomically marks a run completed and publishes its timing diagnostics. This prevents
+    /// readers that react to the terminal outcome (notably the SSE stream) from observing a
+    /// completed run before its timing snapshot is visible.
+    pub async fn complete_with_timing_metrics(
+        pool: &SqlitePool,
+        run_id: i64,
+        completed_at: DateTime<Utc>,
+        timing_metrics: Option<TimingMetrics>,
+    ) -> DbResult<TuneRunRow> {
+        Self::set_terminal_outcome_with_timing_metrics(
+            pool,
+            run_id,
+            completed_at,
+            TuneOutcome::Completed,
+            timing_metrics,
+        )
+        .await
+    }
+
     /// Marks a run `failed`, recording why. Valid whether or not
     /// [`Self::record_initial_readings`] was ever called for this run — a run can fail before,
     /// during, or after the initial read.
@@ -921,6 +1004,53 @@ impl TuneRunRow {
             "UPDATE tune_runs SET outcome = 'aborted', completed_at = ? WHERE id = ? RETURNING *",
         )
         .bind(completed_at)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Atomically marks a run aborted and publishes any timing diagnostics collected before
+    /// the abort, so terminal-state readers cannot miss the final timing snapshot.
+    pub async fn abort_with_timing_metrics(
+        pool: &SqlitePool,
+        run_id: i64,
+        completed_at: DateTime<Utc>,
+        timing_metrics: Option<TimingMetrics>,
+    ) -> DbResult<TuneRunRow> {
+        Self::set_terminal_outcome_with_timing_metrics(
+            pool,
+            run_id,
+            completed_at,
+            TuneOutcome::Aborted,
+            timing_metrics,
+        )
+        .await
+    }
+
+    async fn set_terminal_outcome_with_timing_metrics(
+        pool: &SqlitePool,
+        run_id: i64,
+        completed_at: DateTime<Utc>,
+        outcome: TuneOutcome,
+        timing_metrics: Option<TimingMetrics>,
+    ) -> DbResult<TuneRunRow> {
+        let timing_metrics_json = timing_metrics.map(|metrics| {
+            serde_json::to_string(&metrics).expect("TimingMetrics serialization is infallible")
+        });
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs
+            SET outcome = ?, completed_at = ?, timing_metrics_json = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(enum_to_text(&outcome))
+        .bind(completed_at)
+        .bind(timing_metrics_json)
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -1128,6 +1258,8 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         .map_err(DbError::Query)?;
     let tags_json: String = row.try_get("tags_json").map_err(DbError::Query)?;
     let request_json: String = row.try_get("request_json").map_err(DbError::Query)?;
+    let timing_metrics_json: Option<String> =
+        row.try_get("timing_metrics_json").map_err(DbError::Query)?;
     let template: DcsTemplate =
         serde_json::from_str(&template_snapshot_json).map_err(|source| {
             DbError::InvalidJsonShape {
@@ -1140,6 +1272,14 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
             column: "tags_json",
             source,
         })?;
+    let timing_metrics = timing_metrics_json
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|source| DbError::InvalidJsonShape {
+                column: "timing_metrics_json",
+                source,
+            })
+        })
+        .transpose()?;
 
     Ok(TuneRunRow {
         id: row.try_get("id").map_err(DbError::Query)?,
@@ -1162,6 +1302,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         allow_uncertain_quality: row
             .try_get("allow_uncertain_quality")
             .map_err(DbError::Query)?,
+        timing_metrics,
         restore_status,
         restore_detail: row.try_get("restore_detail").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,

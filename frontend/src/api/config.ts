@@ -2,8 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, apiErrorMessage } from "./errors";
 
 /** The server owns the effective values; the frontend edits the two persisted global policies. */
-export type ConfigSource = string;
-
 export interface GlobalConfigResponse {
   revision: string;
   config_path: string;
@@ -16,8 +14,8 @@ export interface GlobalConfigResponse {
     retention_days: number | null;
   };
   source: {
-    allow_uncertain_quality: ConfigSource;
-    retention_days: ConfigSource;
+    allow_uncertain_quality: string;
+    retention_days: string;
   };
   backup_path: string | null;
 }

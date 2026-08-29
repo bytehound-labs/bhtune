@@ -16,6 +16,7 @@
 //!   logged deletion sweep, shared by [`db::open`]'s startup call, `bhtune-server`'s
 //!   periodic timer, and `bhtune history prune`.
 //! - [`driver`] — constructs the selected `Driver` implementation.
+//! - `timing` — supplies live or fixed-step timestamps to the clock-free MRFT engine.
 //! - [`commands`] — one module per subcommand family: `tune`/`simulate`, `template`,
 //!   `history`, `export`, `opc`.
 //! - [`output`] — the `--output table|json` format shared by `history list`/`history show`
@@ -52,6 +53,7 @@ pub mod output;
 pub mod retention;
 #[cfg(test)]
 mod test_support;
+mod timing;
 
 use std::process::ExitCode;
 
@@ -413,7 +415,9 @@ mod tests {
                 direction: Some(crate::args::DirectionArg::Reverse),
                 tag_overrides: None,
                 poll_interval_ms: 800,
-                timeout_secs: 3600,
+                // Keep this dispatch test bounded even if a mutation prevents the
+                // simulator from completing.
+                timeout_secs: 30,
                 notes: None,
                 yes: false,
                 write_pid: None,
@@ -489,7 +493,9 @@ mod tests {
             sim_initial_pv: 50.0,
             sim_initial_mv: 50.0,
             poll_interval_ms: 5,
-            timeout_secs: 3600,
+            // Keep this dispatch test bounded even if a mutation prevents the
+            // simulator from completing.
+            timeout_secs: 5,
             notes: Some("dispatch test".to_string()),
             yes: false,
             write_pid: None,

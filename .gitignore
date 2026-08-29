@@ -48,3 +48,6 @@ __pycache__/
 # cargo-fuzz output
 fuzz/artifacts/
 fuzz/corpus/
+
+# Personal Copilot instructions (symlinked from ~/git/Work)
+copilot-instructions.md

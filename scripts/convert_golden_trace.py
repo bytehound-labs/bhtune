@@ -43,8 +43,37 @@ import argparse
 import csv
 import json
 from datetime import datetime
+from pathlib import Path
 
 ACTION_MULTIPLIER = {"direct": -1, "reverse": 1}
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+
+
+def repository_path(raw_path: str, *, require_file: bool) -> Path:
+    """Resolve a CLI path and keep it inside the repository checkout."""
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = REPOSITORY_ROOT / candidate
+
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Invalid path {raw_path!r}: {exc}") from exc
+
+    try:
+        resolved.relative_to(REPOSITORY_ROOT)
+    except ValueError as exc:
+        raise ValueError(f"Path must stay within the repository: {raw_path!r}") from exc
+
+    if require_file and not resolved.is_file():
+        raise ValueError(f"Input path is not a file: {raw_path!r}")
+    if not require_file:
+        if resolved.exists() and not resolved.is_file():
+            raise ValueError(f"Output path is not a file: {raw_path!r}")
+        if not resolved.parent.is_dir():
+            raise ValueError(f"Output directory does not exist: {str(resolved.parent)!r}")
+
+    return resolved
 
 
 def parse_dt(value: str) -> str:
@@ -90,9 +119,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    with open(args.static) as f:
+    try:
+        static_path = repository_path(args.static, require_file=True)
+        dynamic_path = repository_path(args.dynamic, require_file=True)
+        output_path = repository_path(args.out, require_file=False)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    with open(static_path, newline="") as f:
         static_row = next(csv.DictReader(f))
-    with open(args.dynamic) as f:
+    with open(dynamic_path, newline="") as f:
         dynamic_rows = list(csv.DictReader(f))
 
     nudges = {}
@@ -124,10 +160,9 @@ def main() -> None:
     # The capture filename convention is `<name>_<YYYYMMDD>_<HHMMSS>_1d/2d.csv` -- pull the
     # date back out for the fixture's own provenance record rather than requiring it as a
     # separate flag.
-    stem = args.static.split("/")[-1]
+    stem = static_path.name
     date_part = stem.rsplit("_", 3)[-3] if stem.count("_") >= 3 else ""
     capture_date = f"{date_part[0:4]}-{date_part[4:6]}-{date_part[6:8]}" if len(date_part) == 8 else "unknown"
-
 
     # MaxPVlist/MinPVlist are fixed-size 3-slot legacy arrays; only the meaningful entries are
     # real peaks/troughs, the rest is unused zero-padding. Lengths follow
@@ -140,8 +175,8 @@ def main() -> None:
     troughs = [f32(static_row, f"MinPVlist_{n}") for n in range(troughs_len)]
 
     description = (
-        f"Real MRFT capture from the legacy C# app against the Python FOPDT simulator "
-        f"on the hp Windows VM (see capture-traces)."
+        "Real MRFT capture from the legacy C# app against the Python FOPDT simulator "
+        "on the hp Windows VM (see capture-traces)."
     )
     if args.description:
         description += " " + args.description
@@ -150,8 +185,8 @@ def main() -> None:
         "name": args.name,
         "description": description,
         "source": {
-            "static_log": args.static.split("/")[-1],
-            "dynamic_log": args.dynamic.split("/")[-1],
+            "static_log": static_path.name,
+            "dynamic_log": dynamic_path.name,
             "captured": capture_date,
         },
         "config": {
@@ -205,7 +240,7 @@ def main() -> None:
         },
     }
 
-    with open(args.out, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(fixture, f, indent=2)
         f.write("\n")
 

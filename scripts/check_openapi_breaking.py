@@ -40,6 +40,82 @@ def _enum_removed(old: dict[str, Any], new: dict[str, Any]) -> bool:
     )
 
 
+def _schema_header_breaks(old: dict[str, Any], new: dict[str, Any], location: str) -> list[str]:
+    errors: list[str] = []
+    old_type = _schema_type(old)
+    new_type = _schema_type(new)
+    if old_type and new_type and old_type != new_type:
+        errors.append(f"{location}: schema type changed from {old_type!r} to {new_type!r}")
+    if _enum_removed(old, new):
+        errors.append(f"{location}: an existing enum value was removed")
+    return errors
+
+
+def _required_breaks(
+    old: dict[str, Any], new: dict[str, Any], direction: str, location: str
+) -> list[str]:
+    old_required = set(old.get("required", []))
+    new_required = set(new.get("required", []))
+    if direction == "request":
+        changed = sorted(new_required - old_required)
+        if changed:
+            return [f"{location}: request fields became required: {', '.join(changed)}"]
+    else:
+        changed = sorted(old_required - new_required)
+        if changed:
+            return [f"{location}: response fields stopped being required: {', '.join(changed)}"]
+    return []
+
+
+def _property_break(
+    old_property: Any,
+    name: str,
+    new_properties: dict[str, Any],
+    direction: str,
+    location: str,
+    allowed_removed_properties: frozenset[str],
+) -> list[str]:
+    if name not in new_properties:
+        if name in allowed_removed_properties:
+            return []
+        if direction == "response":
+            return [f"{location}: response property {name!r} was removed"]
+        return [f"{location}: request property {name!r} was removed"]
+
+    new_property = new_properties[name]
+    if not isinstance(old_property, dict) or not isinstance(new_property, dict):
+        return []
+    return _schema_breaks(
+        old_property,
+        new_property,
+        direction,
+        f"{location}.{name}",
+        frozenset(),
+    )
+
+
+def _property_breaks(
+    old_properties: dict[str, Any],
+    new_properties: dict[str, Any],
+    direction: str,
+    location: str,
+    allowed_removed_properties: frozenset[str],
+) -> list[str]:
+    errors: list[str] = []
+    for name, old_property in old_properties.items():
+        errors.extend(
+            _property_break(
+                old_property,
+                name,
+                new_properties,
+                direction,
+                location,
+                allowed_removed_properties,
+            )
+        )
+    return errors
+
+
 def _schema_breaks(
     old: dict[str, Any],
     new: dict[str, Any],
@@ -47,44 +123,21 @@ def _schema_breaks(
     location: str,
     allowed_removed_properties: frozenset[str] = frozenset(),
 ) -> list[str]:
-    errors: list[str] = []
-    if _schema_type(old) != _schema_type(new) and _schema_type(old) and _schema_type(new):
-        errors.append(f"{location}: schema type changed from {_schema_type(old)!r} to {_schema_type(new)!r}")
-    if _enum_removed(old, new):
-        errors.append(f"{location}: an existing enum value was removed")
-
-    old_required = set(old.get("required", []))
-    new_required = set(new.get("required", []))
-    if direction == "request":
-        added_required = sorted(new_required - old_required)
-        if added_required:
-            errors.append(f"{location}: request fields became required: {', '.join(added_required)}")
-    else:
-        removed_required = sorted(old_required - new_required)
-        if removed_required:
-            errors.append(f"{location}: response fields stopped being required: {', '.join(removed_required)}")
+    errors = _schema_header_breaks(old, new, location)
+    errors.extend(_required_breaks(old, new, direction, location))
 
     old_properties = old.get("properties", {})
     new_properties = new.get("properties", {})
     if isinstance(old_properties, dict) and isinstance(new_properties, dict):
-        for name, old_property in old_properties.items():
-            if name not in new_properties:
-                if name in allowed_removed_properties:
-                    continue
-                if direction == "response":
-                    errors.append(f"{location}: response property {name!r} was removed")
-                elif name not in allowed_removed_properties:
-                    errors.append(f"{location}: request property {name!r} was removed")
-            elif isinstance(old_property, dict) and isinstance(new_properties.get(name), dict):
-                errors.extend(
-                    _schema_breaks(
-                        old_property,
-                        new_properties[name],
-                        direction,
-                        f"{location}.{name}",
-                        frozenset(),
-                    )
-                )
+        errors.extend(
+            _property_breaks(
+                old_properties,
+                new_properties,
+                direction,
+                location,
+                allowed_removed_properties,
+            )
+        )
     return errors
 
 
@@ -137,87 +190,126 @@ def _parameters_break(
     return errors
 
 
-def _operation_breaks(old: dict[str, Any], new: dict[str, Any], location: str) -> list[str]:
-    errors = _parameters_break(
-        old.get("parameters", []),
-        new.get("parameters", []),
-        location,
+def _schema_ref_name(schema: Any) -> str | None:
+    if not isinstance(schema, dict):
+        return None
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
+        return ref.rsplit("/", 1)[-1]
+    return None
+
+
+def _request_body_allowances(old_body: dict[str, Any], location: str) -> frozenset[str]:
+    for old_media in old_body.get("content", {}).values():
+        old_schema = old_media.get("schema", {}) if isinstance(old_media, dict) else {}
+        schema_name = _schema_ref_name(old_schema)
+        if schema_name is not None:
+            return frozenset(
+                property_name
+                for method, path, schema, property_name in INTENTIONAL_REMOVED_REQUEST_PROPERTIES
+                if f"{method} {path}" == location and schema == schema_name
+            )
+    return frozenset()
+
+
+def _request_body_breaks(old_body: Any, new_body: Any, location: str) -> list[str]:
+    if not isinstance(old_body, dict):
+        return []
+    if not isinstance(new_body, dict):
+        return [f"{location}: request body was removed"]
+
+    errors: list[str] = []
+    if old_body.get("required") is not True and new_body.get("required") is True:
+        errors.append(f"{location}: request body became required")
+    errors.extend(
+        _content_breaks(
+            old_body.get("content", {}),
+            new_body.get("content", {}),
+            "request",
+            f"{location} request body",
+            _request_body_allowances(old_body, location),
+        )
+    )
+    return errors
+
+
+def _response_break(
+    status: str,
+    old_response: Any,
+    new_responses: dict[str, Any],
+    location: str,
+) -> list[str]:
+    if status not in new_responses:
+        return [f"{location}: response {status!r} was removed"]
+    new_response = new_responses[status]
+    if not isinstance(old_response, dict) or not isinstance(new_response, dict):
+        return []
+    return _content_breaks(
+        old_response.get("content", {}),
+        new_response.get("content", {}),
+        "response",
+        f"{location} response {status}",
     )
 
-    old_body = old.get("requestBody")
-    new_body = new.get("requestBody")
-    if isinstance(old_body, dict):
-        if not isinstance(new_body, dict):
-            errors.append(f"{location}: request body was removed")
-        else:
-            if old_body.get("required") is not True and new_body.get("required") is True:
-                errors.append(f"{location}: request body became required")
-            allowed_removed_properties = frozenset()
-            for old_media in old_body.get("content", {}).values():
-                old_schema = old_media.get("schema", {}) if isinstance(old_media, dict) else {}
-                ref = old_schema.get("$ref") if isinstance(old_schema, dict) else None
-                if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
-                    schema_name = ref.rsplit("/", 1)[-1]
-                    allowed_removed_properties = frozenset(
-                        property_name
-                        for method, path, schema, property_name in INTENTIONAL_REMOVED_REQUEST_PROPERTIES
-                        if f"{method} {path}" == location and schema == schema_name
-                    )
-                    break
-            errors.extend(
-                _content_breaks(
-                    old_body.get("content", {}),
-                    new_body.get("content", {}),
-                    "request",
-                    f"{location} request body",
-                    allowed_removed_properties,
-                )
-            )
 
-    old_responses = old.get("responses", {})
-    new_responses = new.get("responses", {})
+def _response_breaks(
+    old_responses: dict[str, Any], new_responses: dict[str, Any], location: str
+) -> list[str]:
+    errors: list[str] = []
     for status, old_response in old_responses.items():
-        if status not in new_responses:
-            errors.append(f"{location}: response {status!r} was removed")
-            continue
-        new_response = new_responses[status]
-        if isinstance(old_response, dict) and isinstance(new_response, dict):
-            errors.extend(
-                _content_breaks(
-                    old_response.get("content", {}),
-                    new_response.get("content", {}),
-                    "response",
-                    f"{location} response {status}",
-                )
-            )
-
-    old_security = old.get("security", [])
-    new_security = new.get("security", [])
-    if not old_security and new_security:
-        errors.append(f"{location}: authentication became mandatory")
+        errors.extend(_response_break(status, old_response, new_responses, location))
     return errors
+
+
+def _security_breaks(old: dict[str, Any], new: dict[str, Any], location: str) -> list[str]:
+    if not old.get("security", []) and new.get("security", []):
+        return [f"{location}: authentication became mandatory"]
+    return []
+
+
+def _operation_breaks(old: dict[str, Any], new: dict[str, Any], location: str) -> list[str]:
+    errors = _parameters_break(old.get("parameters", []), new.get("parameters", []), location)
+    errors.extend(_request_body_breaks(old.get("requestBody"), new.get("requestBody"), location))
+    errors.extend(_response_breaks(old.get("responses", {}), new.get("responses", {}), location))
+    errors.extend(_security_breaks(old, new, location))
+    return errors
+
+
+def _request_schema_names_from_content(content: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for media in content.values():
+        schema = media.get("schema", {}) if isinstance(media, dict) else {}
+        schema_name = _schema_ref_name(schema)
+        if schema_name is not None:
+            names.append(schema_name)
+    return names
+
+
+def _request_schema_names(operation: Any) -> list[str]:
+    if not isinstance(operation, dict):
+        return []
+    request_body = operation.get("requestBody", {})
+    if not isinstance(request_body, dict):
+        return []
+    return _request_schema_names_from_content(request_body.get("content", {}))
+
+
+def _request_schema_refs(paths: dict[str, Any]) -> dict[str, set[tuple[str, str]]]:
+    request_refs: dict[str, set[tuple[str, str]]] = {}
+    for path, item in paths.items():
+        if not isinstance(item, dict):
+            continue
+        for method in METHODS:
+            for schema_name in _request_schema_names(item.get(method)):
+                request_refs.setdefault(schema_name, set()).add((method.upper(), path))
+    return request_refs
 
 
 def _component_request_allowances(
     paths: dict[str, Any],
 ) -> dict[str, frozenset[str]]:
     """Return allowlisted removals only for exact request operations."""
-    request_refs: dict[str, set[tuple[str, str]]] = {}
-    for path, item in paths.items():
-        if not isinstance(item, dict):
-            continue
-        for method in METHODS:
-            operation = item.get(method)
-            if not isinstance(operation, dict):
-                continue
-            request_body = operation.get("requestBody", {})
-            if isinstance(request_body, dict):
-                for media in request_body.get("content", {}).values():
-                    schema = media.get("schema", {}) if isinstance(media, dict) else {}
-                    ref = schema.get("$ref") if isinstance(schema, dict) else None
-                    if isinstance(ref, str) and ref.startswith("#/components/schemas/"):
-                        name = ref.rsplit("/", 1)[-1]
-                        request_refs.setdefault(name, set()).add((method.upper(), path))
+    request_refs = _request_schema_refs(paths)
     allowances: dict[str, frozenset[str]] = {}
     for method, path, schema, property_name in INTENTIONAL_REMOVED_REQUEST_PROPERTIES:
         if (method, path) in request_refs.get(schema, set()):
@@ -225,40 +317,81 @@ def _component_request_allowances(
     return allowances
 
 
-def find_breaking_changes(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
+def _method_breaks(
+    old_item: dict[str, Any], new_item: dict[str, Any], path: str
+) -> list[str]:
     errors: list[str] = []
+    for method in METHODS:
+        if method not in old_item:
+            continue
+        location = f"{method.upper()} {path}"
+        if method not in new_item:
+            errors.append(f"{location}: operation was removed")
+            continue
+        errors.extend(_operation_breaks(old_item[method], new_item[method], location))
+    return errors
+
+
+def _path_break(
+    path: str, old_item: dict[str, Any], new_paths: dict[str, Any]
+) -> list[str]:
+    if path not in new_paths:
+        return [f"path {path!r} was removed"]
+    return _method_breaks(old_item, new_paths[path], path)
+
+
+def _path_breaks(old_paths: dict[str, Any], new_paths: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for path, old_item in old_paths.items():
+        errors.extend(_path_break(path, old_item, new_paths))
+    return errors
+
+
+def _component_break(
+    name: str,
+    old_schema: Any,
+    new_schemas: dict[str, Any],
+    allowances: dict[str, frozenset[str]],
+) -> list[str]:
+    if name not in new_schemas:
+        return [f"component schema {name!r} was removed"]
+    new_schema = new_schemas[name]
+    if not isinstance(old_schema, dict) or not isinstance(new_schema, dict):
+        return []
+    return _schema_breaks(
+        old_schema,
+        new_schema,
+        "response",
+        f"schema {name!r}",
+        allowances.get(name, frozenset()),
+    )
+
+
+def _component_breaks(
+    old_schemas: dict[str, Any],
+    new_schemas: dict[str, Any],
+    allowances: dict[str, frozenset[str]],
+) -> list[str]:
+    errors: list[str] = []
+    for name, old_schema in old_schemas.items():
+        errors.extend(_component_break(name, old_schema, new_schemas, allowances))
+    return errors
+
+
+def find_breaking_changes(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
     old_paths = old.get("paths", {})
     new_paths = new.get("paths", {})
-    for path, old_item in old_paths.items():
-        if path not in new_paths:
-            errors.append(f"path {path!r} was removed")
-            continue
-        new_item = new_paths[path]
-        for method in METHODS:
-            if method not in old_item:
-                continue
-            if method not in new_item:
-                errors.append(f"{method.upper()} {path}: operation was removed")
-                continue
-            errors.extend(_operation_breaks(old_item[method], new_item[method], f"{method.upper()} {path}"))
+    errors = _path_breaks(old_paths, new_paths)
 
     old_schemas = old.get("components", {}).get("schemas", {})
     new_schemas = new.get("components", {}).get("schemas", {})
-    component_allowances = _component_request_allowances(old_paths)
-    for name, old_schema in old_schemas.items():
-        if name not in new_schemas:
-            errors.append(f"component schema {name!r} was removed")
-            continue
-        if isinstance(old_schema, dict) and isinstance(new_schemas[name], dict):
-            errors.extend(
-                _schema_breaks(
-                    old_schema,
-                    new_schemas[name],
-                    "response",
-                    f"schema {name!r}",
-                    component_allowances.get(name, frozenset()),
-                )
-            )
+    errors.extend(
+        _component_breaks(
+            old_schemas,
+            new_schemas,
+            _component_request_allowances(old_paths),
+        )
+    )
     return errors
 
 

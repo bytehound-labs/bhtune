@@ -37,6 +37,10 @@ pub fn cutoff_for(days: u32, now: DateTime<Utc>) -> DateTime<Utc> {
     now - Duration::days(i64::from(days))
 }
 
+fn deletion_log_is_info(deleted: u64) -> bool {
+    deleted > 0
+}
+
 /// Deletes every tune run with `started_at` at or before the `days`-day cutoff (see
 /// [`cutoff_for`]), along with -- via `ON DELETE CASCADE` -- its samples, results, and
 /// write-back audit rows. Returns the number of runs deleted.
@@ -54,7 +58,7 @@ pub async fn sweep_retention(
     let deleted =
         TuneRunRow::delete_matching(pool, &TuneRunFilter::default().with_started_before(cutoff))
             .await?;
-    if deleted > 0 {
+    if deletion_log_is_info(deleted) {
         tracing::info!(
             deleted,
             retention_days = days,
@@ -110,6 +114,13 @@ mod tests {
         let now = Utc::now();
         assert_eq!(cutoff_for(30, now), now - Duration::days(30));
         assert_eq!(cutoff_for(0, now), now);
+    }
+
+    #[test]
+    fn deletion_log_is_info_only_when_runs_were_deleted() {
+        assert!(!deletion_log_is_info(0));
+        assert!(deletion_log_is_info(1));
+        assert!(deletion_log_is_info(u64::MAX));
     }
 
     #[tokio::test]

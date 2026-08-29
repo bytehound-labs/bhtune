@@ -70,8 +70,10 @@ Time in minutes); a different template reports these in whatever units that DCS/
 expects — see [DCS/PLC templates](../dcs-templates.md).
 
 Every run's exact numbers depend on the simulator's process parameters
-(`--sim-gain`/`--sim-tau`/`--sim-dead-time`/`--sim-noise`/`--sim-seed`) and are only
-reproducible run-to-run with a fixed `--sim-seed`; don't expect to see these exact values.
+(`--sim-gain`/`--sim-tau`/`--sim-dead-time`/`--sim-noise`/`--sim-seed`). The simulator
+advances its process and MRFT timestamps by the same configured poll step, so zero-noise runs
+with the same inputs are reproducible even when host scheduling differs. A fixed `--sim-seed`
+also reproduces the configured noise sequence within the same supported build.
 
 List every run so far, and export one run's per-tick samples:
 
@@ -112,8 +114,14 @@ bhtune tune \
 
 This reads live tags (PV, MV, ranges, mode, direction), switches the loop to manual, strokes the
 relay, and restores the loop when the test ends — see [Safety](../guides/safety.md) before
-running this against anything connected to a real process, especially unattended. To also write
-the calculated PID constants back:
+running this against anything connected to a real process, especially unattended. Live MRFT
+timestamps use monotonic elapsed time anchored to UTC, so NTP/manual clock changes cannot distort
+the measured relay period; real host, gateway, and OPC latency remains visible. Keep the host and
+gateway responsive and use a poll interval comfortably shorter than the expected oscillation
+period. Afterward, `bhtune history show <run-id>` reports the requested and observed sampling
+cadence, measured oscillation period, and approximate samples per period. A live sample gap at
+least twice the requested interval is reported as a missed-poll warning without aborting the run
+or blocking write-back. To also write the calculated PID constants back:
 
 ```sh
 bhtune tune ... --write-pid moderate --yes

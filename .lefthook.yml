@@ -5,6 +5,13 @@ pre-commit:
   skip:
     - rebase
   commands:
+    ds-sync:
+      run: |
+        echo "Syncing .env.example and pushing secrets to Bitwarden..."
+        ds reverse
+        ds push
+        git add .env.example 2>/dev/null || true
+
     rustfmt-format:
       glob: "**/*.rs"
       run: |
@@ -73,9 +80,15 @@ pre-commit:
         shfmt --apply-ignore -w {staged_files}
       stage_fixed: true
 
-# No .envsync.yaml / dotenv-sync (`ds`) hooks yet, unlike opcda-bridge. There is
-# no real secret or test-env value to manage until a phase needs a live OPC
-# test target (mirroring opcda-bridge's OPC_TEST_HOST/OPC_TEST_SERVER/
-# OPC_TEST_TAG pattern) — see AGENTS.md. Add the ds-sync pre-commit command and
-# a post-merge ds-sync-pull command (see opcda-bridge's .lefthook.yml for the
-# exact shape) at that point, not before.
+post-merge:
+  commands:
+    ds-sync-pull:
+      run: |
+        if command -v ds >/dev/null 2>&1 && [ -f .envsync.yaml ]; then
+          if rbw unlocked >/dev/null 2>&1; then
+            echo "Syncing .env from Bitwarden..."
+            ds sync || echo "ds sync reported an issue (see above); .env may need manual attention."
+          else
+            echo "Skipping ds sync: rbw is locked. Run 'rbw unlock' then 'ds sync' manually if .env.example changed."
+          fi
+        fi

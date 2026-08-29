@@ -29,6 +29,9 @@ run.
 The header's theme button switches between light and dark palettes. The selected palette is
 remembered by the browser.
 
+The header also shows whether the BHTune HTTP service is reachable. Its status includes
+screen-reader text and a tooltip; a healthy server indicator does not test OPC DA connectivity.
+
 `bhtune-server` has no command-line flags of its own (unlike `bhtune`, it doesn't use `clap`
 yet). Every setting — including which port it binds — is resolved from a config file or
 environment variable, the same way the CLI resolves its own flags:
@@ -80,7 +83,8 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      registered on it as clickable buttons — no need to already know (or spell correctly) a
      ProgID like `Matrikon.OPC.Simulation`. A **Browse tags** button next to the Tag name field
      (enabled once a ProgID is entered) opens a lazily-expanding tag tree fetched one level at
-     a time from the gateway. Hierarchical servers such as Yokogawa CSHIS can be expanded
+     a time from the gateway. Already-loaded levels are reused when you revisit an expanded
+     branch. Hierarchical servers such as Yokogawa CSHIS can be expanded
      through nested controller/block levels until their PV leaves; dotted and slash-separated
      item IDs are supported. The first node is selected automatically when the tree loads, and
      the selection panel stays in place while browsing. The main form's collapsible **Loop
@@ -89,8 +93,8 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      shows its effective value and source. Tag mappings use **Template tag** or **Custom tag**;
      direction and range mappings use **Template tag**, **Custom tag**, or **Fixed value**. Switching to a
      custom tag starts with the template-derived value; fixed direction/range values must be
-     entered explicitly.
-     Use a row's **Reset** button or **Reset all mapping overrides** to return to template/live
+     entered explicitly. Each mapping row is a labeled group, and its source choices are exposed
+     as an accessible pressed-button set. Use a row's **Reset** button or **Reset all mapping overrides** to return to template/live
      values. Simulator direction and ranges are kept separately from OPC fixed overrides. The
      browser itself stays focused on browsing and testing the selected PV tag. It offers a
      **Read selected tag** action showing a live value
@@ -134,13 +138,33 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      does not display an error. **Duplicate this run** takes precedence over both sources, and
      **Reset to defaults** replaces the saved draft with the built-in defaults. Connection, Test
      parameters, Loop mapping, Simulator parameters, and Automatic PID settings are independently
-     collapsible and open by default.
+     collapsible and open by default. Controls that do not apply to the selected driver stay
+     visible but disabled with an explanation.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
    in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current
-   relay switch count and cycles remaining. A **Cancel** button stops the run early (the same
+   relay switch count and cycles remaining. The initial PV/MV snapshot appears as soon as the
+   server records it, before the first MRFT sample, so the chart does not wait for a complete
+   relay tick to become visible. Independent OPC DA startup values are collected in one
+   batched read; a setpoint is read separately only when the original mode is Auto. Simulator
+   sample timestamps advance by the configured fixed poll step, matching the FOPDT process time
+   rather than host scheduler timing, so repeated simulator runs retain the same trend timing and
+   PID calculations across machines. Live OPC DA timestamps instead use actual monotonic elapsed
+   time projected onto the run's UTC start, making clock adjustments irrelevant without hiding
+   real scheduling or driver delays. BHTune is not a hard-real-time controller, so the host and
+   gateway still need to remain responsive. The trend ends with a terminal point at the original
+   MV after the run restores the loop. Short runs keep
+   their first point at the left edge by reserving 12 configured poll intervals of x-axis
+   horizon; unused future space stays blank until the trend is long enough to fit normally. The
+   initial-reading and restored-MV boundary markers are presentation-only and do not alter
+   persisted samples or CSV/JSON exports. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
    [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
+   - A **Timing** section with the run's time basis, requested interval, observed mean/maximum
+     sample gap, measured oscillation period, and approximate samples per period. Live runs show
+     an amber warning when any sample gap reaches at least twice the requested interval, proving
+     that at least one complete polling opportunity was missed. The warning is informational and
+     does not disable the PID controls.
    - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own
      **Apply** button to send that response level's constants to the loop after the fact —
      independently of any `--write-pid` choice made before the run started. A confirmation

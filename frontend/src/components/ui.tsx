@@ -3,16 +3,16 @@
  * the `frontend-shell` health indicator (slate = pending/neutral, red = error, emerald =
  * success) stays consistent across every screen rather than being re-invented per file.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 
 export function PageHeading({
   title,
   description,
   actions,
 }: {
-  title: string;
-  description?: string;
-  actions?: ReactNode;
+  readonly title: string;
+  readonly description?: string;
+  readonly actions?: ReactNode;
 }) {
   return (
     <div className="mb-6 flex items-start justify-between gap-4">
@@ -42,12 +42,12 @@ export function Button({
   disabled = false,
   title,
 }: {
-  children: ReactNode;
-  onClick?: () => void;
-  type?: "button" | "submit";
-  variant?: keyof typeof buttonVariants;
-  disabled?: boolean;
-  title?: string;
+  readonly children: ReactNode;
+  readonly onClick?: () => void;
+  readonly type?: "button" | "submit";
+  readonly variant?: keyof typeof buttonVariants;
+  readonly disabled?: boolean;
+  readonly title?: string;
 }) {
   return (
     <button
@@ -62,7 +62,7 @@ export function Button({
   );
 }
 
-export function Card({ children }: { children: ReactNode }) {
+export function Card({ children }: { readonly children: ReactNode }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
       {children}
@@ -70,7 +70,7 @@ export function Card({ children }: { children: ReactNode }) {
   );
 }
 
-export function ErrorBanner({ message }: { message: string }) {
+export function ErrorBanner({ message }: { readonly message: string }) {
   return (
     <div className="rounded-md border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-300">
       {message}
@@ -78,7 +78,7 @@ export function ErrorBanner({ message }: { message: string }) {
   );
 }
 
-export function EmptyState({ message }: { message: string }) {
+export function EmptyState({ message }: { readonly message: string }) {
   return (
     <div className="rounded-md border border-slate-800 bg-slate-900/40 px-4 py-8 text-center text-sm text-slate-400">
       {message}
@@ -86,7 +86,11 @@ export function EmptyState({ message }: { message: string }) {
   );
 }
 
-export function LoadingState({ message = "Loading…" }: { message?: string }) {
+export function LoadingState({
+  message = "Loading…",
+}: {
+  readonly message?: string;
+}) {
   return (
     <div className="rounded-md border border-slate-700 bg-slate-900 px-4 py-8 text-center text-sm text-slate-400">
       {message}
@@ -105,8 +109,8 @@ export function Badge({
   children,
   tone = "neutral",
 }: {
-  children: ReactNode;
-  tone?: keyof typeof badgeTones;
+  readonly children: ReactNode;
+  readonly tone?: keyof typeof badgeTones;
 }) {
   return (
     <span
@@ -121,8 +125,8 @@ export function Section({
   title,
   children,
 }: {
-  title: string;
-  children: ReactNode;
+  readonly title: string;
+  readonly children: ReactNode;
 }) {
   return (
     <section className="mb-6">
@@ -144,9 +148,9 @@ export function Field({
   value,
   full = false,
 }: {
-  label: string;
-  value: ReactNode;
-  full?: boolean;
+  readonly label: string;
+  readonly value: ReactNode;
+  readonly full?: boolean;
 }) {
   return (
     <div className={full ? "sm:col-span-2" : undefined}>
@@ -174,14 +178,14 @@ export function TextField({
   hint,
   disabled = false,
 }: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  required?: boolean;
-  placeholder?: string;
-  full?: boolean;
-  hint?: string;
-  disabled?: boolean;
+  readonly label: string;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly required?: boolean;
+  readonly placeholder?: string;
+  readonly full?: boolean;
+  readonly hint?: string;
+  readonly disabled?: boolean;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
@@ -214,13 +218,13 @@ export function TextAreaField({
   hint,
   rows = 4,
 }: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  full?: boolean;
-  hint?: string;
-  rows?: number;
+  readonly label: string;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly placeholder?: string;
+  readonly full?: boolean;
+  readonly hint?: string;
+  readonly rows?: number;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
@@ -260,17 +264,17 @@ export function NumberField({
   full = false,
   disabled = false,
 }: {
-  label: string;
-  value: number | "";
-  onChange: (value: number | "") => void;
-  required?: boolean;
-  placeholder?: string;
-  hint?: string;
-  step?: number | string;
-  min?: number;
-  max?: number;
-  full?: boolean;
-  disabled?: boolean;
+  readonly label: string;
+  readonly value: number | "";
+  readonly onChange: (value: number | "") => void;
+  readonly required?: boolean;
+  readonly placeholder?: string;
+  readonly hint?: string;
+  readonly step?: number | string;
+  readonly min?: number;
+  readonly max?: number;
+  readonly full?: boolean;
+  readonly disabled?: boolean;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
@@ -321,16 +325,16 @@ export function SelectField<
   disabled = false,
   displayLabel,
 }: {
-  label: string;
-  value: Value;
-  onChange: (value: Value) => void;
-  options: readonly Option[];
-  full?: boolean;
-  placeholder?: string;
-  required?: boolean;
-  hint?: string;
-  disabled?: boolean;
-  displayLabel?: (value: Option) => string;
+  readonly label: string;
+  readonly value: Value;
+  readonly onChange: (value: Value) => void;
+  readonly options: readonly Option[];
+  readonly full?: boolean;
+  readonly placeholder?: string;
+  readonly required?: boolean;
+  readonly hint?: string;
+  readonly disabled?: boolean;
+  readonly displayLabel?: (value: Option) => string;
 }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
@@ -366,11 +370,11 @@ export function CheckboxField({
   hint,
   disabled = false,
 }: {
-  label: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  hint?: string;
-  disabled?: boolean;
+  readonly label: string;
+  readonly checked: boolean;
+  readonly onChange: (checked: boolean) => void;
+  readonly hint?: string;
+  readonly disabled?: boolean;
 }) {
   return (
     <label className="flex items-start gap-2 pt-5">
@@ -395,10 +399,10 @@ export function FormSection({
   collapsible = false,
   defaultOpen = false,
 }: {
-  title: string;
-  children: ReactNode;
-  collapsible?: boolean;
-  defaultOpen?: boolean;
+  readonly title: string;
+  readonly children: ReactNode;
+  readonly collapsible?: boolean;
+  readonly defaultOpen?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const content = (
@@ -446,8 +450,8 @@ export function FormSection({
  * OPC tag-tree browser (`ui-opc-browser`) -- no earlier screen needed a true modal, since
  * `RunDetailPage`'s write/revert confirmations use the browser's native `window.confirm`
  * instead, which doesn't fit an interactive, multi-step tree browse. Closes on a backdrop
- * click, the header's close button, or Escape; a click inside the panel itself is stopped
- * from bubbling to the backdrop so interacting with the dialog's own content never closes it.
+ * click, the header's close button, or Escape. The backdrop is a native button behind the
+ * dialog panel, so it does not interfere with controls inside the panel.
  */
 export function Modal({
   title,
@@ -455,11 +459,13 @@ export function Modal({
   children,
   widthClassName = "max-w-lg",
 }: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-  widthClassName?: string;
+  readonly title: string;
+  readonly onClose: () => void;
+  readonly children: ReactNode;
+  readonly widthClassName?: string;
 }) {
+  const titleId = useId();
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
@@ -469,16 +475,23 @@ export function Modal({
   }, [onClose]);
 
   return (
-    <div
-      className="modal-backdrop fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-12"
-      onClick={onClose}
-    >
-      <div
-        className={`w-full ${widthClassName} rounded-lg border border-slate-700 bg-slate-900 shadow-xl`}
-        onClick={(e) => e.stopPropagation()}
+    <div className="modal-backdrop relative fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-12">
+      <button
+        type="button"
+        aria-label="Dismiss modal backdrop"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default"
+      />
+      <dialog
+        open
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={`relative z-10 w-full ${widthClassName} rounded-lg border border-slate-700 bg-slate-900 shadow-xl`}
       >
         <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-200">{title}</h2>
+          <h2 id={titleId} className="text-sm font-semibold text-slate-200">
+            {title}
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -489,7 +502,7 @@ export function Modal({
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
-      </div>
+      </dialog>
     </div>
   );
 }

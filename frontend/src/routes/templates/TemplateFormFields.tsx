@@ -24,12 +24,12 @@ export function TemplateFormFields({
   set,
   nameEditable = true,
 }: {
-  form: TemplateFormState;
-  set: <K extends keyof TemplateFormState>(
+  readonly form: TemplateFormState;
+  readonly set: <K extends keyof TemplateFormState>(
     key: K,
     value: TemplateFormState[K],
   ) => void;
-  nameEditable?: boolean;
+  readonly nameEditable?: boolean;
 }) {
   return (
     <>

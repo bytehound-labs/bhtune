@@ -578,6 +578,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn measure_oscillation_scales_amplitude_by_cycle_count() {
+        let config = LoopConfig {
+            num_cycles_count: 3,
+            ..flow_pi_config()
+        };
+        let osc = measure_oscillation(
+            &[999.0, 52.0, 52.0, 52.0],
+            &[50.0, 50.0, 50.0],
+            &[t(0), t(10), t(20), t(30), t(40), t(50), t(60)],
+            1,
+            ControllerDirection::Reverse,
+            config,
+            PvRange {
+                high: 100.0,
+                low: 0.0,
+            },
+            TuningMathCompat::default(),
+        );
+        assert_approx(osc.pv_amp_raw, 1.0, 1e-6);
+    }
+
+    #[test]
+    fn measure_oscillation_uses_nonzero_range_floor_in_amplitude_percent() {
+        let osc = measure_oscillation(
+            &[999.0, 52.0, 48.0],
+            &[50.0, 46.0],
+            &[t(0), t(30), t(60), t(90), t(120)],
+            1,
+            ControllerDirection::Reverse,
+            flow_pi_config(),
+            PvRange {
+                high: 100.0,
+                low: 20.0,
+            },
+            TuningMathCompat::default(),
+        );
+        assert_approx(osc.pv_amp_raw, 1.0, 1e-6);
+        assert_approx(osc.pv_amp_percent, 1.25, 1e-6);
+    }
+
     // --- calculate_tuning_result -------------------------------------------------------------
 
     /// Verified against the independent Python oracle for Flow/PI/Aggressive
@@ -619,6 +660,24 @@ mod tests {
         assert_eq!(aggressive.td_minutes, moderate.td_minutes);
         assert!(aggressive.kp > moderate.kp);
         assert!(moderate.kp > sluggish.kp);
+    }
+
+    #[test]
+    fn calculate_tuning_result_pid_derivative_uses_frequency_division() {
+        let osc = Oscillation {
+            period_minutes: 1.0,
+            frequency: 3.0,
+            pv_amp_raw: 1.0,
+            pv_amp_percent: 1.0,
+        };
+        let config = LoopConfig {
+            process_type: ProcessType::TemperatureMixing,
+            controller_type: ControllerType::Pid,
+            ..flow_pi_config()
+        };
+        let result = calculate_tuning_result(osc, config, ResponseLevel::Moderate);
+        let expected = 0.14 * 2.0 * std::f32::consts::PI / 3.0;
+        assert_approx(result.td_minutes, expected, 1e-6);
     }
 
     // --- calculate_pid_parameters -------------------------------------------------------------

@@ -9,26 +9,30 @@
 //! setpoint/mode/mode-attribute/PID-constant tags at all (see `build_loop_tags` below) — no
 //! separate "is this the simulator?" branching is needed in that logic.
 
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::time::Duration;
 
 use bhtune_core::{
     Action, ControllerDirection, ControllerType, DcsTemplate, InitialReadings, LoopConfig,
     LoopTags, MrftCompat, MrftEngine, MvRange, PidParameters, ProcessType, PvRange, ResponseLevel,
-    TagOrValue, TagOverrides, Tick, TuningMathCompat, calculate_all, lookup, opc_write_values,
+    TagOrValue, TagOverrides, Tick, TuningMathCompat, calculate_all, lookup, measure_oscillation,
+    opc_write_values,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TuneDriver, TuneResultRow,
-    TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind, WriteReadback,
+    DcsTemplateRow, NewTuneWrite, RollbackState, SampleQuality, TimingBasis, TimingMetrics,
+    TuneDriver, TuneResultRow, TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow,
+    WriteKind, WriteReadback,
 };
-use bhtune_driver::{Driver, TagWrite};
+use bhtune_driver::{Driver, TagValue, TagWrite};
 use chrono::{DateTime, Utc};
 
 use crate::args::{DriverKindArg, TuneArgs};
 use crate::cancel::CtrlC;
 use crate::driver::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
 use crate::output::OutputFormat;
+use crate::timing::{PollTimingAccumulator, RunTimeAnchor, TickTimeSource};
 
 /// The final disposition of a `tune`/`simulate` run -- drives the printed summary (see
 /// [`print_summary`]) and, via `crate::tune_outcome_exit_code` in `lib.rs`, the process's
@@ -128,7 +132,7 @@ pub(crate) async fn run_with_ctrl_c(
         tags,
         driver,
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
     } = prepared;
@@ -141,7 +145,7 @@ pub(crate) async fn run_with_ctrl_c(
         &tags,
         driver.as_ref(),
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
         ctrl_c,
@@ -191,7 +195,7 @@ pub struct PreparedTune {
     tags: LoopTags,
     driver: Box<dyn Driver>,
     config: LoopConfig,
-    started_at: DateTime<Utc>,
+    time_anchor: RunTimeAnchor,
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
 }
@@ -355,7 +359,8 @@ pub async fn prepare(
     let tags = build_loop_tags(&args, &template)?;
     let driver = crate::driver::build(&args).await?;
 
-    let started_at = Utc::now();
+    let time_anchor = RunTimeAnchor::now();
+    let started_at = time_anchor.utc();
     let run = TuneRunRow::start(
         pool,
         None,
@@ -408,7 +413,7 @@ pub async fn prepare(
         tags,
         driver,
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
     })
@@ -454,7 +459,7 @@ pub async fn drive(
         tags,
         driver,
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
     } = prepared;
@@ -467,7 +472,7 @@ pub async fn drive(
         &tags,
         driver.as_ref(),
         config,
-        started_at,
+        time_anchor,
         write_pid,
         allow_uncertain_quality,
         ctrl_c,
@@ -870,11 +875,11 @@ struct MutationGuard {
     mv_written: bool,
 }
 
-/// Small, private helper bundling the two DB writes that follow a completed MRFT test, so
-/// `execute` can route a failure in either one through a single best-effort restore attempt
-/// instead of silently skipping it (`safety-restore-guard`, finding 3 of the live-plant
-/// safety review) -- previously, both ran ahead of `attempt_restore` with a bare `?` each.
-async fn finish_completed_run(
+/// Persists the three calculated response levels after a completed MRFT test. The run's
+/// terminal outcome is deliberately recorded later, after restoration, together with its
+/// timing snapshot; this keeps SSE-triggered readers from seeing a terminal row before those
+/// diagnostics are visible.
+async fn persist_completed_results(
     pool: &SqlitePool,
     run_id: i64,
     completion: Action,
@@ -886,9 +891,7 @@ async fn finish_completed_run(
     persist_results(
         pool, run_id, completion, direction, config, pv_range, template,
     )
-    .await?;
-    TuneRunRow::complete(pool, run_id, Utc::now()).await?;
-    Ok(())
+    .await
 }
 
 /// Generic over `reader` (rather than hardcoding `std::io::stdin().lock()` internally) so
@@ -910,12 +913,13 @@ async fn execute<R: std::io::BufRead>(
     tags: &LoopTags,
     driver: &dyn Driver,
     config: LoopConfig,
-    started_at: DateTime<Utc>,
+    time_anchor: RunTimeAnchor,
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     reader: &mut R,
 ) -> anyhow::Result<RunOutcome> {
+    let started_at = time_anchor.utc();
     let initial = read_initial_values(driver, tags, template, allow_uncertain_quality).await?;
     validate_initial_state(&initial)?;
 
@@ -978,6 +982,11 @@ async fn execute<R: std::io::BufRead>(
         started_at,
         MrftCompat::default(),
     );
+    let timing_basis = match args.driver {
+        DriverKindArg::Opcda => TimingBasis::LiveMonotonic,
+        DriverKindArg::Simulator => TimingBasis::SimulatedFixedStep,
+    };
+    let mut timing = PollTimingAccumulator::new(timing_basis, args.poll_interval_ms);
 
     let poll_result = run_polling_loop(
         pool,
@@ -986,12 +995,26 @@ async fn execute<R: std::io::BufRead>(
         tags,
         driver,
         &mut engine,
-        started_at,
+        time_anchor,
         ctrl_c,
         &mut guard,
         allow_uncertain_quality,
+        &mut timing,
     )
     .await;
+    let measured_oscillation_period_ms = completed_oscillation_period_ms(
+        &poll_result,
+        initial.direction,
+        config,
+        PvRange {
+            high: initial.pv_range_high,
+            low: initial.pv_range_low,
+        },
+    );
+    let timing_metrics_without_period = timing.finish(None);
+    if let Some(timing_metrics) = timing_metrics_without_period.as_ref() {
+        warn_on_missed_poll_opportunities(run_id, timing_metrics);
+    }
 
     match poll_result {
         Ok(PollOutcome::Completed(completion)) => {
@@ -999,7 +1022,7 @@ async fn execute<R: std::io::BufRead>(
                 high: initial.pv_range_high,
                 low: initial.pv_range_low,
             };
-            if let Err(e) = finish_completed_run(
+            if let Err(e) = persist_completed_results(
                 pool,
                 run_id,
                 completion,
@@ -1010,7 +1033,7 @@ async fn execute<R: std::io::BufRead>(
             )
             .await
             {
-                return Err(restore_best_effort_then_propagate(
+                let error = restore_best_effort_then_propagate(
                     pool,
                     run_id,
                     driver,
@@ -1022,7 +1045,11 @@ async fn execute<R: std::io::BufRead>(
                     ctrl_c,
                     e,
                 )
-                .await);
+                .await;
+                if let Some(timing_metrics) = timing_metrics_without_period {
+                    record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
+                }
+                return Err(error);
             }
 
             let restore_attempt = attempt_restore(
@@ -1036,6 +1063,13 @@ async fn execute<R: std::io::BufRead>(
             )
             .await;
             record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
+            TuneRunRow::complete_with_timing_metrics(
+                pool,
+                run_id,
+                Utc::now(),
+                timing.finish(measured_oscillation_period_ms),
+            )
+            .await?;
             match restore_attempt {
                 RestoreAttempt::Confirmed => {
                     let (write_back, write_back_detail) = maybe_write_back(
@@ -1073,7 +1107,13 @@ async fn execute<R: std::io::BufRead>(
             )
             .await;
             record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
-            TuneRunRow::abort(pool, run_id, Utc::now()).await?;
+            TuneRunRow::abort_with_timing_metrics(
+                pool,
+                run_id,
+                Utc::now(),
+                timing_metrics_without_period,
+            )
+            .await?;
             match restore_attempt {
                 RestoreAttempt::Confirmed => Ok(RunOutcome::Aborted(reason)),
                 RestoreAttempt::Incomplete {
@@ -1088,7 +1128,7 @@ async fn execute<R: std::io::BufRead>(
             // though the overall run is going to be reported as failed regardless. Still
             // bounded/interruptible (a second Ctrl+C or `--restore-timeout-secs` still cuts
             // it short) and still warns loudly on an incomplete restore.
-            Err(restore_best_effort_then_propagate(
+            let error = restore_best_effort_then_propagate(
                 pool,
                 run_id,
                 driver,
@@ -1100,7 +1140,11 @@ async fn execute<R: std::io::BufRead>(
                 ctrl_c,
                 e,
             )
-            .await)
+            .await;
+            if let Some(timing_metrics) = timing_metrics_without_period {
+                record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
+            }
+            Err(error)
         }
     }
 }
@@ -1171,14 +1215,7 @@ async fn read_raw(driver: &dyn Driver, tag: &str, allow_uncertain: bool) -> anyh
 
 async fn read_f32(driver: &dyn Driver, tag: &str, allow_uncertain: bool) -> anyhow::Result<f32> {
     let raw = read_raw(driver, tag, allow_uncertain).await?;
-    let value: f32 = raw
-        .trim()
-        .parse::<f32>()
-        .map_err(|_| anyhow::anyhow!("tag '{tag}' value '{raw}' is not a number"))?;
-    if !value.is_finite() {
-        anyhow::bail!("tag '{tag}' value '{raw}' is not a finite number");
-    }
-    Ok(value)
+    parse_f32_value(tag, &raw)
 }
 
 async fn resolve_f32(
@@ -1207,6 +1244,71 @@ async fn resolve_direction(
         TagOrValue::Value(d) => Ok(*d),
         TagOrValue::Tag(tag) => {
             let raw = read_raw(driver, tag, allow_uncertain).await?;
+            Ok(ControllerDirection::from_raw_tag_value(
+                &raw,
+                &template.controller_action_direct_value,
+            ))
+        }
+    }
+}
+
+fn parse_f32_value(tag: &str, raw: &str) -> anyhow::Result<f32> {
+    let value: f32 = raw
+        .trim()
+        .parse::<f32>()
+        .map_err(|_| anyhow::anyhow!("tag '{tag}' value '{raw}' is not a number"))?;
+    if !value.is_finite() {
+        anyhow::bail!("tag '{tag}' value '{raw}' is not a finite number");
+    }
+    Ok(value)
+}
+
+fn read_batch_raw(
+    values: &HashMap<String, TagValue>,
+    tag: &str,
+    allow_uncertain: bool,
+) -> anyhow::Result<String> {
+    let value = values
+        .get(tag)
+        .ok_or_else(|| anyhow::anyhow!("driver returned no value for tag '{tag}'"))?;
+    check_quality(tag, value.quality, allow_uncertain)?;
+    Ok(value.value.clone())
+}
+
+fn read_batch_f32(
+    values: &HashMap<String, TagValue>,
+    tag: &str,
+    allow_uncertain: bool,
+) -> anyhow::Result<f32> {
+    let raw = read_batch_raw(values, tag, allow_uncertain)?;
+    parse_f32_value(tag, &raw)
+}
+
+async fn resolve_f32_from_batch(
+    driver: &dyn Driver,
+    values: &HashMap<String, TagValue>,
+    tag_or_value: &TagOrValue<f32>,
+    allow_uncertain: bool,
+) -> anyhow::Result<f32> {
+    match tag_or_value {
+        TagOrValue::Value(_) => resolve_f32(driver, tag_or_value, allow_uncertain).await,
+        TagOrValue::Tag(tag) => read_batch_f32(values, tag, allow_uncertain),
+    }
+}
+
+async fn resolve_direction_from_batch(
+    driver: &dyn Driver,
+    values: &HashMap<String, TagValue>,
+    tag_or_value: &TagOrValue<ControllerDirection>,
+    template: &DcsTemplate,
+    allow_uncertain: bool,
+) -> anyhow::Result<ControllerDirection> {
+    match tag_or_value {
+        TagOrValue::Value(_) => {
+            resolve_direction(driver, tag_or_value, template, allow_uncertain).await
+        }
+        TagOrValue::Tag(tag) => {
+            let raw = read_batch_raw(values, tag, allow_uncertain)?;
             Ok(ControllerDirection::from_raw_tag_value(
                 &raw,
                 &template.controller_action_direct_value,
@@ -1279,15 +1381,52 @@ async fn read_initial_values(
     template: &DcsTemplate,
     allow_uncertain: bool,
 ) -> anyhow::Result<InitialState> {
-    let pv_ini = read_f32(driver, &tags.process_variable, allow_uncertain).await?;
-    let mv_ini = read_f32(driver, &tags.manipulated_variable, allow_uncertain).await?;
+    let mut requested_tags = Vec::new();
+    let mut seen_tags = HashSet::new();
+    let mut request_tag = |tag: &str| {
+        if seen_tags.insert(tag.to_string()) {
+            requested_tags.push(tag.to_string());
+        }
+    };
+
+    request_tag(&tags.process_variable);
+    request_tag(&tags.manipulated_variable);
+    if let Some(tag) = &tags.controller_mode {
+        request_tag(tag);
+    }
+    if let Some(tag) = &tags.mode_attribute {
+        request_tag(tag);
+    }
+    if let TagOrValue::Tag(tag) = &tags.controller_direction {
+        request_tag(tag.as_str());
+    }
+    for tag_or_value in [
+        &tags.upper_pv_range,
+        &tags.lower_pv_range,
+        &tags.upper_mv_range,
+        &tags.lower_mv_range,
+    ] {
+        if let TagOrValue::Tag(tag) = tag_or_value {
+            request_tag(tag.as_str());
+        }
+    }
+
+    let values_by_tag: HashMap<String, TagValue> = driver
+        .read(&requested_tags)
+        .await?
+        .into_iter()
+        .map(|value| (value.tag.clone(), value))
+        .collect();
+
+    let pv_ini = read_batch_f32(&values_by_tag, &tags.process_variable, allow_uncertain)?;
+    let mv_ini = read_batch_f32(&values_by_tag, &tags.manipulated_variable, allow_uncertain)?;
 
     let mode_raw = match &tags.controller_mode {
-        Some(tag) => Some(read_raw(driver, tag, allow_uncertain).await?),
+        Some(tag) => Some(read_batch_raw(&values_by_tag, tag, allow_uncertain)?),
         None => None,
     };
     let mode_attribute_raw = match &tags.mode_attribute {
-        Some(tag) => Some(read_raw(driver, tag, allow_uncertain).await?),
+        Some(tag) => Some(read_batch_raw(&values_by_tag, tag, allow_uncertain)?),
         None => None,
     };
 
@@ -1301,17 +1440,42 @@ async fn read_initial_values(
         _ => None,
     };
 
-    let direction = resolve_direction(
+    let direction = resolve_direction_from_batch(
         driver,
+        &values_by_tag,
         &tags.controller_direction,
         template,
         allow_uncertain,
     )
     .await?;
-    let pv_range_high = resolve_f32(driver, &tags.upper_pv_range, allow_uncertain).await?;
-    let pv_range_low = resolve_f32(driver, &tags.lower_pv_range, allow_uncertain).await?;
-    let mv_range_high = resolve_f32(driver, &tags.upper_mv_range, allow_uncertain).await?;
-    let mv_range_low = resolve_f32(driver, &tags.lower_mv_range, allow_uncertain).await?;
+    let pv_range_high = resolve_f32_from_batch(
+        driver,
+        &values_by_tag,
+        &tags.upper_pv_range,
+        allow_uncertain,
+    )
+    .await?;
+    let pv_range_low = resolve_f32_from_batch(
+        driver,
+        &values_by_tag,
+        &tags.lower_pv_range,
+        allow_uncertain,
+    )
+    .await?;
+    let mv_range_high = resolve_f32_from_batch(
+        driver,
+        &values_by_tag,
+        &tags.upper_mv_range,
+        allow_uncertain,
+    )
+    .await?;
+    let mv_range_low = resolve_f32_from_batch(
+        driver,
+        &values_by_tag,
+        &tags.lower_mv_range,
+        allow_uncertain,
+    )
+    .await?;
 
     Ok(InitialState {
         pv_ini,
@@ -1456,49 +1620,12 @@ async fn restore(
     initial: &InitialState,
     guard: &MutationGuard,
 ) -> RestoreReport {
-    let mv = match write_value(driver, &tags.manipulated_variable, initial.mv_ini).await {
-        Ok(()) => RestoreStepOutcome::Succeeded,
-        Err(e) => RestoreStepOutcome::Failed(e.to_string()),
-    };
+    let mv = restore_value_step(driver, &tags.manipulated_variable, initial.mv_ini).await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
-    let mut mode = RestoreStepOutcome::NotNeeded;
-    if let Some(mode_tag) = &tags.controller_mode {
-        let mode_raw = initial.mode_raw.as_deref().unwrap_or_default();
-        if guard.mode_written && template.revert_mode && mode_raw != template.mode_manual_value {
-            mode = match write_raw(driver, mode_tag, mode_raw.to_string()).await {
-                Ok(()) => RestoreStepOutcome::Succeeded,
-                Err(e) => RestoreStepOutcome::Failed(e.to_string()),
-            };
-        }
-    }
-
-    let mut setpoint = RestoreStepOutcome::NotNeeded;
-    if guard.mode_written
-        && template.revert_mode
-        && let (Some(sv_tag), Some(sv_ini)) = (&tags.setpoint_variable, initial.setpoint_ini)
-    {
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-        setpoint = match write_value(driver, sv_tag, sv_ini).await {
-            Ok(()) => RestoreStepOutcome::Succeeded,
-            Err(e) => RestoreStepOutcome::Failed(e.to_string()),
-        };
-    }
-
-    let mut mode_attribute = RestoreStepOutcome::NotNeeded;
-    if let Some(attr_tag) = &tags.mode_attribute {
-        let attr_raw = initial.mode_attribute_raw.as_deref().unwrap_or_default();
-        let program_value = template
-            .mode_attribute_program_value
-            .as_deref()
-            .unwrap_or_default();
-        if guard.mode_attribute_written && attr_raw != program_value {
-            mode_attribute = match write_raw(driver, attr_tag, attr_raw.to_string()).await {
-                Ok(()) => RestoreStepOutcome::Succeeded,
-                Err(e) => RestoreStepOutcome::Failed(e.to_string()),
-            };
-        }
-    }
+    let mode = restore_mode_step(driver, tags, template, initial, guard).await;
+    let setpoint = restore_setpoint_step(driver, tags, template, initial, guard).await;
+    let mode_attribute = restore_mode_attribute_step(driver, tags, template, initial, guard).await;
 
     RestoreReport {
         mv,
@@ -1506,6 +1633,75 @@ async fn restore(
         setpoint,
         mode_attribute,
     }
+}
+
+async fn restore_value_step(driver: &dyn Driver, tag: &str, value: f32) -> RestoreStepOutcome {
+    match write_value(driver, tag, value).await {
+        Ok(()) => RestoreStepOutcome::Succeeded,
+        Err(e) => RestoreStepOutcome::Failed(e.to_string()),
+    }
+}
+
+async fn restore_raw_step(driver: &dyn Driver, tag: &str, value: &str) -> RestoreStepOutcome {
+    match write_raw(driver, tag, value.to_string()).await {
+        Ok(()) => RestoreStepOutcome::Succeeded,
+        Err(e) => RestoreStepOutcome::Failed(e.to_string()),
+    }
+}
+
+async fn restore_mode_step(
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+) -> RestoreStepOutcome {
+    let Some(mode_tag) = &tags.controller_mode else {
+        return RestoreStepOutcome::NotNeeded;
+    };
+    let mode_raw = initial.mode_raw.as_deref().unwrap_or_default();
+    if !guard.mode_written || !template.revert_mode || mode_raw == template.mode_manual_value {
+        return RestoreStepOutcome::NotNeeded;
+    }
+    restore_raw_step(driver, mode_tag, mode_raw).await
+}
+
+async fn restore_setpoint_step(
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+) -> RestoreStepOutcome {
+    if !guard.mode_written || !template.revert_mode {
+        return RestoreStepOutcome::NotNeeded;
+    }
+    let (Some(sv_tag), Some(sv_ini)) = (&tags.setpoint_variable, initial.setpoint_ini) else {
+        return RestoreStepOutcome::NotNeeded;
+    };
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    restore_value_step(driver, sv_tag, sv_ini).await
+}
+
+async fn restore_mode_attribute_step(
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+) -> RestoreStepOutcome {
+    let Some(attr_tag) = &tags.mode_attribute else {
+        return RestoreStepOutcome::NotNeeded;
+    };
+    let attr_raw = initial.mode_attribute_raw.as_deref().unwrap_or_default();
+    let program_value = template
+        .mode_attribute_program_value
+        .as_deref()
+        .unwrap_or_default();
+    if !guard.mode_attribute_written || attr_raw == program_value {
+        return RestoreStepOutcome::NotNeeded;
+    }
+    restore_raw_step(driver, attr_tag, attr_raw).await
 }
 
 /// The outcome of racing one driver call ([`read_pv_sample`]/[`write_value`], during a poll
@@ -1595,20 +1791,20 @@ async fn attempt_restore(
                 let reason = report
                     .failure_summary()
                     .unwrap_or_else(|| "one or more restore steps failed".to_string());
-                warn_restore_incomplete(tags, initial, &reason);
+                let _ = warn_restore_incomplete(tags, initial, &reason);
                 RestoreAttempt::Incomplete { reason }
             }
         }
         () = ctrl_c.signalled() => {
             let reason = "a second Ctrl+C was received while restoring the loop".to_string();
-            warn_restore_incomplete(tags, initial, &reason);
+            let _ = warn_restore_incomplete(tags, initial, &reason);
             RestoreAttempt::Incomplete { reason }
         }
         () = tokio::time::sleep(Duration::from_secs(restore_timeout_secs)) => {
             let reason = format!(
                 "the restore did not complete within the {restore_timeout_secs}s --restore-timeout-secs limit"
             );
-            warn_restore_incomplete(tags, initial, &reason);
+            let _ = warn_restore_incomplete(tags, initial, &reason);
             RestoreAttempt::Incomplete { reason }
         }
     }
@@ -1621,17 +1817,27 @@ async fn attempt_restore(
 /// mode/setpoint/mode-attribute steps -- but the MV is called out specifically since it is
 /// the one value every template has and the one most directly consequential if left at a
 /// relay-test extreme.
-fn warn_restore_incomplete(tags: &LoopTags, initial: &InitialState, reason: &str) {
-    eprintln!(
+fn restore_incomplete_warning_message(
+    tags: &LoopTags,
+    initial: &InitialState,
+    reason: &str,
+) -> String {
+    format!(
         "WARNING: could not confirm the loop was fully restored ({reason}). Tag '{}' may still be at its last relay-test value instead of its pre-test value {}. Check it -- and the loop's mode -- by hand.",
         tags.manipulated_variable, initial.mv_ini
-    );
+    )
+}
+
+fn warn_restore_incomplete(tags: &LoopTags, initial: &InitialState, reason: &str) -> String {
+    let message = restore_incomplete_warning_message(tags, initial, reason);
+    eprintln!("{message}");
     tracing::error!(
         mv_tag = %tags.manipulated_variable,
         mv_ini = initial.mv_ini,
         reason,
         "loop restore could not be confirmed"
     );
+    message
 }
 
 /// Best-effort records a restore attempt's outcome on the run (`safety-restore-guard`,
@@ -1655,13 +1861,67 @@ async fn record_restore_status_best_effort(
     }
 }
 
+fn completed_oscillation_period_ms(
+    poll_result: &anyhow::Result<PollOutcome>,
+    direction: ControllerDirection,
+    config: LoopConfig,
+    pv_range: PvRange,
+) -> Option<f64> {
+    let Ok(PollOutcome::Completed(Action::Complete {
+        peaks,
+        troughs,
+        switch_times,
+        mv_sign_init,
+    })) = poll_result
+    else {
+        return None;
+    };
+
+    let oscillation = measure_oscillation(
+        peaks,
+        troughs,
+        switch_times,
+        *mv_sign_init,
+        direction,
+        config,
+        pv_range,
+        TuningMathCompat::default(),
+    );
+    Some(f64::from(oscillation.period_minutes) * 60_000.0)
+}
+
+fn warn_on_missed_poll_opportunities(run_id: i64, metrics: &TimingMetrics) {
+    if metrics.basis != TimingBasis::LiveMonotonic || metrics.missed_poll_opportunity_count == 0 {
+        return;
+    }
+
+    tracing::warn!(
+        run_id,
+        requested_interval_ms = metrics.requested_interval_ms,
+        sample_gap_count = metrics.sample_gap_count,
+        mean_sample_gap_ms = metrics.mean_sample_gap_ms,
+        max_sample_gap_ms = metrics.max_sample_gap_ms,
+        missed_poll_opportunity_count = metrics.missed_poll_opportunity_count,
+        "live tune missed at least one complete polling opportunity"
+    );
+}
+
+/// Timing diagnostics are observational: every call site defers this database write until
+/// after the safety-critical restore attempt, and a failure here must never replace the
+/// tune's actual completion, abort, or driver-error outcome.
+async fn record_timing_metrics_best_effort(pool: &SqlitePool, run_id: i64, metrics: TimingMetrics) {
+    if let Err(e) = TuneRunRow::record_timing_metrics(pool, run_id, metrics).await {
+        tracing::error!(run_id, error = %e, "failed to record tune timing metrics");
+    }
+}
+
 /// Attempts a best-effort restore, records its outcome, then returns `err` **unchanged** --
 /// the single choke point every early-return error path in `execute` funnels through, so a
 /// partial mutation is never left un-restored just because the step that failed came before
 /// `attempt_restore` was reached (`safety-restore-guard`, finding 3 of the live-plant safety
 /// review, fixing three such gaps: a failed `transition_to_manual`, a failed
-/// `record_initial_readings`/`persist_results`/`complete` after a successful test, and any
-/// other hard failure from `run_polling_loop` itself). Always returns the *original* `err`:
+/// `record_initial_readings`/`persist_results` after a successful test, and any other hard
+/// failure from `run_polling_loop` itself). Always returns the *original* `err`:
 /// neither an incomplete restore nor a failure recording its status should ever mask the
 /// real reason the run is failing.
 #[allow(clippy::too_many_arguments)]
@@ -1722,11 +1982,15 @@ async fn run_polling_loop(
     tags: &LoopTags,
     driver: &dyn Driver,
     engine: &mut MrftEngine,
-    start_time: DateTime<Utc>,
+    time_anchor: RunTimeAnchor,
     ctrl_c: &mut CtrlC,
     guard: &mut MutationGuard,
     allow_uncertain_quality: bool,
+    timing: &mut PollTimingAccumulator,
 ) -> anyhow::Result<PollOutcome> {
+    let start_time = time_anchor.utc();
+    let mut tick_time =
+        TickTimeSource::for_driver(args.driver, time_anchor, args.poll_interval_ms)?;
     let mut interval = tokio::time::interval(Duration::from_millis(args.poll_interval_ms.max(1)));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -1746,7 +2010,6 @@ async fn run_polling_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let now = Utc::now();
                 let (pv, quality) = match bounded_driver_call(
                     args.op_timeout_secs,
                     ctrl_c,
@@ -1773,6 +2036,11 @@ async fn run_polling_loop(
                         }));
                     }
                 };
+                // Timestamp the value after it is actually read. For OPC DA this includes the
+                // read's real monotonic latency; for the simulator it advances the logical
+                // process clock by exactly one fixed poll step per successful PV sample.
+                let now = tick_time.next_timestamp()?;
+                timing.observe(now)?;
                 let tick = Tick { time: now, pv };
                 let sample_quality = sample_quality_from_driver(quality);
 
@@ -2182,6 +2450,118 @@ pub async fn write_pid_values(
     }
 }
 
+/// Represents the selected calculated PID parameters and any reason they were not written.
+///
+/// The write-back operation itself is documented on [`maybe_write_back`].
+enum WriteBackSelection<'a> {
+    Selected(&'a TuneResultRow),
+    Skipped(String),
+    Failed(String),
+}
+
+fn select_named_write_back_result<'a>(
+    results: &'a [TuneResultRow],
+    level: ResponseLevel,
+    output: OutputFormat,
+) -> WriteBackSelection<'a> {
+    match results.iter().find(|r| r.response_level == level) {
+        Some(result) => {
+            if prints_table_output(output) {
+                println!(
+                    "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
+                );
+            }
+            WriteBackSelection::Selected(result)
+        }
+        None => {
+            let detail = format!("no calculated result recorded for response level {level:?}");
+            if prints_table_output(output) {
+                println!(
+                    "No calculated result recorded for response level {level:?}; skipping write-back."
+                );
+            }
+            WriteBackSelection::Failed(detail)
+        }
+    }
+}
+
+fn select_interactive_write_back_result<'a>(
+    results: &'a [TuneResultRow],
+    reader: &mut impl std::io::BufRead,
+) -> WriteBackSelection<'a> {
+    eprintln!("\nCalculated PID parameters:");
+    for (i, result) in results.iter().enumerate() {
+        eprintln!(
+            "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
+            i + 1,
+            result.response_level,
+            result.proportional,
+            result.integral,
+            result.derivative
+        );
+    }
+    eprintln!(
+        "Write which response level's PID parameters back to the DCS? [1-{}, or Enter/n to skip]:",
+        results.len()
+    );
+
+    let mut input = String::new();
+    let bytes_read = reader.read_line(&mut input).unwrap_or(0);
+    let input = input.trim();
+    if bytes_read == 0 || input.is_empty() || input.eq_ignore_ascii_case("n") {
+        eprintln!("Skipping PID write-back.");
+        return WriteBackSelection::Skipped(
+            "skipped interactively (no selection made)".to_string(),
+        );
+    }
+
+    match input.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= results.len() => WriteBackSelection::Selected(&results[n - 1]),
+        _ => {
+            eprintln!("Invalid selection; skipping PID write-back.");
+            WriteBackSelection::Skipped("invalid response level selection".to_string())
+        }
+    }
+}
+
+fn select_write_back_result<'a>(
+    results: &'a [TuneResultRow],
+    write_pid: Option<ResponseLevel>,
+    output: OutputFormat,
+    reader: &mut impl std::io::BufRead,
+) -> WriteBackSelection<'a> {
+    match write_pid {
+        Some(level) => select_named_write_back_result(results, level, output),
+        None if skips_interactive_prompt(write_pid, output) => WriteBackSelection::Skipped(
+            "--output json was set without --write-pid; skipped the interactive \
+             write-back prompt since there is no human present to answer it"
+                .to_string(),
+        ),
+        None => select_interactive_write_back_result(results, reader),
+    }
+}
+
+fn finish_write_back(
+    output: OutputFormat,
+    response_level: ResponseLevel,
+    outcome: PidWriteOutcome,
+) -> (WriteBackOutcome, Option<String>) {
+    match outcome {
+        PidWriteOutcome::Written => {
+            if prints_table_output(output) {
+                println!("Wrote and confirmed {response_level:?} PID parameters.");
+            }
+            (WriteBackOutcome::Written { response_level }, None)
+        }
+        PidWriteOutcome::Failed { detail } => {
+            if prints_table_output(output) {
+                println!("PID write-back failed: {detail}");
+            }
+            (WriteBackOutcome::Failed, Some(detail))
+        }
+    }
+}
+
 /// Writes back the calculated PID parameters for one response level -- chosen either
 /// interactively (prompting on `reader`) or non-interactively via `write_pid`
 /// (`--write-pid`; the caller has already validated `--yes` was also given before the tune
@@ -2234,7 +2614,7 @@ async fn maybe_write_back(
         &tags.derivative_constant,
     ) else {
         let detail = "no PID constant tags configured for this run's driver/template";
-        if output == OutputFormat::Table {
+        if prints_table_output(output) {
             println!(
                 "No PID constant tags configured for this run's driver/template; skipping write-back."
             );
@@ -2250,74 +2630,13 @@ async fn maybe_write_back(
         ));
     }
 
-    let selected = match write_pid {
-        Some(level) => match results.iter().find(|r| r.response_level == level) {
-            Some(r) => {
-                if output == OutputFormat::Table {
-                    println!(
-                        "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
-                    );
-                }
-                r
-            }
-            None => {
-                let detail = format!("no calculated result recorded for response level {level:?}");
-                if output == OutputFormat::Table {
-                    println!(
-                        "No calculated result recorded for response level {level:?}; skipping write-back."
-                    );
-                }
-                return Ok((WriteBackOutcome::Failed, Some(detail)));
-            }
-        },
-        None if output == OutputFormat::Json => {
-            return Ok((
-                WriteBackOutcome::Skipped,
-                Some(
-                    "--output json was set without --write-pid; skipped the interactive \
-                     write-back prompt since there is no human present to answer it"
-                        .to_string(),
-                ),
-            ));
+    let selected = match select_write_back_result(&results, write_pid, output, reader) {
+        WriteBackSelection::Selected(result) => result,
+        WriteBackSelection::Skipped(detail) => {
+            return Ok((WriteBackOutcome::Skipped, Some(detail)));
         }
-        None => {
-            eprintln!("\nCalculated PID parameters:");
-            for (i, r) in results.iter().enumerate() {
-                eprintln!(
-                    "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
-                    i + 1,
-                    r.response_level,
-                    r.proportional,
-                    r.integral,
-                    r.derivative
-                );
-            }
-            eprintln!(
-                "Write which response level's PID parameters back to the DCS? [1-{}, or Enter/n to skip]:",
-                results.len()
-            );
-
-            let mut input = String::new();
-            let bytes_read = reader.read_line(&mut input).unwrap_or(0);
-            let input = input.trim();
-            if bytes_read == 0 || input.is_empty() || input.eq_ignore_ascii_case("n") {
-                eprintln!("Skipping PID write-back.");
-                return Ok((
-                    WriteBackOutcome::Skipped,
-                    Some("skipped interactively (no selection made)".to_string()),
-                ));
-            }
-
-            match input.parse::<usize>() {
-                Ok(n) if n >= 1 && n <= results.len() => &results[n - 1],
-                _ => {
-                    eprintln!("Invalid selection; skipping PID write-back.");
-                    return Ok((
-                        WriteBackOutcome::Skipped,
-                        Some("invalid response level selection".to_string()),
-                    ));
-                }
-            }
+        WriteBackSelection::Failed(detail) => {
+            return Ok((WriteBackOutcome::Failed, Some(detail)));
         }
     };
 
@@ -2349,20 +2668,15 @@ async fn maybe_write_back(
     )
     .await?;
 
-    match outcome {
-        PidWriteOutcome::Written => {
-            if output == OutputFormat::Table {
-                println!("Wrote and confirmed {response_level:?} PID parameters.");
-            }
-            Ok((WriteBackOutcome::Written { response_level }, None))
-        }
-        PidWriteOutcome::Failed { detail } => {
-            if output == OutputFormat::Table {
-                println!("PID write-back failed: {detail}");
-            }
-            Ok((WriteBackOutcome::Failed, Some(detail)))
-        }
-    }
+    Ok(finish_write_back(output, response_level, outcome))
+}
+
+fn prints_table_output(output: OutputFormat) -> bool {
+    matches!(output, OutputFormat::Table)
+}
+
+fn skips_interactive_prompt(write_pid: Option<ResponseLevel>, output: OutputFormat) -> bool {
+    write_pid.is_none() && matches!(output, OutputFormat::Json)
 }
 
 #[cfg(test)]
@@ -2385,6 +2699,31 @@ mod tests {
     /// requires it.
     fn test_config() -> crate::config::BhtuneConfig {
         crate::config::BhtuneConfig::default()
+    }
+
+    fn time_anchor_at(utc: DateTime<Utc>) -> RunTimeAnchor {
+        RunTimeAnchor::from_parts(utc, tokio::time::Instant::now())
+    }
+
+    fn timing_for_args(args: &TuneArgs) -> PollTimingAccumulator {
+        let basis = match args.driver {
+            DriverKindArg::Opcda => TimingBasis::LiveMonotonic,
+            DriverKindArg::Simulator => TimingBasis::SimulatedFixedStep,
+        };
+        PollTimingAccumulator::new(basis, args.poll_interval_ms)
+    }
+
+    fn delayed_live_timing_metrics() -> TimingMetrics {
+        TimingMetrics {
+            basis: TimingBasis::LiveMonotonic,
+            requested_interval_ms: 800,
+            sample_gap_count: 2,
+            mean_sample_gap_ms: Some(1_200.0),
+            max_sample_gap_ms: Some(1_600.0),
+            missed_poll_opportunity_count: 1,
+            measured_oscillation_period_ms: None,
+            approximate_samples_per_period: None,
+        }
     }
 
     /// A fast-converging simulator tune: proportionally scaled down from
@@ -2420,7 +2759,9 @@ mod tests {
             direction: Some(DirectionArg::Reverse),
             tag_overrides: None,
             poll_interval_ms: 5,
-            timeout_secs: 3600,
+            // Keep ordinary tune tests bounded even when a mutation prevents the
+            // simulator from completing. The dedicated timeout test overrides this.
+            timeout_secs: 5,
             op_timeout_secs: 30,
             restore_timeout_secs: 30,
             notes: Some("test note".to_string()),
@@ -2449,6 +2790,25 @@ mod tests {
         assert_eq!(runs[0].loop_name, "ignored-for-simulator");
         assert_eq!(runs[0].notes.as_deref(), Some("test note"));
         assert!(runs[0].initial_readings.is_some());
+        let timing = runs[0]
+            .timing_metrics
+            .expect("completed simulator run should record timing diagnostics");
+        assert_eq!(timing.basis, TimingBasis::SimulatedFixedStep);
+        assert_eq!(timing.requested_interval_ms, 5);
+        assert!(timing.sample_gap_count > 0);
+        assert_eq!(timing.mean_sample_gap_ms, Some(5.0));
+        assert_eq!(timing.max_sample_gap_ms, Some(5.0));
+        assert_eq!(timing.missed_poll_opportunity_count, 0);
+        assert!(
+            timing
+                .measured_oscillation_period_ms
+                .is_some_and(|period| period > 0.0)
+        );
+        assert!(
+            timing
+                .approximate_samples_per_period
+                .is_some_and(|samples| samples > 1.0)
+        );
 
         // A simulator run has no OPC DA connection at all -- `db-run-request-snapshot`
         // requires both to be `None` here regardless of whatever `--bridge-host` default
@@ -2480,6 +2840,20 @@ mod tests {
         // skipped entirely rather than hanging on stdin.
         let writes = TuneWriteRow::list_for_run(&pool, runs[0].id).await.unwrap();
         assert!(writes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prepared_tune_run_id_matches_the_persisted_run_id() {
+        let pool = seeded_pool().await;
+        let first = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let second = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+
+        assert!(first.run_id() > 0);
+        assert_eq!(second.run_id(), first.run_id() + 1);
     }
 
     /// Every range/direction override is CLI-supplied below, so `read_initial_values` never
@@ -2623,16 +2997,19 @@ mod tests {
         assert!(err.to_string().contains("no OPC server specified"));
     }
 
-    /// `--mrft-delay` is whole seconds (the smallest non-zero value costs ~1s of real
-    /// wall-clock time, both before the test starts switching and after it completes), so
-    /// this is deliberately the one slower test in the suite -- there is no way to fast
-    /// forward `Utc::now()`-based padding-window comparisons the way paused `tokio` time
-    /// fast-forwards `interval`/`sleep`.
+    /// `--mrft-delay` is whole seconds (the smallest non-zero value costs ~1s of logical
+    /// simulator time both before switching and after completion). Fixed-step timestamps make
+    /// the result deterministic, but the polling interval still paces those ticks in real time;
+    /// the SQLite-backed test cannot use Tokio's paused clock without also expiring sqlx's own
+    /// pool timers.
     #[tokio::test]
     async fn mrft_delay_pads_the_run_with_extra_recorded_samples() {
         let pool = seeded_pool().await;
         let mut args = fast_simulator_args();
         args.mrft_delay = 1;
+        // This test intentionally consumes about two seconds before ordinary MRFT work. Keep
+        // its safety budget independent of a loaded CI host while retaining the real timeout.
+        args.timeout_secs = 30;
         run(&pool, args, &test_config()).await.unwrap();
 
         let runs = TuneRunRow::list(
@@ -2653,6 +3030,88 @@ mod tests {
             .await
             .unwrap();
         assert!(samples.len() > 100);
+    }
+
+    #[tokio::test]
+    async fn mrft_delay_keeps_the_engine_idle_during_pre_test_padding() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let mut args = fast_simulator_args();
+        args.mrft_delay = 1;
+        args.cycles_count = Some(1_000);
+        let config = build_loop_config(&args).unwrap();
+        let started_at = Utc::now();
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "pre-delay",
+            TuneDriver::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
+        .await
+        .unwrap();
+        let driver = honeywell_driver_auto();
+        let initial = sample_initial_state();
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            lookup(
+                config.process_type,
+                config.controller_type,
+                ResponseLevel::Aggressive,
+            )
+            .beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(1);
+        });
+
+        let mut timing = timing_for_args(&args);
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            time_anchor_at(started_at),
+            &mut ctrl_c,
+            &mut MutationGuard::default(),
+            true,
+            &mut timing,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::UserInterrupt)
+        ));
+        assert!(
+            !TuneSampleRow::list_for_run(&pool, run.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            driver.write_log().is_empty(),
+            "MRFT writes must not occur during pre-test padding"
+        );
     }
 
     #[tokio::test]
@@ -2903,6 +3362,7 @@ mod tests {
             MrftCompat::default(),
         );
 
+        let mut timing = timing_for_args(&args);
         let outcome = run_polling_loop(
             &pool,
             run.id,
@@ -2910,10 +3370,11 @@ mod tests {
             &tags,
             &driver,
             &mut engine,
-            started_at,
+            time_anchor_at(started_at),
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
             false,
+            &mut timing,
         )
         .await
         .unwrap();
@@ -2957,6 +3418,81 @@ mod tests {
                 .write_log()
                 .iter()
                 .any(|(tag, value)| tag == &tags.manipulated_variable && value == "45")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_sample_timestamp_includes_driver_read_delay() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let driver = honeywell_driver_auto()
+            .delaying_read(&tags.process_variable, Duration::from_millis(50))
+            .with_quality(&tags.process_variable, bhtune_driver::Quality::Bad);
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let config = build_loop_config(&args).unwrap();
+        let started_at = DateTime::UNIX_EPOCH;
+        let time_anchor = time_anchor_at(started_at);
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "delayed-live-read",
+            TuneDriver::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            started_at,
+        )
+        .await
+        .unwrap();
+        let initial = sample_initial_state();
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            lookup(
+                config.process_type,
+                config.controller_type,
+                ResponseLevel::Aggressive,
+            )
+            .beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+
+        let mut timing = timing_for_args(&args);
+        let outcome = run_polling_loop(
+            &pool,
+            run.id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            time_anchor,
+            &mut CtrlC::never(),
+            &mut MutationGuard::default(),
+            false,
+            &mut timing,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::PoorQuality { .. })
+        ));
+        let samples = TuneSampleRow::list_for_run(&pool, run.id).await.unwrap();
+        assert_eq!(samples.len(), 1);
+        assert!(
+            samples[0].sample.time - started_at >= chrono::Duration::milliseconds(45),
+            "live sample timestamp should include the driver's 50 ms read delay"
         );
     }
 
@@ -3018,6 +3554,7 @@ mod tests {
             MrftCompat::default(),
         );
 
+        let mut timing = timing_for_args(&args);
         let outcome = run_polling_loop(
             &pool,
             run.id,
@@ -3025,10 +3562,11 @@ mod tests {
             &tags,
             &driver,
             &mut engine,
-            started_at,
+            time_anchor_at(started_at),
             &mut CtrlC::never(),
             &mut MutationGuard::default(),
             false,
+            &mut timing,
         )
         .await
         .unwrap();
@@ -3117,6 +3655,7 @@ mod tests {
             let _ = tx.send(1);
         });
 
+        let mut timing = timing_for_args(&args);
         let outcome = run_polling_loop(
             &pool,
             run.id,
@@ -3124,10 +3663,11 @@ mod tests {
             &tags,
             &driver,
             &mut engine,
-            started_at,
+            time_anchor_at(started_at),
             &mut ctrl_c,
             &mut MutationGuard::default(),
             true,
+            &mut timing,
         )
         .await
         .unwrap();
@@ -3164,6 +3704,7 @@ mod tests {
     #[derive(Default)]
     struct MockDriver {
         values: std::sync::Mutex<std::collections::HashMap<String, String>>,
+        read_batches: std::sync::Mutex<Vec<Vec<String>>>,
         writes: std::sync::Mutex<Vec<(String, String)>>,
         reject_writes: std::collections::HashSet<String>,
         error_reads: std::collections::HashSet<String>,
@@ -3171,11 +3712,14 @@ mod tests {
         empty_reads: std::collections::HashSet<String>,
         /// Tags whose `read`/`write` never resolves (`.await`s `std::future::pending`
         /// forever), simulating a stalled OPC DA call (gateway down, DCOM wedged, network
-        /// black-holed) so `--op-timeout-secs`/Ctrl+C-during-a-tick can actually be exercised
-        /// -- every other mock read/write body resolves synchronously and has no real
-        /// `.await` point, so it can never be caught mid-flight by a racing timeout/cancel.
+        /// black-holed) so `--op-timeout-secs`/Ctrl+C-during-a-tick can actually be exercised.
+        /// Finite delays are configured separately below; both delay forms await before any
+        /// mutex guard is acquired.
         hang_reads: std::collections::HashSet<String>,
         hang_writes: std::collections::HashSet<String>,
+        /// Per-tag finite read latency, used to prove that live monotonic sample timestamps
+        /// include the time spent awaiting the driver rather than being captured before it.
+        read_delays: std::collections::HashMap<String, Duration>,
         /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
         /// listed -- matching a healthy real driver and letting most tests ignore quality
         /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
@@ -3260,6 +3804,21 @@ mod tests {
             self
         }
 
+        fn delaying_read(mut self, tag: &str, delay: Duration) -> MockDriver {
+            self.read_delays.insert(tag.to_string(), delay);
+            self
+        }
+
+        async fn apply_read_delay(&self, tags: &[String]) {
+            if let Some(delay) = tags
+                .iter()
+                .filter_map(|tag| self.read_delays.get(tag))
+                .max()
+            {
+                tokio::time::sleep(*delay).await;
+            }
+        }
+
         /// Overrides a single tag's fixture value -- e.g. to make an otherwise-valid
         /// baseline driver (like `honeywell_driver_auto()`) report one bad reading.
         fn with_value(self, tag: &str, value: &str) -> MockDriver {
@@ -3324,6 +3883,10 @@ mod tests {
         fn write_log(&self) -> Vec<(String, String)> {
             self.writes.lock().unwrap().clone()
         }
+
+        fn read_batches(&self) -> Vec<Vec<String>> {
+            self.read_batches.lock().unwrap().clone()
+        }
     }
 
     #[async_trait::async_trait]
@@ -3332,9 +3895,11 @@ mod tests {
             &self,
             tags: &[String],
         ) -> bhtune_driver::DriverResult<Vec<bhtune_driver::TagValue>> {
+            self.read_batches.lock().unwrap().push(tags.to_vec());
             if tags.iter().any(|tag| self.hang_reads.contains(tag)) {
                 std::future::pending::<()>().await;
             }
+            self.apply_read_delay(tags).await;
             let store = self.values.lock().unwrap();
             let mut out = Vec::new();
             for tag in tags {
@@ -3538,6 +4103,17 @@ mod tests {
         LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &honeywell_template())
     }
 
+    fn yokogawa_template() -> DcsTemplate {
+        bhtune_core::built_in_templates()
+            .into_iter()
+            .find(|t| t.name == "Yokogawa CentumVP")
+            .expect("Yokogawa CentumVP is a built-in template")
+    }
+
+    fn yokogawa_tags() -> LoopTags {
+        LoopTags::derive_from_pv_tag("Unit1.FIC101.PV", &yokogawa_template())
+    }
+
     /// A `MockDriver` pre-populated with every tag `honeywell_tags()` derives, using values
     /// that make the loop initially Auto (`MODE=1`) with its Mode Attribute not yet at the
     /// Program value (`MODEATTR=1`, program value is `"2"`) — the common starting point most
@@ -3561,7 +4137,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_initial_values_reads_the_full_opcda_tag_set() {
+    async fn read_initial_values_batches_the_opcda_tag_set_before_auto_setpoint() {
         let template = honeywell_template();
         let tags = honeywell_tags();
         let driver = honeywell_driver_auto();
@@ -3578,6 +4154,86 @@ mod tests {
         assert_eq!(initial.direction, ControllerDirection::Direct);
         assert_eq!(initial.mode_raw.as_deref(), Some("1"));
         assert_eq!(initial.mode_attribute_raw.as_deref(), Some("1"));
+        assert_eq!(
+            driver.read_batches(),
+            vec![
+                vec![
+                    "Unit1.LIC101.PV".to_string(),
+                    "Unit1.LIC101.OP".to_string(),
+                    "Unit1.LIC101.MODE".to_string(),
+                    "Unit1.LIC101.MODEATTR".to_string(),
+                    "Unit1.LIC101.CTLACTN".to_string(),
+                    "Unit1.LIC101.PVEUHI".to_string(),
+                    "Unit1.LIC101.PVEULO".to_string(),
+                    "Unit1.LIC101.CVEUHI".to_string(),
+                    "Unit1.LIC101.CVEULO".to_string(),
+                ],
+                vec!["Unit1.LIC101.SP".to_string()],
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_initial_values_batches_manual_tags_without_reading_setpoint() {
+        let template = yokogawa_template();
+        let tags = yokogawa_tags();
+        let driver = MockDriver::new(&[
+            ("Unit1.FIC101.PV", "50.0"),
+            ("Unit1.FIC101.MV", "45.0"),
+            ("Unit1.FIC101.MODE", "MAN"),
+            ("Unit1.FIC101.DR", "0"),
+            ("Unit1.FIC101.SH", "100.0"),
+            ("Unit1.FIC101.SL", "0.0"),
+            ("Unit1.FIC101.MSH", "100.0"),
+            ("Unit1.FIC101.MSL", "0.0"),
+        ]);
+
+        let initial = read_initial_values(&driver, &tags, &template, false)
+            .await
+            .unwrap();
+
+        assert_eq!(initial.mode_raw.as_deref(), Some("MAN"));
+        assert_eq!(initial.setpoint_ini, None);
+        assert_eq!(
+            driver.read_batches(),
+            vec![vec![
+                "Unit1.FIC101.PV".to_string(),
+                "Unit1.FIC101.MV".to_string(),
+                "Unit1.FIC101.MODE".to_string(),
+                "Unit1.FIC101.DR".to_string(),
+                "Unit1.FIC101.SH".to_string(),
+                "Unit1.FIC101.SL".to_string(),
+                "Unit1.FIC101.MSH".to_string(),
+                "Unit1.FIC101.MSL".to_string(),
+            ]]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_initial_values_deduplicates_tags_and_skips_fixed_overrides() {
+        let template = honeywell_template();
+        let mut tags = honeywell_tags();
+        tags.manipulated_variable = tags.process_variable.clone();
+        tags.controller_mode = None;
+        tags.mode_attribute = None;
+        tags.controller_direction = TagOrValue::Value(ControllerDirection::Reverse);
+        tags.upper_pv_range = TagOrValue::Value(100.0);
+        tags.lower_pv_range = TagOrValue::Value(0.0);
+        tags.upper_mv_range = TagOrValue::Value(100.0);
+        tags.lower_mv_range = TagOrValue::Value(0.0);
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "50.0")]);
+
+        let initial = read_initial_values(&driver, &tags, &template, false)
+            .await
+            .unwrap();
+
+        assert_eq!(initial.pv_ini, 50.0);
+        assert_eq!(initial.mv_ini, 50.0);
+        assert_eq!(initial.direction, ControllerDirection::Reverse);
+        assert_eq!(
+            driver.read_batches(),
+            vec![vec!["Unit1.LIC101.PV".to_string()]]
+        );
     }
 
     #[tokio::test]
@@ -3669,6 +4325,7 @@ mod tests {
         let driver = honeywell_driver_auto()
             .with_quality(&tags.process_variable, bhtune_driver::Quality::Bad);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -3678,7 +4335,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -3691,7 +4348,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -3715,6 +4372,7 @@ mod tests {
         let driver = honeywell_driver_auto()
             .with_quality(&tags.process_variable, bhtune_driver::Quality::Uncertain);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -3724,7 +4382,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -3737,7 +4395,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             false,
             &mut CtrlC::never(),
@@ -3810,6 +4468,7 @@ mod tests {
             .with_value("Unit1.LIC101.CVEUHI", "0.0")
             .with_value("Unit1.LIC101.CVEULO", "100.0");
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -3819,7 +4478,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -3832,7 +4491,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -3860,6 +4519,7 @@ mod tests {
         let tags = honeywell_tags();
         let driver = honeywell_driver_auto().erroring_write("Unit1.LIC101.MODEATTR");
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -3869,7 +4529,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -3882,7 +4542,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -3933,7 +4593,7 @@ mod tests {
     }
 
     /// Covers `execute`'s second `restore_best_effort_then_propagate` call site: a failure in
-    /// `finish_completed_run` (here, `persist_results` colliding with the
+    /// `persist_completed_results` (here, `persist_results` colliding with the
     /// `UNIQUE (run_id, response_level)` constraint) *after* a real, successful MRFT
     /// completion must still trigger a best-effort restore. Uses the real `SimulatorDriver`
     /// (via `crate::driver::build`, exactly like `a_ctrl_c_style_abort_restores_and_records_aborted`
@@ -3941,13 +4601,14 @@ mod tests {
     /// completion, not just a mocked one -- the simulator's `LoopTags` has no mode/setpoint/
     /// mode-attribute tags at all, so its restore only ever has the MV step to confirm.
     #[tokio::test]
-    async fn execute_attempts_restore_when_finish_completed_run_fails_after_a_successful_test() {
+    async fn execute_attempts_restore_when_persist_completed_results_fails() {
         let pool = seeded_pool().await;
         let template = bhtune_core::built_in_templates().remove(0);
         let args = fast_simulator_args();
         let config = build_loop_config(&args).unwrap();
         let tags = build_loop_tags(&args, &template).unwrap();
         let driver = crate::driver::build(&args).await.unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -3957,7 +4618,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -3992,7 +4653,7 @@ mod tests {
             &tags,
             driver.as_ref(),
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -4014,6 +4675,12 @@ mod tests {
             stored.restore_status,
             Some(bhtune_db::models::RestoreStatus::Confirmed)
         );
+        let timing = stored
+            .timing_metrics
+            .expect("cadence metrics should survive a post-poll persistence failure");
+        assert!(timing.sample_gap_count > 0);
+        assert_eq!(timing.measured_oscillation_period_ms, None);
+        assert_eq!(timing.approximate_samples_per_period, None);
     }
 
     /// Covers the `Aborted` branch's `RestoreAttempt::Incomplete` mapping -- the sibling of
@@ -4037,6 +4704,7 @@ mod tests {
             .erroring_write("Unit1.LIC101.OP")
             .degrade_quality_after(&tags.process_variable, 1, bhtune_driver::Quality::Bad);
         let config = build_loop_config(&fast_simulator_args()).unwrap();
+        let time_anchor = RunTimeAnchor::now();
         let run = TuneRunRow::start(
             &pool,
             None,
@@ -4046,7 +4714,7 @@ mod tests {
             TemplateOrigin::Builtin,
             &template,
             &tags,
-            Utc::now(),
+            time_anchor.utc(),
         )
         .await
         .unwrap();
@@ -4059,7 +4727,7 @@ mod tests {
             &tags,
             &driver,
             config,
-            Utc::now(),
+            time_anchor,
             None,
             true,
             &mut CtrlC::never(),
@@ -4089,6 +4757,11 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not a number"));
+    }
+
+    #[test]
+    fn parse_f32_value_accepts_trimmed_finite_numbers() {
+        assert_eq!(parse_f32_value("Unit1.LIC101.PV", " 42.5 ").unwrap(), 42.5);
     }
 
     /// Rust's `f32::from_str` happily parses the literal strings `"nan"`/`"inf"` --
@@ -4132,6 +4805,24 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("finite"));
+    }
+
+    #[test]
+    fn read_batch_f32_returns_a_good_numeric_value() {
+        let values = HashMap::from([(
+            "Unit1.LIC101.PV".to_string(),
+            TagValue {
+                tag: "Unit1.LIC101.PV".to_string(),
+                value: "42.5".to_string(),
+                quality: bhtune_driver::Quality::Good,
+                timestamp: None,
+            },
+        )]);
+
+        assert_eq!(
+            read_batch_f32(&values, "Unit1.LIC101.PV", false).unwrap(),
+            42.5
+        );
     }
 
     #[tokio::test]
@@ -4668,6 +5359,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn maybe_write_back_reports_blank_and_n_as_no_selection() {
+        for input in [b"\n".as_slice(), b"N\n".as_slice()] {
+            let (pool, run_id) = run_with_recorded_results().await;
+            let template = honeywell_template();
+            let tags = honeywell_tags();
+            let driver = honeywell_driver_auto();
+
+            let (outcome, detail) = maybe_write_back(
+                &pool,
+                run_id,
+                &tags,
+                &template,
+                &driver,
+                build_loop_config(&fast_simulator_args()).unwrap(),
+                None,
+                OutputFormat::Table,
+                false,
+                &mut std::io::Cursor::new(input),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(outcome, WriteBackOutcome::Skipped);
+            assert_eq!(
+                detail.as_deref(),
+                Some("skipped interactively (no selection made)")
+            );
+            assert!(
+                TuneWriteRow::list_for_run(&pool, run_id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn maybe_write_back_writes_and_confirms_a_valid_selection() {
         let (outcome, writes) = write_back_with_input(b"2\n").await; // Moderate (index 1)
         assert_eq!(
@@ -5182,6 +5910,57 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn output_predicates_match_table_and_json_write_back_modes() {
+        assert!(prints_table_output(OutputFormat::Table));
+        assert!(!prints_table_output(OutputFormat::Json));
+        assert!(skips_interactive_prompt(None, OutputFormat::Json));
+        assert!(!skips_interactive_prompt(
+            Some(ResponseLevel::Aggressive),
+            OutputFormat::Json
+        ));
+        assert!(!skips_interactive_prompt(None, OutputFormat::Table));
+    }
+
+    #[test]
+    fn delayed_live_timing_emits_the_observational_warning() {
+        warn_on_missed_poll_opportunities(42, &delayed_live_timing_metrics());
+    }
+
+    #[tokio::test]
+    async fn timing_persistence_failure_does_not_replace_the_run_outcome() {
+        let pool = seeded_pool().await;
+        pool.close().await;
+
+        record_timing_metrics_best_effort(&pool, 42, delayed_live_timing_metrics()).await;
+    }
+
+    #[test]
+    fn restore_incomplete_warning_message_names_the_reason_and_mv_restore_target() {
+        let message = restore_incomplete_warning_message(
+            &honeywell_tags(),
+            &sample_initial_state(),
+            "restore timed out",
+        );
+
+        assert!(message.contains("restore timed out"));
+        assert!(message.contains("Unit1.LIC101.OP"));
+        assert!(message.contains("45"));
+        assert!(message.contains("loop's mode"));
+    }
+
+    #[test]
+    fn warn_restore_incomplete_returns_the_message_it_emits() {
+        let tags = honeywell_tags();
+        let initial = sample_initial_state();
+        let message = warn_restore_incomplete(&tags, &initial, "restore timed out");
+
+        assert_eq!(
+            message,
+            restore_incomplete_warning_message(&tags, &initial, "restore timed out")
         );
     }
 

@@ -13,8 +13,8 @@ use bhtune_db::{
     connect_in_memory,
     models::{
         DcsTemplateRow, NewTuneWrite, Pagination, RollbackState, SampleQuality, TemplateOrigin,
-        TuneDriver, TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunInitialReadings, TuneRunRow,
-        TuneSampleRow, TuneWriteRow, WriteReadback,
+        TimingBasis, TimingMetrics, TuneDriver, TuneOutcome, TuneResultRow, TuneRunFilter,
+        TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -95,6 +95,19 @@ fn sample_initial_readings() -> TuneRunInitialReadings {
         mode_raw: Some("1".to_string()),
         mode_attribute_raw: None,
         setpoint_ini: Some(50.0),
+    }
+}
+
+fn sample_timing_metrics() -> TimingMetrics {
+    TimingMetrics {
+        basis: TimingBasis::LiveMonotonic,
+        requested_interval_ms: 800,
+        sample_gap_count: 3,
+        mean_sample_gap_ms: Some(900.25),
+        max_sample_gap_ms: Some(1_700.5),
+        missed_poll_opportunity_count: 1,
+        measured_oscillation_period_ms: Some(12_345.0),
+        approximate_samples_per_period: Some(13.713_69),
     }
 }
 
@@ -180,6 +193,10 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
         started.request_json, "{}",
         "request_json defaults to an empty JSON object until record_connection is called"
     );
+    assert!(
+        started.timing_metrics.is_none(),
+        "timing metrics stay absent until polling has produced a diagnostic snapshot"
+    );
 
     let readings = sample_initial_readings();
     let with_readings = TuneRunRow::record_initial_readings(&pool, started.id, readings.clone())
@@ -206,6 +223,111 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
 
     let fetched = TuneRunRow::get(&pool, started.id).await.unwrap().unwrap();
     assert_eq!(fetched, completed);
+}
+
+#[tokio::test]
+async fn run_timing_metrics_round_trip_without_changing_lifecycle_state() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC-TIMING",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+    let metrics = sample_timing_metrics();
+
+    let updated = TuneRunRow::record_timing_metrics(&pool, run.id, metrics)
+        .await
+        .unwrap();
+
+    assert_eq!(updated.timing_metrics, Some(metrics));
+    assert_eq!(updated.outcome, TuneOutcome::Running);
+    assert_eq!(updated.completed_at, None);
+    assert_eq!(
+        TuneRunRow::get(&pool, run.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .timing_metrics,
+        Some(metrics)
+    );
+
+    sqlx::query("UPDATE tune_runs SET timing_metrics_json = '{}' WHERE id = ?")
+        .bind(run.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = TuneRunRow::get(&pool, run.id).await.unwrap_err();
+    assert!(matches!(
+        error,
+        bhtune_db::DbError::InvalidJsonShape {
+            column: "timing_metrics_json",
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn terminal_transitions_publish_timing_metrics_with_the_outcome() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let metrics = sample_timing_metrics();
+
+    let completing = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC-TIMING-COMPLETE",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+    let completed = TuneRunRow::complete_with_timing_metrics(
+        &pool,
+        completing.id,
+        now + Duration::seconds(30),
+        Some(metrics),
+    )
+    .await
+    .unwrap();
+    assert_eq!(completed.outcome, TuneOutcome::Completed);
+    assert_eq!(completed.timing_metrics, Some(metrics));
+
+    let aborting = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC-TIMING-ABORT",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+    let aborted = TuneRunRow::abort_with_timing_metrics(
+        &pool,
+        aborting.id,
+        now + Duration::seconds(15),
+        Some(metrics),
+    )
+    .await
+    .unwrap();
+    assert_eq!(aborted.outcome, TuneOutcome::Aborted);
+    assert_eq!(aborted.timing_metrics, Some(metrics));
 }
 
 #[tokio::test]

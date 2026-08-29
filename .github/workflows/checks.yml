@@ -24,6 +24,7 @@ jobs:
       frontend: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.frontend == 'true' }}
       website: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.website == 'true' }}
       package: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.package == 'true' }}
+      knip: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.knip == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -78,6 +79,16 @@ jobs:
               - 'crates/**/CHANGELOG.md'
               - 'packaging/**'
               - 'scripts/**'
+            knip:
+              - 'knip.jsonc'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.lefthook.yml'
+              - '.github/workflows/**'
+              - 'scripts/**'
+              - 'frontend/**'
+              - 'website/**'
 
   check:
     needs: changes
@@ -105,7 +116,7 @@ jobs:
       - name: Lint with clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-      - name: Run tests
+      - name: Run Rust tests (including simulator PID regression)
         run: cargo test --workspace --locked
 
       - name: Run cargo-deny
@@ -169,7 +180,7 @@ jobs:
       - name: Lint with clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-      - name: Run tests
+      - name: Run Rust tests (including simulator PID regression)
         run: cargo test --workspace --locked
 
   package:
@@ -191,8 +202,11 @@ jobs:
         with:
           tool: protoc
 
-      - name: Verify publishable packages
-        run: cargo package --workspace --locked
+      # Cargo's tarball verification removes local paths and resolves same-version workspace
+      # dependencies from crates.io. That cannot validate coordinated, unpublished API changes
+      # between workspace crates; the check/clippy/test jobs compile those local APIs instead.
+      - name: Assemble publishable packages
+        run: cargo package --workspace --locked --no-verify
 
   msrv:
     name: MSRV
@@ -275,10 +289,29 @@ jobs:
       - name: Build (also a broken-link/anchor drift gate for docs/)
         run: pnpm --filter bhtune-website run build
 
+  knip:
+    name: Knip dead-code analysis
+    needs: changes
+    if: needs.changes.outputs.knip == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Check for unused files, dependencies, and exports
+        run: pnpm run check:dead-code
+
   status:
     name: Required validation status
     if: always()
-    needs: [changes, check, windows, package, msrv, frontend, website]
+    needs: [changes, check, windows, package, msrv, frontend, website, knip]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -293,7 +326,8 @@ jobs:
           needs.changes.outputs.rust != 'true' &&
           needs.changes.outputs.frontend != 'true' &&
           needs.changes.outputs.website != 'true' &&
-          needs.changes.outputs.package != 'true'
+          needs.changes.outputs.package != 'true' &&
+          needs.changes.outputs.knip != 'true'
         run: echo "No validation-affecting files changed; heavy validation skipped."
 
       - name: Verify validation results
@@ -308,6 +342,8 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           WEBSITE_RESULT: ${{ needs.website.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
+          KNIP_CHANGED: ${{ needs.changes.outputs.knip }}
+          KNIP_RESULT: ${{ needs.knip.result }}
         run: |
           failed=0
 
@@ -332,6 +368,11 @@ jobs:
 
           if [[ "$PACKAGE_CHANGED" == "true" && "$PACKAGE_RESULT" != "success" ]]; then
             echo "Package verification ended with: $PACKAGE_RESULT"
+            failed=1
+          fi
+
+          if [[ "$KNIP_CHANGED" == "true" && "$KNIP_RESULT" != "success" ]]; then
+            echo "Knip dead-code analysis ended with: $KNIP_RESULT"
             failed=1
           fi
 

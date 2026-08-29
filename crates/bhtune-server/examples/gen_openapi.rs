@@ -32,7 +32,7 @@ fn main() {
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .and_then(|p| p.parent())
+        .and_then(std::path::Path::parent)
         .expect("crates/bhtune-server must be nested two levels under the workspace root")
         .to_path_buf()
 }

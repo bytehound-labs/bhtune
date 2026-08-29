@@ -1383,7 +1383,7 @@
           "runs"
         ],
         "summary": "Stream per-tick engine state for one run over Server-Sent Events.",
-        "description": "`GET /api/runs/{id}/stream` -- 404 if no run has that id. Emits a `sample` event (JSON\nbody: [`SampleResponse`], the same shape `GET /api/runs/{id}`'s `samples` array already\nuses) for every tick recorded so far, and every new tick recorded while connected, followed\nby exactly one final `done` event (JSON body: [`RunStreamDone`]) once the run reaches a\nterminal outcome -- after which the connection closes. Safe to open at any point in a run's\nlifecycle, including after it has already finished: in that case every sample is replayed\nonce as a burst of `sample` events, immediately followed by `done`.",
+        "description": "`GET /api/runs/{id}/stream` -- 404 if no run has that id. Emits one `initial` event (JSON\nbody: [`InitialReadingsResponse`]) as soon as the driver's initial snapshot is persisted,\nthen a `sample` event (JSON body: [`SampleResponse`], the same shape\n`GET /api/runs/{id}`'s `samples` array already uses) for every tick recorded so far and\nevery new tick recorded while connected, followed by exactly one final `done` event (JSON\nbody: [`RunStreamDone`]) once the run reaches a terminal outcome -- after which the\nconnection closes. Safe to open at any point in a run's lifecycle, including after it has\nalready finished: the initial snapshot (when available) and every sample are replayed once,\nimmediately followed by `done`.",
         "operationId": "stream_run",
         "parameters": [
           {
@@ -1399,7 +1399,7 @@
         ],
         "responses": {
           "200": {
-            "description": "A `text/event-stream` of `sample` events (data: SampleResponse) followed by one final `done` event (data: RunStreamDone).",
+            "description": "A `text/event-stream` with an optional `initial` event (data: InitialReadingsResponse), `sample` events (data: SampleResponse), and one final `done` event (data: RunStreamDone).",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -3170,6 +3170,16 @@
           "template_origin": {
             "$ref": "#/components/schemas/TemplateOrigin"
           },
+          "timing_metrics": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TimingMetrics"
+              }
+            ]
+          },
           "writes": {
             "type": "array",
             "items": {
@@ -3669,6 +3679,73 @@
           "seconds",
           "minutes"
         ]
+      },
+      "TimingBasis": {
+        "type": "string",
+        "description": "The clock basis used for a run's persisted polling-cadence diagnostics.",
+        "enum": [
+          "simulated_fixed_step",
+          "live_monotonic"
+        ]
+      },
+      "TimingMetrics": {
+        "type": "object",
+        "description": "Polling-cadence diagnostics captured over one run's successful PV samples.\n\nThe two optional gap fields are `None` when fewer than two samples were observed. The\nmeasured oscillation fields are populated only for a completed MRFT run.",
+        "required": [
+          "basis",
+          "requested_interval_ms",
+          "sample_gap_count",
+          "missed_poll_opportunity_count"
+        ],
+        "properties": {
+          "approximate_samples_per_period": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/TimingBasis"
+          },
+          "max_sample_gap_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "mean_sample_gap_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "measured_oscillation_period_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "missed_poll_opportunity_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of adjacent sample gaps at least twice the requested interval. Each such gap\nproves that at least one complete polling opportunity was missed.",
+            "minimum": 0
+          },
+          "requested_interval_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "sample_gap_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "TuneDriver": {
         "type": "string",

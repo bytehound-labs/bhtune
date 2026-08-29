@@ -144,7 +144,10 @@ fn platform_service_error(action: &str) -> anyhow::Error {
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::*;
+    use super::{
+        SERVICE_DISPLAY_NAME, SERVICE_NAME, ServiceDefinition, ServiceLifecycle,
+        build_service_definition, is_scm_launch_error_code,
+    };
     use crate::cli::Cli;
     use crate::run;
     use std::ffi::OsString;

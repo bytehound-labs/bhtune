@@ -14,8 +14,8 @@ use opcda_bridge_proto::bridge::{
     BrowsePage, BrowseRequest, CloseBrowseSessionRequest, ControlSearchIndexRequest,
     GetCapabilitiesRequest, GetCapabilitiesResponse, GetSearchIndexStatusRequest,
     ListServersRequest, ListServersResponse, ReadRequest, ReadResponse, RefreshSearchIndexRequest,
-    SearchEvent, SearchIndexResponse, SearchIndexStatus, SearchRequest, WriteRequest,
-    WriteResponse,
+    SearchEvent, SearchIndexResponse, SearchIndexStatus, SearchRequest, TagValue as ProtoTagValue,
+    WriteRequest, WriteResponse,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -164,14 +164,27 @@ impl Bridge for MockBridgeService {
         Ok(Response::new(self.search_index_response.clone()))
     }
 
-    async fn read(&self, _request: Request<ReadRequest>) -> Result<Response<ReadResponse>, Status> {
+    async fn read(&self, request: Request<ReadRequest>) -> Result<Response<ReadResponse>, Status> {
         let call = self.read_calls.fetch_add(1, Ordering::SeqCst) + 1;
         if let Some(fail_from) = self.fail_read_from_call
             && call >= fail_from
         {
             return Err(Status::unavailable("mock bridge: simulated read failure"));
         }
-        Ok(Response::new(self.read_response.clone()))
+        let request = request.into_inner();
+        let mut response = self.read_response.clone();
+        if response.values.len() == 1 && response.values[0].tag_id == "ignored" {
+            let template = response.values[0].clone();
+            response.values = request
+                .tag_ids
+                .into_iter()
+                .map(|tag_id| ProtoTagValue {
+                    tag_id,
+                    ..template.clone()
+                })
+                .collect();
+        }
+        Ok(Response::new(response))
     }
 
     async fn write(

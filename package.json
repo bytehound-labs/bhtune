@@ -5,9 +5,11 @@
   "license": "AGPL-3.0-or-later",
   "packageManager": "pnpm@11.22.0",
   "scripts": {
+    "check:dead-code": "knip --no-progress",
     "check:licenses": "node scripts/check-frontend-licenses.mjs"
   },
   "devDependencies": {
+    "knip": "6.32.3",
     "prettier": "^3.9.6"
   }
 }

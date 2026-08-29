@@ -505,6 +505,18 @@ mod tests {
     }
 
     #[test]
+    fn noise_is_added_to_the_computed_process_value() {
+        let seed = 123;
+        let noise_amplitude = 0.5;
+        let config = FopdtConfig::new(0.0, 0.0, 0.0, 1.0).with_noise_amplitude(noise_amplitude);
+        let mut expected_rng = StdRng::seed_from_u64(seed);
+        let expected_noise = expected_rng.random_range(-noise_amplitude..=noise_amplitude);
+
+        let mut process = FopdtProcess::new(config, 0.0, 0.0, seed);
+        assert_eq!(process.step(), expected_noise);
+    }
+
+    #[test]
     fn mv_reports_the_last_written_value_without_advancing_pv() {
         let config = FopdtConfig::new(1.0, 4.0, 0.0, 1.0);
         let mut process = FopdtProcess::new(config, 10.0, 10.0, 0);
@@ -530,6 +542,37 @@ mod tests {
         let output = pid.step(60.0, 50.0, 1.0);
         // error = 10.0, P = 2.0*10.0 = 20.0, output = bias(5) + 20 = 25.0.
         assert!((output - 25.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn zero_integral_time_disables_integral_action() {
+        let config = VirtualPidConfig {
+            kc: 1.0,
+            ti_s: Some(0.0),
+            td_s: None,
+            output_min: -1000.0,
+            output_max: 1000.0,
+            output_bias: 0.0,
+        };
+        let mut pid = VirtualPid::new(config);
+
+        assert_eq!(pid.step(10.0, 0.0, 1.0), 10.0);
+    }
+
+    #[test]
+    fn integral_action_scales_the_error_by_elapsed_time() {
+        let config = VirtualPidConfig {
+            kc: 1.0,
+            ti_s: Some(2.0),
+            td_s: None,
+            output_min: -1000.0,
+            output_max: 1000.0,
+            output_bias: 0.0,
+        };
+        let mut pid = VirtualPid::new(config);
+
+        // P = 10 and I = (10 * 2) * (1 / 2) = 10.
+        assert_eq!(pid.step(10.0, 0.0, 2.0), 20.0);
     }
 
     #[test]
@@ -585,6 +628,78 @@ mod tests {
         let output = pid.step(90.0, 50.0, 1.0);
         // error=40, P=1*40=40, I=0 (disabled), D=0 (pv unchanged) => output=40.
         assert!((output - 40.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn derivative_action_uses_measurement_delta_and_elapsed_time() {
+        let config = VirtualPidConfig {
+            kc: 2.0,
+            ti_s: None,
+            td_s: Some(3.0),
+            output_min: -1000.0,
+            output_max: 1000.0,
+            output_bias: 0.0,
+        };
+        let mut pid = VirtualPid::new(config);
+
+        pid.step(0.0, 0.0, 1.0);
+        // P = -2 and D = -2 * 3 * (1 - 0) / 2 = -3.
+        assert_eq!(pid.step(0.0, 1.0, 2.0), -5.0);
+    }
+
+    #[test]
+    fn non_positive_derivative_inputs_disable_derivative_action() {
+        let config = VirtualPidConfig {
+            kc: 1.0,
+            ti_s: None,
+            td_s: Some(-1.0),
+            output_min: -1000.0,
+            output_max: 1000.0,
+            output_bias: 0.0,
+        };
+        let mut negative_td = VirtualPid::new(config);
+        negative_td.step(0.0, 0.0, 1.0);
+        assert_eq!(negative_td.step(0.0, 1.0, 1.0), -1.0);
+
+        let mut negative_dt = VirtualPid::new(VirtualPidConfig {
+            td_s: Some(1.0),
+            ..config
+        });
+        negative_dt.step(0.0, 0.0, 1.0);
+        assert_eq!(negative_dt.step(0.0, 1.0, -1.0), -1.0);
+    }
+
+    #[test]
+    fn zero_derivative_time_and_elapsed_time_are_safe() {
+        let config = VirtualPidConfig {
+            kc: 1.0,
+            ti_s: None,
+            td_s: Some(0.0),
+            output_min: -1000.0,
+            output_max: 1000.0,
+            output_bias: 0.0,
+        };
+        let mut pid = VirtualPid::new(config);
+
+        pid.step(0.0, 0.0, 1.0);
+        let output = pid.step(0.0, 1.0, 0.0);
+        assert_eq!(output, -1.0);
+    }
+
+    #[test]
+    fn zero_elapsed_time_skips_derivative_action() {
+        let config = VirtualPidConfig {
+            kc: 1.0,
+            ti_s: None,
+            td_s: Some(1.0),
+            output_min: -1000.0,
+            output_max: 1000.0,
+            output_bias: 0.0,
+        };
+        let mut pid = VirtualPid::new(config);
+
+        pid.step(0.0, 0.0, 1.0);
+        assert_eq!(pid.step(0.0, 1.0, 0.0), -1.0);
     }
 
     #[test]
