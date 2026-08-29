@@ -1656,7 +1656,9 @@ precedence shipped separately as `cli-config` — see "Config precedence" below.
 `SimulatorDriver` for full happy-path runs (including the `--mrft-delay` padding test, whose
 fixed simulator timestamps advance once per real interval tick, so its configured padding still
 costs corresponding real test time unless the whole Tokio/SQLite test environment is made
-pausable), and a shared test-only mock gRPC `Bridge` service (`crate::test_support`, used by
+pausable; that test overrides the generic fast-fixture timeout to 30 seconds so a loaded Windows
+runner cannot abort its intentional two seconds of padding), and a shared test-only mock gRPC
+`Bridge` service (`crate::test_support`, used by
 `driver.rs`, `tune.rs`, and `commands/opc.rs`) to prove the OPC DA path — connect, initial
 reads, a mid-poll failure, and the `opc` passthrough commands — actually works end-to-end
 without a real gateway or OPC DA server. A single canned mock read response satisfies every
