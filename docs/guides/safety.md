@@ -87,6 +87,8 @@ tolerance without the relay cap. The final MRFT snapback hands responsibility to
 authoritative restore write, so BHTune does not wait twice for the same original-MV target.
 The restore readback is attempted immediately; only a mismatch is retried, and a
 `--restore-timeout-secs` value below four seconds is rejected before a live loop is mutated.
+An MV read that starts before the deadline but returns after it is still treated as late and does
+not confirm the command.
 
 Verification reads are separate from PV samples: they do not advance MRFT time, add trend/export
 samples, or increment polling timing statistics. `bhtune history show <run>` records each

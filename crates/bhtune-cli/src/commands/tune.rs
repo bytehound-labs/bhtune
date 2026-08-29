@@ -2513,8 +2513,8 @@ async fn verify_pending_mv_actuation_with(
     ctrl_c: &mut CtrlC,
     allow_uncertain_quality: bool,
     tracker: &mut MvActuationTracker,
-    mut trigger: MvVerificationTrigger,
-    mut call_limit: MvVerificationCallLimit,
+    trigger: MvVerificationTrigger,
+    call_limit: MvVerificationCallLimit,
     audit_policy: ActuationAuditPolicy,
 ) -> anyhow::Result<Option<AbortReason>> {
     let Some(pending) = tracker.pending.as_ref() else {
@@ -2525,22 +2525,127 @@ async fn verify_pending_mv_actuation_with(
         return Ok(None);
     }
 
-    let read = loop {
-        let pending = tracker
-            .pending
-            .as_ref()
-            .expect("pending actuation existed before the bounded read");
-        let limit = mv_verification_read_limit(trigger, pending, call_limit);
+    match read_pending_mv_verification(args, tag, driver, ctrl_c, tracker, trigger, call_limit)
+        .await?
+    {
+        PendingMvVerificationRead::Deferred => Ok(None),
+        PendingMvVerificationRead::RestoreTimedOut {
+            pending,
+            checked_at,
+            checked_instant,
+        } => {
+            record_final_actuation_observation(
+                pool,
+                &pending,
+                checked_at,
+                pending.last_readback,
+                None,
+                MvActuationStatus::Unverified,
+                "the restore timeout elapsed before MV confirmation completed",
+            )
+            .await;
+            Ok(Some(actuation_abort_reason(
+                tag,
+                &pending,
+                pending.last_readback,
+                checked_instant,
+            )))
+        }
+        PendingMvVerificationRead::Ready {
+            operation,
+            checked_at,
+            checked_instant,
+        } => match resolve_pending_mv_read(
+            pool,
+            args,
+            tag,
+            tracker,
+            operation,
+            checked_at,
+            checked_instant,
+            allow_uncertain_quality,
+        )
+        .await?
+        {
+            PendingMvVerificationResult::Abort(reason) => Ok(Some(reason)),
+            PendingMvVerificationResult::Value(value) => {
+                finalize_pending_mv_verification(pool, tag, tracker, value, trigger, audit_policy)
+                    .await
+            }
+        },
+    }
+}
+
+enum PendingMvVerificationRead {
+    Ready {
+        operation: anyhow::Result<TickOperation<(f32, bhtune_driver::Quality)>>,
+        checked_at: DateTime<Utc>,
+        checked_instant: Instant,
+    },
+    Deferred,
+    RestoreTimedOut {
+        pending: PendingMvActuation,
+        checked_at: DateTime<Utc>,
+        checked_instant: Instant,
+    },
+}
+
+struct PendingMvVerificationValue {
+    readback: f32,
+    sample_quality: SampleQuality,
+    checked_at: DateTime<Utc>,
+    checked_instant: Instant,
+}
+
+enum PendingMvVerificationResult {
+    Value(PendingMvVerificationValue),
+    Abort(AbortReason),
+}
+
+fn pending_verification_ready(
+    tracker: &MvActuationTracker,
+    operation: anyhow::Result<TickOperation<(f32, bhtune_driver::Quality)>>,
+) -> anyhow::Result<PendingMvVerificationRead> {
+    let checked_instant = Instant::now();
+    let pending = tracker
+        .pending
+        .as_ref()
+        .expect("pending actuation existed after the bounded read");
+    Ok(PendingMvVerificationRead::Ready {
+        operation,
+        checked_at: checked_at_for_pending(pending, checked_instant)?,
+        checked_instant,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn read_pending_mv_verification(
+    args: &TuneArgs,
+    tag: &str,
+    driver: &dyn Driver,
+    ctrl_c: &mut CtrlC,
+    tracker: &mut MvActuationTracker,
+    mut trigger: MvVerificationTrigger,
+    mut call_limit: MvVerificationCallLimit,
+) -> anyhow::Result<PendingMvVerificationRead> {
+    loop {
+        let limit = {
+            let pending = tracker
+                .pending
+                .as_ref()
+                .expect("pending actuation existed before the bounded read");
+            mv_verification_read_limit(trigger, pending, call_limit)
+        };
         let read = bounded_driver_call(
             args.op_timeout_secs,
             ctrl_c,
             read_numeric_sample(driver, tag),
         );
         let Some((deadline, limit_kind)) = limit else {
-            break read.await;
+            return pending_verification_ready(tracker, read.await);
         };
         match tokio::time::timeout_at(deadline, read).await {
-            Ok(result) => break result,
+            Ok(operation) => return pending_verification_ready(tracker, operation),
             Err(_) => match limit_kind {
                 MvVerificationLimitKind::Confirmation => {
                     trigger = MvVerificationTrigger::Deadline;
@@ -2554,7 +2659,7 @@ async fn verify_pending_mv_actuation_with(
                         .as_mut()
                         .expect("pending actuation existed before the bounded read")
                         .precheck_deferred_for_poll = true;
-                    return Ok(None);
+                    return Ok(PendingMvVerificationRead::Deferred);
                 }
                 MvVerificationLimitKind::Restore => {
                     let pending = tracker
@@ -2563,34 +2668,29 @@ async fn verify_pending_mv_actuation_with(
                         .expect("pending actuation existed before the bounded read");
                     let checked_instant = Instant::now();
                     let checked_at = checked_at_for_pending(&pending, checked_instant)?;
-                    record_final_actuation_observation(
-                        pool,
-                        &pending,
+                    return Ok(PendingMvVerificationRead::RestoreTimedOut {
+                        pending,
                         checked_at,
-                        pending.last_readback,
-                        None,
-                        MvActuationStatus::Unverified,
-                        "the restore timeout elapsed before MV confirmation completed",
-                    )
-                    .await;
-                    return Ok(Some(actuation_abort_reason(
-                        tag,
-                        &pending,
-                        pending.last_readback,
                         checked_instant,
-                    )));
+                    });
                 }
             },
         }
-    };
-    let checked_instant = Instant::now();
-    let checked_at = pending.switch_tick
-        + chrono::Duration::from_std(
-            checked_instant.saturating_duration_since(pending.switch_instant),
-        )
-        .map_err(|_| anyhow::anyhow!("MV actuation observation time exceeded chrono's range"))?;
+    }
+}
 
-    let operation = match read {
+#[allow(clippy::too_many_arguments)]
+async fn resolve_pending_mv_read(
+    pool: &SqlitePool,
+    args: &TuneArgs,
+    tag: &str,
+    tracker: &mut MvActuationTracker,
+    operation: anyhow::Result<TickOperation<(f32, bhtune_driver::Quality)>>,
+    checked_at: DateTime<Utc>,
+    checked_instant: Instant,
+    allow_uncertain_quality: bool,
+) -> anyhow::Result<PendingMvVerificationResult> {
+    let operation = match operation {
         Ok(operation) => operation,
         Err(error) => {
             let pending = tracker
@@ -2626,7 +2726,9 @@ async fn verify_pending_mv_actuation_with(
                 "MV verification was interrupted before confirmation completed",
             )
             .await;
-            return Ok(Some(AbortReason::UserInterrupt));
+            return Ok(PendingMvVerificationResult::Abort(
+                AbortReason::UserInterrupt,
+            ));
         }
         TickOperation::TimedOut => {
             let pending = tracker
@@ -2647,10 +2749,12 @@ async fn verify_pending_mv_actuation_with(
                 &detail,
             )
             .await;
-            return Ok(Some(AbortReason::OperationTimedOut {
-                tag: tag.to_string(),
-                op_timeout_secs: args.op_timeout_secs,
-            }));
+            return Ok(PendingMvVerificationResult::Abort(
+                AbortReason::OperationTimedOut {
+                    tag: tag.to_string(),
+                    op_timeout_secs: args.op_timeout_secs,
+                },
+            ));
         }
     };
     let sample_quality = sample_quality_from_driver(quality);
@@ -2670,19 +2774,92 @@ async fn verify_pending_mv_actuation_with(
             &detail,
         )
         .await;
-        return Ok(Some(AbortReason::PoorQuality {
-            tag: tag.to_string(),
-            quality,
-        }));
+        return Ok(PendingMvVerificationResult::Abort(
+            AbortReason::PoorQuality {
+                tag: tag.to_string(),
+                quality,
+            },
+        ));
     }
 
+    Ok(PendingMvVerificationResult::Value(
+        PendingMvVerificationValue {
+            readback,
+            sample_quality,
+            checked_at,
+            checked_instant,
+        },
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn confirm_pending_mv_actuation(
+    pool: &SqlitePool,
+    tracker: &mut MvActuationTracker,
+    pending: PendingMvActuation,
+    checked_at: DateTime<Utc>,
+    readback: f32,
+    sample_quality: SampleQuality,
+    audit_policy: ActuationAuditPolicy,
+) -> anyhow::Result<()> {
+    let recorded_attempts = match pending.id {
+        Some(id) => {
+            let result = TuneMvActuationRow::record_final_observation(
+                pool,
+                id,
+                checked_at,
+                Some(readback),
+                Some(sample_quality),
+                MvActuationStatus::Confirmed,
+                None,
+            )
+            .await;
+            match result {
+                Ok(row) => Some(row.attempt_count),
+                Err(error) if audit_policy == ActuationAuditPolicy::BestEffort => {
+                    tracing::error!(
+                        actuation_id = id,
+                        error = %error,
+                        "failed to record confirmed MV restore observation"
+                    );
+                    None
+                }
+                Err(error) => {
+                    tracker.pending = Some(pending);
+                    return Err(error.into());
+                }
+            }
+        }
+        None => None,
+    };
+    if let Some(attempt_count) = recorded_attempts.filter(|attempt_count| *attempt_count > 1) {
+        tracing::warn!(
+            actuation_id = ?pending.id,
+            attempt_count,
+            target = pending.target,
+            readback,
+            tolerance = pending.tolerance,
+            "MV actuation confirmed after earlier unsuccessful observations"
+        );
+    }
+    tracker.confirmed_mv = Some(pending.target);
+    Ok(())
+}
+
+async fn finalize_pending_mv_verification(
+    pool: &SqlitePool,
+    tag: &str,
+    tracker: &mut MvActuationTracker,
+    value: PendingMvVerificationValue,
+    trigger: MvVerificationTrigger,
+    audit_policy: ActuationAuditPolicy,
+) -> anyhow::Result<Option<AbortReason>> {
     let pending = tracker
         .pending
         .take()
-        .expect("pending actuation existed before the verification read");
-    let deadline_missed = checked_instant > pending.deadline;
-    if deadline_missed {
-        let detail = if actuation_matches(pending.target, readback, pending.tolerance) {
+        .expect("pending actuation existed before the verification result");
+    if value.checked_instant > pending.deadline {
+        let detail = if actuation_matches(pending.target, value.readback, pending.tolerance) {
             "MV readback matched the target only after the confirmation deadline"
         } else {
             "MV readback remained outside tolerance after the confirmation deadline"
@@ -2690,9 +2867,9 @@ async fn verify_pending_mv_actuation_with(
         record_final_actuation_observation(
             pool,
             &pending,
-            checked_at,
-            Some(readback),
-            Some(sample_quality),
+            value.checked_at,
+            Some(value.readback),
+            Some(value.sample_quality),
             MvActuationStatus::Failed,
             detail,
         )
@@ -2700,64 +2877,33 @@ async fn verify_pending_mv_actuation_with(
         return Ok(Some(actuation_abort_reason(
             tag,
             &pending,
-            Some(readback),
-            checked_instant,
+            Some(value.readback),
+            value.checked_instant,
         )));
     }
-    if actuation_matches(pending.target, readback, pending.tolerance) {
-        let recorded_attempts = match pending.id {
-            Some(id) => {
-                let result = TuneMvActuationRow::record_final_observation(
-                    pool,
-                    id,
-                    checked_at,
-                    Some(readback),
-                    Some(sample_quality),
-                    MvActuationStatus::Confirmed,
-                    None,
-                )
-                .await;
-                match result {
-                    Ok(row) => Some(row.attempt_count),
-                    Err(error) if audit_policy == ActuationAuditPolicy::BestEffort => {
-                        tracing::error!(
-                            actuation_id = id,
-                            error = %error,
-                            "failed to record confirmed MV restore observation"
-                        );
-                        None
-                    }
-                    Err(error) => {
-                        tracker.pending = Some(pending);
-                        return Err(error.into());
-                    }
-                }
-            }
-            None => None,
-        };
-        if let Some(attempt_count) = recorded_attempts.filter(|attempt_count| *attempt_count > 1) {
-            tracing::warn!(
-                actuation_id = ?pending.id,
-                attempt_count,
-                target = pending.target,
-                readback,
-                tolerance = pending.tolerance,
-                "MV actuation confirmed after earlier unsuccessful observations"
-            );
-        }
-        tracker.confirmed_mv = Some(pending.target);
+    if actuation_matches(pending.target, value.readback, pending.tolerance) {
+        confirm_pending_mv_actuation(
+            pool,
+            tracker,
+            pending,
+            value.checked_at,
+            value.readback,
+            value.sample_quality,
+            audit_policy,
+        )
+        .await?;
         return Ok(None);
     }
 
     let deadline_reached =
-        trigger == MvVerificationTrigger::Deadline || checked_instant >= pending.deadline;
+        trigger == MvVerificationTrigger::Deadline || value.checked_instant >= pending.deadline;
     if deadline_reached {
         record_final_actuation_observation(
             pool,
             &pending,
-            checked_at,
-            Some(readback),
-            Some(sample_quality),
+            value.checked_at,
+            Some(value.readback),
+            Some(value.sample_quality),
             MvActuationStatus::Failed,
             "MV readback remained outside tolerance at the confirmation deadline",
         )
@@ -2765,17 +2911,17 @@ async fn verify_pending_mv_actuation_with(
         return Ok(Some(actuation_abort_reason(
             tag,
             &pending,
-            Some(readback),
-            checked_instant,
+            Some(value.readback),
+            value.checked_instant,
         )));
     }
 
     let attempt_count = record_actuation_observation(
         pool,
         &pending,
-        checked_at,
-        Some(readback),
-        Some(sample_quality),
+        value.checked_at,
+        Some(value.readback),
+        Some(value.sample_quality),
         audit_policy,
     )
     .await?;
@@ -2783,12 +2929,12 @@ async fn verify_pending_mv_actuation_with(
         actuation_id = ?pending.id,
         attempt_count,
         target = pending.target,
-        readback,
+        readback = value.readback,
         tolerance = pending.tolerance,
         "MV readback is outside tolerance; confirmation remains pending"
     );
     let mut pending = pending;
-    pending.last_readback = Some(readback);
+    pending.last_readback = Some(value.readback);
     tracker.pending = Some(pending);
     Ok(None)
 }
@@ -6791,6 +6937,151 @@ mod tests {
         assert_eq!(rows[0].status, MvActuationStatus::Unverified);
         assert_eq!(rows[0].attempt_count, 1);
         assert_eq!(rows[0].readback_mv, None);
+    }
+
+    #[tokio::test]
+    async fn restore_verification_timeout_finalizes_the_pending_row_as_unverified() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_opc_test_run(&pool, "actuation-restore-verification-timeout").await;
+        let driver = honeywell_driver_auto().hanging_read(&tags.manipulated_variable);
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let initial = sample_initial_state();
+        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
+        let accepted_instant = Instant::now();
+        tracker
+            .record_accepted(
+                &pool,
+                run_id,
+                MvActuationKind::Restore,
+                initial.mv_ini,
+                accepted_instant,
+                Utc::now(),
+                accepted_instant,
+                mv_actuation_tolerance(MvActuationKind::Restore, initial.mv_ini, 55.0, 100.0)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let outcome = verify_pending_mv_actuation_with(
+            &pool,
+            &args,
+            &tags.manipulated_variable,
+            &driver,
+            &mut CtrlC::never(),
+            false,
+            &mut tracker,
+            MvVerificationTrigger::Deadline,
+            MvVerificationCallLimit::Restore(Instant::now()),
+            ActuationAuditPolicy::BestEffort,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            Some(AbortReason::MvActuationUnconfirmed { readback: None, .. })
+        ));
+        assert!(tracker.pending.is_none());
+        let rows = TuneMvActuationRow::list_for_run(&pool, run_id)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].status, MvActuationStatus::Unverified);
+        assert_eq!(rows[0].attempt_count, 1);
+    }
+
+    #[tokio::test]
+    async fn required_confirmation_audit_failure_keeps_the_pending_state_for_retry() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_opc_test_run(&pool, "actuation-required-audit-failure").await;
+        let driver = honeywell_driver_auto().with_value(&tags.manipulated_variable, "55");
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let initial = sample_initial_state();
+        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
+        let accepted_instant = Instant::now();
+        tracker
+            .record_accepted(
+                &pool,
+                run_id,
+                MvActuationKind::Relay,
+                55.0,
+                accepted_instant,
+                Utc::now(),
+                accepted_instant,
+                mv_actuation_tolerance(MvActuationKind::Relay, 55.0, 45.0, 100.0).unwrap(),
+            )
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let error = verify_pending_mv_actuation_with(
+            &pool,
+            &args,
+            &tags.manipulated_variable,
+            &driver,
+            &mut CtrlC::never(),
+            false,
+            &mut tracker,
+            MvVerificationTrigger::Scheduled,
+            MvVerificationCallLimit::None,
+            ActuationAuditPolicy::Required,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("pool"));
+        assert!(tracker.pending.is_some());
+        assert_eq!(tracker.confirmed_mv, None);
+    }
+
+    #[tokio::test]
+    async fn best_effort_confirmation_audit_failure_does_not_block_restore_state() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_opc_test_run(&pool, "actuation-best-effort-audit-failure").await;
+        let driver = honeywell_driver_auto().with_value(&tags.manipulated_variable, "55");
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let initial = sample_initial_state();
+        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
+        let accepted_instant = Instant::now();
+        tracker
+            .record_accepted(
+                &pool,
+                run_id,
+                MvActuationKind::Restore,
+                55.0,
+                accepted_instant,
+                Utc::now(),
+                accepted_instant,
+                mv_actuation_tolerance(MvActuationKind::Restore, 55.0, 45.0, 100.0).unwrap(),
+            )
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let outcome = verify_pending_mv_actuation_with(
+            &pool,
+            &args,
+            &tags.manipulated_variable,
+            &driver,
+            &mut CtrlC::never(),
+            false,
+            &mut tracker,
+            MvVerificationTrigger::Scheduled,
+            MvVerificationCallLimit::None,
+            ActuationAuditPolicy::BestEffort,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, None);
+        assert!(tracker.pending.is_none());
+        assert_eq!(tracker.confirmed_mv, Some(55.0));
     }
 
     #[tokio::test]
