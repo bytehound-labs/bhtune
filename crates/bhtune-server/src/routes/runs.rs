@@ -1177,10 +1177,10 @@ mod tests {
             request["restore_timeout_secs"] = serde_json::json!(timeout);
             let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
             let error = parsed.into_tune_args().unwrap_err();
-            assert!(matches!(&error, ApiError::BadRequest(_)));
-            if let ApiError::BadRequest(message) = &error {
-                assert!(message.contains("at least 4 seconds"));
-            }
+            assert!(matches!(
+                error,
+                ApiError::BadRequest(message) if message.contains("at least 4 seconds")
+            ));
         }
 
         let mut request = fast_simulator_request_json();
@@ -1198,10 +1198,10 @@ mod tests {
         request["restore_timeout_secs"] = serde_json::json!(0);
         let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
         let error = parsed.into_tune_args().unwrap_err();
-        assert!(matches!(&error, ApiError::BadRequest(_)));
-        if let ApiError::BadRequest(message) = &error {
-            assert!(message.contains("greater than zero"));
-        }
+        assert!(matches!(
+            error,
+            ApiError::BadRequest(message) if message.contains("greater than zero")
+        ));
 
         let mut request = fast_simulator_request_json();
         request["restore_timeout_secs"] = serde_json::json!(1);

@@ -1184,6 +1184,36 @@ impl MvActuationTracker {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn record_relay_actuation(
+    tracker: &mut MvActuationTracker,
+    pool: &SqlitePool,
+    run_id: i64,
+    target: f32,
+    switch_tick: DateTime<Utc>,
+    switch_instant: Instant,
+    first_check_at: Instant,
+    elapsed_since_observation: Duration,
+    accepted_instant: Instant,
+    tolerance: f32,
+) -> anyhow::Result<()> {
+    let accepted_at = utc_after_elapsed(switch_tick, elapsed_since_observation)?;
+    tracker
+        .record_accepted_at_switch(
+            pool,
+            run_id,
+            MvActuationKind::Relay,
+            target,
+            switch_tick,
+            switch_instant,
+            first_check_at,
+            accepted_at,
+            accepted_instant,
+            tolerance,
+        )
+        .await
+}
+
 fn f32_precision_floor(target: f32, previous: f32) -> f32 {
     4.0 * f32::EPSILON * target.abs().max(previous.abs()).max(1.0)
 }
@@ -1194,23 +1224,31 @@ fn mv_actuation_tolerance(
     previous: f32,
     mv_span: f32,
 ) -> anyhow::Result<f32> {
-    let precision_floor = f32_precision_floor(target, previous);
-    let span_tolerance = mv_span.abs() * MV_SPAN_TOLERANCE_FRACTION;
-    let uncapped = precision_floor + span_tolerance;
+    let uncapped = mv_actuation_uncapped_tolerance(target, previous, mv_span);
     if kind == MvActuationKind::Restore {
         return Ok(uncapped);
     }
 
     let step = (target - previous).abs();
     let relay_cap = step * RELAY_STEP_TOLERANCE_FRACTION;
-    if !step.is_finite() || step < MIN_RELAY_STEP || relay_cap <= precision_floor {
-        let minimum_step = MIN_RELAY_STEP.max(precision_floor / RELAY_STEP_TOLERANCE_FRACTION);
+    if !step.is_finite()
+        || step < MIN_RELAY_STEP
+        || relay_cap <= f32_precision_floor(target, previous)
+    {
+        let minimum_step = MIN_RELAY_STEP
+            .max(f32_precision_floor(target, previous) / RELAY_STEP_TOLERANCE_FRACTION);
         anyhow::bail!(
             "the effective relay step {step} is too small to verify safely (minimum {})",
             minimum_step
         );
     }
     Ok(uncapped.min(relay_cap))
+}
+
+fn mv_actuation_uncapped_tolerance(target: f32, previous: f32, mv_span: f32) -> f32 {
+    let precision_floor = f32_precision_floor(target, previous);
+    let span_tolerance = mv_span.abs() * MV_SPAN_TOLERANCE_FRACTION;
+    precision_floor + span_tolerance
 }
 
 fn validate_relay_actuation_step(
@@ -2478,7 +2516,7 @@ fn mv_verification_read_limit(
     trigger: MvVerificationTrigger,
     pending: &PendingMvActuation,
     call_limit: MvVerificationCallLimit,
-) -> Option<(Instant, MvVerificationLimitKind)> {
+) -> (Instant, MvVerificationLimitKind) {
     let external = match call_limit {
         MvVerificationCallLimit::None => None,
         MvVerificationCallLimit::PreservePoll(deadline) => {
@@ -2494,13 +2532,13 @@ fn mv_verification_read_limit(
             MvVerificationLimitKind::Deadline,
         );
         return match external {
-            Some(external) if external.0 < deadline_read_limit.0 => Some(external),
-            _ => Some(deadline_read_limit),
+            Some(external) if external.0 < deadline_read_limit.0 => external,
+            _ => deadline_read_limit,
         };
     }
     match external {
-        Some((deadline, _)) if deadline < pending.deadline => external,
-        _ => Some((pending.deadline, MvVerificationLimitKind::Confirmation)),
+        Some(external @ (deadline, _)) if deadline < pending.deadline => external,
+        _ => (pending.deadline, MvVerificationLimitKind::Confirmation),
     }
 }
 
@@ -2673,9 +2711,7 @@ async fn read_pending_mv_verification(
             ctrl_c,
             read_numeric_sample(driver, tag),
         );
-        let Some((deadline, limit_kind)) = limit else {
-            return pending_verification_ready(tracker, read.await);
-        };
+        let (deadline, limit_kind) = limit;
         match tokio::time::timeout_at(deadline, read).await {
             Ok(operation) => return pending_verification_ready(tracker, operation),
             Err(_) => match limit_kind {
@@ -3078,6 +3114,12 @@ fn checked_at_for_pending(
         .map_err(|_| anyhow::anyhow!("MV actuation observation time exceeded chrono's range"))?)
 }
 
+fn utc_after_elapsed(now: DateTime<Utc>, elapsed: Duration) -> anyhow::Result<DateTime<Utc>> {
+    Ok(now
+        + chrono::Duration::from_std(elapsed)
+            .map_err(|_| anyhow::anyhow!("MV command time exceeded chrono's range"))?)
+}
+
 /// The outcome of [`attempt_restore_with_actuation`] -- whether the restore was confirmed to run
 /// every applicable step to completion, or was abandoned/only partially successful because a
 /// second Ctrl+C arrived, `--restore-timeout-secs` elapsed, or one or more individual restore
@@ -3099,6 +3141,13 @@ enum RestoreAttempt {
 enum RestoreMvOutcome {
     Continue(RestoreStepOutcome),
     Interrupted(String),
+}
+
+fn restore_mv_outcome_or_failed(result: anyhow::Result<RestoreMvOutcome>) -> RestoreMvOutcome {
+    match result {
+        Ok(outcome) => outcome,
+        Err(error) => RestoreMvOutcome::Continue(RestoreStepOutcome::Failed(error.to_string())),
+    }
 }
 
 enum RestoreHandoffOutcome {
@@ -3132,16 +3181,9 @@ async fn try_confirm_final_snapback_handoff(
         .expect("the final-snapback predicate required a pending actuation");
     let now = Instant::now();
     let reserved_restore_window = Duration::from_secs(MV_ACTUATION_CONFIRMATION_SECS);
-    let Some(latest_handoff_finish) = restore_deadline.checked_sub(reserved_restore_window) else {
-        finalize_actuation_best_effort(
-            pool,
-            &pending,
-            MvActuationStatus::Superseded,
-            "the authoritative restore skipped the final-snapback handoff read to preserve its full MV confirmation budget",
-        )
-        .await;
-        return Ok(Some(RestoreHandoffOutcome::Rewrite));
-    };
+    let latest_handoff_finish = restore_deadline
+        .checked_sub(reserved_restore_window)
+        .unwrap_or(now);
     if now >= latest_handoff_finish {
         finalize_actuation_best_effort(
             pool,
@@ -3321,12 +3363,8 @@ async fn restore_mv_with_verification(
         Some(RestoreHandoffOutcome::Rewrite) | None => {}
     }
 
-    let tolerance = mv_actuation_tolerance(
-        MvActuationKind::Restore,
-        initial_mv,
-        tracker.previous_commanded_mv,
-        tracker.mv_span,
-    )?;
+    let tolerance =
+        mv_actuation_uncapped_tolerance(initial_mv, tracker.previous_commanded_mv, tracker.mv_span);
     let write = tokio::time::timeout_at(
         restore_deadline,
         bounded_driver_call(
@@ -3478,26 +3516,26 @@ async fn attempt_restore_with_actuation(
     mv_actuations: &mut Option<MvActuationTracker>,
 ) -> RestoreAttempt {
     let restore_deadline = Instant::now() + Duration::from_secs(args.restore_timeout_secs);
-    let mv = match restore_mv_with_verification(
-        pool,
-        run_id,
-        args,
-        driver,
-        &tags.manipulated_variable,
-        initial.mv_ini,
-        allow_uncertain_quality,
-        ctrl_c,
-        mv_actuations,
-        restore_deadline,
-    )
-    .await
-    {
-        Ok(RestoreMvOutcome::Continue(outcome)) => outcome,
-        Ok(RestoreMvOutcome::Interrupted(reason)) => {
+    let mv = match restore_mv_outcome_or_failed(
+        restore_mv_with_verification(
+            pool,
+            run_id,
+            args,
+            driver,
+            &tags.manipulated_variable,
+            initial.mv_ini,
+            allow_uncertain_quality,
+            ctrl_c,
+            mv_actuations,
+            restore_deadline,
+        )
+        .await,
+    ) {
+        RestoreMvOutcome::Continue(outcome) => outcome,
+        RestoreMvOutcome::Interrupted(reason) => {
             let _ = warn_restore_incomplete(tags, initial, &reason);
             return RestoreAttempt::Incomplete { reason };
         }
-        Err(error) => RestoreStepOutcome::Failed(error.to_string()),
     };
 
     tokio::select! {
@@ -3763,39 +3801,34 @@ async fn run_polling_loop(
         tokio::select! {
             biased;
             _ = wait_for_mv_verification(verification_wakeup) => {
-                let Some(tracker) = mv_actuations.as_mut() else {
-                    continue;
-                };
-                let Some(trigger) = tracker
-                    .pending
-                    .as_ref()
-                    .and_then(|pending| verification_trigger(pending, Instant::now()))
-                else {
-                    continue;
-                };
-                if let Some(reason) = verify_pending_mv_actuation_with(
-                    pool,
-                    args,
-                    &tags.manipulated_variable,
-                    driver,
-                    ctrl_c,
-                    allow_uncertain_quality,
-                    tracker,
-                    trigger,
-                    match trigger {
-                        MvVerificationTrigger::Scheduled => {
-                            if next_poll_at > Instant::now() {
-                                MvVerificationCallLimit::PreservePoll(next_poll_at)
-                            } else {
-                                MvVerificationCallLimit::None
+                if let Some(tracker) = mv_actuations.as_mut()
+                    && let Some(trigger) = tracker
+                        .pending
+                        .as_ref()
+                        .and_then(|pending| verification_trigger(pending, Instant::now()))
+                    && let Some(reason) = verify_pending_mv_actuation_with(
+                        pool,
+                        args,
+                        &tags.manipulated_variable,
+                        driver,
+                        ctrl_c,
+                        allow_uncertain_quality,
+                        tracker,
+                        trigger,
+                        match trigger {
+                            MvVerificationTrigger::Scheduled => {
+                                if next_poll_at > Instant::now() {
+                                    MvVerificationCallLimit::PreservePoll(next_poll_at)
+                                } else {
+                                    MvVerificationCallLimit::None
+                                }
                             }
-                        }
-                        MvVerificationTrigger::Deadline
-                        | MvVerificationTrigger::Replacement => MvVerificationCallLimit::None,
-                    },
-                    ActuationAuditPolicy::Required,
-                )
-                .await?
+                            MvVerificationTrigger::Deadline
+                            | MvVerificationTrigger::Replacement => MvVerificationCallLimit::None,
+                        },
+                        ActuationAuditPolicy::Required,
+                    )
+                    .await?
                 {
                     return Ok(PollOutcome::Aborted(reason));
                 }
@@ -3945,34 +3978,23 @@ async fn run_polling_loop(
                                         (mv_actuations.as_mut(), tolerance)
                                     {
                                         let commanded_instant = Instant::now();
-                                        let commanded_at = now
-                                            + chrono::Duration::from_std(
-                                                commanded_instant.saturating_duration_since(
-                                                    tick_observed_instant,
-                                                ),
-                                            )
-                                            .map_err(|_| {
-                                                anyhow::anyhow!(
-                                                    "MV command time exceeded chrono's range"
-                                                )
-                                            })?;
-                                        tracker
-                                            .record_accepted_at_switch(
-                                                pool,
-                                                run_id,
-                                                MvActuationKind::Relay,
-                                                v,
-                                                now,
-                                                tick_observed_instant,
-                                                tick_observed_instant
-                                                    + Duration::from_secs(u64::from(
-                                                        config.noise_protection_secs,
-                                                    )),
-                                                commanded_at,
-                                                commanded_instant,
-                                                tolerance,
-                                            )
-                                            .await?;
+                                        record_relay_actuation(
+                                            tracker,
+                                            pool,
+                                            run_id,
+                                            v,
+                                            now,
+                                            tick_observed_instant,
+                                            tick_observed_instant
+                                                + Duration::from_secs(u64::from(
+                                                    config.noise_protection_secs,
+                                                )),
+                                            commanded_instant
+                                                .saturating_duration_since(tick_observed_instant),
+                                            commanded_instant,
+                                            tolerance,
+                                        )
+                                        .await?;
                                     }
                                 }
                                 TickOperation::Cancelled => {
@@ -4630,6 +4652,61 @@ mod tests {
             DriverKindArg::Simulator => TimingBasis::SimulatedFixedStep,
         };
         PollTimingAccumulator::new(basis, args.poll_interval_ms)
+    }
+
+    #[test]
+    fn restore_mv_errors_become_failed_restore_steps() {
+        let outcome = restore_mv_outcome_or_failed(Err(anyhow::anyhow!("restore failed")));
+
+        assert!(matches!(
+            outcome,
+            RestoreMvOutcome::Continue(RestoreStepOutcome::Failed(detail))
+                if detail == "restore failed"
+        ));
+    }
+
+    #[test]
+    fn utc_after_elapsed_rejects_a_duration_outside_chrono_range() {
+        let error = utc_after_elapsed(Utc::now(), Duration::MAX).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("MV command time exceeded chrono's range")
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_actuation_timestamp_conversion_error_is_propagated() {
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let initial = sample_initial_state();
+        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
+        let now = Utc::now();
+        let instant = Instant::now();
+
+        let error = record_relay_actuation(
+            &mut tracker,
+            &pool,
+            0,
+            55.0,
+            now,
+            instant,
+            instant,
+            Duration::MAX,
+            instant,
+            1.0,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("MV command time exceeded chrono's range")
+        );
+        assert!(tracker.pending.is_none());
     }
 
     fn delayed_live_timing_metrics() -> TimingMetrics {
@@ -6129,6 +6206,338 @@ mod tests {
         assert!(error.to_string().contains("too small to verify safely"));
     }
 
+    fn pending_actuation(
+        id: Option<i64>,
+        kind: MvActuationKind,
+        target: f32,
+        first_check_at: Instant,
+        deadline: Instant,
+        last_readback: Option<f32>,
+    ) -> PendingMvActuation {
+        let now = Instant::now();
+        PendingMvActuation {
+            id,
+            kind,
+            target,
+            tolerance: 0.1,
+            switch_tick: Utc::now(),
+            switch_instant: now,
+            accepted_instant: now,
+            first_check_at,
+            deadline,
+            last_readback,
+            precheck_deferred_for_poll: false,
+        }
+    }
+
+    fn tracker_with_pending(pending: PendingMvActuation) -> MvActuationTracker {
+        MvActuationTracker {
+            next_sequence: 1,
+            previous_commanded_mv: 55.0,
+            confirmed_mv: None,
+            pending: Some(pending),
+            mv_span: 100.0,
+        }
+    }
+
+    #[test]
+    fn mv_actuation_abort_format_falls_back_for_other_abort_reasons() {
+        assert_eq!(
+            format_mv_actuation_abort_reason(&AbortReason::UserInterrupt),
+            "UserInterrupt"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_helpers_skip_rows_without_an_audit_id_or_pending_actuation() {
+        let pool = seeded_pool().await;
+        let now = Instant::now();
+        let pending = pending_actuation(
+            None,
+            MvActuationKind::Restore,
+            45.0,
+            now,
+            now + Duration::from_secs(1),
+            None,
+        );
+
+        assert_eq!(
+            record_actuation_observation(
+                &pool,
+                &pending,
+                Utc::now(),
+                Some(45.0),
+                Some(SampleQuality::Good),
+                ActuationAuditPolicy::Required,
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            record_final_actuation_observation(
+                &pool,
+                &pending,
+                Utc::now(),
+                Some(45.0),
+                Some(SampleQuality::Good),
+                MvActuationStatus::Confirmed,
+                "",
+            )
+            .await,
+            None
+        );
+        finalize_actuation_best_effort(
+            &pool,
+            &pending,
+            MvActuationStatus::Superseded,
+            "no audit row",
+        )
+        .await;
+
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let mut tracker = MvActuationTracker::for_run(&args, &sample_initial_state()).unwrap();
+        supersede_pending_actuation_best_effort(&pool, &mut tracker, "nothing pending").await;
+        assert!(tracker.pending.is_none());
+    }
+
+    #[tokio::test]
+    async fn audit_helpers_apply_required_and_best_effort_failure_policies() {
+        let pool = seeded_pool().await;
+        let now = Instant::now();
+        let pending = pending_actuation(
+            Some(i64::MAX),
+            MvActuationKind::Restore,
+            45.0,
+            now,
+            now + Duration::from_secs(1),
+            None,
+        );
+        pool.close().await;
+
+        assert_eq!(
+            record_actuation_observation(
+                &pool,
+                &pending,
+                Utc::now(),
+                Some(45.0),
+                Some(SampleQuality::Good),
+                ActuationAuditPolicy::BestEffort,
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        assert!(
+            record_actuation_observation(
+                &pool,
+                &pending,
+                Utc::now(),
+                Some(45.0),
+                Some(SampleQuality::Good),
+                ActuationAuditPolicy::Required,
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            record_final_actuation_observation(
+                &pool,
+                &pending,
+                Utc::now(),
+                Some(45.0),
+                Some(SampleQuality::Good),
+                MvActuationStatus::Confirmed,
+                "closed pool",
+            )
+            .await,
+            None
+        );
+        finalize_actuation_best_effort(
+            &pool,
+            &pending,
+            MvActuationStatus::Superseded,
+            "closed pool",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn replacement_before_any_readback_is_finalized_as_unverified() {
+        let pool = seeded_pool().await;
+        let now = Instant::now();
+        let pending = pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            55.0,
+            now,
+            now + Duration::from_secs(1),
+            None,
+        );
+        let mut tracker = tracker_with_pending(pending);
+
+        let reason =
+            reject_replacement_for_pending_actuation(&pool, "Unit1.LIC101.OP", &mut tracker)
+                .await
+                .unwrap();
+
+        assert!(matches!(
+            reason,
+            AbortReason::MvActuationUnconfirmed { readback: None, .. }
+        ));
+        assert!(tracker.pending.is_none());
+    }
+
+    #[tokio::test]
+    async fn verification_without_pending_work_or_before_first_check_is_a_noop() {
+        let pool = seeded_pool().await;
+        let driver = honeywell_driver_auto();
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let mut tracker = MvActuationTracker::for_run(&args, &sample_initial_state()).unwrap();
+
+        assert_eq!(
+            verify_pending_mv_actuation_with(
+                &pool,
+                &args,
+                "Unit1.LIC101.OP",
+                &driver,
+                &mut CtrlC::never(),
+                false,
+                &mut tracker,
+                MvVerificationTrigger::Scheduled,
+                MvVerificationCallLimit::None,
+                ActuationAuditPolicy::Required,
+            )
+            .await
+            .unwrap(),
+            None
+        );
+
+        let now = Instant::now();
+        tracker.pending = Some(pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            55.0,
+            now + Duration::from_secs(1),
+            now + Duration::from_secs(2),
+            None,
+        ));
+        assert_eq!(
+            verify_pending_mv_actuation_with(
+                &pool,
+                &args,
+                "Unit1.LIC101.OP",
+                &driver,
+                &mut CtrlC::never(),
+                false,
+                &mut tracker,
+                MvVerificationTrigger::Scheduled,
+                MvVerificationCallLimit::None,
+                ActuationAuditPolicy::Required,
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        assert!(driver.read_batches().is_empty());
+    }
+
+    #[tokio::test]
+    async fn preserve_poll_limit_is_cleared_after_the_confirmation_deadline() {
+        let driver = honeywell_driver_auto().hanging_read("Unit1.LIC101.OP");
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.op_timeout_secs = 30;
+        let now = Instant::now();
+        let mut tracker = tracker_with_pending(pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            55.0,
+            now,
+            now + Duration::from_millis(10),
+            None,
+        ));
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let _ = tx.send(1);
+        });
+
+        let read = read_pending_mv_verification(
+            &args,
+            "Unit1.LIC101.OP",
+            &driver,
+            &mut ctrl_c,
+            &mut tracker,
+            MvVerificationTrigger::Scheduled,
+            MvVerificationCallLimit::PreservePoll(now + Duration::from_secs(1)),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            read,
+            PendingMvVerificationRead::Ready {
+                operation: Ok(TickOperation::Cancelled),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_deadline_trigger_rejects_a_mismatch_before_the_clock_deadline() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_opc_test_run(&pool, "actuation-explicit-deadline").await;
+        let driver = honeywell_driver_auto();
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let now = Instant::now();
+        let mut tracker = MvActuationTracker::for_run(&args, &sample_initial_state()).unwrap();
+        tracker
+            .record_accepted(
+                &pool,
+                run_id,
+                MvActuationKind::Relay,
+                55.0,
+                now,
+                Utc::now(),
+                now,
+                0.1,
+            )
+            .await
+            .unwrap();
+
+        let outcome = verify_pending_mv_actuation_with(
+            &pool,
+            &args,
+            &tags.manipulated_variable,
+            &driver,
+            &mut CtrlC::never(),
+            false,
+            &mut tracker,
+            MvVerificationTrigger::Deadline,
+            MvVerificationCallLimit::None,
+            ActuationAuditPolicy::Required,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            Some(AbortReason::MvActuationUnconfirmed {
+                readback: Some(45.0),
+                ..
+            })
+        ));
+        let rows = TuneMvActuationRow::list_for_run(&pool, run_id)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].status, MvActuationStatus::Failed);
+    }
+
     #[tokio::test]
     async fn first_verification_uses_the_switch_tick_even_when_write_acceptance_is_late() {
         let pool = seeded_pool().await;
@@ -6802,6 +7211,236 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn due_scheduled_verification_with_a_due_poll_uses_no_poll_preservation_limit() {
+        let pool = seeded_pool().await;
+        let (run_id, config, _template, tags) =
+            start_opc_test_run(&pool, "scheduled-verification-before-due-poll").await;
+        let driver = honeywell_driver_auto()
+            .with_quality(&tags.process_variable, bhtune_driver::Quality::Bad);
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.mrft_delay = 10;
+        let initial = sample_initial_state();
+        let now = Instant::now();
+        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
+        tracker
+            .record_accepted(
+                &pool,
+                run_id,
+                MvActuationKind::Relay,
+                initial.mv_ini,
+                now,
+                Utc::now(),
+                now,
+                0.1,
+            )
+            .await
+            .unwrap();
+        let mut tracker = Some(tracker);
+        let started_at = Utc::now();
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            lookup(
+                config.process_type,
+                config.controller_type,
+                ResponseLevel::Aggressive,
+            )
+            .beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+        let mut timing = timing_for_args(&args);
+
+        let outcome = run_polling_loop(
+            &pool,
+            run_id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            time_anchor_at(started_at),
+            &mut CtrlC::never(),
+            &mut MutationGuard::default(),
+            false,
+            &mut timing,
+            &mut tracker,
+            config,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::PoorQuality { .. })
+        ));
+        assert_eq!(
+            driver.read_batches(),
+            vec![
+                vec![tags.manipulated_variable.clone()],
+                vec![tags.process_variable.clone()]
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_preview_uses_deadline_verification_and_records_the_abort_sample() {
+        let pool = seeded_pool().await;
+        let (run_id, config, _template, tags) =
+            start_opc_test_run(&pool, "deadline-preview-verification").await;
+        let driver = honeywell_driver_auto();
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.timeout_secs = 1;
+        let initial = sample_initial_state();
+        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
+        let now = Instant::now();
+        tracker.pending = Some(pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            35.0,
+            now + Duration::from_secs(1),
+            now,
+            None,
+        ));
+        let mut tracker = Some(tracker);
+        let started_at = Utc::now();
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            lookup(
+                config.process_type,
+                config.controller_type,
+                ResponseLevel::Aggressive,
+            )
+            .beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+        let state_before = engine.state();
+        let mut timing = timing_for_args(&args);
+
+        let outcome = run_polling_loop(
+            &pool,
+            run_id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            time_anchor_at(started_at),
+            &mut CtrlC::never(),
+            &mut MutationGuard::default(),
+            false,
+            &mut timing,
+            &mut tracker,
+            config,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::MvActuationUnconfirmed {
+                readback: Some(45.0),
+                ..
+            })
+        ));
+        assert_eq!(engine.state(), state_before);
+        assert_eq!(
+            TuneSampleRow::list_for_run(&pool, run_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_preview_commits_after_confirming_the_prior_command() {
+        let pool = seeded_pool().await;
+        let (run_id, config, _template, tags) =
+            start_opc_test_run(&pool, "confirmed-preview-replacement").await;
+        let driver = honeywell_driver_auto().degrade_quality_after(
+            &tags.process_variable,
+            1,
+            bhtune_driver::Quality::Bad,
+        );
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.timeout_secs = 1;
+        let initial = sample_initial_state();
+        let now = Instant::now();
+        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
+        tracker.pending = Some(pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            initial.mv_ini,
+            now + Duration::from_secs(1),
+            now + Duration::from_secs(2),
+            None,
+        ));
+        let mut tracker = Some(tracker);
+        let started_at = Utc::now();
+        let mut engine = MrftEngine::new(
+            config,
+            initial.direction,
+            lookup(
+                config.process_type,
+                config.controller_type,
+                ResponseLevel::Aggressive,
+            )
+            .beta,
+            InitialReadings {
+                pv_ini: initial.pv_ini,
+                mv_ini: initial.mv_ini,
+                mv_range_low: initial.mv_range_low,
+                mv_range_high: initial.mv_range_high,
+            },
+            started_at,
+            MrftCompat::default(),
+        );
+        let state_before = engine.state();
+        let mut timing = timing_for_args(&args);
+
+        let outcome = run_polling_loop(
+            &pool,
+            run_id,
+            &args,
+            &tags,
+            &driver,
+            &mut engine,
+            time_anchor_at(started_at),
+            &mut CtrlC::never(),
+            &mut MutationGuard::default(),
+            false,
+            &mut timing,
+            &mut tracker,
+            config,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PollOutcome::Aborted(AbortReason::PoorQuality { .. })
+        ));
+        assert_ne!(engine.state(), state_before);
+        assert_eq!(driver.write_log().len(), 1);
     }
 
     #[tokio::test]
@@ -7487,6 +8126,415 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].status, MvActuationStatus::Superseded);
         assert_eq!(rows[1].status, MvActuationStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    async fn snapback_handoff_skips_reads_that_would_consume_the_restore_budget() {
+        let pool = seeded_pool().await;
+        let driver = honeywell_driver_auto();
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let now = Instant::now();
+
+        for restore_deadline in [
+            now + Duration::from_secs(1),
+            Instant::now() + Duration::from_secs(MV_ACTUATION_CONFIRMATION_SECS),
+        ] {
+            let pending = pending_actuation(
+                None,
+                MvActuationKind::Relay,
+                45.0,
+                now,
+                now + Duration::from_secs(10),
+                None,
+            );
+            let mut tracker = tracker_with_pending(pending);
+            let outcome = try_confirm_final_snapback_handoff(
+                &pool,
+                &args,
+                &driver,
+                "Unit1.LIC101.OP",
+                45.0,
+                false,
+                &mut CtrlC::never(),
+                &mut tracker,
+                restore_deadline,
+            )
+            .await
+            .unwrap();
+
+            assert!(matches!(outcome, Some(RestoreHandoffOutcome::Rewrite)));
+            assert!(tracker.pending.is_none());
+        }
+        assert!(driver.read_batches().is_empty());
+    }
+
+    #[tokio::test]
+    async fn snapback_handoff_failures_fall_back_to_an_authoritative_rewrite() {
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let restore_deadline = Instant::now() + Duration::from_secs(10);
+
+        let cases = [
+            honeywell_driver_auto().erroring_read("Unit1.LIC101.OP"),
+            honeywell_driver_auto()
+                .hanging_read("Unit1.LIC101.OP")
+                .with_quality("Unit1.LIC101.OP", bhtune_driver::Quality::Good),
+            honeywell_driver_auto().with_quality("Unit1.LIC101.OP", bhtune_driver::Quality::Bad),
+        ];
+        for (index, driver) in cases.into_iter().enumerate() {
+            let now = Instant::now();
+            let pending = pending_actuation(
+                None,
+                MvActuationKind::Relay,
+                45.0,
+                now,
+                now + Duration::from_secs(10),
+                None,
+            );
+            let mut tracker = tracker_with_pending(pending);
+            if index == 1 {
+                args.op_timeout_secs = 0;
+            } else {
+                args.op_timeout_secs = 30;
+            }
+            let outcome = try_confirm_final_snapback_handoff(
+                &pool,
+                &args,
+                &driver,
+                "Unit1.LIC101.OP",
+                45.0,
+                false,
+                &mut CtrlC::never(),
+                &mut tracker,
+                restore_deadline,
+            )
+            .await
+            .unwrap();
+
+            assert!(matches!(outcome, Some(RestoreHandoffOutcome::Rewrite)));
+            assert!(tracker.pending.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn snapback_handoff_preserves_pending_state_when_ctrl_c_interrupts_the_read() {
+        let pool = seeded_pool().await;
+        let driver = honeywell_driver_auto().hanging_read("Unit1.LIC101.OP");
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let now = Instant::now();
+        let pending = pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            45.0,
+            now,
+            now + Duration::from_secs(10),
+            None,
+        );
+        let mut tracker = tracker_with_pending(pending);
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tx.send(1).unwrap();
+
+        let outcome = try_confirm_final_snapback_handoff(
+            &pool,
+            &args,
+            &driver,
+            "Unit1.LIC101.OP",
+            45.0,
+            false,
+            &mut ctrl_c,
+            &mut tracker,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            Some(RestoreHandoffOutcome::Interrupted(_))
+        ));
+        assert!(tracker.pending.is_some());
+    }
+
+    #[tokio::test]
+    async fn restore_mv_propagates_an_interrupted_final_snapback_handoff() {
+        let pool = seeded_pool().await;
+        let driver = honeywell_driver_auto().hanging_read("Unit1.LIC101.OP");
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let now = Instant::now();
+        let mut tracker = Some(tracker_with_pending(pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            45.0,
+            now,
+            now + Duration::from_secs(10),
+            None,
+        )));
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tx.send(1).unwrap();
+
+        let outcome = restore_mv_with_verification(
+            &pool,
+            0,
+            &args,
+            &driver,
+            "Unit1.LIC101.OP",
+            45.0,
+            false,
+            &mut ctrl_c,
+            &mut tracker,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            RestoreMvOutcome::Interrupted(ref detail)
+                if detail.contains("final MRFT snapback")
+        ));
+        assert!(tracker.as_ref().unwrap().pending.is_some());
+    }
+
+    #[tokio::test]
+    async fn restore_mv_without_a_tracker_reports_an_operation_timeout() {
+        let pool = seeded_pool().await;
+        let driver = honeywell_driver_auto().hanging_write("Unit1.LIC101.OP");
+        let mut args = fast_simulator_args();
+        args.op_timeout_secs = 0;
+        let mut tracker = None;
+
+        let outcome = restore_mv_with_verification(
+            &pool,
+            0,
+            &args,
+            &driver,
+            "Unit1.LIC101.OP",
+            45.0,
+            false,
+            &mut CtrlC::never(),
+            &mut tracker,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            RestoreMvOutcome::Continue(RestoreStepOutcome::Failed(ref detail))
+                if detail.contains("restore write did not complete")
+        ));
+    }
+
+    #[tokio::test]
+    async fn tracked_restore_write_handles_deadline_cancel_and_operation_timeout() {
+        let pool = seeded_pool().await;
+        let driver = honeywell_driver_auto().hanging_write("Unit1.LIC101.OP");
+        let initial = sample_initial_state();
+
+        let now = Instant::now();
+        let mut deadline_tracker = Some(tracker_with_pending(pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            55.0,
+            now,
+            now + Duration::from_secs(1),
+            None,
+        )));
+        let deadline_outcome = restore_mv_with_verification(
+            &pool,
+            0,
+            &fast_simulator_args(),
+            &driver,
+            "Unit1.LIC101.OP",
+            initial.mv_ini,
+            false,
+            &mut CtrlC::never(),
+            &mut deadline_tracker,
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            deadline_outcome,
+            RestoreMvOutcome::Interrupted(ref detail)
+                if detail.contains("--restore-timeout-secs")
+        ));
+
+        let now = Instant::now();
+        let mut cancel_tracker = Some(tracker_with_pending(pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            55.0,
+            now,
+            now + Duration::from_secs(1),
+            None,
+        )));
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tx.send(1).unwrap();
+        let cancel_outcome = restore_mv_with_verification(
+            &pool,
+            0,
+            &fast_simulator_args(),
+            &driver,
+            "Unit1.LIC101.OP",
+            initial.mv_ini,
+            false,
+            &mut ctrl_c,
+            &mut cancel_tracker,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            cancel_outcome,
+            RestoreMvOutcome::Interrupted(ref detail) if detail.contains("second Ctrl+C")
+        ));
+
+        let now = Instant::now();
+        let mut timeout_tracker = Some(tracker_with_pending(pending_actuation(
+            None,
+            MvActuationKind::Relay,
+            55.0,
+            now,
+            now + Duration::from_secs(1),
+            None,
+        )));
+        let mut timeout_args = fast_simulator_args();
+        timeout_args.op_timeout_secs = 0;
+        let timeout_outcome = restore_mv_with_verification(
+            &pool,
+            0,
+            &timeout_args,
+            &driver,
+            "Unit1.LIC101.OP",
+            initial.mv_ini,
+            false,
+            &mut CtrlC::never(),
+            &mut timeout_tracker,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            timeout_outcome,
+            RestoreMvOutcome::Continue(RestoreStepOutcome::Failed(ref detail))
+                if detail.contains("restore write did not complete")
+        ));
+    }
+
+    #[tokio::test]
+    async fn restore_verification_retries_a_mismatch_then_confirms() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_opc_test_run(&pool, "restore-retry-confirm").await;
+        let driver =
+            honeywell_driver_auto().with_read_sequence(&tags.manipulated_variable, &["50", "45"]);
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let initial = sample_initial_state();
+        let mut tracker = Some(MvActuationTracker::for_run(&args, &initial).unwrap());
+
+        let outcome = restore_mv_with_verification(
+            &pool,
+            run_id,
+            &args,
+            &driver,
+            &tags.manipulated_variable,
+            initial.mv_ini,
+            false,
+            &mut CtrlC::never(),
+            &mut tracker,
+            Instant::now() + Duration::from_secs(args.restore_timeout_secs),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            RestoreMvOutcome::Continue(RestoreStepOutcome::Succeeded)
+        ));
+        let rows = TuneMvActuationRow::list_for_run(&pool, run_id)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].attempt_count, 2);
+        assert_eq!(rows[0].status, MvActuationStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_during_restore_verification_interrupts_after_the_write() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_opc_test_run(&pool, "restore-verification-cancel").await;
+        let driver = honeywell_driver_auto()
+            .delaying_read(&tags.manipulated_variable, Duration::from_millis(500));
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let initial = sample_initial_state();
+        let mut tracker = Some(MvActuationTracker::for_run(&args, &initial).unwrap());
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let _ = tx.send(1);
+        });
+
+        let outcome = restore_mv_with_verification(
+            &pool,
+            run_id,
+            &args,
+            &driver,
+            &tags.manipulated_variable,
+            initial.mv_ini,
+            false,
+            &mut ctrl_c,
+            &mut tracker,
+            Instant::now() + Duration::from_secs(args.restore_timeout_secs),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            RestoreMvOutcome::Interrupted(ref detail)
+                if detail.contains("confirming the restored MV")
+        ));
+    }
+
+    #[tokio::test]
+    async fn restore_verification_reports_the_expired_restore_deadline() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_opc_test_run(&pool, "restore-verification-deadline").await;
+        let driver = honeywell_driver_auto().hanging_read(&tags.manipulated_variable);
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.op_timeout_secs = 30;
+        let initial = sample_initial_state();
+        let mut tracker = Some(MvActuationTracker::for_run(&args, &initial).unwrap());
+
+        let outcome = restore_mv_with_verification(
+            &pool,
+            run_id,
+            &args,
+            &driver,
+            &tags.manipulated_variable,
+            initial.mv_ini,
+            false,
+            &mut CtrlC::never(),
+            &mut tracker,
+            Instant::now() + Duration::from_millis(30),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            RestoreMvOutcome::Interrupted(ref detail)
+                if detail.contains("--restore-timeout-secs")
+        ));
     }
 
     #[tokio::test]
@@ -10658,6 +11706,8 @@ mod tests {
             &mut MutationGuard::default(),
             false,
             &mut timing,
+            &mut None,
+            config,
         )
         .await
         .unwrap();
@@ -10730,6 +11780,8 @@ mod tests {
             &mut MutationGuard::default(),
             false,
             &mut timing,
+            &mut None,
+            config,
         )
         .await
         .unwrap();
@@ -10864,6 +11916,113 @@ mod tests {
             }
             RestoreAttempt::Confirmed => panic!("expected RestoreAttempt::Incomplete"),
         }
+    }
+
+    #[tokio::test]
+    async fn restore_wrapper_handles_ctrl_c_after_mv_restore_completes() {
+        let pool = seeded_pool().await;
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let driver = honeywell_driver_auto().hanging_write(tags.controller_mode.as_ref().unwrap());
+        let initial = sample_initial_state();
+        let guard = MutationGuard {
+            mode_written: true,
+            ..MutationGuard::default()
+        };
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            let _ = tx.send(1);
+        });
+
+        let outcome = attempt_restore_with_actuation(
+            &pool,
+            0,
+            &fast_simulator_args(),
+            &driver,
+            &tags,
+            &template,
+            &initial,
+            &guard,
+            false,
+            &mut ctrl_c,
+            &mut None,
+        )
+        .await;
+
+        assert!(matches!(
+            outcome,
+            RestoreAttempt::Incomplete { ref reason } if reason.contains("second Ctrl+C")
+        ));
+        assert_eq!(
+            driver.value_of(&tags.manipulated_variable).as_deref(),
+            Some("45")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn restore_wrapper_handles_deadline_after_mv_restore_completes() {
+        let pool = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        let template = honeywell_template();
+        let tags = honeywell_tags();
+        let driver = honeywell_driver_auto().hanging_write(tags.controller_mode.as_ref().unwrap());
+        let initial = sample_initial_state();
+        let guard = MutationGuard {
+            mode_written: true,
+            ..MutationGuard::default()
+        };
+        let mut args = fast_simulator_args();
+        args.restore_timeout_secs = 1;
+        args.op_timeout_secs = 30;
+
+        let outcome = attempt_restore_with_actuation(
+            &pool,
+            0,
+            &args,
+            &driver,
+            &tags,
+            &template,
+            &initial,
+            &guard,
+            false,
+            &mut CtrlC::never(),
+            &mut None,
+        )
+        .await;
+
+        assert!(matches!(
+            outcome,
+            RestoreAttempt::Incomplete { ref reason }
+                if reason.contains("--restore-timeout-secs")
+        ));
+        assert_eq!(
+            driver.value_of(&tags.manipulated_variable).as_deref(),
+            Some("45")
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_failure_wrapper_preserves_error_when_status_and_cleanup_writes_fail() {
+        let pool = seeded_pool().await;
+        pool.close().await;
+        let original = anyhow::anyhow!("original polling failure");
+        let error = restore_best_effort_then_propagate(
+            &pool,
+            42,
+            &honeywell_driver_auto(),
+            &honeywell_tags(),
+            &honeywell_template(),
+            &sample_initial_state(),
+            &MutationGuard::default(),
+            &fast_simulator_args(),
+            false,
+            &mut CtrlC::never(),
+            &mut None,
+            original,
+        )
+        .await;
+
+        assert_eq!(error.to_string(), "original polling failure");
     }
 
     // --- `run_with_ctrl_c`: the real, ctrl-c-aware entry point, exercised end to end with ---

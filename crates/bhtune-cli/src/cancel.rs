@@ -243,6 +243,15 @@ mod tests {
         tokio::task::yield_now().await;
     }
 
+    #[tokio::test]
+    async fn signalled_waits_forever_when_all_senders_are_dropped() {
+        let (tx, rx) = watch::channel(0u32);
+        drop(tx);
+        let mut ctrl_c = CtrlC { rx };
+        let result = tokio::time::timeout(Duration::from_millis(20), ctrl_c.signalled()).await;
+        assert!(result.is_err());
+    }
+
     // `install()`'s own real-signal-handling behavior deliberately has no in-process test
     // here: raising a real `SIGINT` against this test binary before `install()`'s spawned
     // task has actually reached `tokio::signal::ctrl_c().await` (registering the OS-level
