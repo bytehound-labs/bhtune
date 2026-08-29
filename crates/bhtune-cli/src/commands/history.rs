@@ -901,7 +901,9 @@ async fn revert(
 mod tests {
     use super::*;
     use bhtune_core::{ControllerType, DcsTemplate, LoopConfig, LoopTags, ProcessType};
-    use bhtune_db::models::{TemplateOrigin, TuneDriver, TuneRunInitialReadings};
+    use bhtune_db::models::{
+        NewTuneMvActuation, TemplateOrigin, TuneDriver, TuneRunInitialReadings,
+    };
 
     fn sample_config() -> LoopConfig {
         LoopConfig {
@@ -1186,6 +1188,57 @@ mod tests {
         failed.rollback_state = Some(bhtune_db::models::RollbackState::Failed);
         failed.rollback_error = Some("mock rollback failure".to_string());
         TuneWriteRow::insert(&pool, run.id, failed).await.unwrap();
+
+        let confirmed_actuation = TuneMvActuationRow::insert_pending(
+            &pool,
+            run.id,
+            NewTuneMvActuation {
+                sequence: 0,
+                kind: MvActuationKind::Relay,
+                commanded_at: now,
+                target_mv: 55.0,
+                previous_commanded_mv: Some(50.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(4),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::record_final_observation(
+            &pool,
+            confirmed_actuation.id,
+            now + chrono::Duration::seconds(1),
+            Some(55.0),
+            Some(SampleQuality::Good),
+            MvActuationStatus::Confirmed,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let superseded_actuation = TuneMvActuationRow::insert_pending(
+            &pool,
+            run.id,
+            NewTuneMvActuation {
+                sequence: 1,
+                kind: MvActuationKind::Restore,
+                commanded_at: now + chrono::Duration::seconds(5),
+                target_mv: 50.0,
+                previous_commanded_mv: Some(55.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(9),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::finalize(
+            &pool,
+            superseded_actuation.id,
+            MvActuationStatus::Superseded,
+            Some("restore took over confirmation"),
+        )
+        .await
+        .unwrap();
 
         (pool, run.id)
     }

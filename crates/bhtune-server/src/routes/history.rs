@@ -672,6 +672,7 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use bhtune_db::models::NewTuneMvActuation;
     use tower::ServiceExt;
 
     async fn body_json(response: axum::response::Response) -> serde_json::Value {
@@ -878,6 +879,57 @@ mod tests {
         TuneWriteRow::insert(&state.pool, run_id, failed_write)
             .await
             .unwrap();
+
+        let confirmed_actuation = TuneMvActuationRow::insert_pending(
+            &state.pool,
+            run_id,
+            NewTuneMvActuation {
+                sequence: 0,
+                kind: MvActuationKind::Relay,
+                commanded_at: now,
+                target_mv: 55.0,
+                previous_commanded_mv: Some(50.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(4),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::record_final_observation(
+            &state.pool,
+            confirmed_actuation.id,
+            now + chrono::Duration::seconds(1),
+            Some(55.0),
+            Some(SampleQuality::Good),
+            MvActuationStatus::Confirmed,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let superseded_actuation = TuneMvActuationRow::insert_pending(
+            &state.pool,
+            run_id,
+            NewTuneMvActuation {
+                sequence: 1,
+                kind: MvActuationKind::Restore,
+                commanded_at: now + chrono::Duration::seconds(5),
+                target_mv: 50.0,
+                previous_commanded_mv: Some(55.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(9),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::finalize(
+            &state.pool,
+            superseded_actuation.id,
+            MvActuationStatus::Superseded,
+            Some("restore took over confirmation"),
+        )
+        .await
+        .unwrap();
 
         TuneRunRow::complete(&state.pool, run_id, now)
             .await
@@ -1105,6 +1157,39 @@ mod tests {
             failed["error_message"],
             "write rejected: value out of range"
         );
+
+        let actuations = body["mv_actuations"].as_array().unwrap();
+        assert_eq!(actuations.len(), 2);
+        let confirmed = actuations
+            .iter()
+            .find(|actuation| actuation["kind"] == "relay")
+            .unwrap();
+        assert_eq!(confirmed["sequence"], 0);
+        assert_eq!(confirmed["target_mv"], 55.0);
+        assert_eq!(confirmed["previous_commanded_mv"], 50.0);
+        assert_eq!(confirmed["tolerance"], 0.5);
+        assert!(confirmed["commanded_at"].is_string());
+        assert!(confirmed["confirmation_due_at"].is_string());
+        assert!(confirmed["last_checked_at"].is_string());
+        assert_eq!(confirmed["readback_mv"], 55.0);
+        assert_eq!(confirmed["readback_quality"], "good");
+        assert_eq!(confirmed["attempt_count"], 1);
+        assert_eq!(confirmed["status"], "confirmed");
+        assert!(confirmed["detail"].is_null());
+
+        let superseded = actuations
+            .iter()
+            .find(|actuation| actuation["kind"] == "restore")
+            .unwrap();
+        assert_eq!(superseded["sequence"], 1);
+        assert_eq!(superseded["target_mv"], 50.0);
+        assert_eq!(superseded["previous_commanded_mv"], 55.0);
+        assert!(superseded["last_checked_at"].is_null());
+        assert!(superseded["readback_mv"].is_null());
+        assert!(superseded["readback_quality"].is_null());
+        assert_eq!(superseded["attempt_count"], 0);
+        assert_eq!(superseded["status"], "superseded");
+        assert_eq!(superseded["detail"], "restore took over confirmation");
     }
 
     #[tokio::test]

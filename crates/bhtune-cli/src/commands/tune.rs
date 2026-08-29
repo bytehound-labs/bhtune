@@ -680,157 +680,162 @@ fn format_mv_actuation_abort_reason(reason: &AbortReason) -> String {
 fn print_summary(run_id: i64, outcome: &RunOutcome, output: OutputFormat) -> TuneOutcome {
     let tune_outcome = tune_outcome_for_run(outcome);
     match output {
-        OutputFormat::Table => match outcome {
-            RunOutcome::Completed {
-                write_back: WriteBackOutcome::Written { response_level },
-                ..
-            } => {
-                println!(
-                    "Tune completed successfully (run id {run_id}); wrote {response_level:?} PID parameters."
-                );
-            }
-            RunOutcome::Completed {
-                write_back: WriteBackOutcome::Skipped,
-                ..
-            } => {
-                println!("Tune completed successfully (run id {run_id}).");
-            }
-            RunOutcome::Completed {
-                write_back: WriteBackOutcome::Failed,
-                ..
-            } => {
-                println!(
-                    "Tune completed successfully (run id {run_id}), but PID write-back failed; the loop was left with its previous PID constants."
-                );
-            }
-            RunOutcome::Aborted(AbortReason::UserInterrupt) => {
-                println!("Tune aborted (Ctrl+C received; loop restored).");
-            }
-            RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => {
-                println!(
-                    "Tune aborted: exceeded the {timeout_secs}s --timeout-secs limit before completing; loop restored."
-                );
-            }
-            RunOutcome::Aborted(AbortReason::OperationTimedOut {
-                tag,
-                op_timeout_secs,
-            }) => {
-                println!(
-                    "Tune aborted: tag '{tag}' did not respond within the {op_timeout_secs}s --op-timeout-secs limit; loop restored."
-                );
-            }
-            RunOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => {
-                println!(
-                    "Tune aborted: tag '{tag}' reported OPC quality {quality:?} during polling; loop restored."
-                );
-            }
-            RunOutcome::Aborted(AbortReason::MvActuationUnconfirmed {
-                tag,
-                target,
-                readback,
-                tolerance,
-                elapsed_ms,
-                deadline_secs,
-            }) => {
-                let readback = readback
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "unavailable".to_string());
-                println!(
-                    "Tune aborted: MV tag '{tag}' did not confirm target {target} (readback {readback}, tolerance {tolerance}) after {:.3}s; the confirmation deadline was {deadline_secs}s. Loop restored.",
-                    *elapsed_ms as f64 / 1_000.0
-                );
-            }
-            RunOutcome::RestoreIncomplete { reason } => {
-                println!(
-                    "Tune ended, but the loop's restore could not be confirmed ({reason}). Check the loop by hand -- see the warning above for the tag and value to check."
-                );
-            }
-        },
-        OutputFormat::Json => {
-            let (write_back, response_level) = match outcome {
-                RunOutcome::Completed {
-                    write_back: WriteBackOutcome::Written { response_level },
-                    ..
-                } => ("written", Some(*response_level)),
-                RunOutcome::Completed {
-                    write_back: WriteBackOutcome::Skipped,
-                    ..
-                } => ("skipped", None),
-                RunOutcome::Completed {
-                    write_back: WriteBackOutcome::Failed,
-                    ..
-                } => ("failed", None),
-                RunOutcome::Aborted(_) => ("not_attempted", None),
-                RunOutcome::RestoreIncomplete { .. } => ("not_attempted", None),
-            };
-            let write_back_detail = match outcome {
-                RunOutcome::Completed {
-                    write_back_detail, ..
-                } => write_back_detail.clone(),
-                _ => None,
-            };
-            let timeout_secs = match outcome {
-                RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => Some(*timeout_secs),
-                _ => None,
-            };
-            let (poor_quality_tag, poor_quality) = match outcome {
-                RunOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => (
-                    Some(tag.clone()),
-                    Some(format!("{quality:?}").to_lowercase()),
-                ),
-                _ => (None, None),
-            };
-            let (op_timeout_tag, op_timeout_secs) = match outcome {
-                RunOutcome::Aborted(AbortReason::OperationTimedOut {
-                    tag,
-                    op_timeout_secs,
-                }) => (Some(tag.clone()), Some(*op_timeout_secs)),
-                _ => (None, None),
-            };
-            let restore_incomplete_reason = match outcome {
-                RunOutcome::RestoreIncomplete { reason } => Some(reason.clone()),
-                _ => None,
-            };
-            let actuation = match outcome {
-                RunOutcome::Aborted(AbortReason::MvActuationUnconfirmed {
-                    tag,
-                    target,
-                    readback,
-                    tolerance,
-                    elapsed_ms,
-                    deadline_secs,
-                }) => Some(serde_json::json!({
-                    "tag": tag,
-                    "target": target,
-                    "readback": readback,
-                    "tolerance": tolerance,
-                    "elapsed_ms": elapsed_ms,
-                    "deadline_secs": deadline_secs,
-                })),
-                _ => None,
-            };
-            let json = serde_json::json!({
-                "run_id": run_id,
-                "outcome": tune_outcome.label(),
-                "write_back": write_back,
-                "write_back_response_level": response_level,
-                "write_back_detail": write_back_detail,
-                "timeout_secs": timeout_secs,
-                "poor_quality_tag": poor_quality_tag,
-                "poor_quality": poor_quality,
-                "op_timeout_tag": op_timeout_tag,
-                "op_timeout_secs": op_timeout_secs,
-                "mv_actuation": actuation,
-                "restore_incomplete_reason": restore_incomplete_reason,
-            });
+        OutputFormat::Table => print_table_summary(run_id, outcome),
+        OutputFormat::Json => print_json_summary(run_id, outcome, tune_outcome),
+    }
+    tune_outcome
+}
+
+fn print_table_summary(run_id: i64, outcome: &RunOutcome) {
+    match outcome {
+        RunOutcome::Completed {
+            write_back: WriteBackOutcome::Written { response_level },
+            ..
+        } => {
             println!(
-                "{}",
-                serde_json::to_string_pretty(&json)
-                    .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+                "Tune completed successfully (run id {run_id}); wrote {response_level:?} PID parameters."
+            );
+        }
+        RunOutcome::Completed {
+            write_back: WriteBackOutcome::Skipped,
+            ..
+        } => {
+            println!("Tune completed successfully (run id {run_id}).");
+        }
+        RunOutcome::Completed {
+            write_back: WriteBackOutcome::Failed,
+            ..
+        } => {
+            println!(
+                "Tune completed successfully (run id {run_id}), but PID write-back failed; the loop was left with its previous PID constants."
+            );
+        }
+        RunOutcome::Aborted(AbortReason::UserInterrupt) => {
+            println!("Tune aborted (Ctrl+C received; loop restored).");
+        }
+        RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => {
+            println!(
+                "Tune aborted: exceeded the {timeout_secs}s --timeout-secs limit before completing; loop restored."
+            );
+        }
+        RunOutcome::Aborted(AbortReason::OperationTimedOut {
+            tag,
+            op_timeout_secs,
+        }) => {
+            println!(
+                "Tune aborted: tag '{tag}' did not respond within the {op_timeout_secs}s --op-timeout-secs limit; loop restored."
+            );
+        }
+        RunOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => {
+            println!(
+                "Tune aborted: tag '{tag}' reported OPC quality {quality:?} during polling; loop restored."
+            );
+        }
+        RunOutcome::Aborted(AbortReason::MvActuationUnconfirmed {
+            tag,
+            target,
+            readback,
+            tolerance,
+            elapsed_ms,
+            deadline_secs,
+        }) => {
+            let readback = readback
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unavailable".to_string());
+            println!(
+                "Tune aborted: MV tag '{tag}' did not confirm target {target} (readback {readback}, tolerance {tolerance}) after {:.3}s; the confirmation deadline was {deadline_secs}s. Loop restored.",
+                *elapsed_ms as f64 / 1_000.0
+            );
+        }
+        RunOutcome::RestoreIncomplete { reason } => {
+            println!(
+                "Tune ended, but the loop's restore could not be confirmed ({reason}). Check the loop by hand -- see the warning above for the tag and value to check."
             );
         }
     }
-    tune_outcome
+}
+
+fn print_json_summary(run_id: i64, outcome: &RunOutcome, tune_outcome: TuneOutcome) {
+    let (write_back, response_level) = match outcome {
+        RunOutcome::Completed {
+            write_back: WriteBackOutcome::Written { response_level },
+            ..
+        } => ("written", Some(*response_level)),
+        RunOutcome::Completed {
+            write_back: WriteBackOutcome::Skipped,
+            ..
+        } => ("skipped", None),
+        RunOutcome::Completed {
+            write_back: WriteBackOutcome::Failed,
+            ..
+        } => ("failed", None),
+        RunOutcome::Aborted(_) => ("not_attempted", None),
+        RunOutcome::RestoreIncomplete { .. } => ("not_attempted", None),
+    };
+    let write_back_detail = match outcome {
+        RunOutcome::Completed {
+            write_back_detail, ..
+        } => write_back_detail.clone(),
+        _ => None,
+    };
+    let timeout_secs = match outcome {
+        RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => Some(*timeout_secs),
+        _ => None,
+    };
+    let (poor_quality_tag, poor_quality) = match outcome {
+        RunOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => (
+            Some(tag.clone()),
+            Some(format!("{quality:?}").to_lowercase()),
+        ),
+        _ => (None, None),
+    };
+    let (op_timeout_tag, op_timeout_secs) = match outcome {
+        RunOutcome::Aborted(AbortReason::OperationTimedOut {
+            tag,
+            op_timeout_secs,
+        }) => (Some(tag.clone()), Some(*op_timeout_secs)),
+        _ => (None, None),
+    };
+    let restore_incomplete_reason = match outcome {
+        RunOutcome::RestoreIncomplete { reason } => Some(reason.clone()),
+        _ => None,
+    };
+    let actuation = match outcome {
+        RunOutcome::Aborted(AbortReason::MvActuationUnconfirmed {
+            tag,
+            target,
+            readback,
+            tolerance,
+            elapsed_ms,
+            deadline_secs,
+        }) => Some(serde_json::json!({
+            "tag": tag,
+            "target": target,
+            "readback": readback,
+            "tolerance": tolerance,
+            "elapsed_ms": elapsed_ms,
+            "deadline_secs": deadline_secs,
+        })),
+        _ => None,
+    };
+    let json = serde_json::json!({
+        "run_id": run_id,
+        "outcome": tune_outcome.label(),
+        "write_back": write_back,
+        "write_back_response_level": response_level,
+        "write_back_detail": write_back_detail,
+        "timeout_secs": timeout_secs,
+        "poor_quality_tag": poor_quality_tag,
+        "poor_quality": poor_quality,
+        "op_timeout_tag": op_timeout_tag,
+        "op_timeout_secs": op_timeout_secs,
+        "mv_actuation": actuation,
+        "restore_incomplete_reason": restore_incomplete_reason,
+    });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+    );
 }
 
 fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
@@ -1380,173 +1385,304 @@ async fn execute<R: std::io::BufRead>(
 
     match poll_result {
         Ok(PollOutcome::Completed(completion)) => {
-            let pv_range = PvRange {
-                high: initial.pv_range_high,
-                low: initial.pv_range_low,
-            };
-            if let Err(e) = persist_completed_results(
+            finish_completed_run(
                 pool,
                 run_id,
-                completion,
-                initial.direction,
-                config,
-                pv_range,
+                args,
                 template,
+                tags,
+                driver,
+                config,
+                &initial,
+                &guard,
+                write_pid,
+                allow_uncertain_quality,
+                ctrl_c,
+                reader,
+                &mut mv_actuations,
+                completion,
+                &mut timing,
+                timing_metrics_without_period,
+                measured_oscillation_period_ms,
             )
             .await
-            {
-                let error = restore_best_effort_then_propagate(
-                    pool,
-                    run_id,
-                    driver,
-                    tags,
-                    template,
-                    &initial,
-                    &guard,
-                    args,
-                    allow_uncertain_quality,
-                    ctrl_c,
-                    &mut mv_actuations,
-                    e,
-                )
-                .await;
-                if let Some(timing_metrics) = timing_metrics_without_period {
-                    record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
-                }
-                return Err(error);
-            }
-
-            let restore_attempt = attempt_restore_with_actuation(
-                pool,
-                run_id,
-                args,
-                driver,
-                tags,
-                template,
-                &initial,
-                &guard,
-                allow_uncertain_quality,
-                ctrl_c,
-                &mut mv_actuations,
-            )
-            .await;
-            record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
-            finalize_pending_for_run_best_effort(
-                pool,
-                run_id,
-                "the run ended before MV confirmation completed",
-            )
-            .await;
-            TuneRunRow::complete_with_timing_metrics(
-                pool,
-                run_id,
-                Utc::now(),
-                timing.finish(measured_oscillation_period_ms),
-            )
-            .await?;
-            match restore_attempt {
-                RestoreAttempt::Confirmed => {
-                    let (write_back, write_back_detail) = maybe_write_back(
-                        pool,
-                        run_id,
-                        tags,
-                        template,
-                        driver,
-                        config,
-                        write_pid,
-                        args.output,
-                        allow_uncertain_quality,
-                        reader,
-                    )
-                    .await?;
-                    Ok(RunOutcome::Completed {
-                        write_back,
-                        write_back_detail,
-                    })
-                }
-                RestoreAttempt::Incomplete { reason } => {
-                    Ok(RunOutcome::RestoreIncomplete { reason })
-                }
-            }
         }
         Ok(PollOutcome::Aborted(reason)) => {
-            let restore_attempt = attempt_restore_with_actuation(
+            finish_aborted_run(
                 pool,
                 run_id,
                 args,
-                driver,
-                tags,
                 template,
+                tags,
+                driver,
                 &initial,
                 &guard,
                 allow_uncertain_quality,
                 ctrl_c,
                 &mut mv_actuations,
+                reason,
+                timing_metrics_without_period,
             )
-            .await;
-            record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
-            finalize_pending_for_run_best_effort(
-                pool,
-                run_id,
-                "the run ended before MV confirmation completed",
-            )
-            .await;
-            match &reason {
-                AbortReason::MvActuationUnconfirmed { .. } => {
-                    TuneRunRow::abort_with_timing_metrics_and_reason(
-                        pool,
-                        run_id,
-                        Utc::now(),
-                        timing_metrics_without_period,
-                        &format_mv_actuation_abort_reason(&reason),
-                    )
-                    .await?;
-                }
-                _ => {
-                    TuneRunRow::abort_with_timing_metrics(
-                        pool,
-                        run_id,
-                        Utc::now(),
-                        timing_metrics_without_period,
-                    )
-                    .await?;
-                }
-            }
-            match restore_attempt {
-                RestoreAttempt::Confirmed => Ok(RunOutcome::Aborted(reason)),
-                RestoreAttempt::Incomplete {
-                    reason: restore_reason,
-                } => Ok(RunOutcome::RestoreIncomplete {
-                    reason: format!("run aborted ({reason:?}); {restore_reason}"),
-                }),
-            }
+            .await
         }
-        Err(e) => {
-            // Best-effort: a failed test still stroked the valve, so try to put it back even
-            // though the overall run is going to be reported as failed regardless. Still
-            // bounded/interruptible (a second Ctrl+C or `--restore-timeout-secs` still cuts
-            // it short) and still warns loudly on an incomplete restore.
-            let error = restore_best_effort_then_propagate(
+        Err(error) => {
+            finish_failed_run(
                 pool,
                 run_id,
-                driver,
-                tags,
                 template,
+                tags,
+                driver,
                 &initial,
                 &guard,
                 args,
                 allow_uncertain_quality,
                 ctrl_c,
                 &mut mv_actuations,
-                e,
+                error,
+                timing_metrics_without_period,
             )
-            .await;
-            if let Some(timing_metrics) = timing_metrics_without_period {
-                record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
-            }
-            Err(error)
+            .await
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn attempt_and_record_restore(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneArgs,
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    mv_actuations: &mut Option<MvActuationTracker>,
+) -> RestoreAttempt {
+    let restore_attempt = attempt_restore_with_actuation(
+        pool,
+        run_id,
+        args,
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        allow_uncertain_quality,
+        ctrl_c,
+        mv_actuations,
+    )
+    .await;
+    record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
+    finalize_pending_for_run_best_effort(
+        pool,
+        run_id,
+        "the run ended before MV confirmation completed",
+    )
+    .await;
+    restore_attempt
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finish_completed_run<R: std::io::BufRead>(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneArgs,
+    template: &DcsTemplate,
+    tags: &LoopTags,
+    driver: &dyn Driver,
+    config: LoopConfig,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    write_pid: Option<ResponseLevel>,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    reader: &mut R,
+    mv_actuations: &mut Option<MvActuationTracker>,
+    completion: Action,
+    timing: &mut PollTimingAccumulator,
+    timing_metrics_without_period: Option<TimingMetrics>,
+    measured_oscillation_period_ms: Option<f64>,
+) -> anyhow::Result<RunOutcome> {
+    let pv_range = PvRange {
+        high: initial.pv_range_high,
+        low: initial.pv_range_low,
+    };
+    if let Err(error) = persist_completed_results(
+        pool,
+        run_id,
+        completion,
+        initial.direction,
+        config,
+        pv_range,
+        template,
+    )
+    .await
+    {
+        let error = restore_best_effort_then_propagate(
+            pool,
+            run_id,
+            driver,
+            tags,
+            template,
+            initial,
+            guard,
+            args,
+            allow_uncertain_quality,
+            ctrl_c,
+            mv_actuations,
+            error,
+        )
+        .await;
+        if let Some(timing_metrics) = timing_metrics_without_period {
+            record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
+        }
+        return Err(error);
+    }
+
+    let restore_attempt = attempt_and_record_restore(
+        pool,
+        run_id,
+        args,
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        allow_uncertain_quality,
+        ctrl_c,
+        mv_actuations,
+    )
+    .await;
+    TuneRunRow::complete_with_timing_metrics(
+        pool,
+        run_id,
+        Utc::now(),
+        timing.finish(measured_oscillation_period_ms),
+    )
+    .await?;
+    match restore_attempt {
+        RestoreAttempt::Confirmed => {
+            let (write_back, write_back_detail) = maybe_write_back(
+                pool,
+                run_id,
+                tags,
+                template,
+                driver,
+                config,
+                write_pid,
+                args.output,
+                allow_uncertain_quality,
+                reader,
+            )
+            .await?;
+            Ok(RunOutcome::Completed {
+                write_back,
+                write_back_detail,
+            })
+        }
+        RestoreAttempt::Incomplete { reason } => Ok(RunOutcome::RestoreIncomplete { reason }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finish_aborted_run(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneArgs,
+    template: &DcsTemplate,
+    tags: &LoopTags,
+    driver: &dyn Driver,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    mv_actuations: &mut Option<MvActuationTracker>,
+    reason: AbortReason,
+    timing_metrics_without_period: Option<TimingMetrics>,
+) -> anyhow::Result<RunOutcome> {
+    let restore_attempt = attempt_and_record_restore(
+        pool,
+        run_id,
+        args,
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        allow_uncertain_quality,
+        ctrl_c,
+        mv_actuations,
+    )
+    .await;
+    if matches!(reason, AbortReason::MvActuationUnconfirmed { .. }) {
+        TuneRunRow::abort_with_timing_metrics_and_reason(
+            pool,
+            run_id,
+            Utc::now(),
+            timing_metrics_without_period,
+            &format_mv_actuation_abort_reason(&reason),
+        )
+        .await?;
+    } else {
+        TuneRunRow::abort_with_timing_metrics(
+            pool,
+            run_id,
+            Utc::now(),
+            timing_metrics_without_period,
+        )
+        .await?;
+    }
+    match restore_attempt {
+        RestoreAttempt::Confirmed => Ok(RunOutcome::Aborted(reason)),
+        RestoreAttempt::Incomplete {
+            reason: restore_reason,
+        } => Ok(RunOutcome::RestoreIncomplete {
+            reason: format!("run aborted ({reason:?}); {restore_reason}"),
+        }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finish_failed_run(
+    pool: &SqlitePool,
+    run_id: i64,
+    template: &DcsTemplate,
+    tags: &LoopTags,
+    driver: &dyn Driver,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    args: &TuneArgs,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    mv_actuations: &mut Option<MvActuationTracker>,
+    error: anyhow::Error,
+    timing_metrics_without_period: Option<TimingMetrics>,
+) -> anyhow::Result<RunOutcome> {
+    // Best-effort: a failed test still stroked the valve, so try to put it back even
+    // though the overall run is going to be reported as failed regardless. Still
+    // bounded/interruptible (a second Ctrl+C or `--restore-timeout-secs` still cuts
+    // it short) and still warns loudly on an incomplete restore.
+    let error = restore_best_effort_then_propagate(
+        pool,
+        run_id,
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        args,
+        allow_uncertain_quality,
+        ctrl_c,
+        mv_actuations,
+        error,
+    )
+    .await;
+    if let Some(timing_metrics) = timing_metrics_without_period {
+        record_timing_metrics_best_effort(pool, run_id, timing_metrics).await;
+    }
+    Err(error)
 }
 
 /// The single choke point enforcing finding 5 of the live-plant safety review

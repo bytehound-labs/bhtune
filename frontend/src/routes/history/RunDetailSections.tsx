@@ -447,15 +447,24 @@ function MvActuationRow({ actuation }: { readonly actuation: MvActuation }) {
 }
 
 function actuationStatus(status: MvActuation["status"]) {
-  const tone =
-    status === "confirmed"
-      ? "success"
-      : status === "failed"
-        ? "error"
-        : status === "unverified"
-          ? "warning"
-          : "neutral";
+  const tone = actuationStatusTone(status);
   return { tone, label: MV_ACTUATION_STATUS_LABELS[status] };
+}
+
+function actuationStatusTone(
+  status: MvActuation["status"],
+): "success" | "error" | "warning" | "neutral" {
+  switch (status) {
+    case "confirmed":
+      return "success";
+    case "failed":
+      return "error";
+    case "unverified":
+      return "warning";
+    case "pending":
+    case "superseded":
+      return "neutral";
+  }
 }
 
 function CalculatedResultsSection({
