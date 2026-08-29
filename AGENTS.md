@@ -219,7 +219,11 @@ item 2, for the real `bhtune-core` bug this test caught and fixed in the process
 oscillation period silently lost sub-second precision by default, zeroing `ti_minutes`/`td_minutes`
 even for PI/PID). The matrix runs serially with a fixed 5 ms simulator cadence: the FOPDT
 process and MRFT timestamps advance by the same exact step, so scheduler load can lengthen
-the subprocess runtime but cannot change its calculated PID values. `e2e-playwright` is also done: a
+the subprocess runtime but cannot change its calculated PID values. `live-monotonic-time` is
+also done: live OPC DA samples are timestamped from actual monotonic elapsed time projected
+onto the run's UTC start, after each successful PV read, so NTP/manual clock changes cannot
+distort MRFT windows or calculated periods while real scheduler and driver latency remains
+visible. `e2e-playwright` is also done: a
 Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
 off disk rather than needing a re-embed step — see `server-embed-spa`'s `rust-embed`
@@ -1324,6 +1328,16 @@ derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
   the synthetic process evolve in one time domain while tuning math measures it in another.
   Persisted simulator samples use this logical time too, so their trend and calculated period
   describe the same simulated process.
+- **Live OPC DA MRFT timestamps use monotonic elapsed time projected onto UTC.** `prepare()`
+  captures one `RunTimeAnchor` (`Utc::now()` paired with `tokio::time::Instant::now()`) at the
+  same point `tune_runs.started_at` is recorded. `run_polling_loop` timestamps each successful PV
+  observation after the driver read as `utc_anchor + monotonic_elapsed`, so a slow read is
+  represented in the sample that actually experienced it and subsequent engine switch timestamps
+  reuse that same value. NTP or a manual calendar-clock correction after the anchor is captured
+  has no input path into MRFT timing. Real scheduling, OPC read/write, and SQLite processing
+  delays remain part of the measured timeline; `MissedTickBehavior::Delay` remains deliberate so
+  a late tick never causes catch-up I/O bursts. This makes the algorithm clock-jump-safe, not
+  hard-real-time: an overloaded host can still undersample a live oscillation.
 - **The FOPDT process model uses an exact closed-form discretization, not a ported ODE solver.**
   For the first-order lag `tau*dy/dt = -(y-y0) + Kp*(u-u0)` driven by a zero-order-hold input over
   one tick, the update `pv_new = pv*decay + (1-decay)*(bias + gain*mv_effective)` (`decay =
@@ -3745,7 +3759,8 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    disabled workspace-wide, so `bhtune-core` cannot call `Utc::now()` even by accident — verified
    by temporarily adding such a call and confirming it fails to compile (see `driver-opcda`'s
    notes above for where this was re-verified after `opcda-bridge`/`tonic` entered the dependency
-   graph).
+   graph). The CLI caller uses fixed-step simulator time or UTC-anchored monotonic live time;
+   neither path reads the calendar clock again for an in-flight sample or switch.
 4. **`[structurally impossible]` Lookup tables must be sized to exactly the number of process
    types that exist (6)** — no
    extra, unreachable rows/columns in the tuning-constant or default-cycle data. Legacy:

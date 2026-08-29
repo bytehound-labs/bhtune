@@ -396,6 +396,12 @@ language, including exactly what happens on the first and second Ctrl+C:
   wedged gateway, a black-holed network): every driver call is separately capped by
   **`--op-timeout-secs`** (default `30`), so a hung call is abandoned rather than blocking the
   whole run indefinitely.
+- **Live OPC DA sample time is monotonic.** BHTune pairs the run's UTC start timestamp with a
+  monotonic clock and derives every live MRFT/sample timestamp from actual elapsed time. NTP or
+  manual system-clock changes therefore cannot move the tuning algorithm backward or forward,
+  while real scheduling, gateway, read, and write delays remain visible. BHTune is not a
+  hard-real-time controller: keep the host and gateway responsive, and choose a poll interval
+  comfortably shorter than the expected oscillation period.
 - **`--restore-timeout-secs <seconds>`** (default `30`) bounds putting the loop back afterwards,
   independently of `--timeout-secs`. If the restore can't be confirmed within that time, or a
   _second_ Ctrl+C arrives while it's in progress, the process prints which tag and value to

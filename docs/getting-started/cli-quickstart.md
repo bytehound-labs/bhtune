@@ -114,8 +114,11 @@ bhtune tune \
 
 This reads live tags (PV, MV, ranges, mode, direction), switches the loop to manual, strokes the
 relay, and restores the loop when the test ends — see [Safety](../guides/safety.md) before
-running this against anything connected to a real process, especially unattended. To also write
-the calculated PID constants back:
+running this against anything connected to a real process, especially unattended. Live MRFT
+timestamps use monotonic elapsed time anchored to UTC, so NTP/manual clock changes cannot distort
+the measured relay period; real host, gateway, and OPC latency remains visible. Keep the host and
+gateway responsive and use a poll interval comfortably shorter than the expected oscillation
+period. To also write the calculated PID constants back:
 
 ```sh
 bhtune tune ... --write-pid moderate --yes

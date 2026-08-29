@@ -134,8 +134,11 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    batched read; a setpoint is read separately only when the original mode is Auto. Simulator
    sample timestamps advance by the configured fixed poll step, matching the FOPDT process time
    rather than host scheduler timing, so repeated simulator runs retain the same trend timing and
-   PID calculations across machines. The trend ends with a terminal point at the original MV
-   after the run restores the loop. Short runs keep
+   PID calculations across machines. Live OPC DA timestamps instead use actual monotonic elapsed
+   time projected onto the run's UTC start, making clock adjustments irrelevant without hiding
+   real scheduling or driver delays. BHTune is not a hard-real-time controller, so the host and
+   gateway still need to remain responsive. The trend ends with a terminal point at the original
+   MV after the run restores the loop. Short runs keep
    their first point at the left edge by reserving 12 configured poll intervals of x-axis
    horizon; unused future space stays blank until the trend is long enough to fit normally. The
    initial-reading and restored-MV boundary markers are presentation-only and do not alter
