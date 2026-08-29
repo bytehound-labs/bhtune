@@ -6,6 +6,9 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    // Keep the dev UI reachable from other hosts on the local network.
+    host: "0.0.0.0",
+    allowedHosts: ["asus"],
     // Proxy API calls to a locally running `bhtune-server` in dev mode, so
     // `pnpm dev` gets hot-reload while still exercising the real HTTP API
     // instead of a mock. In production builds, bhtune-server instead embeds

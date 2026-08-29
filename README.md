@@ -249,7 +249,7 @@ pnpm --filter bhtune-frontend run build
 cargo run --bin bhtune-server    # now also serves the built UI at http://127.0.0.1:8787/
 ```
 
-The web GUI header includes a light/dark theme toggle and shows the server version beside a
+The web GUI header includes a Catppuccin light/dark theme toggle and shows the server version beside a
 vertically centered colored status dot based on that liveness endpoint. The selected theme is
 remembered by the browser. Green means the BHTune HTTP service is reachable; it does not verify
 OPC DA connectivity. Hover the dot for the full status detail.
@@ -259,8 +259,13 @@ gives hot-reload:
 
 ```sh
 cd frontend
-pnpm dev             # http://localhost:5173, proxies /api/* to the server above
+pnpm dev             # http://localhost:5173 or http://asus:5173 on the local network
 ```
+
+The Vite development server binds to all local interfaces, allows the `asus` hostname, and
+proxies `/api/*` to the loopback `bhtune-server` on port `8787`. Frontend edits appear through
+hot module reload; restart `bhtune-server` after Rust or API changes. This development server
+has no authentication and should only be exposed on a trusted network.
 
 See [`frontend/README.md`](frontend/README.md) for details. The
 server shuts down gracefully on Ctrl+C (and on Unix, `SIGTERM`), draining in-flight requests
