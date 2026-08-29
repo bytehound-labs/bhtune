@@ -460,7 +460,9 @@ Flow/PI, Temperature (Heat Exchange)/PID, and Level/P tunes, then compares every
 Kp/Ti/Td and template-converted P/I/D value with reviewed baselines. The simulator advances its
 FOPDT process and MRFT timestamps by the same fixed poll step, so scheduler load may lengthen the
 test's wall-clock runtime but cannot change its calculated values. The browser E2E remains focused
-on server/UI delivery rather than duplicating this numeric oracle.
+on server/UI delivery rather than duplicating this numeric oracle. Simulator tests that
+intentionally add MRFT padding retain a generous real-time safety budget so a loaded CI host does
+not abort deterministic logical-time coverage.
 
 The repository also validates high-risk boundaries and delivery artifacts automatically:
 

@@ -2850,16 +2850,19 @@ mod tests {
         assert!(err.to_string().contains("no OPC server specified"));
     }
 
-    /// `--mrft-delay` is whole seconds (the smallest non-zero value costs ~1s of real
-    /// wall-clock time, both before the test starts switching and after it completes), so
-    /// this is deliberately the one slower test in the suite -- there is no way to fast
-    /// forward `Utc::now()`-based padding-window comparisons the way paused `tokio` time
-    /// fast-forwards `interval`/`sleep`.
+    /// `--mrft-delay` is whole seconds (the smallest non-zero value costs ~1s of logical
+    /// simulator time both before switching and after completion). Fixed-step timestamps make
+    /// the result deterministic, but the polling interval still paces those ticks in real time;
+    /// the SQLite-backed test cannot use Tokio's paused clock without also expiring sqlx's own
+    /// pool timers.
     #[tokio::test]
     async fn mrft_delay_pads_the_run_with_extra_recorded_samples() {
         let pool = seeded_pool().await;
         let mut args = fast_simulator_args();
         args.mrft_delay = 1;
+        // This test intentionally consumes about two seconds before ordinary MRFT work. Keep
+        // its safety budget independent of a loaded CI host while retaining the real timeout.
+        args.timeout_secs = 30;
         run(&pool, args, &test_config()).await.unwrap();
 
         let runs = TuneRunRow::list(
