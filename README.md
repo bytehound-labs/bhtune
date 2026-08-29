@@ -375,9 +375,10 @@ Windows Task Scheduler, CI):
   the requested PID write-back failed, `4` the test was forcibly stopped for running past
   `--timeout-secs`, `5` a poor-quality OPC reading aborted the run, and
   `6` the post-run restore could not be confirmed (a second Ctrl+C, or `--restore-timeout-secs`
-  elapsing) — distinct from `2` since "aborted and restored" and "aborted, restore abandoned"
-  call for very different alerting. A caller never has to parse stdout just to find out whether
-  a scheduled tune actually wrote anything, or why it stopped early.
+  elapsing), and `7` an accepted OPC DA MV command could not be confirmed before its deadline
+  or before the next relay command was required. Restore-incomplete exit code `6` takes
+  precedence over `7` when both occur. A caller never has to parse stdout just to find out
+  whether a scheduled tune actually wrote anything, or why it stopped early.
 
 ## Safety
 
@@ -413,7 +414,16 @@ language, including exactly what happens on the first and second Ctrl+C:
   adjacent sample gap reaches at least twice the requested interval, proving that at least one
   complete polling opportunity was missed. The warning is diagnostic only: it does not abort the
   run or block PID write-back.
-- **`--restore-timeout-secs <seconds>`** (default `30`) bounds putting the loop back afterwards,
+- **Accepted OPC DA MV commands are physically verified.** Relay writes are read back before a
+  later relay step can replace them and no later than four seconds after acceptance. An early
+  mismatch remains pending and is retried; a mismatch at the deadline, or when the next relay
+  step is required, aborts the tune without writing that replacement. Verification tolerance
+  combines the `f32` precision floor with 0.1% of the MV span and caps relay tolerance at 25% of
+  the actual step. The final snapback hands confirmation responsibility to the authoritative
+  restore write, avoiding duplicate waits. These checks are audited in run history and do not
+  create PV samples or advance MRFT timing. A readback that returns after the confirmation deadline
+  does not count, even if the read started before the deadline.
+- **`--restore-timeout-secs <seconds>`** (default `30`; OPC DA minimum `4`) bounds putting the loop back afterwards,
   independently of `--timeout-secs`. If the restore can't be confirmed within that time, or a
   _second_ Ctrl+C arrives while it's in progress, the process prints which tag and value to
   check by hand and exits `6` — distinct from `2`, since "aborted and restored" and "aborted,

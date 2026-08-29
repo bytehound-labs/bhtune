@@ -14,7 +14,9 @@ use axum::routing::{post, put};
 use axum::{Json, Router};
 use bhtune_cli::args::{DriverKindArg, TuneArgs};
 use bhtune_cli::cancel::CtrlC;
-use bhtune_cli::commands::tune::{PidWriteOutcome, drive, prepare, write_pid_values};
+use bhtune_cli::commands::tune::{
+    PidWriteOutcome, drive, prepare, validate_restore_timeout_secs, write_pid_values,
+};
 use bhtune_cli::output::OutputFormat;
 use bhtune_core::{
     ControllerDirection, ControllerType, PidParameters, ProcessType, ResponseLevel, TagOverrides,
@@ -158,7 +160,10 @@ pub struct StartRunRequest {
     #[serde(default = "default_op_or_restore_timeout_secs")]
     pub op_timeout_secs: u64,
     /// Cap on restoring the loop to its pre-test state after the run ends, in seconds.
+    /// OPC DA runs require at least 4 seconds so the internal MV actuation confirmation
+    /// window can complete; simulator runs only require a positive value.
     #[serde(default = "default_op_or_restore_timeout_secs")]
+    #[schema(minimum = 1, example = 30)]
     pub restore_timeout_secs: u64,
 }
 
@@ -225,7 +230,6 @@ impl StartRunRequest {
         require_positive("poll_interval_ms", self.poll_interval_ms)?;
         require_positive("timeout_secs", self.timeout_secs)?;
         require_positive("op_timeout_secs", self.op_timeout_secs)?;
-        require_positive("restore_timeout_secs", self.restore_timeout_secs)?;
         if let Some(tag_overrides) = &self.tag_overrides {
             tag_overrides
                 .validate()
@@ -234,6 +238,8 @@ impl StartRunRequest {
 
         let driver = DriverKindArg::try_from(self.driver)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        validate_restore_timeout_secs(driver, self.restore_timeout_secs)
+            .map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
         Ok(TuneArgs {
             tagname: self.tagname,
@@ -1035,6 +1041,68 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let error = body_json(response).await;
         assert!(error["error"].as_str().unwrap().contains("--yes"));
+    }
+
+    #[test]
+    fn opcda_restore_timeout_requires_the_four_second_confirmation_window() {
+        for timeout in [1, 3] {
+            let mut request = fast_simulator_request_json();
+            request["driver"] = serde_json::json!("opcda");
+            request["restore_timeout_secs"] = serde_json::json!(timeout);
+            let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
+            let error = parsed.into_tune_args().unwrap_err();
+            assert!(matches!(&error, ApiError::BadRequest(_)));
+            if let ApiError::BadRequest(message) = &error {
+                assert!(message.contains("at least 4 seconds"));
+            }
+        }
+
+        let mut request = fast_simulator_request_json();
+        request["driver"] = serde_json::json!("opcda");
+        request["restore_timeout_secs"] = serde_json::json!(4);
+        let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
+        let args = parsed.into_tune_args().expect("4 seconds must be accepted");
+        assert_eq!(args.restore_timeout_secs, 4);
+        assert_eq!(args.driver, DriverKindArg::Opcda);
+    }
+
+    #[test]
+    fn simulator_restore_timeout_remains_positive_only() {
+        let mut request = fast_simulator_request_json();
+        request["restore_timeout_secs"] = serde_json::json!(0);
+        let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
+        let error = parsed.into_tune_args().unwrap_err();
+        assert!(matches!(&error, ApiError::BadRequest(_)));
+        if let ApiError::BadRequest(message) = &error {
+            assert!(message.contains("greater than zero"));
+        }
+
+        let mut request = fast_simulator_request_json();
+        request["restore_timeout_secs"] = serde_json::json!(1);
+        let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
+        let args = parsed
+            .into_tune_args()
+            .expect("one second remains valid for the simulator");
+        assert_eq!(args.restore_timeout_secs, 1);
+        assert_eq!(args.driver, DriverKindArg::Simulator);
+    }
+
+    #[tokio::test]
+    async fn opcda_restore_timeout_below_four_returns_400_before_prepare() {
+        let app = crate::build_router(crate::test_support::in_memory_state().await);
+        let mut request = fast_simulator_request_json();
+        request["driver"] = serde_json::json!("opcda");
+        request["restore_timeout_secs"] = serde_json::json!(3);
+
+        let response = post_json(app, "/api/runs", request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("at least 4 seconds")
+        );
     }
 
     #[tokio::test]

@@ -78,6 +78,42 @@ async fn run_migrations(pool: &SqlitePool) -> DbResult<()> {
 mod tests {
     use super::*;
 
+    async fn apply_migrations_through(pool: &SqlitePool, migration_count: usize) {
+        sqlx::query(
+            r#"
+            CREATE TABLE _sqlx_migrations (
+                version BIGINT PRIMARY KEY,
+                description TEXT NOT NULL,
+                installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                success BOOLEAN NOT NULL,
+                checksum BLOB NOT NULL,
+                execution_time BIGINT NOT NULL
+            )
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let migrations = sqlx::migrate!("./migrations");
+        for migration in migrations.migrations.iter().take(migration_count) {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(migration.sql.as_str()))
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) VALUES (?, ?, 1, ?, 0)",
+            )
+            .bind(migration.version)
+            .bind(migration.description.as_ref())
+            .bind(migration.checksum.as_ref())
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn connect_creates_file_and_applies_wal_and_foreign_keys() {
         let dir = tempfile::tempdir().unwrap();
@@ -144,37 +180,7 @@ mod tests {
             .await
             .unwrap();
 
-        let migrations = sqlx::migrate!("./migrations");
-        let initial = &migrations.migrations[0];
-        sqlx::query(
-            r#"
-            CREATE TABLE _sqlx_migrations (
-                version BIGINT PRIMARY KEY,
-                description TEXT NOT NULL,
-                installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                success BOOLEAN NOT NULL,
-                checksum BLOB NOT NULL,
-                execution_time BIGINT NOT NULL
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::raw_sql(sqlx::AssertSqlSafe(initial.sql.as_str()))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "INSERT INTO _sqlx_migrations \
-             (version, description, success, checksum, execution_time) VALUES (?, ?, 1, ?, 0)",
-        )
-        .bind(initial.version)
-        .bind(initial.description.as_ref())
-        .bind(initial.checksum.as_ref())
-        .execute(&pool)
-        .await
-        .unwrap();
+        apply_migrations_through(&pool, 1).await;
         sqlx::query(
             "INSERT INTO settings (key, value, updated_at) VALUES ('migration-fixture', ?, ?)",
         )
@@ -280,6 +286,102 @@ mod tests {
             timing_metrics,
             vec![None, None],
             "pre-diagnostics runs must remain readable with no invented timing metrics"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_upgrades_a_migration_0004_database_with_mv_actuation_audit_support() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("before-mv-actuation-verification.db");
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+
+        apply_migrations_through(&pool, 4).await;
+        let started_at = chrono::Utc::now();
+        let run_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO tune_runs (
+                loop_name, template_name, template_origin, template_snapshot_json,
+                tags_json, driver, started_at, outcome, process_type, controller_type,
+                relay_amp_percent, num_cycles_skip, num_cycles_count,
+                noise_protection_secs, mrft_delay_secs, created_at
+            ) VALUES (
+                'migration-0004-fixture', 'fixture', 'builtin', '{}', '{}', 'opcda',
+                ?, 'completed', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(started_at)
+        .bind(started_at)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO settings (key, value, updated_at) VALUES ('migration-0004-fixture', ?, ?)",
+        )
+        .bind(r#"{"preserve":true}"#)
+        .bind(started_at)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let upgraded = connect(&path).await.unwrap();
+        let preserved: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'migration-0004-fixture'")
+                .fetch_one(&upgraded)
+                .await
+                .unwrap();
+        assert_eq!(preserved, r#"{"preserve":true}"#);
+        let preserved_run: String =
+            sqlx::query_scalar("SELECT outcome FROM tune_runs WHERE id = ?")
+                .bind(run_id)
+                .fetch_one(&upgraded)
+                .await
+                .unwrap();
+        assert_eq!(
+            preserved_run, "completed",
+            "migration 0005 must not rewrite existing run outcomes"
+        );
+
+        let commanded_at = started_at + chrono::Duration::seconds(1);
+        sqlx::query(
+            r#"
+            INSERT INTO tune_mv_actuations (
+                run_id, sequence, kind, commanded_at, target_mv, previous_commanded_mv,
+                tolerance, confirmation_due_at
+            ) VALUES (?, 0, 'relay', ?, 55.0, 45.0, 0.1, ?)
+            "#,
+        )
+        .bind(run_id)
+        .bind(commanded_at)
+        .bind(commanded_at + chrono::Duration::seconds(4))
+        .execute(&upgraded)
+        .await
+        .unwrap();
+
+        sqlx::query("DELETE FROM tune_runs WHERE id = ?")
+            .bind(run_id)
+            .execute(&upgraded)
+            .await
+            .unwrap();
+        let remaining: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM tune_mv_actuations WHERE run_id = ?")
+                .bind(run_id)
+                .fetch_one(&upgraded)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining, 0,
+            "the new audit table must cascade-delete with an upgraded run"
         );
     }
 }

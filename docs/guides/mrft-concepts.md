@@ -42,6 +42,17 @@ unchanged.
 7. **The loop is restored** to its original mode (and setpoint, if it was changed) — see
    [Safety](safety.md#restoration) for exactly what "restored" guarantees.
 
+For OPC DA runs, each accepted MV relay command is also read back and checked against its
+commanded target before another relay can replace it. This verification uses a fixed internal
+four-second confirmation window; a command that remains outside tolerance, or whose matching
+readback arrives after the deadline, aborts the test and starts restoration. Simulator and replay
+runs do not add this live-I/O verification step.
+
+The MV values shown in the trend, persisted samples, and sample exports are the **commanded**
+values produced by the MRFT engine. The actual MV values returned by OPC DA readbacks are
+separate actuation-audit records shown in run history; keeping these series separate preserves
+the engine's timing and export semantics while making physical actuation evidence available.
+
 Nothing here writes a PID constant. That only happens if you explicitly ask for it
 (`--write-pid <level>` on the CLI, or the Automatic PID settings section of the New tune form) — see
 [PID write-back](safety.md#pid-write-back).

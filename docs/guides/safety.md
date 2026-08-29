@@ -69,7 +69,30 @@ correctly ordered — a `NaN` or an inverted range is rejected, not silently pro
 write), and the initial MV must fall inside the validated MV range. Command-line flags reject
 non-finite/out-of-range input immediately with a clear message; anything read from the driver
 (a real DCS/PLC's current ranges, for instance) is validated again right after being read, before
-the loop is ever switched to manual.
+the loop is ever switched to manual. An effective relay step below the minimum that can be
+distinguished safely at `f32` precision is rejected at this same pre-mutation boundary.
+
+## MV actuation verification
+
+Every accepted OPC DA relay write is read back before a later relay command can replace it. The
+first check occurs at the earlier of the MRFT noise-protection boundary and four seconds after
+write acceptance. An early mismatch remains pending and is retried; a mismatch at four seconds,
+or when the engine genuinely needs the next relay command, aborts the run without writing the
+replacement.
+
+The absolute tolerance combines the `f32` precision floor with 0.1% of the configured MV span.
+For relay commands it is capped at 25% of the actual step, preventing a wide range from making a
+small command appear confirmed accidentally. Restore confirmation uses the same precision/span
+tolerance without the relay cap. The final MRFT snapback hands responsibility to the
+authoritative restore write, so BHTune does not wait twice for the same original-MV target.
+The restore readback is attempted immediately; only a mismatch is retried, and a
+`--restore-timeout-secs` value below four seconds is rejected before a live loop is mutated.
+An MV read that starts before the deadline but returns after it is still treated as late and does
+not confirm the command.
+
+Verification reads are separate from PV samples: they do not advance MRFT time, add trend/export
+samples, or increment polling timing statistics. `bhtune history show <run>` records each
+accepted command, observation, tolerance, deadline, and final status.
 
 ## OPC quality
 
@@ -83,6 +106,10 @@ operations:
   the loop. A held or stale PV during a relay half-cycle would corrupt the exact period
   measurement the test depends on — silently tolerating it is worse than aborting loudly. The
   triggering sample is still recorded (with its real quality) before the abort.
+- **During MV actuation verification**: an unacceptable readback is recorded but does not
+  immediately prove failure. Confirmation remains pending and is retried until the four-second
+  deadline; if the engine needs the next relay command first, the run aborts without issuing that
+  replacement.
 - **During write-back confirmation**: a non-`Good` readback is treated as an unconfirmed write,
   which triggers rollback (see [PID write-back](#pid-write-back) below).
 - **When selecting a tag in the web browser**: BHTune re-reads the exact item selected in the
@@ -164,6 +191,10 @@ are equally specific:
 | `4`  | `--timeout-secs` elapsed before the test finished                                        |
 | `5`  | A non-`Good` OPC sample aborted the run                                                  |
 | `6`  | The post-run restore could not be confirmed — check the loop by hand                     |
+| `7`  | An accepted OPC DA MV command could not be confirmed; restore was confirmed              |
+
+Exit code `6` takes precedence over `7` if the actuation failure is followed by an incomplete
+restore.
 
 ## Next steps
 

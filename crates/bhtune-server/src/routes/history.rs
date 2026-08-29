@@ -22,9 +22,9 @@ use bhtune_core::{
     ControllerDirection, ControllerType, LoopConfig, ProcessType, ResponseLevel, Tick,
 };
 use bhtune_db::models::{
-    Pagination, RestoreStatus, RollbackState, SampleQuality, TemplateOrigin, TimingMetrics,
-    TuneDriver, TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
-    WriteKind,
+    MvActuationKind, MvActuationStatus, Pagination, RestoreStatus, RollbackState, SampleQuality,
+    TemplateOrigin, TimingMetrics, TuneDriver, TuneMvActuationRow, TuneOutcome, TuneResultRow,
+    TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -345,6 +345,48 @@ impl From<&TuneWriteRow> for WriteResponse {
     }
 }
 
+/// Local projection of one accepted OPC DA manipulated-variable command and its independent
+/// live readback evidence. Commanded MV samples remain in [`SampleResponse`]; this audit trail
+/// is the only response surface that reports measured MV values.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MvActuationResponse {
+    pub id: i64,
+    pub sequence: i64,
+    pub kind: MvActuationKind,
+    pub commanded_at: DateTime<Utc>,
+    pub target_mv: f32,
+    pub previous_commanded_mv: Option<f32>,
+    pub tolerance: f32,
+    pub confirmation_due_at: DateTime<Utc>,
+    pub last_checked_at: Option<DateTime<Utc>>,
+    pub readback_mv: Option<f32>,
+    pub readback_quality: Option<SampleQuality>,
+    pub attempt_count: i64,
+    pub status: MvActuationStatus,
+    pub detail: Option<String>,
+}
+
+impl From<&TuneMvActuationRow> for MvActuationResponse {
+    fn from(row: &TuneMvActuationRow) -> Self {
+        Self {
+            id: row.id,
+            sequence: row.sequence,
+            kind: row.kind,
+            commanded_at: row.commanded_at,
+            target_mv: row.target_mv,
+            previous_commanded_mv: row.previous_commanded_mv,
+            tolerance: row.tolerance,
+            confirmation_due_at: row.confirmation_due_at,
+            last_checked_at: row.last_checked_at,
+            readback_mv: row.readback_mv,
+            readback_quality: row.readback_quality,
+            attempt_count: row.attempt_count,
+            status: row.status,
+            detail: row.detail.clone(),
+        }
+    }
+}
+
 /// A run's snapshotted PID constant tag names, present only when all three were configured.
 /// Nested under `RunDetailResponse::pid_constant_tags` following the same
 /// "`Option<...>` presence itself is the signal" convention `initial_readings` already uses,
@@ -391,6 +433,7 @@ pub struct RunDetailResponse {
     pub samples: Vec<SampleResponse>,
     pub results: Vec<ResultResponse>,
     pub writes: Vec<WriteResponse>,
+    pub mv_actuations: Vec<MvActuationResponse>,
     pub restore_status: Option<RestoreStatus>,
     pub restore_detail: Option<String>,
     /// This run's own `request_json` (`db-run-request-snapshot`), parsed back into a
@@ -417,6 +460,7 @@ pub(crate) async fn build_run_detail(
     let samples = TuneSampleRow::list_for_run(pool, run_id).await?;
     let results = TuneResultRow::list_for_run(pool, run_id).await?;
     let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
+    let mv_actuations = TuneMvActuationRow::list_for_run(pool, run_id).await?;
     let pid_constant_tags = match (
         &run.tags.proportional_constant,
         &run.tags.integral_constant,
@@ -451,6 +495,10 @@ pub(crate) async fn build_run_detail(
         samples: samples.iter().map(SampleResponse::from).collect(),
         results: results.iter().map(ResultResponse::from).collect(),
         writes: writes.iter().map(WriteResponse::from).collect(),
+        mv_actuations: mv_actuations
+            .iter()
+            .map(MvActuationResponse::from)
+            .collect(),
         restore_status: run.restore_status,
         restore_detail: run.restore_detail,
         original_request: parse_stored_request(run.id, &run.request_json),
@@ -624,6 +672,7 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use bhtune_db::models::NewTuneMvActuation;
     use tower::ServiceExt;
 
     async fn body_json(response: axum::response::Response) -> serde_json::Value {
@@ -830,6 +879,57 @@ mod tests {
         TuneWriteRow::insert(&state.pool, run_id, failed_write)
             .await
             .unwrap();
+
+        let confirmed_actuation = TuneMvActuationRow::insert_pending(
+            &state.pool,
+            run_id,
+            NewTuneMvActuation {
+                sequence: 0,
+                kind: MvActuationKind::Relay,
+                commanded_at: now,
+                target_mv: 55.0,
+                previous_commanded_mv: Some(50.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(4),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::record_final_observation(
+            &state.pool,
+            confirmed_actuation.id,
+            now + chrono::Duration::seconds(1),
+            Some(55.0),
+            Some(SampleQuality::Good),
+            MvActuationStatus::Confirmed,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let superseded_actuation = TuneMvActuationRow::insert_pending(
+            &state.pool,
+            run_id,
+            NewTuneMvActuation {
+                sequence: 1,
+                kind: MvActuationKind::Restore,
+                commanded_at: now + chrono::Duration::seconds(5),
+                target_mv: 50.0,
+                previous_commanded_mv: Some(55.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(9),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::finalize(
+            &state.pool,
+            superseded_actuation.id,
+            MvActuationStatus::Superseded,
+            Some("restore took over confirmation"),
+        )
+        .await
+        .unwrap();
 
         TuneRunRow::complete(&state.pool, run_id, now)
             .await
@@ -1057,6 +1157,39 @@ mod tests {
             failed["error_message"],
             "write rejected: value out of range"
         );
+
+        let actuations = body["mv_actuations"].as_array().unwrap();
+        assert_eq!(actuations.len(), 2);
+        let confirmed = actuations
+            .iter()
+            .find(|actuation| actuation["kind"] == "relay")
+            .unwrap();
+        assert_eq!(confirmed["sequence"], 0);
+        assert_eq!(confirmed["target_mv"], 55.0);
+        assert_eq!(confirmed["previous_commanded_mv"], 50.0);
+        assert_eq!(confirmed["tolerance"], 0.5);
+        assert!(confirmed["commanded_at"].is_string());
+        assert!(confirmed["confirmation_due_at"].is_string());
+        assert!(confirmed["last_checked_at"].is_string());
+        assert_eq!(confirmed["readback_mv"], 55.0);
+        assert_eq!(confirmed["readback_quality"], "good");
+        assert_eq!(confirmed["attempt_count"], 1);
+        assert_eq!(confirmed["status"], "confirmed");
+        assert!(confirmed["detail"].is_null());
+
+        let superseded = actuations
+            .iter()
+            .find(|actuation| actuation["kind"] == "restore")
+            .unwrap();
+        assert_eq!(superseded["sequence"], 1);
+        assert_eq!(superseded["target_mv"], 50.0);
+        assert_eq!(superseded["previous_commanded_mv"], 55.0);
+        assert!(superseded["last_checked_at"].is_null());
+        assert!(superseded["readback_mv"].is_null());
+        assert!(superseded["readback_quality"].is_null());
+        assert_eq!(superseded["attempt_count"], 0);
+        assert_eq!(superseded["status"], "superseded");
+        assert_eq!(superseded["detail"], "restore took over confirmation");
     }
 
     #[tokio::test]
