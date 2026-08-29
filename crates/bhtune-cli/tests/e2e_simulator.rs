@@ -13,17 +13,15 @@
 //!
 //! The matrix uses Flow/PI, Temperature (Heat Exchange)/PID, and Level/P cases. All cases use
 //! `direction=reverse`, which is the direction that produces a valid oscillation against the
-//! simulator's fixed process gain. The plant parameters are scaled to a 50 ms polling interval
-//! (`sim_tau=0.1`, `sim_dead_time=0.25`) rather than the older 5 ms smoke-test configuration.
-//! Repeated runs showed that this reduces wall-clock timestamp jitter in period-derived values
-//! from roughly 31% to roughly 0.25%, while keeping amplitude-derived values bit-stable.
+//! simulator's fixed process gain. The simulator advances both its FOPDT process and the MRFT
+//! timestamp by the same exact 5 ms step per PV read (`sim_tau=0.01`,
+//! `sim_dead_time=0.025`), so host scheduling can lengthen the subprocess's wall-clock runtime
+//! but cannot change its calculated PID values.
 //!
-//! The reviewed baselines below use the ideal fixed-cadence result where practical and were
-//! cross-checked against repeated runs of the trusted implementation. Kp and proportional-band
-//! values use a tight absolute-plus-relative tolerance. Ti/Td and the template-converted
-//! integral/derivative values use a 5% relative tolerance plus a small absolute floor because
-//! the CLI records relay switch times from the wall clock. Fields that are mathematically
-//! absent for a controller type must remain exactly zero.
+//! The reviewed baselines below use that fixed simulator time domain. All nonzero values use
+//! tight absolute-plus-relative tolerances for cross-platform floating-point math and SQLite
+//! round trips; there is no scheduler-jitter allowance. Fields that are mathematically absent
+//! for a controller type must remain exactly zero.
 
 use std::io::Read;
 use std::path::Path;
@@ -37,8 +35,9 @@ use bhtune_db::models::{TuneOutcome, TuneResultRow, TuneRunRow, TuneSampleRow};
 
 const AMPLITUDE_ABSOLUTE_TOLERANCE: f32 = 1e-3;
 const AMPLITUDE_RELATIVE_TOLERANCE: f32 = 1e-4;
-const PERIOD_ABSOLUTE_TOLERANCE: f32 = 1e-5;
-const PERIOD_RELATIVE_TOLERANCE: f32 = 0.05;
+const PERIOD_ABSOLUTE_TOLERANCE: f32 = 1e-7;
+const PERIOD_RELATIVE_TOLERANCE: f32 = 1e-4;
+const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 struct ExpectedResult {
@@ -61,7 +60,7 @@ struct SimulatorScenario {
     expected_results: [ExpectedResult; 3],
 }
 
-/// Spawns `bhtune tune` against a fresh temp DB with the scaled, fast-completing simulator
+/// Spawns `bhtune tune` against a fresh temp DB with the deterministic, fast-completing simulator
 /// parameters. The process/controller type changes which tuning-constant matrix cell is used;
 /// the simulated plant and all timing parameters stay identical across scenarios.
 fn run_simulator_tune(
@@ -98,9 +97,9 @@ fn run_simulator_tune(
             "--sim-gain",
             "1.0",
             "--sim-tau",
-            "0.1",
+            "0.01",
             "--sim-dead-time",
-            "0.25",
+            "0.025",
             "--pv-range-high",
             "100",
             "--pv-range-low",
@@ -112,9 +111,9 @@ fn run_simulator_tune(
             "--direction",
             "reverse",
             "--poll-interval-ms",
-            "50",
+            "5",
             "--timeout-secs",
-            "10",
+            "30",
             "--notes",
             "e2e-simulator-test",
             "--output",
@@ -151,28 +150,28 @@ fn simulator_scenarios() -> [SimulatorScenario; 3] {
                 ExpectedResult {
                     response_level: ResponseLevel::Aggressive,
                     kp: 0.595620036,
-                    ti_minutes: 0.004413333,
+                    ti_minutes: 0.000441333,
                     td_minutes: 0.0,
                     proportional: 167.892272949,
-                    integral: 0.264799982,
+                    integral: 0.026479999,
                     derivative: 0.0,
                 },
                 ExpectedResult {
                     response_level: ResponseLevel::Moderate,
                     kp: 0.398840874,
-                    ti_minutes: 0.004413333,
+                    ti_minutes: 0.000441333,
                     td_minutes: 0.0,
                     proportional: 250.726562500,
-                    integral: 0.264799982,
+                    integral: 0.026479999,
                     derivative: 0.0,
                 },
                 ExpectedResult {
                     response_level: ResponseLevel::Sluggish,
                     kp: 0.298470318,
-                    ti_minutes: 0.004413333,
+                    ti_minutes: 0.000441333,
                     td_minutes: 0.0,
                     proportional: 335.041687012,
-                    integral: 0.264799982,
+                    integral: 0.026479999,
                     derivative: 0.0,
                 },
             ],
@@ -187,29 +186,29 @@ fn simulator_scenarios() -> [SimulatorScenario; 3] {
                 ExpectedResult {
                     response_level: ResponseLevel::Aggressive,
                     kp: 0.449071199,
-                    ti_minutes: 0.003208333,
-                    td_minutes: 0.001050000,
+                    ti_minutes: 0.000320833,
+                    td_minutes: 0.000105000,
                     proportional: 222.681838989,
-                    integral: 0.192500010,
-                    derivative: 0.063000008,
+                    integral: 0.019250000,
+                    derivative: 0.006300000,
                 },
                 ExpectedResult {
                     response_level: ResponseLevel::Moderate,
                     kp: 0.300282568,
-                    ti_minutes: 0.003208333,
-                    td_minutes: 0.001050000,
+                    ti_minutes: 0.000320833,
+                    td_minutes: 0.000105000,
                     proportional: 333.019653320,
-                    integral: 0.192500010,
-                    derivative: 0.063000008,
+                    integral: 0.019250000,
+                    derivative: 0.006300000,
                 },
                 ExpectedResult {
                     response_level: ResponseLevel::Sluggish,
                     kp: 0.224535599,
-                    ti_minutes: 0.003208333,
-                    td_minutes: 0.001050000,
+                    ti_minutes: 0.000320833,
+                    td_minutes: 0.000105000,
                     proportional: 445.363677979,
-                    integral: 0.192500010,
-                    derivative: 0.063000008,
+                    integral: 0.019250000,
+                    derivative: 0.006300000,
                 },
             ],
         },
@@ -351,7 +350,7 @@ async fn assert_matrix_case(scenario: SimulatorScenario) {
     let log_dir = tempfile::tempdir().unwrap();
 
     let (exit_code, stdout, stderr) = tokio::time::timeout(
-        Duration::from_secs(30),
+        SUBPROCESS_TIMEOUT,
         tokio::task::spawn_blocking({
             let db_path = db_path.clone();
             let log_dir = log_dir.path().to_path_buf();
@@ -366,7 +365,13 @@ async fn assert_matrix_case(scenario: SimulatorScenario) {
         }),
     )
     .await
-    .unwrap_or_else(|_| panic!("{} did not exit within 30s", scenario.name))
+    .unwrap_or_else(|_| {
+        panic!(
+            "{} did not exit within {}s",
+            scenario.name,
+            SUBPROCESS_TIMEOUT.as_secs()
+        )
+    })
     .expect("joining the spawn_blocking task panicked");
 
     assert_eq!(
@@ -489,13 +494,27 @@ async fn assert_matrix_case(scenario: SimulatorScenario) {
         "{}: a completed run must have recorded at least one sample tick",
         scenario.name
     );
+    assert_eq!(
+        (samples[0].sample.time - run.started_at).num_milliseconds(),
+        5,
+        "{}: the first persisted simulator sample must be one process step after the run start",
+        scenario.name
+    );
+    for pair in samples.windows(2) {
+        assert_eq!(
+            (pair[1].sample.time - pair[0].sample.time).num_milliseconds(),
+            5,
+            "{}: persisted simulator samples must use the fixed 5 ms process step",
+            scenario.name
+        );
+    }
 
     pool.close().await;
 }
 
-/// Runs the numeric matrix serially so the three subprocesses do not compete with one another
-/// for wall-clock timer scheduling. This is deliberately one test: parallel test execution
-/// would add noise to the period-derived values this regression is intended to monitor.
+/// Runs the numeric matrix serially to keep CI resource use predictable. The simulator's fixed
+/// time domain makes the calculated values independent of host scheduling, but one test also
+/// keeps subprocess startup and SQLite activity from competing unnecessarily.
 #[tokio::test]
 async fn simulator_tunes_match_reviewed_numeric_baselines() {
     for scenario in simulator_scenarios() {

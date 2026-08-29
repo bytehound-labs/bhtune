@@ -30,6 +30,7 @@ use crate::args::{DriverKindArg, TuneArgs};
 use crate::cancel::CtrlC;
 use crate::driver::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
 use crate::output::OutputFormat;
+use crate::timing::TickTimeSource;
 
 /// The final disposition of a `tune`/`simulate` run -- drives the printed summary (see
 /// [`print_summary`]) and, via `crate::tune_outcome_exit_code` in `lib.rs`, the process's
@@ -1890,6 +1891,7 @@ async fn run_polling_loop(
     guard: &mut MutationGuard,
     allow_uncertain_quality: bool,
 ) -> anyhow::Result<PollOutcome> {
+    let mut tick_time = TickTimeSource::for_driver(args.driver, start_time, args.poll_interval_ms)?;
     let mut interval = tokio::time::interval(Duration::from_millis(args.poll_interval_ms.max(1)));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -1909,7 +1911,7 @@ async fn run_polling_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let now = Utc::now();
+                let now = tick_time.next_timestamp()?;
                 let (pv, quality) = match bounded_driver_call(
                     args.op_timeout_secs,
                     ctrl_c,
