@@ -2794,7 +2794,7 @@
             "format": "int64",
             "description": "Cap on restoring the loop to its pre-test state after the run ends, in seconds.\nOPC DA runs require at least 4 seconds so the internal MV actuation confirmation\nwindow can complete; simulator runs only require a positive value.",
             "example": 30,
-            "minimum": 1
+            "minimum": 4
           },
           "server": {
             "type": [

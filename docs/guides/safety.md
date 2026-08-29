@@ -88,7 +88,9 @@ authoritative restore write, so BHTune does not wait twice for the same original
 The restore readback is attempted immediately; only a mismatch is retried, and a
 `--restore-timeout-secs` value below four seconds is rejected before a live loop is mutated.
 An MV read that starts before the deadline but returns after it is still treated as late and does
-not confirm the command.
+not confirm the command. The fresh read started at the deadline is independently capped at one
+second, rather than inheriting the full per-operation timeout, so a stalled read cannot hold the
+tune open indefinitely.
 
 Verification reads are separate from PV samples: they do not advance MRFT time, add trend/export
 samples, or increment polling timing statistics. `bhtune history show <run>` records each

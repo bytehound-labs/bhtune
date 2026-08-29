@@ -103,4 +103,16 @@ mod tests {
         let json = spec.to_json().expect("spec must serialize to JSON");
         assert!(json.contains("\"title\":\"BHTune API\""));
     }
+
+    #[test]
+    fn start_run_schema_exposes_the_opcda_restore_timeout_floor() {
+        let spec = ApiDoc::openapi();
+        let value = serde_json::to_value(spec).expect("spec must serialize to a JSON value");
+        assert_eq!(
+            value.pointer(
+                "/components/schemas/StartRunRequest/properties/restore_timeout_secs/minimum"
+            ),
+            Some(&serde_json::json!(4))
+        );
+    }
 }

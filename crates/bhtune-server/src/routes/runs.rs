@@ -163,7 +163,7 @@ pub struct StartRunRequest {
     /// OPC DA runs require at least 4 seconds so the internal MV actuation confirmation
     /// window can complete; simulator runs only require a positive value.
     #[serde(default = "default_op_or_restore_timeout_secs")]
-    #[schema(minimum = 1, example = 30)]
+    #[schema(minimum = 4, example = 30)]
     pub restore_timeout_secs: u64,
 }
 

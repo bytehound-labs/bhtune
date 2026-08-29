@@ -423,6 +423,8 @@ language, including exactly what happens on the first and second Ctrl+C:
   restore write, avoiding duplicate waits. These checks are audited in run history and do not
   create PV samples or advance MRFT timing. A readback that returns after the confirmation deadline
   does not count, even if the read started before the deadline.
+  The fresh read started at that deadline has its own one-second bound, so a stalled MV read
+  cannot consume the full per-operation timeout and leave the run waiting indefinitely.
 - **`--restore-timeout-secs <seconds>`** (default `30`; OPC DA minimum `4`) bounds putting the loop back afterwards,
   independently of `--timeout-secs`. If the restore can't be confirmed within that time, or a
   _second_ Ctrl+C arrives while it's in progress, the process prints which tag and value to
