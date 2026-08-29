@@ -37,7 +37,8 @@
 //! `--yes`/`--write-pid <level>`/`--timeout-secs` flags (bypassing the interactive
 //! write-back prompt and mandatorily bounding an unattended run's wall-clock duration) plus
 //! this module's distinguished exit codes ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`],
-//! [`EXIT_POOR_QUALITY`], [`EXIT_WRITE_BACK_FAILED`], [`EXIT_RESTORE_INCOMPLETE`]), so a
+//! [`EXIT_POOR_QUALITY`], [`EXIT_ACTUATION_FAILED`], [`EXIT_WRITE_BACK_FAILED`],
+//! [`EXIT_RESTORE_INCOMPLETE`]), so a
 //! scheduler can tell "aborted", "timed out", "the plant data couldn't be trusted", "test ran
 //! but the write-back failed", "the loop may not have been fully restored", and "never ran at
 //! all" apart without parsing stdout. See AGENTS.md's `cli-automation`/`cli-safety` sections.
@@ -108,6 +109,11 @@ pub const EXIT_POOR_QUALITY: u8 = 5;
 /// `commands::tune::TuneOutcome::RestoreIncomplete` and AGENTS.md's `safety-cancellation`
 /// section.
 pub const EXIT_RESTORE_INCOMPLETE: u8 = 6;
+/// A live OPC DA tune was aborted because an accepted MV command could not be confirmed at
+/// the controller before its deadline or before a replacement relay command was required.
+/// The ordinary restore path still ran; [`EXIT_RESTORE_INCOMPLETE`] takes precedence if that
+/// restore could not itself be confirmed.
+pub const EXIT_ACTUATION_FAILED: u8 = 7;
 
 /// Parses real CLI arguments, initializes structured logging, and runs, returning a process
 /// exit code.
@@ -257,6 +263,7 @@ fn tune_outcome_exit_code(outcome: commands::tune::TuneOutcome) -> ExitCode {
         commands::tune::TuneOutcome::TimedOut => ExitCode::from(EXIT_TIMED_OUT),
         commands::tune::TuneOutcome::WriteBackFailed => ExitCode::from(EXIT_WRITE_BACK_FAILED),
         commands::tune::TuneOutcome::PoorQuality => ExitCode::from(EXIT_POOR_QUALITY),
+        commands::tune::TuneOutcome::ActuationFailed => ExitCode::from(EXIT_ACTUATION_FAILED),
         commands::tune::TuneOutcome::RestoreIncomplete => ExitCode::from(EXIT_RESTORE_INCOMPLETE),
     }
 }
@@ -462,6 +469,10 @@ mod tests {
         assert_eq!(
             tune_outcome_exit_code(commands::tune::TuneOutcome::PoorQuality),
             ExitCode::from(EXIT_POOR_QUALITY)
+        );
+        assert_eq!(
+            tune_outcome_exit_code(commands::tune::TuneOutcome::ActuationFailed),
+            ExitCode::from(EXIT_ACTUATION_FAILED)
         );
         assert_eq!(
             tune_outcome_exit_code(commands::tune::TuneOutcome::RestoreIncomplete),

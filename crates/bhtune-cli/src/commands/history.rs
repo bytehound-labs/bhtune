@@ -2,8 +2,8 @@
 
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    Pagination, TuneDriver, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
-    WriteKind,
+    MvActuationKind, MvActuationStatus, Pagination, SampleQuality, TuneDriver, TuneMvActuationRow,
+    TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
 };
 use bhtune_driver::OpcDaDriver;
 
@@ -180,6 +180,45 @@ impl From<&TuneWriteRow> for WriteJson {
 }
 
 #[derive(serde::Serialize)]
+struct MvActuationJson {
+    id: i64,
+    sequence: i64,
+    kind: MvActuationKind,
+    commanded_at: chrono::DateTime<chrono::Utc>,
+    target_mv: f32,
+    previous_commanded_mv: Option<f32>,
+    tolerance: f32,
+    confirmation_due_at: chrono::DateTime<chrono::Utc>,
+    last_checked_at: Option<chrono::DateTime<chrono::Utc>>,
+    readback_mv: Option<f32>,
+    readback_quality: Option<SampleQuality>,
+    attempt_count: i64,
+    status: MvActuationStatus,
+    detail: Option<String>,
+}
+
+impl From<&TuneMvActuationRow> for MvActuationJson {
+    fn from(row: &TuneMvActuationRow) -> Self {
+        Self {
+            id: row.id,
+            sequence: row.sequence,
+            kind: row.kind,
+            commanded_at: row.commanded_at,
+            target_mv: row.target_mv,
+            previous_commanded_mv: row.previous_commanded_mv,
+            tolerance: row.tolerance,
+            confirmation_due_at: row.confirmation_due_at,
+            last_checked_at: row.last_checked_at,
+            readback_mv: row.readback_mv,
+            readback_quality: row.readback_quality,
+            attempt_count: row.attempt_count,
+            status: row.status,
+            detail: row.detail.clone(),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
 struct RunDetailJson {
     id: i64,
     tag_name: String,
@@ -206,6 +245,7 @@ struct RunDetailJson {
     samples_recorded: usize,
     results: Vec<ResultJson>,
     writes: Vec<WriteJson>,
+    mv_actuations: Vec<MvActuationJson>,
     /// Outcome of the best-effort restore attempted after this run ended -- `None` if the
     /// run never mutated the loop, or hasn't ended yet (`safety-restore-guard`).
     restore_status: Option<bhtune_db::models::RestoreStatus>,
@@ -391,6 +431,7 @@ fn print_show_table(
     samples: &[TuneSampleRow],
     results: &[TuneResultRow],
     writes: &[TuneWriteRow],
+    mv_actuations: &[TuneMvActuationRow],
 ) {
     println!("Run #{} — Tag name: {}", run.id, run.loop_name);
     println!("  Notes:           {}", run.notes.as_deref().unwrap_or("—"));
@@ -484,6 +525,7 @@ fn print_show_table(
 
     print_show_results(results);
     print_show_writes(writes);
+    print_show_mv_actuations(mv_actuations);
 }
 
 fn print_show_results(results: &[TuneResultRow]) {
@@ -555,11 +597,49 @@ fn print_show_rollback(write: &TuneWriteRow) {
     );
 }
 
+fn print_show_mv_actuations(actuations: &[TuneMvActuationRow]) {
+    if !has_rows(actuations) {
+        return;
+    }
+    println!("  MV actuation verification:");
+    println!(
+        "    {:<5} {:<8} {:<25} {:<10} {:<10} {:<10} {:<10} {:<12} DETAIL",
+        "SEQ", "KIND", "COMMANDED", "TARGET", "READBACK", "TOLERANCE", "ATTEMPTS", "STATUS"
+    );
+    for actuation in actuations {
+        println!(
+            "    {:<5} {:<8} {:<25} {:<10} {:<10} {:<10} {:<10} {:<12} {}",
+            actuation.sequence,
+            format!("{:?}", actuation.kind),
+            actuation.commanded_at.to_rfc3339(),
+            fmt_opt_f32(Some(actuation.target_mv)),
+            fmt_opt_f32(actuation.readback_mv),
+            fmt_opt_f32(Some(actuation.tolerance)),
+            actuation.attempt_count,
+            format!("{:?}", actuation.status),
+            actuation.detail.as_deref().unwrap_or("-"),
+        );
+        println!(
+            "        confirmation due: {}  last checked: {}  quality: {}",
+            actuation.confirmation_due_at.to_rfc3339(),
+            actuation
+                .last_checked_at
+                .map(|value| value.to_rfc3339())
+                .unwrap_or_else(|| "-".to_string()),
+            actuation
+                .readback_quality
+                .map(|quality| format!("{quality:?}"))
+                .unwrap_or_else(|| "-".to_string()),
+        );
+    }
+}
+
 fn print_show_json(
     run: &TuneRunRow,
     samples: &[TuneSampleRow],
     results: &[TuneResultRow],
     writes: &[TuneWriteRow],
+    mv_actuations: &[TuneMvActuationRow],
 ) -> anyhow::Result<()> {
     let json = RunDetailJson {
         id: run.id,
@@ -583,6 +663,7 @@ fn print_show_json(
         samples_recorded: samples.len(),
         results: results.iter().map(ResultJson::from).collect(),
         writes: writes.iter().map(WriteJson::from).collect(),
+        mv_actuations: mv_actuations.iter().map(MvActuationJson::from).collect(),
         restore_status: run.restore_status,
         restore_detail: run.restore_detail.clone(),
     };
@@ -597,10 +678,11 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
     let samples = TuneSampleRow::list_for_run(pool, run_id).await?;
     let results = TuneResultRow::list_for_run(pool, run_id).await?;
     let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
+    let mv_actuations = TuneMvActuationRow::list_for_run(pool, run_id).await?;
 
     match output {
-        OutputFormat::Table => print_show_table(&run, &samples, &results, &writes),
-        OutputFormat::Json => print_show_json(&run, &samples, &results, &writes)?,
+        OutputFormat::Table => print_show_table(&run, &samples, &results, &writes, &mv_actuations),
+        OutputFormat::Json => print_show_json(&run, &samples, &results, &writes, &mv_actuations)?,
     }
 
     Ok(())

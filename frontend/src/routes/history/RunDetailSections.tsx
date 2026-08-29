@@ -1,5 +1,6 @@
 import { userFacingErrorMessage } from "../../api/errors";
 import type {
+  MvActuation,
   RunDetailResponse,
   RunStreamState,
   ResponseLevel,
@@ -9,9 +10,12 @@ import {
   CONTROLLER_TYPE_LABELS,
   DIRECTION_LABELS,
   DRIVER_LABELS,
+  MV_ACTUATION_KIND_LABELS,
+  MV_ACTUATION_STATUS_LABELS,
   OUTCOME_LABELS,
   PROCESS_TYPE_LABELS,
   RESPONSE_LEVEL_LABELS,
+  SAMPLE_QUALITY_LABELS,
   TIMING_BASIS_LABELS,
 } from "../../lib/enumLabels";
 import { TrendChart } from "../../components/TrendChart";
@@ -145,7 +149,7 @@ function SummarySection({ run }: { readonly run: RunDetailResponse }) {
       <Field label="Started" value={dateTime(run.started_at)} />
       <Field label="Completed" value={dateTime(run.completed_at)} />
       {run.failure_reason && (
-        <Field label="Failure reason" value={run.failure_reason} full />
+        <Field label="End reason" value={run.failure_reason} full />
       )}
       {run.restore_status && (
         <Field
@@ -358,6 +362,100 @@ function TimingSection({
       </Card>
     </section>
   );
+}
+
+function MvActuationSection({
+  actuations,
+}: {
+  readonly actuations: readonly MvActuation[];
+}) {
+  return (
+    <section className="mb-6">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+        MV actuation verification
+      </h2>
+      {actuations.length === 0 ? (
+        <p className="text-sm text-slate-500">
+          No OPC DA MV commands were recorded for this tune.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-slate-800">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+              <tr>
+                <th className="px-4 py-2 font-medium">Command</th>
+                <th className="px-4 py-2 font-medium">Commanded at</th>
+                <th className="px-4 py-2 font-medium">Target MV</th>
+                <th className="px-4 py-2 font-medium">Readback</th>
+                <th className="px-4 py-2 font-medium">Tolerance</th>
+                <th className="px-4 py-2 font-medium">Due</th>
+                <th className="px-4 py-2 font-medium">Attempts</th>
+                <th className="px-4 py-2 font-medium">Status</th>
+                <th className="px-4 py-2 font-medium">Detail</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {actuations.map((actuation) => (
+                <MvActuationRow key={actuation.id} actuation={actuation} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MvActuationRow({ actuation }: { readonly actuation: MvActuation }) {
+  const status = actuationStatus(actuation.status);
+  return (
+    <tr>
+      <td className="px-4 py-3">
+        <div className="font-medium">
+          {MV_ACTUATION_KIND_LABELS[actuation.kind]}
+        </div>
+        <div className="text-xs text-slate-500">#{actuation.sequence}</div>
+      </td>
+      <td className="px-4 py-3 text-slate-400">
+        <div>{dateTime(actuation.commanded_at)}</div>
+        <div className="text-xs">
+          check {dateTime(actuation.last_checked_at)}
+        </div>
+      </td>
+      <td className="px-4 py-3 font-mono">{num(actuation.target_mv)}</td>
+      <td className="px-4 py-3 font-mono">
+        <div>{num(actuation.readback_mv)}</div>
+        {actuation.readback_quality && (
+          <div className="font-sans text-xs text-slate-400">
+            {SAMPLE_QUALITY_LABELS[actuation.readback_quality]}
+          </div>
+        )}
+      </td>
+      <td className="px-4 py-3 font-mono">{num(actuation.tolerance)}</td>
+      <td className="px-4 py-3 text-slate-400">
+        {dateTime(actuation.confirmation_due_at)}
+      </td>
+      <td className="px-4 py-3">{actuation.attempt_count}</td>
+      <td className="px-4 py-3">
+        <Badge tone={status.tone}>{status.label}</Badge>
+      </td>
+      <td className="max-w-sm px-4 py-3 text-slate-400">
+        {actuation.detail ?? "—"}
+      </td>
+    </tr>
+  );
+}
+
+function actuationStatus(status: MvActuation["status"]) {
+  const tone =
+    status === "confirmed"
+      ? "success"
+      : status === "failed"
+        ? "error"
+        : status === "unverified"
+          ? "warning"
+          : "neutral";
+  return { tone, label: MV_ACTUATION_STATUS_LABELS[status] };
 }
 
 function CalculatedResultsSection({
@@ -745,6 +843,9 @@ export function RunDetailContent({
       <ConfigurationSection run={run} />
       {initialReadings && <InitialReadingsSection readings={initialReadings} />}
       {run.timing_metrics && <TimingSection timing={run.timing_metrics} />}
+      {run.driver === "opcda" && (
+        <MvActuationSection actuations={run.mv_actuations} />
+      )}
       <CalculatedResultsSection
         run={run}
         eligibility={eligibility}

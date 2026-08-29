@@ -99,3 +99,22 @@ export const SAMPLE_QUALITY_TONE: Record<
   uncertain: "warning",
   bad: "error",
 };
+
+export const MV_ACTUATION_KIND_LABELS: Record<
+  components["schemas"]["MvActuationKind"],
+  string
+> = {
+  relay: "Relay",
+  restore: "Restore",
+};
+
+export const MV_ACTUATION_STATUS_LABELS: Record<
+  components["schemas"]["MvActuationStatus"],
+  string
+> = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  failed: "Failed",
+  unverified: "Unverified",
+  superseded: "Superseded",
+};

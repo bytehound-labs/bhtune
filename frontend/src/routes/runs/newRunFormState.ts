@@ -809,6 +809,13 @@ function validateForm(form: FormState): string | undefined {
   if (form.driver === "opcda" && !form.server.trim()) {
     return "OPC DA server ProgID is required for the opcda driver.";
   }
+  if (
+    form.driver === "opcda" &&
+    form.restoreTimeoutSecs !== "" &&
+    form.restoreTimeoutSecs < 4
+  ) {
+    return "Restore timeout must be at least 4 seconds for OPC DA MV confirmation.";
+  }
   if (form.relayAmp === "") return "Relay amplitude is required.";
   const mappingError =
     form.driver === "simulator"
