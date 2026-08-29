@@ -43,6 +43,7 @@ use crate::timing::{PollTimingAccumulator, RunTimeAnchor, TickTimeSource};
 /// copying the safety-critical literal.
 pub const MV_ACTUATION_CONFIRMATION_SECS: u64 = 4;
 const MV_ACTUATION_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+const MV_ACTUATION_DEADLINE_READ_MAX: Duration = Duration::from_secs(1);
 const MV_RESTORE_HANDOFF_READ_MAX: Duration = Duration::from_secs(1);
 const MV_SPAN_TOLERANCE_FRACTION: f32 = 0.001;
 const RELAY_STEP_TOLERANCE_FRACTION: f32 = 0.25;
@@ -2343,6 +2344,7 @@ enum MvVerificationCallLimit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MvVerificationLimitKind {
     Confirmation,
+    Deadline,
     PreservePoll,
     Restore,
 }
@@ -2491,7 +2493,14 @@ fn mv_verification_read_limit(
         }
     };
     if trigger == MvVerificationTrigger::Deadline {
-        return external;
+        let deadline_read_limit = (
+            Instant::now() + MV_ACTUATION_DEADLINE_READ_MAX,
+            MvVerificationLimitKind::Deadline,
+        );
+        return match external {
+            Some(external) if external.0 < deadline_read_limit.0 => Some(external),
+            _ => Some(deadline_read_limit),
+        };
     }
     match external {
         Some((deadline, _)) if deadline < pending.deadline => external,
@@ -2529,6 +2538,28 @@ async fn verify_pending_mv_actuation_with(
         .await?
     {
         PendingMvVerificationRead::Deferred => Ok(None),
+        PendingMvVerificationRead::DeadlineTimedOut {
+            pending,
+            checked_at,
+            checked_instant,
+        } => {
+            record_final_actuation_observation(
+                pool,
+                &pending,
+                checked_at,
+                pending.last_readback,
+                None,
+                MvActuationStatus::Unverified,
+                "the fresh MV read at the confirmation deadline did not finish within its bounded verification window",
+            )
+            .await;
+            Ok(Some(actuation_abort_reason(
+                tag,
+                &pending,
+                pending.last_readback,
+                checked_instant,
+            )))
+        }
         PendingMvVerificationRead::RestoreTimedOut {
             pending,
             checked_at,
@@ -2583,6 +2614,11 @@ enum PendingMvVerificationRead {
         checked_instant: Instant,
     },
     Deferred,
+    DeadlineTimedOut {
+        pending: PendingMvActuation,
+        checked_at: DateTime<Utc>,
+        checked_instant: Instant,
+    },
     RestoreTimedOut {
         pending: PendingMvActuation,
         checked_at: DateTime<Utc>,
@@ -2652,6 +2688,19 @@ async fn read_pending_mv_verification(
                     if matches!(call_limit, MvVerificationCallLimit::PreservePoll(_)) {
                         call_limit = MvVerificationCallLimit::None;
                     }
+                }
+                MvVerificationLimitKind::Deadline => {
+                    let pending = tracker
+                        .pending
+                        .take()
+                        .expect("pending actuation existed before the deadline read");
+                    let checked_instant = Instant::now();
+                    let checked_at = checked_at_for_pending(&pending, checked_instant)?;
+                    return Ok(PendingMvVerificationRead::DeadlineTimedOut {
+                        pending,
+                        checked_at,
+                        checked_instant,
+                    });
                 }
                 MvVerificationLimitKind::PreservePoll => {
                     tracker
@@ -5604,6 +5653,8 @@ mod tests {
         /// Per-tag finite read latency, used to prove that live monotonic sample timestamps
         /// include the time spent awaiting the driver rather than being captured before it.
         read_delays: std::collections::HashMap<String, Duration>,
+        /// Tags whose configured finite read delay was cancelled before it completed.
+        cancelled_delayed_reads: std::sync::Mutex<std::collections::HashSet<String>>,
         /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
         /// listed -- matching a healthy real driver and letting most tests ignore quality
         /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
@@ -5702,7 +5753,18 @@ mod tests {
                 .filter_map(|tag| self.read_delays.get(tag))
                 .max()
             {
+                let delayed_tags = tags
+                    .iter()
+                    .filter(|tag| self.read_delays.contains_key(*tag))
+                    .cloned()
+                    .collect();
+                let mut observer = DelayedReadObserver {
+                    driver: self,
+                    tags: delayed_tags,
+                    completed: false,
+                };
                 tokio::time::sleep(*delay).await;
+                observer.completed = true;
             }
         }
 
@@ -5792,6 +5854,28 @@ mod tests {
 
         fn read_batches(&self) -> Vec<Vec<String>> {
             self.read_batches.lock().unwrap().clone()
+        }
+
+        fn delayed_read_was_cancelled(&self, tag: &str) -> bool {
+            self.cancelled_delayed_reads.lock().unwrap().contains(tag)
+        }
+    }
+
+    struct DelayedReadObserver<'a> {
+        driver: &'a MockDriver,
+        tags: Vec<String>,
+        completed: bool,
+    }
+
+    impl Drop for DelayedReadObserver<'_> {
+        fn drop(&mut self) {
+            if !self.completed {
+                self.driver
+                    .cancelled_delayed_reads
+                    .lock()
+                    .unwrap()
+                    .extend(self.tags.iter().cloned());
+            }
         }
     }
 
@@ -6338,6 +6422,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fresh_deadline_read_is_tightly_bounded_below_the_operation_timeout() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_opc_test_run(&pool, "actuation-deadline-read-bound").await;
+        let driver = honeywell_driver_auto().hanging_read(&tags.manipulated_variable);
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.op_timeout_secs = 30;
+        let initial = sample_initial_state();
+        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
+        let accepted_instant = Instant::now();
+        tracker
+            .record_accepted(
+                &pool,
+                run_id,
+                MvActuationKind::Relay,
+                55.0,
+                accepted_instant,
+                Utc::now(),
+                accepted_instant,
+                mv_actuation_tolerance(MvActuationKind::Relay, 55.0, 45.0, 100.0).unwrap(),
+            )
+            .await
+            .unwrap();
+        tracker.pending.as_mut().unwrap().deadline = Instant::now();
+
+        let started = Instant::now();
+        let outcome = verify_pending_mv_actuation(
+            &pool,
+            &args,
+            &tags.manipulated_variable,
+            &driver,
+            &mut CtrlC::never(),
+            false,
+            &mut tracker,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(matches!(
+            outcome,
+            Some(AbortReason::MvActuationUnconfirmed { readback: None, .. })
+        ));
+        let rows = TuneMvActuationRow::list_for_run(&pool, run_id)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].status, MvActuationStatus::Unverified);
+        assert_eq!(rows[0].attempt_count, 1);
+    }
+
+    #[tokio::test]
     async fn slow_verification_does_not_delay_the_next_scheduled_pv_sample() {
         let pool = seeded_pool().await;
         let (run_id, config, _template, tags) =
@@ -6388,7 +6525,6 @@ mod tests {
         );
         let mut timing = timing_for_args(&args);
 
-        let started = Instant::now();
         let outcome = run_polling_loop(
             &pool,
             run_id,
@@ -6412,7 +6548,7 @@ mod tests {
             PollOutcome::Aborted(AbortReason::PoorQuality { .. })
         ));
         assert!(
-            started.elapsed() < Duration::from_millis(250),
+            driver.delayed_read_was_cancelled(&tags.manipulated_variable),
             "the 500ms MV verification read must be dropped at the 50ms PV deadline"
         );
         let reads = driver.read_batches();

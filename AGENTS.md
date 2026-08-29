@@ -1968,6 +1968,8 @@ rationale for code that still exists (not a changelog of the review itself):
   process's noise-protection interval and the fixed internal
   `MV_ACTUATION_CONFIRMATION_SECS = 4` deadline; a finite readback must be within the derived
   tolerance, and a matching readback that completes after the deadline is still a failure.
+  The fresh deadline read has an independent one-second bound instead of inheriting the full
+  per-operation timeout, so a stalled MV read cannot hold the run open indefinitely.
   Verification is given priority when its deadline and a PV poll become ready together, so a
   due safety check cannot be hidden behind another engine step. An unconfirmed relay aborts
   without issuing the replacement write, records `TuneOutcome::ActuationFailed`/exit code `7`
