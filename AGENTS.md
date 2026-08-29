@@ -4195,6 +4195,24 @@ The repository now has a layered hardening gate for both source changes and rele
 - **Frontend dependency hygiene**: `pnpm run check:licenses` (from the repo root) — the
   npm-side counterpart to `cargo deny check`, see "Key architectural decisions" above
 
+### Local browser development deployment
+
+When making frontend or browser-visible changes, keep the local test deployment running so
+the result is available for manual testing after every edit:
+
+- Start `bhtune-server` with an isolated development database on
+  `127.0.0.1:8787`, for example
+  `BHTUNE_DB=/tmp/bhtune-dev.db BHTUNE_BIND=127.0.0.1:8787 cargo run -p bhtune-server`.
+- Start the frontend with `cd frontend && pnpm dev`. `frontend/vite.config.ts` binds Vite to
+  `0.0.0.0` and allows the local `asus` hostname, so use `http://asus:5173` from another host
+  on the trusted local network.
+- Vite hot module reload deploys frontend edits automatically. After Rust or API changes,
+  restart the `bhtune-server` process before browser verification; if either dev process
+  exits, start it again before finishing the change.
+- Verify both `http://127.0.0.1:8787/api/health` and the browser URL after each change. Do not
+  expose the unauthenticated development API or UI beyond a trusted network, and never use a
+  normal user database for local UI testing.
+
 ### Coverage enforcement
 
 Coverage is tracked by Codecov and enforced at **100%** via `codecov.yml` (project and patch
@@ -4378,7 +4396,7 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    and range sources — a live
    "Test read", and "Select tag" — manually verified
    end to end, including against a real populated tag tree served by a temporary,
-   never-committed mock gateway. The header also provides a persistent light/dark theme toggle
+   never-committed mock gateway. The header also provides a persistent Catppuccin light/dark theme toggle
    whose palette is shared across the full SPA. The Phase 7.5 documentation wrap-up is complete.
    See
    the Status section above for the full design and verification detail behind each.

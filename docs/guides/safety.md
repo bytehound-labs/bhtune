@@ -171,6 +171,10 @@ the same way you'd treat any other unauthenticated service on your OT network: o
 trusted, isolated network, and prefer console/remote-desktop access to the host running
 `bhtune-server` over exposing it further.
 
+The frontend development server is also unauthenticated. It binds all local interfaces so a
+trusted host can use `http://asus:5173`, and proxies browser API requests to the local
+`bhtune-server`; use this development-only path only on the same trusted network.
+
 ## Scripting and exit codes
 
 `--output json` emits exactly one parseable JSON value on stdout, on every path — success,

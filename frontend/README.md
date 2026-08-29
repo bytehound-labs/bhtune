@@ -22,14 +22,18 @@ The workspace uses the latest TypeScript 6 release supported by the OpenAPI gene
 the `typescript` pins in `frontend/package.json` and `website/package.json` on the same
 compatible major until `openapi-typescript` supports TypeScript 7's compiler API.
 
-`vite.config.ts` proxies `/api/*` requests to `http://127.0.0.1:8787`, so run
+The Vite dev server binds `0.0.0.0` and allows the local `asus` hostname, so the UI is
+available at `http://asus:5173` from another host on the same network. Vite's hot module
+reload updates the running UI after each frontend save; restart the API process after Rust
+changes. `vite.config.ts` proxies `/api/*` requests to `http://127.0.0.1:8787`, so run
 `cargo run -p bhtune-server` alongside `pnpm dev` to exercise the real HTTP API while
-developing. In production, `bhtune-server` embeds the built SPA (`rust-embed`, see
+developing. The dev server has no authentication; use it only on a trusted network.
+In production, `bhtune-server` embeds the built SPA (`rust-embed`, see
 `crates/bhtune-server/src/spa.rs`) and serves it directly from the same origin — build with
 `pnpm run build`, then `cargo run -p bhtune-server` serves both the API and the UI from one
 process with no proxy involved.
 
-The header includes a light/dark theme toggle whose selection is remembered by the browser. Its
+The header includes a Catppuccin light/dark theme toggle whose selection is remembered by the browser. Its
 colored status dot and server version label are vertically centered together. The dot polls
 `GET /api/health` every five seconds. Green means the BHTune HTTP service is reachable; it does
 not verify OPC DA or another process-driver connection. Hover the dot for the full status detail.
