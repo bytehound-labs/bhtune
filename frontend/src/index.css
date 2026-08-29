@@ -1,52 +1,87 @@
 @import "tailwindcss";
 
+/* Catppuccin palette tokens are mapped onto the existing Tailwind semantic classes so the
+ * component markup keeps one consistent vocabulary across both theme modes. */
 :root {
   color-scheme: dark;
-  --bhtune-page-background: #020617;
-  --bhtune-modal-backdrop: rgb(2 6 23 / 70%);
-  --bhtune-chart-pv: #34d399;
-  --bhtune-chart-mv: #38bdf8;
-  --bhtune-chart-axis: #94a3b8;
-  --bhtune-chart-grid: #1e293b;
-  --color-slate-950: #020617;
+  --bhtune-page-background: #1e1e2e;
+  --bhtune-modal-backdrop: rgb(30 30 46 / 72%);
+  --bhtune-chart-pv: #f38ba8;
+  --bhtune-chart-mv: #89b4fa;
+  --bhtune-chart-axis: #a6adc8;
+  --bhtune-chart-grid: #585b70;
+
+  /* Catppuccin Mocha: base/surface/overlay backgrounds with pastel accents. */
+  --color-slate-950: #1e1e2e;
+  --color-slate-900: #313244;
+  --color-slate-800: #45475a;
+  --color-slate-700: #585b70;
+  --color-slate-600: #6c7086;
+  --color-slate-500: #7f849c;
+  --color-slate-400: #9399b2;
+  --color-slate-300: #a6adc8;
+  --color-slate-200: #bac2de;
+  --color-slate-100: #cdd6f4;
+
+  --color-emerald-950: #20352d;
+  --color-emerald-900: #2d4a3b;
+  --color-emerald-800: #a6e3a1;
+  --color-emerald-400: #a6e3a1;
+  --color-emerald-300: #a6e3a1;
+
+  --color-red-950: #39252e;
+  --color-red-900: #4e2f3a;
+  --color-red-800: #f38ba8;
+  --color-red-400: #f38ba8;
+  --color-red-300: #f38ba8;
+
+  --color-amber-950: #3a3023;
+  --color-amber-900: #51432d;
+  --color-amber-800: #f9e2af;
+  --color-amber-400: #f9e2af;
+  --color-amber-300: #f9e2af;
+  --color-amber-200: #f9e2af;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bhtune-page-background: #f8fafc;
-  --bhtune-modal-backdrop: rgb(15 23 42 / 35%);
-  --bhtune-chart-pv: #059669;
-  --bhtune-chart-mv: #0284c7;
-  --bhtune-chart-axis: #64748b;
-  --bhtune-chart-grid: #cbd5e1;
+  --bhtune-page-background: #eff1f5;
+  --bhtune-modal-backdrop: rgb(76 79 105 / 35%);
+  --bhtune-chart-pv: #d20f39;
+  --bhtune-chart-mv: #1e66f5;
+  --bhtune-chart-axis: #6c6f85;
+  --bhtune-chart-grid: #bcc0cc;
 
-  --color-slate-950: #f8fafc;
-  --color-slate-900: #ffffff;
-  --color-slate-800: #e2e8f0;
-  --color-slate-700: #cbd5e1;
-  --color-slate-600: #94a3b8;
-  --color-slate-500: #64748b;
-  --color-slate-400: #475569;
-  --color-slate-300: #334155;
-  --color-slate-200: #1e293b;
-  --color-slate-100: #0f172a;
+  /* Catppuccin Latte: bright surfaces with dark purple foreground content. */
+  --color-slate-950: #eff1f5;
+  --color-slate-900: #ccd0da;
+  --color-slate-800: #bcc0cc;
+  --color-slate-700: #acb0be;
+  --color-slate-600: #9ca0b0;
+  --color-slate-500: #8c8fa1;
+  --color-slate-400: #7c7f93;
+  --color-slate-300: #6c6f85;
+  --color-slate-200: #5c5f77;
+  --color-slate-100: #4c4f69;
 
-  --color-emerald-950: #f0fdf4;
-  --color-emerald-900: #dcfce7;
-  --color-emerald-800: #86efac;
-  --color-emerald-400: #16a34a;
-  --color-emerald-300: #166534;
+  --color-emerald-950: #e5f2e4;
+  --color-emerald-900: #d1e8d0;
+  --color-emerald-800: #40a02b;
+  --color-emerald-400: #40a02b;
+  --color-emerald-300: #40a02b;
 
-  --color-red-950: #fef2f2;
-  --color-red-900: #fee2e2;
-  --color-red-800: #fca5a5;
-  --color-red-400: #dc2626;
-  --color-red-300: #b91c1c;
+  --color-red-950: #f7e1e5;
+  --color-red-900: #efc2ca;
+  --color-red-800: #d20f39;
+  --color-red-400: #d20f39;
+  --color-red-300: #b20c30;
 
-  --color-amber-950: #fffbeb;
-  --color-amber-800: #fcd34d;
-  --color-amber-400: #d97706;
-  --color-amber-200: #92400e;
+  --color-amber-950: #f8ead4;
+  --color-amber-900: #f3d8ae;
+  --color-amber-800: #df8e1d;
+  --color-amber-400: #b56b00;
+  --color-amber-300: #965800;
+  --color-amber-200: #7a4700;
 }
 
 html,

@@ -181,8 +181,10 @@ test.describe("app shell", () => {
               .backgroundColor,
         ),
       )
-      .toBe("rgb(2, 6, 23)");
-    await page.getByRole("button", { name: "Switch to light theme" }).click();
+      .toBe("rgb(30, 30, 46)");
+    await page
+      .getByRole("button", { name: "Switch to Catppuccin light theme" })
+      .click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await expect
       .poll(() =>
@@ -192,15 +194,15 @@ test.describe("app shell", () => {
               .backgroundColor,
         ),
       )
-      .toBe("rgb(248, 250, 252)");
+      .toBe("rgb(239, 241, 245)");
     await expect(
-      page.getByRole("button", { name: "Switch to dark theme" }),
+      page.getByRole("button", { name: "Switch to Catppuccin dark theme" }),
     ).toBeVisible();
 
     await page.reload();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await expect(
-      page.getByRole("button", { name: "Switch to dark theme" }),
+      page.getByRole("button", { name: "Switch to Catppuccin dark theme" }),
     ).toBeVisible();
   });
 

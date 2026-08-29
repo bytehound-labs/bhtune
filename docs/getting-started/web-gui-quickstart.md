@@ -26,7 +26,7 @@ its API — every `/api/*` route works — but any other path returns a clear
 `503 the web UI has not been built yet` instead of a blank page, naming the exact command to
 run.
 
-The header's theme button switches between light and dark palettes. The selected palette is
+The header's theme button switches between Catppuccin light and dark palettes. The selected palette is
 remembered by the browser.
 
 The header also shows whether the BHTune HTTP service is reachable. Its status includes
@@ -55,6 +55,12 @@ to the real server so both stay in sync:
 cargo run --bin bhtune-server &     # first, in one terminal
 pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on save
 ```
+
+The Vite development server binds all local interfaces and allows the `asus` hostname, so a
+second host on the trusted local network can open `http://asus:5173`. Frontend edits are
+deployed through hot module reload after each save; restart `bhtune-server` after Rust or API
+changes. The development server and API have no authentication, so do not expose them beyond
+a trusted network.
 
 ## Run a tune
 
