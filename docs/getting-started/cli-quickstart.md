@@ -70,8 +70,10 @@ Time in minutes); a different template reports these in whatever units that DCS/
 expects — see [DCS/PLC templates](../dcs-templates.md).
 
 Every run's exact numbers depend on the simulator's process parameters
-(`--sim-gain`/`--sim-tau`/`--sim-dead-time`/`--sim-noise`/`--sim-seed`) and are only
-reproducible run-to-run with a fixed `--sim-seed`; don't expect to see these exact values.
+(`--sim-gain`/`--sim-tau`/`--sim-dead-time`/`--sim-noise`/`--sim-seed`). The simulator
+advances its process and MRFT timestamps by the same configured poll step, so zero-noise runs
+with the same inputs are reproducible even when host scheduling differs. A fixed `--sim-seed`
+also reproduces the configured noise sequence within the same supported build.
 
 List every run so far, and export one run's per-tick samples:
 

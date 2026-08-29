@@ -131,8 +131,11 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    relay switch count and cycles remaining. The initial PV/MV snapshot appears as soon as the
    server records it, before the first MRFT sample, so the chart does not wait for a complete
    relay tick to become visible. Independent OPC DA startup values are collected in one
-   batched read; a setpoint is read separately only when the original mode is Auto. It ends
-   with a terminal point at the original MV after the run restores the loop. Short runs keep
+   batched read; a setpoint is read separately only when the original mode is Auto. Simulator
+   sample timestamps advance by the configured fixed poll step, matching the FOPDT process time
+   rather than host scheduler timing, so repeated simulator runs retain the same trend timing and
+   PID calculations across machines. The trend ends with a terminal point at the original MV
+   after the run restores the loop. Short runs keep
    their first point at the left edge by reserving 12 configured poll intervals of x-axis
    horizon; unused future space stays blank until the trend is long enough to fit normally. The
    initial-reading and restored-MV boundary markers are presentation-only and do not alter

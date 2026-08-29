@@ -1,36 +1,27 @@
-//! Fully automated, Linux-CI-friendly end-to-end coverage for a real `bhtune tune` run
+//! Fully automated, Linux-CI-friendly end-to-end coverage for real `bhtune tune` runs
 //! against the in-process simulator driver (`e2e-simulator`): spawns the actual compiled
-//! `bhtune` binary (not an in-process call), lets it complete a full MRFT test, then opens
-//! the resulting SQLite database directly and asserts the *calculated tuning results* are
-//! sane -- not just that rows exist.
+//! `bhtune` binary (not an in-process call), lets each full MRFT test complete, then opens
+//! the resulting SQLite database directly and compares every persisted PID value with a
+//! reviewed numeric baseline.
 //!
-//! This closes a real gap no earlier test covered. `json_output_contract.rs`/
-//! `ctrlc_abort.rs` are genuine subprocess tests but only check the JSON summary's
-//! shape/exit code, which never includes calculated Kp/Ti/Td at all (see
-//! `commands::tune::print_summary`). `commands::tune`'s own in-process
-//! `a_full_simulator_tune_completes_and_persists_results` test checks row *presence/counts*
-//! only. Neither ever asserted an actual numeric result was correct.
+//! This is the numeric envelope test for the production CLI path. It covers argument parsing,
+//! simulator construction, MRFT orchestration, tuning math, result persistence, and process
+//! exit behavior without adding browser rendering, SSE delivery, or selector timing to the
+//! numeric oracle. The Playwright tune test remains responsible for proving that the server and
+//! SPA can start and render a tune, while `bhtune-core`'s golden replay remains the strict,
+//! deterministic legacy-parity oracle.
 //!
-//! Writing this test is what surfaced a real production bug: `measure_oscillation`
-//! (`bhtune-core`'s `tuning_math.rs`) computed the relay oscillation period via
-//! `chrono::Duration::num_seconds()` *unconditionally*, truncating to whole seconds even
-//! though the surrounding `TuningMathCompat.replicate_period_truncation_bug` flag's own doc
-//! comment says the *default* path should preserve full precision. Every existing unit test
-//! for that function used whole-second switch-time offsets, so the truncation was always
-//! lossless there and the gap went unnoticed. This test's simulator runs complete in tens of
-//! milliseconds of simulated relay-switch spacing (by design -- see `fast_simulator_args()`
-//! in `commands::tune`), so it hit the bug immediately: `ti_minutes`/`td_minutes` came back
-//! as exactly `0.0` even for PI/PID controller types with a nonzero `C2`/`C3` matrix entry,
-//! which is what `results_are_sane_and_correctly_ordered` below directly guards against.
+//! The matrix uses Flow/PI, Temperature (Heat Exchange)/PID, and Level/P cases. All cases use
+//! `direction=reverse`, which is the direction that produces a valid oscillation against the
+//! simulator's fixed process gain. The simulator advances both its FOPDT process and the MRFT
+//! timestamp by the same exact 5 ms step per PV read (`sim_tau=0.01`,
+//! `sim_dead_time=0.025`), so host scheduling can lengthen the subprocess's wall-clock runtime
+//! but cannot change its calculated PID values.
 //!
-//! All three matrix cases use `direction=reverse`: empirically confirmed (by hand, before
-//! writing this test) to be the only direction that produces a valid relay oscillation
-//! against this driver's fixed `sim_gain=1.0`/`sim_tau=0.01`/`sim_dead_time=0.025`
-//! parameters -- `direction=direct` rails the simulated process out instead of oscillating,
-//! which is a genuine control-theory sign-mismatch (relay pushes the same way the process is
-//! already moving), not a bug. `process_type`/`controller_type` are varied freely across the
-//! matrix since neither affects the simulated plant dynamics, only which tuning-constant
-//! matrix cell (`bhtune-core`'s `constants.rs`) is looked up.
+//! The reviewed baselines below use that fixed simulator time domain. All nonzero values use
+//! tight absolute-plus-relative tolerances for cross-platform floating-point math and SQLite
+//! round trips; there is no scheduler-jitter allowance. Fields that are mathematically absent
+//! for a controller type must remain exactly zero.
 
 use std::io::Read;
 use std::path::Path;
@@ -42,12 +33,37 @@ use bhtune_core::controller_type::ControllerType;
 use bhtune_core::process_type::ProcessType;
 use bhtune_db::models::{TuneOutcome, TuneResultRow, TuneRunRow, TuneSampleRow};
 
-/// Spawns `bhtune tune` against a fresh temp DB with the fast-completing simulator
-/// parameters (see `commands::tune::fast_simulator_args()`), fixed at `direction=reverse`,
-/// varying only `--process-type`/`--controller-type`. Returns the exit code, stdout, and the
-/// path to the SQLite database the run wrote to (the caller's `db_dir`/`log_dir` tempdirs
-/// must outlive this call, hence they're passed in rather than created here).
-fn run_fast_simulator_tune(
+const AMPLITUDE_ABSOLUTE_TOLERANCE: f32 = 1e-3;
+const AMPLITUDE_RELATIVE_TOLERANCE: f32 = 1e-4;
+const PERIOD_ABSOLUTE_TOLERANCE: f32 = 1e-7;
+const PERIOD_RELATIVE_TOLERANCE: f32 = 1e-4;
+const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Clone, Copy)]
+struct ExpectedResult {
+    response_level: ResponseLevel,
+    kp: f32,
+    ti_minutes: f32,
+    td_minutes: f32,
+    proportional: f32,
+    integral: f32,
+    derivative: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SimulatorScenario {
+    name: &'static str,
+    process_type_arg: &'static str,
+    controller_type_arg: &'static str,
+    process_type: ProcessType,
+    controller_type: ControllerType,
+    expected_results: [ExpectedResult; 3],
+}
+
+/// Spawns `bhtune tune` against a fresh temp DB with the deterministic, fast-completing simulator
+/// parameters. The process/controller type changes which tuning-constant matrix cell is used;
+/// the simulated plant and all timing parameters stay identical across scenarios.
+fn run_simulator_tune(
     db_path: &Path,
     log_dir: &Path,
     process_type_arg: &str,
@@ -97,7 +113,7 @@ fn run_fast_simulator_tune(
             "--poll-interval-ms",
             "5",
             "--timeout-secs",
-            "10",
+            "30",
             "--notes",
             "e2e-simulator-test",
             "--output",
@@ -121,202 +137,387 @@ fn run_fast_simulator_tune(
     (output.status.code(), stdout, stderr)
 }
 
-/// Runs one matrix case end-to-end and asserts the full set of invariants a real tune's
-/// results must satisfy, regardless of process/controller type: clean completion, exactly
-/// one row per [`ResponseLevel`], strictly-decreasing `kp` from Aggressive to Sluggish, a
-/// non-empty sample trail, and -- the specific regression this file exists to guard --
-/// `ti_minutes`/`td_minutes` that are identical across all three response levels and match
-/// the caller's expectation of whether they should be exactly zero (P-only has no integral
-/// or derivative term) or genuinely nonzero (PI/PID do, and must not silently collapse to
-/// zero the way the pre-fix truncation bug made them).
-async fn assert_matrix_case(
-    process_type_arg: &str,
-    controller_type_arg: &str,
-    expected_process_type: ProcessType,
-    expected_controller_type: ControllerType,
-    expect_nonzero_ti: bool,
-    expect_nonzero_td: bool,
+#[allow(clippy::excessive_precision)] // Preserve the recorded f32 baseline values verbatim.
+fn simulator_scenarios() -> [SimulatorScenario; 3] {
+    [
+        SimulatorScenario {
+            name: "Flow / PI / Reverse",
+            process_type_arg: "flow",
+            controller_type_arg: "pi",
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            expected_results: [
+                ExpectedResult {
+                    response_level: ResponseLevel::Aggressive,
+                    kp: 0.595620036,
+                    ti_minutes: 0.000441333,
+                    td_minutes: 0.0,
+                    proportional: 167.892272949,
+                    integral: 0.026479999,
+                    derivative: 0.0,
+                },
+                ExpectedResult {
+                    response_level: ResponseLevel::Moderate,
+                    kp: 0.398840874,
+                    ti_minutes: 0.000441333,
+                    td_minutes: 0.0,
+                    proportional: 250.726562500,
+                    integral: 0.026479999,
+                    derivative: 0.0,
+                },
+                ExpectedResult {
+                    response_level: ResponseLevel::Sluggish,
+                    kp: 0.298470318,
+                    ti_minutes: 0.000441333,
+                    td_minutes: 0.0,
+                    proportional: 335.041687012,
+                    integral: 0.026479999,
+                    derivative: 0.0,
+                },
+            ],
+        },
+        SimulatorScenario {
+            name: "Temperature Heat Exchange / PID / Reverse",
+            process_type_arg: "temperature-heat-exchange",
+            controller_type_arg: "pid",
+            process_type: ProcessType::TemperatureHeatExchange,
+            controller_type: ControllerType::Pid,
+            expected_results: [
+                ExpectedResult {
+                    response_level: ResponseLevel::Aggressive,
+                    kp: 0.449071199,
+                    ti_minutes: 0.000320833,
+                    td_minutes: 0.000105000,
+                    proportional: 222.681838989,
+                    integral: 0.019250000,
+                    derivative: 0.006300000,
+                },
+                ExpectedResult {
+                    response_level: ResponseLevel::Moderate,
+                    kp: 0.300282568,
+                    ti_minutes: 0.000320833,
+                    td_minutes: 0.000105000,
+                    proportional: 333.019653320,
+                    integral: 0.019250000,
+                    derivative: 0.006300000,
+                },
+                ExpectedResult {
+                    response_level: ResponseLevel::Sluggish,
+                    kp: 0.224535599,
+                    ti_minutes: 0.000320833,
+                    td_minutes: 0.000105000,
+                    proportional: 445.363677979,
+                    integral: 0.019250000,
+                    derivative: 0.006300000,
+                },
+            ],
+        },
+        SimulatorScenario {
+            name: "Level / P / Reverse",
+            process_type_arg: "level",
+            controller_type_arg: "p",
+            process_type: ProcessType::Level,
+            controller_type: ControllerType::P,
+            expected_results: [
+                ExpectedResult {
+                    response_level: ResponseLevel::Aggressive,
+                    kp: 0.450423837,
+                    ti_minutes: 0.0,
+                    td_minutes: 0.0,
+                    proportional: 222.013122559,
+                    integral: 0.0,
+                    derivative: 0.0,
+                },
+                ExpectedResult {
+                    response_level: ResponseLevel::Moderate,
+                    kp: 0.300282568,
+                    ti_minutes: 0.0,
+                    td_minutes: 0.0,
+                    proportional: 333.019653320,
+                    integral: 0.0,
+                    derivative: 0.0,
+                },
+                ExpectedResult {
+                    response_level: ResponseLevel::Sluggish,
+                    kp: 0.225888222,
+                    ti_minutes: 0.0,
+                    td_minutes: 0.0,
+                    proportional: 442.696838379,
+                    integral: 0.0,
+                    derivative: 0.0,
+                },
+            ],
+        },
+    ]
+}
+
+fn assert_amplitude_matches(
+    scenario: &str,
+    response_level: ResponseLevel,
+    field: &str,
+    actual: f32,
+    expected: f32,
 ) {
+    let tolerance = AMPLITUDE_ABSOLUTE_TOLERANCE + expected.abs() * AMPLITUDE_RELATIVE_TOLERANCE;
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "{scenario} {response_level:?} {field}: expected {expected:.9}, got {actual:.9}, \
+         allowed tolerance {tolerance:.9} (absolute {AMPLITUDE_ABSOLUTE_TOLERANCE:.9}, \
+         relative {AMPLITUDE_RELATIVE_TOLERANCE:.6})"
+    );
+}
+
+fn assert_period_matches(
+    scenario: &str,
+    response_level: ResponseLevel,
+    field: &str,
+    actual: f32,
+    expected: f32,
+) {
+    if expected == 0.0 {
+        assert_eq!(
+            actual, 0.0,
+            "{scenario} {response_level:?} {field}: expected exact zero, got {actual:.9}"
+        );
+        return;
+    }
+
+    let tolerance = PERIOD_ABSOLUTE_TOLERANCE + expected.abs() * PERIOD_RELATIVE_TOLERANCE;
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "{scenario} {response_level:?} {field}: expected {expected:.9}, got {actual:.9}, \
+         allowed tolerance {tolerance:.9} (absolute {PERIOD_ABSOLUTE_TOLERANCE:.9}, \
+         relative {PERIOD_RELATIVE_TOLERANCE:.2})"
+    );
+}
+
+fn assert_result_matches(scenario: &str, actual: &TuneResultRow, expected: ExpectedResult) {
+    assert_eq!(
+        actual.response_level, expected.response_level,
+        "{scenario}: result row has the wrong response level"
+    );
+    assert_amplitude_matches(
+        scenario,
+        expected.response_level,
+        "kp",
+        actual.kp,
+        expected.kp,
+    );
+    assert_period_matches(
+        scenario,
+        expected.response_level,
+        "ti_minutes",
+        actual.ti_minutes,
+        expected.ti_minutes,
+    );
+    assert_period_matches(
+        scenario,
+        expected.response_level,
+        "td_minutes",
+        actual.td_minutes,
+        expected.td_minutes,
+    );
+    assert_amplitude_matches(
+        scenario,
+        expected.response_level,
+        "proportional",
+        actual.proportional,
+        expected.proportional,
+    );
+    assert_period_matches(
+        scenario,
+        expected.response_level,
+        "integral",
+        actual.integral,
+        expected.integral,
+    );
+    assert_period_matches(
+        scenario,
+        expected.response_level,
+        "derivative",
+        actual.derivative,
+        expected.derivative,
+    );
+}
+
+/// Runs one matrix case end-to-end and asserts lifecycle, identity, ordering, response-level
+/// invariance, sample persistence, and the reviewed numeric baseline for every result field.
+async fn assert_matrix_case(scenario: SimulatorScenario) {
     let db_dir = tempfile::tempdir().unwrap();
     let db_path = db_dir.path().join("bhtune.db");
-    // See `ctrlc_abort.rs`/`json_output_contract.rs`'s identical comment: without an
-    // explicit temp log dir, logging setup would resolve the real platform default log
-    // directory using this test process's inherited environment, writing real files
-    // under the developer/CI machine's actual home directory as a side effect of running
-    // this test.
+    // Without an explicit temp log dir, logging setup would resolve the real platform default
+    // log directory using this test process's inherited environment.
     let log_dir = tempfile::tempdir().unwrap();
 
     let (exit_code, stdout, stderr) = tokio::time::timeout(
-        Duration::from_secs(30),
+        SUBPROCESS_TIMEOUT,
         tokio::task::spawn_blocking({
             let db_path = db_path.clone();
             let log_dir = log_dir.path().to_path_buf();
-            let process_type_arg = process_type_arg.to_string();
-            let controller_type_arg = controller_type_arg.to_string();
             move || {
-                run_fast_simulator_tune(&db_path, &log_dir, &process_type_arg, &controller_type_arg)
+                run_simulator_tune(
+                    &db_path,
+                    &log_dir,
+                    scenario.process_type_arg,
+                    scenario.controller_type_arg,
+                )
             }
         }),
     )
     .await
-    .expect("bhtune did not exit within 30s")
+    .unwrap_or_else(|_| {
+        panic!(
+            "{} did not exit within {}s",
+            scenario.name,
+            SUBPROCESS_TIMEOUT.as_secs()
+        )
+    })
     .expect("joining the spawn_blocking task panicked");
 
     assert_eq!(
         exit_code,
         Some(bhtune_cli::EXIT_SUCCESS as i32),
-        "expected a clean completion; stderr: {stderr}"
+        "{}: expected a clean completion; stderr: {stderr}",
+        scenario.name
     );
 
     let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
-        panic!("stdout was not exactly one parseable JSON value: {e}\nstdout was: {stdout:?}")
+        panic!(
+            "{}: stdout was not exactly one parseable JSON value: {e}\nstdout: {stdout:?}",
+            scenario.name
+        )
     });
-    assert_eq!(json["outcome"], "completed", "full JSON was: {json}");
-    let run_id = json["run_id"]
-        .as_i64()
-        .expect("run_id must be present and an integer in the JSON summary");
+    assert_eq!(
+        json["outcome"], "completed",
+        "{}: full JSON was: {json}",
+        scenario.name
+    );
+    let run_id = json["run_id"].as_i64().unwrap_or_else(|| {
+        panic!(
+            "{}: run_id must be present and an integer in the JSON summary",
+            scenario.name
+        )
+    });
 
     let pool = bhtune_db::connect(&db_path)
         .await
-        .expect("failed to open the database the subprocess just wrote to");
+        .unwrap_or_else(|e| panic!("{}: failed to open the test database: {e}", scenario.name));
 
     let run = TuneRunRow::get(&pool, run_id)
         .await
-        .expect("querying the run row failed")
-        .expect("the run the subprocess just reported by id must exist in the database");
+        .unwrap_or_else(|e| panic!("{}: querying the run row failed: {e}", scenario.name))
+        .unwrap_or_else(|| {
+            panic!(
+                "{}: the run reported by the subprocess must exist in the database",
+                scenario.name
+            )
+        });
     assert_eq!(run.outcome, TuneOutcome::Completed);
-    assert_eq!(run.config.process_type, expected_process_type);
-    assert_eq!(run.config.controller_type, expected_controller_type);
+    assert_eq!(run.config.process_type, scenario.process_type);
+    assert_eq!(run.config.controller_type, scenario.controller_type);
 
     let results = TuneResultRow::list_for_run(&pool, run_id)
         .await
-        .expect("querying tune_results failed");
+        .unwrap_or_else(|e| panic!("{}: querying tune_results failed: {e}", scenario.name));
     assert_eq!(
         results.len(),
         3,
-        "a completed run must have exactly one result row per ResponseLevel, got: {results:?}"
+        "{}: a completed run must have exactly one result row per ResponseLevel, got: {results:?}",
+        scenario.name
     );
 
     let by_level = |level: ResponseLevel| {
         results
             .iter()
-            .find(|r| r.response_level == level)
-            .unwrap_or_else(|| panic!("missing a {level:?} result row, got: {results:?}"))
+            .find(|result| result.response_level == level)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: missing a {level:?} result row, got: {results:?}",
+                    scenario.name
+                )
+            })
     };
     let aggressive = by_level(ResponseLevel::Aggressive);
     let moderate = by_level(ResponseLevel::Moderate);
     let sluggish = by_level(ResponseLevel::Sluggish);
 
-    assert!(aggressive.kp > 0.0, "kp must be positive: {aggressive:?}");
-    assert!(moderate.kp > 0.0, "kp must be positive: {moderate:?}");
-    assert!(sluggish.kp > 0.0, "kp must be positive: {sluggish:?}");
+    assert!(
+        aggressive.kp > 0.0,
+        "{}: kp must be positive",
+        scenario.name
+    );
+    assert!(moderate.kp > 0.0, "{}: kp must be positive", scenario.name);
+    assert!(sluggish.kp > 0.0, "{}: kp must be positive", scenario.name);
     assert!(
         aggressive.kp > moderate.kp && moderate.kp > sluggish.kp,
-        "kp must strictly decrease Aggressive > Moderate > Sluggish, got: \
+        "{}: kp must strictly decrease Aggressive > Moderate > Sluggish, got: \
          aggressive={}, moderate={}, sluggish={}",
+        scenario.name,
         aggressive.kp,
         moderate.kp,
         sluggish.kp
     );
 
-    // ti_minutes/td_minutes are response-level-invariant by design (C2/C3/BETA are indexed
-    // only by [process_type][controller_type], not by response level) -- proven already by
-    // `calculate_tuning_result_ti_td_invariant_across_response_levels` in bhtune-core, and
-    // re-asserted here as a real end-to-end property rather than assumed.
-    assert_eq!(aggressive.ti_minutes, moderate.ti_minutes);
-    assert_eq!(moderate.ti_minutes, sluggish.ti_minutes);
-    assert_eq!(aggressive.td_minutes, moderate.td_minutes);
-    assert_eq!(moderate.td_minutes, sluggish.td_minutes);
+    // Ti/Td are response-level-invariant by design: their constants are indexed only by
+    // process/controller type, not response level.
+    assert_eq!(
+        aggressive.ti_minutes, moderate.ti_minutes,
+        "{}: ti_minutes must be response-level invariant",
+        scenario.name
+    );
+    assert_eq!(
+        moderate.ti_minutes, sluggish.ti_minutes,
+        "{}: ti_minutes must be response-level invariant",
+        scenario.name
+    );
+    assert_eq!(
+        aggressive.td_minutes, moderate.td_minutes,
+        "{}: td_minutes must be response-level invariant",
+        scenario.name
+    );
+    assert_eq!(
+        moderate.td_minutes, sluggish.td_minutes,
+        "{}: td_minutes must be response-level invariant",
+        scenario.name
+    );
 
-    // The regression this file exists to catch: before the `measure_oscillation` fix,
-    // ti_minutes/td_minutes were silently exactly 0.0 for *every* case, including PI/PID,
-    // because the sub-second relay period truncated to whole seconds. A genuine, real
-    // relay oscillation happened (proven by the non-empty sample trail asserted below);
-    // the bug was purely in the period arithmetic that turns switch timestamps into
-    // ti_minutes/td_minutes.
-    if expect_nonzero_ti {
-        assert!(
-            aggressive.ti_minutes > 0.0,
-            "ti_minutes must be genuinely nonzero for a PI/PID controller type, got \
-             exactly {} -- this is the sub-second period-truncation bug if it recurs",
-            aggressive.ti_minutes
-        );
-    } else {
-        assert_eq!(
-            aggressive.ti_minutes, 0.0,
-            "ti_minutes must be exactly zero for a P-only controller type"
-        );
-    }
-    if expect_nonzero_td {
-        assert!(
-            aggressive.td_minutes > 0.0,
-            "td_minutes must be genuinely nonzero for a PID controller type, got \
-             exactly {} -- this is the sub-second period-truncation bug if it recurs",
-            aggressive.td_minutes
-        );
-    } else {
-        assert_eq!(
-            aggressive.td_minutes, 0.0,
-            "td_minutes must be exactly zero for a non-PID controller type"
-        );
+    for expected in scenario.expected_results {
+        let actual = by_level(expected.response_level);
+        assert_result_matches(scenario.name, actual, expected);
     }
 
     let samples = TuneSampleRow::list_for_run(&pool, run_id)
         .await
-        .expect("querying tune_samples failed");
+        .unwrap_or_else(|e| panic!("{}: querying tune_samples failed: {e}", scenario.name));
     assert!(
         !samples.is_empty(),
-        "a completed run must have recorded at least one sample tick"
+        "{}: a completed run must have recorded at least one sample tick",
+        scenario.name
     );
+    assert_eq!(
+        (samples[0].sample.time - run.started_at).num_milliseconds(),
+        5,
+        "{}: the first persisted simulator sample must be one process step after the run start",
+        scenario.name
+    );
+    for pair in samples.windows(2) {
+        assert_eq!(
+            (pair[1].sample.time - pair[0].sample.time).num_milliseconds(),
+            5,
+            "{}: persisted simulator samples must use the fixed 5 ms process step",
+            scenario.name
+        );
+    }
 
     pool.close().await;
 }
 
-/// Flow process type, PI controller: the simplest matrix case, and the one manually
-/// verified by hand (via a real subprocess run + direct `sqlite3` inspection) before this
-/// test was written, to confirm the expected shape before hardcoding it.
+/// Runs the numeric matrix serially to keep CI resource use predictable. The simulator's fixed
+/// time domain makes the calculated values independent of host scheduling, but one test also
+/// keeps subprocess startup and SQLite activity from competing unnecessarily.
 #[tokio::test]
-async fn flow_pi_reverse_produces_sane_ordered_results() {
-    assert_matrix_case(
-        "flow",
-        "pi",
-        ProcessType::Flow,
-        ControllerType::Pi,
-        true,  // PI has a nonzero integral term
-        false, // PI has no derivative term
-    )
-    .await;
-}
-
-/// Temperature (heat exchange) process type, PID controller -- the only process type/
-/// controller-type combination in this matrix that exercises a nonzero derivative term
-/// (PID is only ever offered for the two Temperature process types, per
-/// `ControllerType::is_allowed_for`).
-#[tokio::test]
-async fn temperature_heat_exchange_pid_reverse_produces_sane_ordered_results() {
-    assert_matrix_case(
-        "temperature-heat-exchange",
-        "pid",
-        ProcessType::TemperatureHeatExchange,
-        ControllerType::Pid,
-        true, // PID has a nonzero integral term
-        true, // PID has a nonzero derivative term
-    )
-    .await;
-}
-
-/// Level process type, P-only controller: proves the zero-integral/zero-derivative case is
-/// still handled correctly (i.e. that fixing the truncation bug didn't turn a
-/// legitimately-zero `ti_minutes`/`td_minutes` into some other, still-wrong nonzero value).
-#[tokio::test]
-async fn level_p_reverse_produces_sane_ordered_results() {
-    assert_matrix_case(
-        "level",
-        "p",
-        ProcessType::Level,
-        ControllerType::P,
-        false, // P-only has no integral term
-        false, // P-only has no derivative term
-    )
-    .await;
+async fn simulator_tunes_match_reviewed_numeric_baselines() {
+    for scenario in simulator_scenarios() {
+        assert_matrix_case(scenario).await;
+    }
 }

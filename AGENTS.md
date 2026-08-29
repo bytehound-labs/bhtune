@@ -212,11 +212,14 @@ the real-time content was correct and matched Linux's own output exactly). This 
 fully closed out. Phase 8's
 `e2e-simulator` is now done: a genuine, real-subprocess end-to-end test
 (`crates/bhtune-cli/tests/e2e_simulator.rs`) that runs `bhtune tune` against the simulator
-driver across a small process/controller-type matrix and asserts the _calculated_ PID
-results, not just row presence — a gap no earlier test closed (see "Correctness-critical
-design details" below, item 2, for the real `bhtune-core` bug this test caught and fixed
-in the process: the MRFT oscillation period silently lost sub-second precision by default,
-zeroing `ti_minutes`/`td_minutes` even for PI/PID). `e2e-playwright` is also done: a
+driver across a small process/controller-type matrix and compares every persisted calculated
+Kp/Ti/Td and template-converted P/I/D value with reviewed numeric baselines, not just row
+presence — a gap no earlier test closed (see "Correctness-critical design details" below,
+item 2, for the real `bhtune-core` bug this test caught and fixed in the process: the MRFT
+oscillation period silently lost sub-second precision by default, zeroing `ti_minutes`/`td_minutes`
+even for PI/PID). The matrix runs serially with a fixed 5 ms simulator cadence: the FOPDT
+process and MRFT timestamps advance by the same exact step, so scheduler load can lengthen
+the subprocess runtime but cannot change its calculated PID values. `e2e-playwright` is also done: a
 Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
 off disk rather than needing a re-embed step — see `server-embed-spa`'s `rust-embed`
@@ -1313,6 +1316,14 @@ derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
   making the simpler std mutex both sufficient and correct. This is a genuine difference from
   `OpcDaDriver`, not an inconsistency: the tokio mutex there is load-bearing because its guard
   really is held across `.await`.
+- **Simulator MRFT timestamps use the same fixed step as the FOPDT process.** Each simulator PV
+  read advances `FopdtProcess` by exactly `poll_interval_ms`; `bhtune-cli` advances the
+  corresponding `Tick.time` by that same exact duration, with the first sample one step after the
+  logical run start. Host scheduling still controls how quickly the CLI subprocess gets CPU time
+  and the mandatory `--timeout-secs` remains real elapsed time, but scheduler jitter cannot make
+  the synthetic process evolve in one time domain while tuning math measures it in another.
+  Persisted simulator samples use this logical time too, so their trend and calculated period
+  describe the same simulated process.
 - **The FOPDT process model uses an exact closed-form discretization, not a ported ODE solver.**
   For the first-order lag `tau*dy/dt = -(y-y0) + Kp*(u-u0)` driven by a zero-order-hold input over
   one tick, the update `pv_new = pv*decay + (1-decay)*(bias + gain*mv_effective)` (`decay =
@@ -1493,7 +1504,8 @@ listing).
 FOPDT (first-order-plus-dead-time) process model plus a standalone virtual PID controller, served
 through the real `Driver` trait as `SimulatorDriver`. No external process, no Windows, no
 network I/O — every tick advances an internal virtual clock rather than sleeping on the wall
-clock, which is what makes it usable for fast CI E2E runs.
+clock. The CLI's MRFT timestamp advances by the same configured fixed step, which is what makes
+numeric simulator results reproducible across differently scheduled hosts.
 
 - **`FopdtConfig`/`FopdtProcess`** — the process model: `gain`, `time_constant_s`, `dead_time_s`,
   `tick_interval_s`, and an optional noise amplitude. `step()` advances the model by exactly one
@@ -1641,10 +1653,10 @@ precedence shipped separately as `cli-config` — see "Config precedence" below.
 
 **Testing approach.** `commands/tune.rs`'s tests use a `MockDriver` (an in-memory
 `Driver` impl with canned/erroring responses) for setup-and-validation-error paths, a real
-`SimulatorDriver` for full happy-path runs (including the `--mrft-delay` padding test, which
-necessarily costs a couple of real wall-clock seconds — `chrono::Utc::now()`, which
-`pre_delay_end`/`post_delay_end` are computed from, is unaffected by tokio's pausable test
-clock), and a shared test-only mock gRPC `Bridge` service (`crate::test_support`, used by
+`SimulatorDriver` for full happy-path runs (including the `--mrft-delay` padding test, whose
+fixed simulator timestamps advance once per real interval tick, so its configured padding still
+costs corresponding real test time unless the whole Tokio/SQLite test environment is made
+pausable), and a shared test-only mock gRPC `Bridge` service (`crate::test_support`, used by
 `driver.rs`, `tune.rs`, and `commands/opc.rs`) to prove the OPC DA path — connect, initial
 reads, a mid-poll failure, and the `opc` passthrough commands — actually works end-to-end
 without a real gateway or OPC DA server. A single canned mock read response satisfies every
@@ -3607,6 +3619,15 @@ three response-level results against the fixture's `expected_final`. The first f
 (`flow_pi_direct`, Flow/PI/Reverse, from the first real hp-VM capture) passes in full — the Rust
 port reproduces the legacy app's tuning behavior tick-for-tick and result-for-result.
 
+The production CLI's numeric simulator regression is deliberately separate from this
+deterministic replay oracle. `crates/bhtune-cli/tests/e2e_simulator.rs` launches the real
+subprocess and persists a Flow/PI, Temperature (Heat Exchange)/PID, and Level/P matrix through
+the full CLI path, then compares Kp/Ti/Td and template-converted P/I/D values with reviewed
+baselines. It uses a serial 5 ms fixed-step simulator configuration: each PV read advances both
+the FOPDT process and MRFT time by exactly 5 ms, so all nonzero fields use tight
+absolute-plus-relative tolerances with no scheduler-jitter allowance. The browser E2E checks
+server/UI delivery; this CLI test is the numeric envelope check.
+
 Getting there surfaced two genuine data-precision limits of the legacy CSV logger itself (not
 engine defects — confirmed in both cases by reading the actual C# source, not by loosening
 tolerances to make a test pass):
@@ -3705,7 +3726,7 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    `TuningMathCompat.replicate_period_truncation_bug` only gating an additional 24-hour wrap on
    top of the already-truncated value. Every existing unit test used whole-second switch-time
    offsets, so this was lossless in every test and went unnoticed until `e2e-simulator`'s real,
-   millisecond-spaced subprocess timing hit it directly, silently zeroing `ti_minutes`/
+   fixed millisecond-spaced simulator ticks through the production subprocess path hit it directly, silently zeroing `ti_minutes`/
    `td_minutes` even for PI/PID. Fixed by switching to `num_milliseconds()` for the default path;
    see the `measure_oscillation_keeps_sub_second_precision_by_default` regression test in
    `tuning_math.rs` and `e2e_simulator.rs`'s module doc for the full story. The lesson: writing
@@ -4281,13 +4302,14 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    (`crates/bhtune-cli/tests/e2e_simulator.rs`) spawns the real `bhtune tune` binary against the
    simulator driver across a small process/controller-type matrix (all `direction=reverse`, the
    direction empirically confirmed to actually oscillate against this simulator's fixed FOPDT
-   parameters), then opens the resulting SQLite database directly and asserts the _calculated_
-   PID results are sane — positive, correctly-ordered `kp` across all three response levels,
-   response-level-invariant `ti_minutes`/`td_minutes`, and a non-empty sample trail — closing a
-   real gap no earlier test covered (existing subprocess tests only checked the JSON summary's
-   shape/exit code, and existing in-process tests only checked row presence/counts, never actual
-   values). Writing it surfaced and fixed a real `bhtune-core` bug in the process — see
-   "Correctness-critical design details" above, item 2. `e2e-playwright` is also done: a
+   parameters), then opens the resulting SQLite database directly and compares every persisted
+   Kp/Ti/Td and template-converted P/I/D value with reviewed numeric baselines, alongside
+   positive/ordered-Kp, response-level-invariant, lifecycle, identity, and sample-trail checks.
+   The matrix runs serially with a fixed 5 ms simulator cadence shared by FOPDT process evolution
+   and MRFT timestamps, so host scheduling affects runtime but not the expected numeric results.
+   Writing it surfaced and fixed a real `bhtune-core` bug in the
+   process — see "Correctness-critical design details" above, item 2. `e2e-playwright` is also
+   done: a
    Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
    served by a real `bhtune-server` binary (debug profile -- serves `frontend/dist/` live off
    disk, no re-embed step needed between runs) over the in-process simulator driver --

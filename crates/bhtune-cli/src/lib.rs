@@ -16,6 +16,7 @@
 //!   logged deletion sweep, shared by [`db::open`]'s startup call, `bhtune-server`'s
 //!   periodic timer, and `bhtune history prune`.
 //! - [`driver`] — constructs the selected `Driver` implementation.
+//! - `timing` — supplies live or fixed-step timestamps to the clock-free MRFT engine.
 //! - [`commands`] — one module per subcommand family: `tune`/`simulate`, `template`,
 //!   `history`, `export`, `opc`.
 //! - [`output`] — the `--output table|json` format shared by `history list`/`history show`
@@ -52,6 +53,7 @@ pub mod output;
 pub mod retention;
 #[cfg(test)]
 mod test_support;
+mod timing;
 
 use std::process::ExitCode;
 
