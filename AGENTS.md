@@ -212,11 +212,13 @@ the real-time content was correct and matched Linux's own output exactly). This 
 fully closed out. Phase 8's
 `e2e-simulator` is now done: a genuine, real-subprocess end-to-end test
 (`crates/bhtune-cli/tests/e2e_simulator.rs`) that runs `bhtune tune` against the simulator
-driver across a small process/controller-type matrix and asserts the _calculated_ PID
-results, not just row presence — a gap no earlier test closed (see "Correctness-critical
-design details" below, item 2, for the real `bhtune-core` bug this test caught and fixed
-in the process: the MRFT oscillation period silently lost sub-second precision by default,
-zeroing `ti_minutes`/`td_minutes` even for PI/PID). `e2e-playwright` is also done: a
+driver across a small process/controller-type matrix and compares every persisted calculated
+Kp/Ti/Td and template-converted P/I/D value with reviewed numeric baselines, not just row
+presence — a gap no earlier test closed (see "Correctness-critical design details" below,
+item 2, for the real `bhtune-core` bug this test caught and fixed in the process: the MRFT
+oscillation period silently lost sub-second precision by default, zeroing `ti_minutes`/`td_minutes`
+even for PI/PID). The matrix runs serially with a scaled 50 ms simulator cadence and
+jitter-aware tolerances for wall-clock period measurements. `e2e-playwright` is also done: a
 Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
 off disk rather than needing a re-embed step — see `server-embed-spa`'s `rust-embed`
@@ -3607,6 +3609,15 @@ three response-level results against the fixture's `expected_final`. The first f
 (`flow_pi_direct`, Flow/PI/Reverse, from the first real hp-VM capture) passes in full — the Rust
 port reproduces the legacy app's tuning behavior tick-for-tick and result-for-result.
 
+The production CLI's numeric simulator regression is deliberately separate from this
+deterministic replay oracle. `crates/bhtune-cli/tests/e2e_simulator.rs` launches the real
+subprocess and persists a Flow/PI, Temperature (Heat Exchange)/PID, and Level/P matrix through
+the full CLI path, then compares Kp/Ti/Td and template-converted P/I/D values with reviewed
+baselines. It uses a serial 50 ms scaled simulator configuration: amplitude-derived values have
+tight absolute-plus-relative tolerances, while period-derived values allow a 5% relative
+tolerance plus a small absolute floor because the CLI records relay switch times from the wall
+clock. The browser E2E checks server/UI delivery; this CLI test is the numeric envelope check.
+
 Getting there surfaced two genuine data-precision limits of the legacy CSV logger itself (not
 engine defects — confirmed in both cases by reading the actual C# source, not by loosening
 tolerances to make a test pass):
@@ -4281,13 +4292,13 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    (`crates/bhtune-cli/tests/e2e_simulator.rs`) spawns the real `bhtune tune` binary against the
    simulator driver across a small process/controller-type matrix (all `direction=reverse`, the
    direction empirically confirmed to actually oscillate against this simulator's fixed FOPDT
-   parameters), then opens the resulting SQLite database directly and asserts the _calculated_
-   PID results are sane — positive, correctly-ordered `kp` across all three response levels,
-   response-level-invariant `ti_minutes`/`td_minutes`, and a non-empty sample trail — closing a
-   real gap no earlier test covered (existing subprocess tests only checked the JSON summary's
-   shape/exit code, and existing in-process tests only checked row presence/counts, never actual
-   values). Writing it surfaced and fixed a real `bhtune-core` bug in the process — see
-   "Correctness-critical design details" above, item 2. `e2e-playwright` is also done: a
+   parameters), then opens the resulting SQLite database directly and compares every persisted
+   Kp/Ti/Td and template-converted P/I/D value with reviewed numeric baselines, alongside
+   positive/ordered-Kp, response-level-invariant, lifecycle, identity, and sample-trail checks.
+   The matrix runs serially with a scaled 50 ms simulator cadence and jitter-aware tolerances for
+   wall-clock period measurements. Writing it surfaced and fixed a real `bhtune-core` bug in the
+   process — see "Correctness-critical design details" above, item 2. `e2e-playwright` is also
+   done: a
    Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
    served by a real `bhtune-server` binary (debug profile -- serves `frontend/dist/` live off
    disk, no re-embed step needed between runs) over the in-process simulator driver --

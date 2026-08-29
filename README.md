@@ -454,6 +454,13 @@ proving the port behaviorally matches the original, not just arguing that it sho
 feature checklist — what's required, what's deferred, and what's deliberately not planned — lives at
 [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md).
 
+The production CLI also has a numeric simulator regression
+(`crates/bhtune-cli/tests/e2e_simulator.rs`). It launches the real `bhtune` binary, completes
+Flow/PI, Temperature (Heat Exchange)/PID, and Level/P tunes, then compares every persisted
+Kp/Ti/Td and template-converted P/I/D value with reviewed baselines. The test runs serially with
+a scaled 50 ms simulator cadence and jitter-aware tolerances for wall-clock period measurements;
+the browser E2E remains focused on server/UI delivery rather than duplicating this numeric oracle.
+
 The repository also validates high-risk boundaries and delivery artifacts automatically:
 
 - `proptest` covers configuration, template catalogs, bridge payload mappings, and template

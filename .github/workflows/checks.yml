@@ -116,7 +116,7 @@ jobs:
       - name: Lint with clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-      - name: Run tests
+      - name: Run Rust tests (including simulator PID regression)
         run: cargo test --workspace --locked
 
       - name: Run cargo-deny
@@ -180,7 +180,7 @@ jobs:
       - name: Lint with clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-      - name: Run tests
+      - name: Run Rust tests (including simulator PID regression)
         run: cargo test --workspace --locked
 
   package:
