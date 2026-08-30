@@ -2243,6 +2243,113 @@
           }
         }
       },
+      "MvActuationKind": {
+        "type": "string",
+        "description": "The physical purpose of one accepted manipulated-variable command.",
+        "enum": [
+          "relay",
+          "restore"
+        ]
+      },
+      "MvActuationResponse": {
+        "type": "object",
+        "description": "Local projection of one accepted OPC DA manipulated-variable command and its independent\nlive readback evidence. Commanded MV samples remain in [`SampleResponse`]; this audit trail\nis the only response surface that reports measured MV values.",
+        "required": [
+          "id",
+          "sequence",
+          "kind",
+          "commanded_at",
+          "target_mv",
+          "tolerance",
+          "confirmation_due_at",
+          "attempt_count",
+          "status"
+        ],
+        "properties": {
+          "attempt_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "commanded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "confirmation_due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MvActuationKind"
+          },
+          "last_checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "previous_commanded_mv": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "readback_mv": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "readback_quality": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SampleQuality"
+              }
+            ]
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MvActuationStatus"
+          },
+          "target_mv": {
+            "type": "number",
+            "format": "float"
+          },
+          "tolerance": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "MvActuationStatus": {
+        "type": "string",
+        "description": "Lifecycle state of one accepted manipulated-variable command.",
+        "enum": [
+          "pending",
+          "confirmed",
+          "failed",
+          "unverified",
+          "superseded"
+        ]
+      },
       "NewRunDraft": {
         "type": "object",
         "description": "The editable state of the New Tune form.\n\nFields are optional because the form is allowed to be incomplete while it is being edited.\nThe frontend sends the complete shape on each save, using `null` for a cleared numeric or\nenum field. Notes are intentionally absent: they describe one run, not a reusable draft.",
@@ -3043,7 +3150,8 @@
           "config",
           "samples",
           "results",
-          "writes"
+          "writes",
+          "mv_actuations"
         ],
         "properties": {
           "allow_uncertain_quality": {
@@ -3089,6 +3197,12 @@
                 "$ref": "#/components/schemas/InitialReadingsResponse"
               }
             ]
+          },
+          "mv_actuations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MvActuationResponse"
+            }
           },
           "notes": {
             "type": [
@@ -3439,8 +3553,9 @@
           "restore_timeout_secs": {
             "type": "integer",
             "format": "int64",
-            "description": "Cap on restoring the loop to its pre-test state after the run ends, in seconds.",
-            "minimum": 0
+            "description": "Cap on restoring the loop to its pre-test state after the run ends, in seconds.\nOPC DA runs require at least 4 seconds so the internal MV actuation confirmation\nwindow can complete; simulator runs only require a positive value.",
+            "example": 30,
+            "minimum": 4
           },
           "server": {
             "type": [

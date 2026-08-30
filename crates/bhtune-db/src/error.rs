@@ -22,6 +22,12 @@ pub enum DbError {
     #[error("column {column:?} held an unrecognized value: {value:?}")]
     InvalidEnumValue { column: &'static str, value: String },
 
+    /// An MV-actuation finalization API was given [`crate::models::MvActuationStatus::Pending`].
+    /// Pending is the initial state inserted by
+    /// [`crate::models::TuneMvActuationRow::insert_pending`], not a terminal result.
+    #[error("pending is not a terminal MV actuation status")]
+    InvalidMvActuationFinalStatus,
+
     /// A JSON column (`tune_runs.template_snapshot_json`/`tags_json`/
     /// `timing_metrics_json`, `dcs_templates.versions_json`) held syntactically valid JSON
     /// -- the schema's `CHECK (json_valid(...))` already guarantees that much -- but it

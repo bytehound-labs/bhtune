@@ -47,8 +47,9 @@ file, resolved through the same `CLI > env > TOML > default` precedence as every
 setting, with console mirroring confined to stderr so it can never corrupt the `--output
 json` stdout contract — see "Logging" below. This completes all five `bhtune-cli` sub-phases;
 the CLI is a fully headless, scriptable adapter on its own, no server required.
-The Phase 6.5 live-plant safety hardening pass is done (see "Live-plant safety hardening"
-below). Phase 6.6's `template-catalog` and `template-provenance` are also done: the four
+The Phase 6.5 live-plant safety hardening pass is done, including OPC DA MV actuation
+verification (see "Live-plant safety hardening" below). Phase 6.6's `template-catalog` and
+`template-provenance` are also done: the four
 built-in DCS templates moved from hardcoded Rust constructors to an embedded, contributable
 TOML catalog (`crates/bhtune-core/templates/builtin.toml`) with a `DcsTemplate::validate()`
 and new `versions`/`description`/`source` fields, and `dcs_templates` gained a real
@@ -1987,6 +1988,29 @@ and no template/tag snapshot on a recorded run. All nine are closed, each landed
 commit with its own test coverage; the per-finding writeups below are the permanent record
 of what changed and why, kept rather than trimmed once "done" since they're the design
 rationale for code that still exists (not a changelog of the review itself):
+
+- **OPC DA MV actuation verification** — done. An accepted OPC DA MV write is only a gateway
+  acceptance, not proof that the DCS/PLC reached the requested value. Every accepted relay
+  command is tracked as pending and checked against its exact target before a replacement relay
+  can overwrite it. The first check is scheduled at the earlier of the switch tick plus the
+  process's noise-protection interval and the fixed internal
+  `MV_ACTUATION_CONFIRMATION_SECS = 4` deadline; a finite readback must be within the derived
+  tolerance, and a matching readback that completes after the deadline is still a failure.
+  The fresh deadline read has an independent one-second bound instead of inheriting the full
+  per-operation timeout, so a stalled MV read cannot hold the run open indefinitely.
+  Verification is given priority when its deadline and a PV poll become ready together, so a
+  due safety check cannot be hidden behind another engine step. An unconfirmed relay aborts
+  without issuing the replacement write, records `TuneOutcome::ActuationFailed`/exit code `7`
+  when restore is confirmed, and preserves the existing restore-incomplete exit code `6` when
+  restoration is not confirmed. Simulator/replay runs deliberately do not perform this
+  live-I/O verification or add timing work.
+
+  The same tracker records one durable `tune_mv_actuations` row per accepted relay or restore
+  command, including target, tolerance, deadline, attempts, readback quality, and terminal
+  status. Restore remains authoritative for the original MV and is coordinated with the final
+  MRFT snapback so the same target is not subjected to duplicate waits. Verification reads are
+  not PV samples: commanded MV remains the trend/sample/export series, while measured MV
+  evidence is exposed only in the actuation audit.
 
 - **`--dry-run` removed entirely** — done. It was documented as never touching the DCS, but
   actually forced the full mode transition and stroked the MV through a complete relay test,
@@ -3937,6 +3961,18 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     bhtune ships no log encryption and no login gate at all — logs and the database are plain,
     matching the "no need to obfuscate/encrypt/hide anything" requirement — so there is no
     encryption or auth subsystem left to get subtly wrong in this way.
+19. **`[fixed, no flag needed]` An accepted MV write must not be treated as proof of physical
+    actuation.** An OPC DA gateway can accept a write while the DCS/PLC leaves the tag unchanged,
+    clamps it, updates it late, or returns a stale value. OPC DA relay and restore commands are
+    therefore tracked in `tune_mv_actuations` and read back against their exact targets within a
+    fixed four-second confirmation window; a matching read that completes after the deadline is
+    still invalid, and a due verification runs before a due PV poll. A mismatch aborts before a
+    replacement relay is issued and restores the loop, with confirmed restoration reported as
+    `TuneOutcome::ActuationFailed`/exit code `7` and incomplete restoration retaining the higher
+    priority `RestoreIncomplete`/exit code `6`. Verification reads never become PV samples and
+    never alter MRFT timing: trends and exports remain commanded MV, while measured MV evidence
+    lives only in the actuation audit. Simulator and replay drivers remain free of this live-I/O
+    policy.
 
 ## Documentation contract (`docs-contract`)
 
@@ -4291,8 +4327,11 @@ that binary does something real and gains its own targeted tests.
    above), and structured logging (`cli-logging`, done: `tracing`/`tracing-subscriber`
    to a rotating file plus stderr-only console mirroring — see "Logging" above). All five
    sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
-   own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done —
-   see "Live-plant safety hardening" above. Phase 6.6, turning the built-in DCS/PLC templates
+   own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done,
+   including OPC DA MV actuation verification with durable command/readback audit records,
+   fixed four-second confirmation, late-readback rejection, and restore-aware exit-code
+   precedence — see "Live-plant safety hardening" above. Phase 6.6, turning the built-in
+   DCS/PLC templates
    into a community-contributable catalog, is done: `template-catalog` (`bhtune-core`),
    `template-provenance` (`bhtune-db` schema: a real three-way `origin` column plus
    `versions_json`/`description`/`source`), `template-user-catalog` (`bhtune-cli` auto-loads

@@ -312,13 +312,13 @@ function testParameterFields({
         label="Restore timeout (s)"
         value={form.restoreTimeoutSecs}
         onChange={(value) => onChange("restoreTimeoutSecs", value)}
-        min={1}
+        min={form.driver === "opcda" ? 4 : 1}
         step={1}
         disabled={form.driver === "simulator"}
         hint={
           form.driver === "simulator"
             ? "Disabled — the simulator has no out-of-process I/O to time out."
-            : "Cap on restoring the loop afterward."
+            : "Cap on restoring the loop afterward; OPC DA requires at least 4 seconds for MV confirmation."
         }
       />
     </FormSection>

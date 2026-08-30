@@ -789,6 +789,48 @@ export interface components {
       mv_value_current: number;
     };
     /**
+     * @description The physical purpose of one accepted manipulated-variable command.
+     * @enum {string}
+     */
+    MvActuationKind: "relay" | "restore";
+    /**
+     * @description Local projection of one accepted OPC DA manipulated-variable command and its independent
+     *     live readback evidence. Commanded MV samples remain in [`SampleResponse`]; this audit trail
+     *     is the only response surface that reports measured MV values.
+     */
+    MvActuationResponse: {
+      /** Format: int64 */
+      attempt_count: number;
+      /** Format: date-time */
+      commanded_at: string;
+      /** Format: date-time */
+      confirmation_due_at: string;
+      detail?: string | null;
+      /** Format: int64 */
+      id: number;
+      kind: components["schemas"]["MvActuationKind"];
+      /** Format: date-time */
+      last_checked_at?: string | null;
+      /** Format: float */
+      previous_commanded_mv?: number | null;
+      /** Format: float */
+      readback_mv?: number | null;
+      readback_quality?: null | components["schemas"]["SampleQuality"];
+      /** Format: int64 */
+      sequence: number;
+      status: components["schemas"]["MvActuationStatus"];
+      /** Format: float */
+      target_mv: number;
+      /** Format: float */
+      tolerance: number;
+    };
+    /**
+     * @description Lifecycle state of one accepted manipulated-variable command.
+     * @enum {string}
+     */
+    MvActuationStatus:
+      "pending" | "confirmed" | "failed" | "unverified" | "superseded";
+    /**
      * @description The editable state of the New Tune form.
      *
      *     Fields are optional because the form is allowed to be incomplete while it is being edited.
@@ -1057,6 +1099,7 @@ export interface components {
       id: number;
       initial_readings?:
         null | components["schemas"]["InitialReadingsResponse"];
+      mv_actuations: components["schemas"]["MvActuationResponse"][];
       notes?: string | null;
       /**
        * @description The resolved OPC DA server ProgID this run actually used, or `None` for a
@@ -1258,6 +1301,9 @@ export interface components {
       /**
        * Format: int64
        * @description Cap on restoring the loop to its pre-test state after the run ends, in seconds.
+       *     OPC DA runs require at least 4 seconds so the internal MV actuation confirmation
+       *     window can complete; simulator runs only require a positive value.
+       * @example 30
        */
       restore_timeout_secs?: number;
       /** @description OPC DA server ProgID. Required with `driver: "opcda"`. */
