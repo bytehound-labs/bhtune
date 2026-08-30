@@ -4023,11 +4023,12 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
   repeat until all checks pass. If branch protection reports the branch behind `main`, update it
   before merging. A merge is allowed only when the applicable PR Sonar analysis reports zero
   `OPEN`/`CONFIRMED` issues; intentional Accepted or False Positive findings must have a durable
-  rationale and related PR or documentation link. Squash-merge only after the complete green
-  result, wait for the resulting `main` workflows and Sonar analysis, and verify the intended
-  findings disappeared without introducing new ones before starting dependent work. Never commit
-  or push directly to `main`, bypass branch protection, use `NOSONAR`, or silence a real finding
-  merely to clean a dashboard.
+  rationale and related PR or documentation link. After the complete green result, queue GitHub's
+  built-in squash auto-merge with `gh pr merge <PR> --auto --squash --delete-branch`, confirm that
+  the PR has an auto-merge request, and monitor it until the PR is merged. Wait for the resulting
+  `main` workflows and Sonar analysis, and verify the intended findings disappeared without
+  introducing new ones before starting dependent work. Never commit or push directly to `main`,
+  bypass branch protection, use `NOSONAR`, or silence a real finding merely to clean a dashboard.
 - **Commits**: [Conventional Commits](https://www.conventionalcommits.org/).
 - **Formatting/linting**: `cargo fmt --check --all` and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
@@ -4054,11 +4055,14 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
   and restores it through `ds-sync-pull` after successful pulls. Keep `rbw` unlocked for those
   operations, never print or commit secret values, and add new keys to `.env.example` through
   `ds reverse` rather than hand-maintaining a divergent schema.
-- **No `release-plz.yml`/`auto-merge.yml` workflows yet**, though `release-plz.toml` exists.
-  These require a `RELEASE_PLZ_TOKEN` repo secret (a PAT with more permission than the default
-  `GITHUB_TOKEN`, so the release PR itself can trigger further CI). Shipping the workflow without
-  the secret would produce a failing Actions run on every push to `main`. Add both workflows once
-  the token is provisioned.
+- **No `release-plz.yml` workflow yet**, though `release-plz.toml` exists. It requires a
+  `RELEASE_PLZ_TOKEN` repo secret (a PAT with more permission than the default `GITHUB_TOKEN`, so
+  the release PR itself can trigger further CI). Shipping the workflow without the secret would
+  produce a failing Actions run on every push to `main`; add it once the token is provisioned.
+- **Pull request merging uses GitHub's built-in auto-merge, not an `auto-merge.yml` workflow.**
+  Once all required checks and the applicable SonarQube zero-issue check pass, queue the required
+  squash merge with `gh pr merge <PR> --auto --squash --delete-branch` and verify that GitHub
+  reports the PR as merged.
 - **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft naming ByteHound Corp. as the
   entity; it does not bind anyone until the text has had a legal review and a CLA-assistant check
   is added to the PR checks.
