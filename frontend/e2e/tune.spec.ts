@@ -142,47 +142,12 @@ test.describe("running a tune", () => {
     expect(await tiMinutes("aggressive")).toBeGreaterThan(0);
     expect(await tdMinutes("aggressive")).toBe(0);
 
-    const timingSection = page.locator("section").filter({
-      has: page.getByRole("heading", { name: "Timing" }),
-    });
-    await expect(timingSection).toBeVisible();
     await expect(
-      timingSection.getByText("Simulator fixed step", { exact: true }),
-    ).toBeVisible();
+      page.getByRole("heading", { name: "Timing", exact: true }),
+    ).toHaveCount(0);
     await expect(
-      timingSection
-        .getByText("Requested interval", { exact: true })
-        .locator("..")
-        .locator("dd"),
-    ).toHaveText("5 ms");
-    await expect(
-      timingSection
-        .getByText("Mean sample gap", { exact: true })
-        .locator("..")
-        .locator("dd"),
-    ).toHaveText("5 ms");
-    await expect(
-      timingSection
-        .getByText("Maximum sample gap", { exact: true })
-        .locator("..")
-        .locator("dd"),
-    ).toHaveText("5 ms");
-    await expect(
-      timingSection
-        .getByText("Missed poll opportunities", { exact: true })
-        .locator("..")
-        .locator("dd"),
-    ).toHaveText("0");
-    await expect(timingSection.getByText("Timing warning:")).toHaveCount(0);
-
-    const samplesPerPeriod = Number.parseFloat(
-      await timingSection
-        .getByText("Approx. samples per period", { exact: true })
-        .locator("..")
-        .locator("dd")
-        .innerText(),
-    );
-    expect(samplesPerPeriod).toBeGreaterThan(1);
+      page.getByText("Timing warning:", { exact: false }),
+    ).toHaveCount(0);
 
     await expect(
       page.getByText(/\d+ measurements were recorded/),
@@ -193,30 +158,16 @@ test.describe("running a tune", () => {
     const runResponse = await page.request.get(`/api/runs/${runId}`);
     expect(runResponse.ok()).toBe(true);
     const run = await runResponse.json();
-
-    await page.route(`**/api/runs/${runId}`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          ...run,
-          timing_metrics: {
-            ...run.timing_metrics,
-            basis: "live_monotonic",
-            max_sample_gap_ms: 10,
-            missed_poll_opportunity_count: 1,
-          },
-        }),
-      });
+    expect(run.timing_metrics).toMatchObject({
+      basis: "simulated_fixed_step",
+      requested_interval_ms: 5,
+      mean_sample_gap_ms: 5,
+      max_sample_gap_ms: 5,
+      missed_poll_opportunity_count: 0,
     });
-    await page.reload();
-
-    await expect(
-      page.getByText(
-        "Timing warning: 1 sample gap reached at least twice the requested interval.",
-        { exact: false },
-      ),
-    ).toBeVisible();
+    expect(run.timing_metrics.approximate_samples_per_period).toBeGreaterThan(
+      1,
+    );
   });
 
   test("exports a completed run's samples as CSV and JSON downloads", async ({

@@ -152,11 +152,21 @@ pub(crate) async fn put_draft(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(draft): Json<NewRunDraft>,
 ) -> Result<Json<NewRunDraft>, ApiError> {
-    let value = serde_json::to_value(&draft)
-        .map_err(|error| ApiError::Internal(anyhow::anyhow!("failed to encode draft: {error}")))?;
+    let value = encode_draft(&draft, |value| serde_json::to_value(value))?;
     let stored = SettingRow::upsert(&state.pool, NEW_RUN_DRAFT_KEY, &value, Utc::now()).await?;
     let persisted = serde_json::from_value(stored.value).map_err(invalid_stored_draft)?;
     Ok(Json(persisted))
+}
+
+fn encode_draft<E>(
+    draft: &NewRunDraft,
+    encode: impl FnOnce(&NewRunDraft) -> Result<serde_json::Value, E>,
+) -> Result<serde_json::Value, ApiError>
+where
+    E: std::fmt::Display,
+{
+    encode(draft)
+        .map_err(|error| ApiError::Internal(anyhow::anyhow!("failed to encode draft: {error}")))
 }
 
 pub fn router() -> Router<AppState> {
@@ -172,6 +182,58 @@ mod tests {
     use bhtune_db::models::SettingRow;
     use serde_json::json;
     use tower::ServiceExt;
+
+    #[test]
+    fn draft_encoding_failure_is_an_internal_error() {
+        let error = encode_draft(
+            &NewRunDraft {
+                driver: None,
+                template: None,
+                tagname: None,
+                server: None,
+                bridge_host: None,
+                process_type: None,
+                controller_type: None,
+                relay_amp: None,
+                cycles_skip: None,
+                cycles_count: None,
+                noise_protection_secs: None,
+                mrft_delay: None,
+                poll_interval_ms: None,
+                timeout_secs: None,
+                op_timeout_secs: None,
+                restore_timeout_secs: None,
+                direction: None,
+                tag_overrides: None,
+                source_driver: None,
+                source_direction: None,
+                pv_range_high: None,
+                pv_range_low: None,
+                mv_range_high: None,
+                mv_range_low: None,
+                source_pv_range_high: None,
+                source_pv_range_low: None,
+                source_mv_range_high: None,
+                source_mv_range_low: None,
+                tag_sources: None,
+                value_sources: None,
+                sim_gain: None,
+                sim_tau: None,
+                sim_dead_time: None,
+                sim_noise: None,
+                sim_seed: None,
+                sim_initial_pv: None,
+                sim_initial_mv: None,
+                write_pid: None,
+                yes: None,
+            },
+            |_| Err::<serde_json::Value, _>("injected encoding failure"),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, ApiError::Internal(message) if message.to_string().contains("encoding failure"))
+        );
+    }
 
     #[tokio::test]
     async fn missing_draft_is_null() {

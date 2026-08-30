@@ -283,6 +283,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_refuses_a_duplicate_run_id_while_the_task_is_active() {
+        let active = ActiveRun::default();
+        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        active
+            .start(1, handle, std::future::pending())
+            .await
+            .unwrap();
+
+        let (_ctrl_c_duplicate, duplicate_handle) = bhtune_cli::cancel::CtrlC::manual();
+        let err = active
+            .start(1, duplicate_handle, std::future::pending())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, RunAlreadyActive { run_id: 1 });
+    }
+
+    #[tokio::test]
     async fn reserve_refuses_a_second_reservation_while_one_is_active() {
         let active = ActiveRun::default();
         active.reserve(1).await.unwrap();
@@ -453,5 +471,20 @@ mod tests {
         )
         .await
         .expect("cancel_and_wait must respect its own timeout even if the task never exits");
+    }
+
+    #[tokio::test]
+    async fn cancel_and_wait_logs_and_consumes_a_panicking_task() {
+        let active = ActiveRun::default();
+        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        active
+            .start(1, handle, async {
+                panic!("simulated task failure");
+            })
+            .await
+            .unwrap();
+
+        active.cancel_and_wait(Duration::from_secs(1)).await;
+        assert!(active.active_run_ids().await.is_empty());
     }
 }

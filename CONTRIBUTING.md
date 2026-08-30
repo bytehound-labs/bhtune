@@ -95,8 +95,10 @@ and validation rules rather than treating "latest" as an unconditional upgrade p
   can be tested deterministically and validated by replaying golden-master traces. See
   `AGENTS.md` for the replay-validation approach and the correctness-critical details that need
   direct unit-test coverage.
-- Coverage is tracked by Codecov and enforced at 100% (`codecov.yml`). Add tests for new code —
-  including error branches and edge cases — in the same PR.
+- Coverage is tracked by Codecov and enforced at exactly 100% (`codecov.yml`). The coverage
+  workflow independently checks every canonical LCOV `DA` source-line record, rejects any
+  zero-hit line, and normalizes the report's aggregate `LF`/`LH` summary before uploading it.
+  Add tests for new code — including error branches and edge cases — in the same PR.
 - End-to-end browser tests live in `frontend/e2e/` (Playwright), driving a real
   `bhtune-server` running the simulator driver through the actual built UI — no mocked HTTP
   layer. Run locally with:
@@ -168,9 +170,10 @@ substitute for doing this deliberately.
 - Keep PRs small and focused — one logical change each.
 - Describe what changed and why; link an issue if one exists.
 - Include the targeted validation performed and any manual verification needed for the change.
-- Squash-merge only after every applicable required check, the CLA check, and the applicable
-  SonarQube zero-issue check pass. Do not use `NOSONAR` or a dashboard status change to hide a
-  real unresolved code issue.
+- After every applicable required check, the CLA check, and the applicable SonarQube zero-issue
+  check pass, queue the built-in GitHub squash auto-merge with
+  `gh pr merge <PR> --auto --squash --delete-branch` and confirm that the PR reaches `MERGED`.
+  Do not use `NOSONAR` or a dashboard status change to hide a real unresolved code issue.
 
 ## Contributing a DCS/PLC template
 

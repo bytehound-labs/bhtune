@@ -244,9 +244,7 @@ async fn read_with_output(
             v.tag,
             v.value,
             format!("{:?}", v.quality),
-            v.timestamp
-                .map(|t| t.to_rfc3339())
-                .unwrap_or_else(|| "-".to_string()),
+            format_timestamp(v.timestamp),
         );
     }
     Ok(())
@@ -298,11 +296,19 @@ async fn write_with_output(
     } else {
         anyhow::bail!(
             "driver rejected the write: {}",
-            outcome
-                .error_message
-                .unwrap_or_else(|| "unknown reason".to_string())
+            write_rejection_reason(outcome.error_message)
         )
     }
+}
+
+fn format_timestamp(timestamp: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    timestamp
+        .map(|timestamp| timestamp.to_rfc3339())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn write_rejection_reason(error_message: Option<String>) -> String {
+    error_message.unwrap_or_else(|| "unknown reason".to_string())
 }
 
 #[cfg(test)]
@@ -819,6 +825,44 @@ mod tests {
         assert!(err.to_string().contains("read-only"));
 
         server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn write_reports_a_gateway_rejection_when_it_omits_a_reason() {
+        let (host, server) = start_mock_server(MockBridgeService {
+            write_response: WriteResponse {
+                tag_id: "Unit1.LIC101.OP".to_string(),
+                success: false,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let err = write(&host, "Sim.Server", "Unit1.LIC101.OP", "55.0")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("driver rejected the write"));
+
+        server.shutdown().await;
+    }
+
+    #[test]
+    fn diagnostic_formatters_cover_timestamp_and_reason_fallbacks() {
+        assert_eq!(format_timestamp(None), "-");
+        assert_eq!(
+            format_timestamp(Some(
+                chrono::DateTime::parse_from_rfc3339("2024-01-15T10:23:45Z")
+                    .unwrap()
+                    .into()
+            )),
+            "2024-01-15T10:23:45+00:00"
+        );
+        assert_eq!(write_rejection_reason(None), "unknown reason");
+        assert_eq!(
+            write_rejection_reason(Some("read-only".to_string())),
+            "read-only"
+        );
     }
 
     #[tokio::test]

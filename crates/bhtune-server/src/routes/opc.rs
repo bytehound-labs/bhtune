@@ -959,6 +959,14 @@ mod tests {
             }),
         }
     }
+
+    fn expect_bad_request(error: ApiError) -> String {
+        match error {
+            ApiError::BadRequest(message) => message,
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
     /// A fresh in-memory [`AppState`] with `bridge_host`/`opc_server` overridden -- every
     /// test in this module needs the config resolution to pick up a specific mock gateway
     /// (or a deliberately unreachable/unset one), never the four seeded built-in templates.
@@ -1472,6 +1480,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_returns_400_when_the_connected_gateway_rejects_the_read() {
+        let host = start_mock_server(MockBridgeService {
+            read_error: Some(tonic::Status::unavailable("read unavailable")),
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+
+        let response = get(app, "/api/opc/read?tag=Unit1.LIC101.PV").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("read 'Unit1.LIC101.PV'")
+        );
+    }
+
+    #[tokio::test]
     async fn read_surfaces_uncertain_and_bad_quality_without_failing() {
         let host = start_mock_server(MockBridgeService {
             read_response: opcda_bridge_proto::bridge::ReadResponse {
@@ -1503,13 +1530,9 @@ mod tests {
         let err = with_timeout("read 'X'", std::future::pending::<DriverResult<()>>())
             .await
             .unwrap_err();
-        match err {
-            ApiError::BadRequest(message) => {
-                assert!(message.contains("read 'X'"));
-                assert!(message.contains("no response within 30s"));
-            }
-            other => panic!("expected BadRequest, got {other:?}"),
-        }
+        let message = expect_bad_request(err);
+        assert!(message.contains("read 'X'"));
+        assert!(message.contains("no response within 30s"));
     }
 
     #[tokio::test]
@@ -1529,13 +1552,22 @@ mod tests {
         })
         .await
         .unwrap_err();
-        match err {
-            ApiError::BadRequest(message) => {
-                assert!(message.contains("read 'X'"));
-                assert!(message.contains("not supported"));
-            }
-            other => panic!("expected BadRequest, got {other:?}"),
-        }
+        let message = expect_bad_request(err);
+        assert!(message.contains("read 'X'"));
+        assert!(message.contains("not supported"));
+    }
+
+    #[test]
+    fn bad_request_assertion_fails_clearly_for_another_api_error() {
+        let panic = std::panic::catch_unwind(|| {
+            expect_bad_request(ApiError::NotFound("missing".to_string()))
+        })
+        .unwrap_err();
+        assert!(
+            panic
+                .downcast_ref::<String>()
+                .is_some_and(|message| message.contains("BadRequest"))
+        );
     }
 
     #[tokio::test]

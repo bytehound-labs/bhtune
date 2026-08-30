@@ -309,6 +309,18 @@ pub(crate) async fn start_run(
     State(state): State<AppState>,
     Json(request): Json<StartRunRequest>,
 ) -> Result<(StatusCode, Json<RunDetailResponse>), ApiError> {
+    start_run_with_hook(state, request, |_| async {}).await
+}
+
+async fn start_run_with_hook<F, Fut>(
+    state: AppState,
+    request: StartRunRequest,
+    after_prepare: F,
+) -> Result<(StatusCode, Json<RunDetailResponse>), ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     // Optimistic pre-check: avoids a wasted `prepare()` call while a post-hoc PID write/revert
     // is holding the exclusive live-loop reservation. It deliberately does not reject an
     // already-running tune: independent tunes are allowed to execute concurrently.
@@ -329,6 +341,7 @@ pub(crate) async fn start_run(
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let run_id = prepared.run_id();
+    after_prepare(&state).await;
 
     let (ctrl_c, cancel_handle) = CtrlC::manual();
     let pool_for_task = state.pool.clone();
@@ -427,15 +440,36 @@ pub(crate) async fn update_notes(
     Path(run_id): Path<i64>,
     Json(request): Json<UpdateNotesRequest>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {
+    update_notes_with_hook(state, run_id, request, |_| async {}).await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NotesHookStage {
+    AfterLookup,
+    AfterUpdate,
+}
+
+async fn update_notes_with_hook<F, Fut>(
+    state: AppState,
+    run_id: i64,
+    request: UpdateNotesRequest,
+    mut hook: F,
+) -> Result<Json<RunDetailResponse>, ApiError>
+where
+    F: FnMut(NotesHookStage) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
+    hook(NotesHookStage::AfterLookup).await;
     TuneRunRow::update_notes(
         &state.pool,
         run_id,
         normalized_notes(request.notes).as_deref(),
     )
     .await?;
+    hook(NotesHookStage::AfterUpdate).await;
     build_run_detail(&state.pool, run_id)
         .await?
         .map(Json)
@@ -462,10 +496,23 @@ pub(crate) async fn delete_notes(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {
+    delete_notes_with_hook(state, run_id, |_| async {}).await
+}
+
+async fn delete_notes_with_hook<F, Fut>(
+    state: AppState,
+    run_id: i64,
+    after_update: F,
+) -> Result<Json<RunDetailResponse>, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
     TuneRunRow::update_notes(&state.pool, run_id, None).await?;
+    after_update(&state).await;
     build_run_detail(&state.pool, run_id)
         .await?
         .map(Json)
@@ -567,6 +614,78 @@ async fn reserve_connect_and_write(
     kind: WriteKind,
     allow_uncertain_quality: bool,
 ) -> Result<RunDetailResponse, ApiError> {
+    reserve_connect_and_write_with_hook(
+        state,
+        run_id,
+        run,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        kind,
+        allow_uncertain_quality,
+        |_| async {},
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reserve_connect_and_write_with_hook<F, Fut>(
+    state: &AppState,
+    run_id: i64,
+    run: &TuneRunRow,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain_quality: bool,
+    after_release: F,
+) -> Result<RunDetailResponse, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    reserve_connect_and_write_with_hooks(
+        state,
+        run_id,
+        run,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        kind,
+        allow_uncertain_quality,
+        |_| async {},
+        after_release,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reserve_connect_and_write_with_hooks<F, Fut, G, Gut>(
+    state: &AppState,
+    run_id: i64,
+    run: &TuneRunRow,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain_quality: bool,
+    before_write: F,
+    after_release: G,
+) -> Result<RunDetailResponse, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+    G: FnOnce(&AppState) -> Gut,
+    Gut: std::future::Future<Output = ()>,
+{
     state
         .active_run
         .reserve(run_id)
@@ -579,6 +698,7 @@ async fn reserve_connect_and_write(
 
     let result: Result<PidWriteOutcome, ApiError> = async {
         let driver = connect_to_runs_recorded_driver(run).await?;
+        before_write(state).await;
         let outcome = write_pid_values(
             &state.pool,
             run_id,
@@ -597,6 +717,7 @@ async fn reserve_connect_and_write(
     .await;
 
     state.active_run.release(run_id).await;
+    after_release(state).await;
     result?;
 
     build_run_detail(&state.pool, run_id).await?.ok_or_else(|| {
@@ -784,6 +905,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use bhtune_core::LoopConfig;
+    use bhtune_db::models::{Pagination, TuneRunFilter};
     use tower::ServiceExt;
 
     /// A fast-converging simulator-backed request body, mirroring `bhtune-cli`'s own
@@ -837,7 +959,15 @@ mod tests {
     /// Polls `GET /api/runs/{id}` (via the merged `history` router) until `outcome` is no
     /// longer `"running"`, bounded so a real bug can't hang the test suite forever.
     async fn wait_for_outcome(state: &AppState, run_id: i64) -> serde_json::Value {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        wait_for_outcome_with_timeout(state, run_id, std::time::Duration::from_secs(10)).await
+    }
+
+    async fn wait_for_outcome_with_timeout(
+        state: &AppState,
+        run_id: i64,
+        timeout: std::time::Duration,
+    ) -> serde_json::Value {
+        let deadline = tokio::time::Instant::now() + timeout;
         loop {
             let app = crate::build_router(state.clone());
             let response = app
@@ -853,10 +983,23 @@ mod tests {
                 return detail;
             }
             if tokio::time::Instant::now() >= deadline {
-                panic!("run {run_id} did not leave 'running' within 10s: {detail:?}");
+                panic!("run {run_id} did not leave 'running' within {timeout:?}: {detail:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn wait_for_outcome_panics_after_an_injected_deadline() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = start_opcda_run(&state).await;
+        let state_for_task = state.clone();
+        let join = tokio::spawn(async move {
+            wait_for_outcome_with_timeout(&state_for_task, run_id, std::time::Duration::ZERO).await
+        });
+
+        let panic = join.await.expect_err("a zero deadline should panic");
+        assert!(panic.is_panic());
     }
 
     #[tokio::test]
@@ -940,6 +1083,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_route_lookups_propagate_database_failures_as_500() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = crate::build_router(state.clone());
+        state.pool.close().await;
+
+        let update = app
+            .clone()
+            .oneshot(
+                Request::put("/api/runs/1/notes")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"notes":"updated"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let delete = app
+            .clone()
+            .oneshot(
+                Request::delete("/api/runs/1/notes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let write = post_json(
+            app.clone(),
+            "/api/runs/1/write",
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(write.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let revert = post_empty(app, "/api/runs/1/revert").await;
+        assert_eq!(revert.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn note_routes_propagate_failures_after_each_successful_database_step() {
+        let update_state = crate::test_support::in_memory_state().await;
+        let update_run_id = start_opcda_run(&update_state).await;
+        let update_pool = update_state.pool.clone();
+        let update_result = update_notes_with_hook(
+            update_state.clone(),
+            update_run_id,
+            UpdateNotesRequest {
+                notes: "updated".to_string(),
+            },
+            move |_| {
+                let pool = update_pool.clone();
+                async move { pool.close().await }
+            },
+        )
+        .await;
+        assert!(matches!(update_result, Err(ApiError::Internal(_))));
+
+        let detail_state = crate::test_support::in_memory_state().await;
+        let detail_run_id = start_opcda_run(&detail_state).await;
+        let detail_pool = detail_state.pool.clone();
+        let detail_result = update_notes_with_hook(
+            detail_state.clone(),
+            detail_run_id,
+            UpdateNotesRequest {
+                notes: "updated".to_string(),
+            },
+            move |stage| {
+                let pool = detail_pool.clone();
+                async move {
+                    if stage == NotesHookStage::AfterUpdate {
+                        pool.close().await;
+                    }
+                }
+            },
+        )
+        .await;
+        assert!(matches!(detail_result, Err(ApiError::Internal(_))));
+
+        let delete_state = crate::test_support::in_memory_state().await;
+        let delete_run_id = start_opcda_run(&delete_state).await;
+        let delete_result = delete_notes_with_hook(delete_state.clone(), delete_run_id, |state| {
+            let pool = state.pool.clone();
+            async move { pool.close().await }
+        })
+        .await;
+        assert!(matches!(delete_result, Err(ApiError::Internal(_))));
+    }
+
+    #[tokio::test]
     async fn starting_a_second_run_while_one_is_active_succeeds() {
         let state = crate::test_support::in_memory_state().await;
 
@@ -1014,6 +1248,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reservation_starting_after_prepare_marks_the_new_run_failed() {
+        let state = crate::test_support::in_memory_state().await;
+        let reservation_id = 9_999;
+        let result = start_run_with_hook(
+            state.clone(),
+            serde_json::from_value(fast_simulator_request_json()).unwrap(),
+            |state| {
+                let active_run = state.active_run.clone();
+                async move {
+                    active_run.reserve(reservation_id).await.unwrap();
+                }
+            },
+        )
+        .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, ApiError::Conflict(_)));
+        let filter = TuneRunFilter::default();
+        let runs = TuneRunRow::list(&state.pool, &filter, Pagination::default())
+            .await
+            .unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].outcome, TuneOutcome::Failed);
+        assert!(
+            runs[0]
+                .failure_reason
+                .as_deref()
+                .unwrap()
+                .contains("no tune task was started")
+        );
+        state.active_run.release(reservation_id).await;
+    }
+
+    #[tokio::test]
+    async fn starting_a_run_while_a_write_reservation_is_active_returns_409() {
+        let state = crate::test_support::in_memory_state().await;
+        let reservation_id = 9_998;
+        state.active_run.reserve(reservation_id).await.unwrap();
+
+        let response = post_json(
+            crate::build_router(state.clone()),
+            "/api/runs",
+            fast_simulator_request_json(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("exclusive PID write/revert")
+        );
+        state.active_run.release(reservation_id).await;
+    }
+
+    #[tokio::test]
     async fn unknown_template_name_returns_400() {
         let app = crate::build_router(crate::test_support::in_memory_state().await);
         let mut request = fast_simulator_request_json();
@@ -1051,10 +1341,10 @@ mod tests {
             request["restore_timeout_secs"] = serde_json::json!(timeout);
             let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
             let error = parsed.into_tune_args().unwrap_err();
-            assert!(matches!(&error, ApiError::BadRequest(_)));
-            if let ApiError::BadRequest(message) = &error {
-                assert!(message.contains("at least 4 seconds"));
-            }
+            assert!(matches!(
+                error,
+                ApiError::BadRequest(message) if message.contains("at least 4 seconds")
+            ));
         }
 
         let mut request = fast_simulator_request_json();
@@ -1072,10 +1362,10 @@ mod tests {
         request["restore_timeout_secs"] = serde_json::json!(0);
         let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
         let error = parsed.into_tune_args().unwrap_err();
-        assert!(matches!(&error, ApiError::BadRequest(_)));
-        if let ApiError::BadRequest(message) = &error {
-            assert!(message.contains("greater than zero"));
-        }
+        assert!(matches!(
+            error,
+            ApiError::BadRequest(message) if message.contains("greater than zero")
+        ));
 
         let mut request = fast_simulator_request_json();
         request["restore_timeout_secs"] = serde_json::json!(1);
@@ -1102,6 +1392,35 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("at least 4 seconds")
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_tag_override_returns_400_before_starting_a_run() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = crate::build_router(state.clone());
+        let mut request = fast_simulator_request_json();
+        request["tag_overrides"] = serde_json::json!({
+            "process_variable": "Loop\u{0000}PV"
+        });
+
+        let response = post_json(app, "/api/runs", request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("process_variable")
+        );
+        assert!(
+            TuneRunRow::list(
+                &state.pool,
+                &TuneRunFilter::default(),
+                Pagination::default(),
+            )
+            .await
+            .unwrap()
+            .is_empty()
         );
     }
 
@@ -1468,6 +1787,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_reports_an_internal_error_when_the_run_vanishes_after_the_write() {
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+        let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+        let p_tag = run.tags.proportional_constant.clone().unwrap();
+        let i_tag = run.tags.integral_constant.clone().unwrap();
+        let d_tag = run.tags.derivative_constant.clone().unwrap();
+        let pool = state.pool.clone();
+
+        let error = reserve_connect_and_write_with_hook(
+            &state,
+            run_id,
+            &run,
+            &p_tag,
+            &i_tag,
+            &d_tag,
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 10.0,
+                integral: 10.0,
+                derivative: 10.0,
+            },
+            WriteKind::Write,
+            true,
+            move |_| async move {
+                assert!(TuneRunRow::delete(&pool, run_id).await.unwrap());
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, ApiError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn write_propagates_an_unexpected_database_failure_and_releases_its_reservation() {
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+        let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+        let p_tag = run.tags.proportional_constant.clone().unwrap();
+        let i_tag = run.tags.integral_constant.clone().unwrap();
+        let d_tag = run.tags.derivative_constant.clone().unwrap();
+
+        let error = reserve_connect_and_write_with_hooks(
+            &state,
+            run_id,
+            &run,
+            &p_tag,
+            &i_tag,
+            &d_tag,
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 10.0,
+                integral: 10.0,
+                derivative: 10.0,
+            },
+            WriteKind::Write,
+            true,
+            |state| {
+                let pool = state.pool.clone();
+                async move { pool.close().await }
+            },
+            |_| async {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, ApiError::Internal(_)));
+        assert!(state.active_run.reserve(999).await.is_ok());
+        state.active_run.release(999).await;
+    }
+
+    #[tokio::test]
     async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
         use crate::test_support::mock_bridge::{
             MockBridgeService, good_reading, start_mock_server,
@@ -1660,21 +2080,26 @@ mod tests {
         let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
         let base = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
 
-        for missing_tag in ["proportional", "integral", "derivative"] {
-            let mut run = base.clone();
-            match missing_tag {
-                "proportional" => run.tags.proportional_constant = None,
-                "integral" => run.tags.integral_constant = None,
-                "derivative" => run.tags.derivative_constant = None,
-                _ => unreachable!(),
-            }
+        let mut missing_proportional = base.clone();
+        missing_proportional.tags.proportional_constant = None;
+        let mut missing_integral = base.clone();
+        missing_integral.tags.integral_constant = None;
+        let mut missing_derivative = base;
+        missing_derivative.tags.derivative_constant = None;
 
-            let Err(ApiError::BadRequest(error)) = require_writable_run(&run) else {
-                panic!("missing {missing_tag} tag should produce a bad-request error");
-            };
+        for (missing_tag, run) in [
+            ("proportional", missing_proportional),
+            ("integral", missing_integral),
+            ("derivative", missing_derivative),
+        ] {
+            let error = require_writable_run(&run).unwrap_err();
             assert!(
-                error.contains("no PID constant tags configured"),
-                "missing {missing_tag} tag should be rejected: {error}"
+                matches!(
+                    error,
+                    ApiError::BadRequest(ref message)
+                        if message.contains("no PID constant tags configured")
+                ),
+                "missing {missing_tag} tag should be rejected: {error:?}"
             );
         }
     }
@@ -1685,20 +2110,23 @@ mod tests {
         let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
         let base = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
 
-        for missing_field in ["opc_server", "bridge_host"] {
-            let mut run = base.clone();
-            match missing_field {
-                "opc_server" => run.opc_server = None,
-                "bridge_host" => run.bridge_host = None,
-                _ => unreachable!(),
-            }
+        let mut missing_server = base.clone();
+        missing_server.opc_server = None;
+        let mut missing_bridge = base;
+        missing_bridge.bridge_host = None;
 
-            let Err(ApiError::BadRequest(error)) = require_writable_run(&run) else {
-                panic!("missing {missing_field} should produce a bad-request error");
-            };
+        for (missing_field, run) in [
+            ("opc_server", missing_server),
+            ("bridge_host", missing_bridge),
+        ] {
+            let error = require_writable_run(&run).unwrap_err();
             assert!(
-                error.contains("no recorded OPC server"),
-                "missing {missing_field} should be rejected: {error}"
+                matches!(
+                    error,
+                    ApiError::BadRequest(ref message)
+                        if message.contains("no recorded OPC server")
+                ),
+                "missing {missing_field} should be rejected: {error:?}"
             );
         }
     }
@@ -1913,6 +2341,36 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("never recorded pre-write values")
+        );
+    }
+
+    #[tokio::test]
+    async fn revert_run_returns_400_when_the_driver_connection_fails() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+        let mut previous_write =
+            bhtune_db::models::NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());
+        previous_write.previous = Some(WriteReadback {
+            proportional: 10.0,
+            integral: 20.0,
+            derivative: 30.0,
+        });
+        previous_write.success = true;
+        TuneWriteRow::insert(&state.pool, run_id, previous_write)
+            .await
+            .unwrap();
+
+        let response = post_empty(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/revert"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("failed to connect")
         );
     }
 

@@ -148,7 +148,8 @@ a trusted network.
      visible but disabled with an explanation.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
-   in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current
+   in real time over Server-Sent Events (`GET /api/runs/:id/stream`), with line-only PV/MV series
+   alongside the current
    relay switch count and cycles remaining. The initial PV/MV snapshot appears as soon as the
    server records it, before the first MRFT sample, so the chart does not wait for a complete
    relay tick to become visible. Independent OPC DA startup values are collected in one
@@ -166,11 +167,6 @@ a trusted network.
    persisted samples or CSV/JSON exports. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
    [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
-   - A **Timing** section with the run's time basis, requested interval, observed mean/maximum
-     sample gap, measured oscillation period, and approximate samples per period. Live runs show
-     an amber warning when any sample gap reaches at least twice the requested interval, proving
-     that at least one complete polling opportunity was missed. The warning is informational and
-     does not disable the PID controls.
    - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own
      **Apply** button to send that response level's constants to the loop after the fact —
      independently of any `--write-pid` choice made before the run started. A confirmation
@@ -191,6 +187,10 @@ a trusted network.
      results, and cannot be undone).
    - A **Duplicate this run** button, returning to the New tune form prefilled from this run's
      tune settings instead of the newest run's; Notes starts blank.
+
+   Detailed polling timing diagnostics remain available through `bhtune history show`, the
+   run-detail API, and structured logs, but are not part of the normal web run-detail view.
+
 3. **History** (`/runs`) — every past tune, shown by **Tag name** and filterable by outcome and
    process type, with the same detail view available for any completed run — not just the one
    you just started.

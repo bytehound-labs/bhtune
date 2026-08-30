@@ -139,9 +139,9 @@ pub async fn run() -> ExitCode {
     let cli = Cli::parse();
 
     let output_format = cli.command.output_format();
-    let config = match config::load_config(cli.config.as_deref()) {
+    let config = match load_startup_config(cli.config.as_deref(), output_format) {
         Ok(config) => config,
-        Err(error) => return fail(&error, output_format),
+        Err(code) => return code,
     };
     let default_log_dir = config::default_log_dir_from(
         std::env::var("XDG_DATA_HOME").ok().as_deref(),
@@ -163,6 +163,13 @@ pub async fn run() -> ExitCode {
     let _log_guard = logging::init_tracing(&log_settings);
 
     run_with_cli_and_ctrl_c(cli, ctrl_c).await
+}
+
+fn load_startup_config(
+    path: Option<&std::path::Path>,
+    output: OutputFormat,
+) -> Result<config::BhtuneConfig, ExitCode> {
+    config::load_config(path).map_err(|error| fail(&error, output))
 }
 
 /// Test-facing entry point: exercises [`run_with_cli_and_ctrl_c`] against an already-parsed
@@ -639,5 +646,14 @@ mod tests {
         };
         assert_eq!(run_with_cli(cli).await, ExitCode::SUCCESS);
         assert!(db.exists());
+    }
+
+    #[test]
+    fn startup_config_errors_use_the_requested_failure_format() {
+        let missing = std::path::Path::new("config-that-does-not-exist.toml");
+        assert_eq!(
+            load_startup_config(Some(missing), OutputFormat::Table),
+            Err(ExitCode::FAILURE)
+        );
     }
 }

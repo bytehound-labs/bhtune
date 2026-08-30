@@ -229,8 +229,9 @@ visible. `timing-diagnostics` is also done: every run with at least one successf
 typed timing snapshot (`simulated_fixed_step` or `live_monotonic`, requested interval, adjacent
 gap count/mean/maximum, gaps at least twice the requested interval, completed-run oscillation
 period, and approximate samples per period) in `tune_runs.timing_metrics_json`; `history show`,
-`GET /api/runs/{id}`, and the run-detail UI expose it, and live runs emit/show a warning when at
-least one complete poll opportunity was missed without aborting or blocking write-back.
+`GET /api/runs/{id}`, and structured logs expose it, while the normal run-detail UI intentionally
+omits the low-level diagnostics. Live runs log a warning when at least one complete poll
+opportunity was missed without aborting or blocking write-back.
 `e2e-playwright` is also done: a
 Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
@@ -1375,13 +1376,13 @@ derivative }`. `previous` is all-or-nothing (`Option<WriteReadback>`, not three
   SQLite file can never leave the live loop waiting at its relay-test value merely to save
   diagnostic metadata. Normal completion/abort uses one atomic repository update for the
   terminal outcome and timing snapshot, so the SSE `done` event can never make the frontend stop
-  polling on a terminal row before its Timing section is visible. Completed-only period fields
-  are included only in that same `completed` update; a failure while saving calculated results
-  records cadence metrics without a period. Standalone failure-path persistence is best-effort so
-  diagnostic metadata can never replace a tune's real completion/abort/error outcome. Only live
-  runs with a nonzero missed-opportunity count log and display a warning; no run abort,
-  result-validity label, or PID write restriction exists until field evidence supports a
-  defensible threshold.
+  polling on a terminal row before its timing metrics are durable for API and CLI consumers.
+  Completed-only period fields are included only in that same `completed` update; a failure while
+  saving calculated results records cadence metrics without a period. Standalone failure-path
+  persistence is best-effort so diagnostic metadata can never replace a tune's real
+  completion/abort/error outcome. Only live runs with a nonzero missed-opportunity count log a
+  warning; the web run-detail UI does not display it, and no run abort, result-validity label, or
+  PID write restriction exists until field evidence supports a defensible threshold.
 - **The FOPDT process model uses an exact closed-form discretization, not a ported ODE solver.**
   For the first-order lag `tau*dy/dt = -(y-y0) + Kp*(u-u0)` driven by a zero-order-hold input over
   one tick, the update `pv_new = pv*decay + (1-decay)*(bias + gain*mv_effective)` (`decay =
@@ -4051,11 +4052,12 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
   repeat until all checks pass. If branch protection reports the branch behind `main`, update it
   before merging. A merge is allowed only when the applicable PR Sonar analysis reports zero
   `OPEN`/`CONFIRMED` issues; intentional Accepted or False Positive findings must have a durable
-  rationale and related PR or documentation link. Squash-merge only after the complete green
-  result, wait for the resulting `main` workflows and Sonar analysis, and verify the intended
-  findings disappeared without introducing new ones before starting dependent work. Never commit
-  or push directly to `main`, bypass branch protection, use `NOSONAR`, or silence a real finding
-  merely to clean a dashboard.
+  rationale and related PR or documentation link. After the complete green result, queue GitHub's
+  built-in squash auto-merge with `gh pr merge <PR> --auto --squash --delete-branch`, confirm that
+  the PR has an auto-merge request, and monitor it until the PR is merged. Wait for the resulting
+  `main` workflows and Sonar analysis, and verify the intended findings disappeared without
+  introducing new ones before starting dependent work. Never commit or push directly to `main`,
+  bypass branch protection, use `NOSONAR`, or silence a real finding merely to clean a dashboard.
 - **Commits**: [Conventional Commits](https://www.conventionalcommits.org/).
 - **Formatting/linting**: `cargo fmt --check --all` and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
@@ -4082,11 +4084,14 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
   and restores it through `ds-sync-pull` after successful pulls. Keep `rbw` unlocked for those
   operations, never print or commit secret values, and add new keys to `.env.example` through
   `ds reverse` rather than hand-maintaining a divergent schema.
-- **No `release-plz.yml`/`auto-merge.yml` workflows yet**, though `release-plz.toml` exists.
-  These require a `RELEASE_PLZ_TOKEN` repo secret (a PAT with more permission than the default
-  `GITHUB_TOKEN`, so the release PR itself can trigger further CI). Shipping the workflow without
-  the secret would produce a failing Actions run on every push to `main`. Add both workflows once
-  the token is provisioned.
+- **No `release-plz.yml` workflow yet**, though `release-plz.toml` exists. It requires a
+  `RELEASE_PLZ_TOKEN` repo secret (a PAT with more permission than the default `GITHUB_TOKEN`, so
+  the release PR itself can trigger further CI). Shipping the workflow without the secret would
+  produce a failing Actions run on every push to `main`; add it once the token is provisioned.
+- **Pull request merging uses GitHub's built-in auto-merge, not an `auto-merge.yml` workflow.**
+  Once all required checks and the applicable SonarQube zero-issue check pass, queue the required
+  squash merge with `gh pr merge <PR> --auto --squash --delete-branch` and verify that GitHub
+  reports the PR as merged.
 - **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft naming ByteHound Corp. as the
   entity; it does not bind anyone until the text has had a legal review and a CLA-assistant check
   is added to the PR checks.
@@ -4213,7 +4218,10 @@ The repository now has a layered hardening gate for both source changes and rele
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - **Dependency hygiene**: `cargo deny check` (license/advisory allow-list) and `cargo machete`
   (unused dependencies)
-- **Coverage**: `cargo llvm-cov --workspace --lcov --output-path lcov.info`
+- **Coverage**: `cargo llvm-cov --workspace --lcov --output-path lcov.info`; CI requires every
+  canonical LCOV `DA` source-line record to have a positive hit count, rewrites the report's
+  `LF`/`LH` summaries from those records for the Codecov upload, and
+  `codecov.yml` uses zero tolerance for project and patch coverage
 - **Frontend build**: `pnpm --filter bhtune-frontend run build` (`tsc -b` typecheck + Vite
   production bundle)
 - **Local UI restart**: after every source, frontend, or generated-artifact change, rebuild the
@@ -4251,11 +4259,15 @@ the result is available for manual testing after every edit:
 
 ### Coverage enforcement
 
-Coverage is tracked by Codecov and enforced at **100%** via `codecov.yml` (project and patch
-targets both at 100% with a 1% threshold). Even placeholder code must be exercised by a test —
-see the `main_runs_without_panicking` smoke tests in each binary crate's `main.rs` for the pattern
-used to keep the gate meaningful (not vacuous) from the very first commit. Delete each one once
-that binary does something real and gains its own targeted tests.
+Coverage is tracked by Codecov and enforced at **exactly 100%** via `codecov.yml` (project and
+patch targets both at 100% with zero tolerance). The coverage workflow independently parses every
+canonical LCOV `DA` source-line record, fails on any zero-hit line, and regenerates the report's
+`LF`/`LH` summaries from those records before upload, so LLVM's duplicated line-instance
+accounting cannot produce a false failure and a successful upload cannot mask a real uncovered
+source line. Even placeholder code must be exercised by a test — see the
+`main_runs_without_panicking` smoke tests in each binary crate's `main.rs` for the pattern used
+to keep the gate meaningful (not vacuous) from the very first commit. Delete each one once that
+binary does something real and gains its own targeted tests.
 
 ## Crate map and phase status
 
@@ -4456,10 +4468,11 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `smoke.spec.ts` (app shell, health indicator, seeded template list, header nav) and
    `tune.spec.ts` (a full tune through `/runs/new` with `e2e_simulator.rs`'s own
    millisecond-scale simulator parameters, asserting sane/ordered rendered Kp/Ti/Td values,
-   deterministic fixed-step timing diagnostics with zero missed poll opportunities, plus
-   cancelling an in-flight run). Polling timing diagnostics are persisted and exposed through
-   CLI/API/UI for both simulator and live runs; live gaps at least twice the requested interval
-   produce a warning only, without changing tune or write-back outcomes.
+   deterministic fixed-step timing diagnostics with zero missed poll opportunities through the
+   API, plus cancelling an in-flight run). Polling timing diagnostics are persisted and exposed
+   through CLI/API/logs for both simulator and live runs; the normal web run-detail UI omits them,
+   and live gaps at least twice the requested interval produce a warning only, without changing
+   tune or write-back outcomes.
    `.github/workflows/e2e.yml` builds a debug
    `bhtune-server` and the frontend, installs Chromium, and runs the suite in CI, uploading
    the HTML report on failure. A direct dividend of dropping Tauri: `tauri-driver`/WebDriver would

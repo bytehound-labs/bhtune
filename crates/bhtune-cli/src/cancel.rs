@@ -14,6 +14,8 @@
 //! exactly the two states `safety-cancellation` needs to tell apart (first Ctrl+C aborting
 //! the run, versus a second one during the restore forcing it to give up).
 
+use std::future::Future;
+
 use tokio::sync::watch;
 
 /// A handle to the process's Ctrl+C signal, threaded explicitly through every function that
@@ -40,35 +42,43 @@ pub struct CtrlC {
     rx: watch::Receiver<u32>,
 }
 
+fn install_with_signal_provider<F, Fut>(signal_provider: F) -> CtrlC
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(), std::io::Error>> + Send + 'static,
+{
+    let (tx, rx) = watch::channel(0u32);
+    tokio::spawn(async move {
+        let mut count = 0u32;
+        loop {
+            if signal_provider().await.is_err() {
+                // The OS-level listener itself failed to install/poll (e.g. an exhausted
+                // signal-handling resource -- vanishingly rare). Stop rather than spin; a
+                // `CtrlC` handle simply never fires again for the rest of this process,
+                // the same observable behavior as never receiving a signal at all.
+                return;
+            }
+            count = count.wrapping_add(1);
+            if tx.send(count).is_err() {
+                // Every receiver was dropped -- nothing left to notify.
+                return;
+            }
+        }
+    });
+    CtrlC { rx }
+}
+
 impl CtrlC {
     /// Spawns the one long-lived task that listens for Ctrl+C for the rest of the process's
     /// life, incrementing a counter on every delivery -- see the struct doc comment for why
     /// this must be called exactly once, and only from real process startup.
     pub(crate) fn install() -> CtrlC {
-        let (tx, rx) = watch::channel(0u32);
         // Fire-and-forget: nothing ever awaits or aborts this task, so its `JoinHandle` is
         // simply never bound (an explicit `let _ = ...` would trip clippy's
         // `let_underscore_future`, which can't tell this apart from a future that was meant
         // to run but never got polled -- this one is already spawned onto the runtime the
         // moment `tokio::spawn` returns).
-        tokio::spawn(async move {
-            let mut count = 0u32;
-            loop {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    // The OS-level listener itself failed to install/poll (e.g. an exhausted
-                    // signal-handling resource -- vanishingly rare). Stop rather than spin; a
-                    // `CtrlC` handle simply never fires again for the rest of this process,
-                    // the same observable behavior as never receiving a signal at all.
-                    return;
-                }
-                count = count.wrapping_add(1);
-                if tx.send(count).is_err() {
-                    // Every receiver was dropped -- nothing left to notify.
-                    return;
-                }
-            }
-        });
-        CtrlC { rx }
+        install_with_signal_provider(tokio::signal::ctrl_c)
     }
 
     /// Resolves the next time Ctrl+C is delivered -- immediately, if one already arrived
@@ -155,13 +165,16 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    #[tokio::test]
-    async fn never_does_not_resolve_signalled_even_after_a_yield() {
-        let mut ctrl_c = CtrlC::never();
+    async fn assert_not_signalled(mut ctrl_c: CtrlC) {
         tokio::select! {
-            () = ctrl_c.signalled() => panic!("never() must not resolve"),
+            () = ctrl_c.signalled() => panic!("signalled() must not resolve"),
             () = tokio::time::sleep(Duration::from_millis(20)) => {}
         }
+    }
+
+    #[tokio::test]
+    async fn never_does_not_resolve_signalled_even_after_a_yield() {
+        assert_not_signalled(CtrlC::never()).await;
     }
 
     #[tokio::test]
@@ -196,6 +209,87 @@ mod tests {
             .expect("a send delivered before signalled() was ever called must still be seen");
     }
 
+    #[tokio::test]
+    async fn signal_listener_stops_when_signal_provider_fails() {
+        let called = std::sync::Arc::new(tokio::sync::Notify::new());
+        let provider_called = std::sync::Arc::clone(&called);
+        let _ctrl_c = install_with_signal_provider(move || {
+            provider_called.notify_one();
+            async { Err(std::io::Error::other("test signal provider failure")) }
+        });
+
+        tokio::time::timeout(Duration::from_millis(200), called.notified())
+            .await
+            .expect("the injected signal provider should be called");
+    }
+
+    #[tokio::test]
+    async fn signal_listener_notifies_receivers_for_each_successful_signal() {
+        let (ready, release) = (
+            std::sync::Arc::new(tokio::sync::Notify::new()),
+            std::sync::Arc::new(tokio::sync::Notify::new()),
+        );
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider_ready = ready.clone();
+        let provider_release = release.clone();
+        let provider_calls = calls.clone();
+        let mut ctrl_c = install_with_signal_provider(move || {
+            provider_ready.notify_one();
+            let provider_release = provider_release.clone();
+            let call = provider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async move {
+                if call < 2 {
+                    provider_release.notified().await;
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other("stop test listener"))
+                }
+            }
+        });
+
+        for _ in 0..2 {
+            tokio::time::timeout(Duration::from_millis(200), ready.notified())
+                .await
+                .expect("the injected provider should wait for the next signal");
+            release.notify_one();
+            tokio::time::timeout(Duration::from_millis(200), ctrl_c.signalled())
+                .await
+                .expect("the listener should notify its receiver");
+        }
+    }
+
+    #[tokio::test]
+    async fn signal_listener_stops_when_all_receivers_are_dropped() {
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let provider_started = std::sync::Arc::clone(&started);
+        let provider_release = std::sync::Arc::clone(&release);
+        let ctrl_c = install_with_signal_provider(move || {
+            provider_started.notify_one();
+            let provider_release = std::sync::Arc::clone(&provider_release);
+            async move {
+                provider_release.notified().await;
+                Ok(())
+            }
+        });
+
+        tokio::time::timeout(Duration::from_millis(200), started.notified())
+            .await
+            .expect("the injected signal provider should start");
+        drop(ctrl_c);
+        release.notify_one();
+        tokio::task::yield_now().await;
+    }
+
+    #[tokio::test]
+    async fn signalled_waits_forever_when_all_senders_are_dropped() {
+        let (tx, rx) = watch::channel(0u32);
+        drop(tx);
+        let mut ctrl_c = CtrlC { rx };
+        let result = tokio::time::timeout(Duration::from_millis(20), ctrl_c.signalled()).await;
+        assert!(result.is_err());
+    }
+
     // `install()`'s own real-signal-handling behavior deliberately has no in-process test
     // here: raising a real `SIGINT` against this test binary before `install()`'s spawned
     // task has actually reached `tokio::signal::ctrl_c().await` (registering the OS-level
@@ -215,11 +309,18 @@ mod tests {
 
     #[tokio::test]
     async fn manual_does_not_resolve_signalled_before_any_trigger() {
-        let (mut ctrl_c, _handle) = CtrlC::manual();
-        tokio::select! {
-            () = ctrl_c.signalled() => panic!("signalled() must not resolve before trigger()"),
-            () = tokio::time::sleep(Duration::from_millis(20)) => {}
-        }
+        let (ctrl_c, _handle) = CtrlC::manual();
+        assert_not_signalled(ctrl_c).await;
+    }
+
+    #[tokio::test]
+    async fn no_signal_assertion_panics_when_a_signal_arrives() {
+        let (ctrl_c, handle) = CtrlC::manual();
+        handle.trigger();
+        let error = tokio::spawn(assert_not_signalled(ctrl_c))
+            .await
+            .unwrap_err();
+        assert!(error.is_panic());
     }
 
     #[tokio::test]

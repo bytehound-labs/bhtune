@@ -69,8 +69,20 @@ export function TrendChart({
       },
       series: [
         {},
-        { label: "PV", stroke: pvColor, width: 2, scale: "y" },
-        { label: "MV", stroke: mvColor, width: 2, scale: "mv" },
+        {
+          label: "PV",
+          stroke: pvColor,
+          width: 2,
+          scale: "y",
+          points: { show: false },
+        },
+        {
+          label: "MV",
+          stroke: mvColor,
+          width: 2,
+          scale: "mv",
+          points: { show: false },
+        },
       ],
       axes: [
         { stroke: axisColor, grid: { stroke: gridColor } },

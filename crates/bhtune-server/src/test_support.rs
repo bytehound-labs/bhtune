@@ -48,6 +48,8 @@ pub(crate) mod mock_bridge {
     };
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
+    use tokio::task::JoinHandle;
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
     use tonic::transport::Server;
     use tonic::{Request, Response, Status};
@@ -262,17 +264,46 @@ pub(crate) mod mock_bridge {
     /// each test's server simply runs for the rest of the test process on its own
     /// ephemeral port, matching the upstream pattern this mirrors.
     pub(crate) async fn start_mock_server(service: MockBridgeService) -> String {
+        let (host, handle) = start_mock_server_with_handle(service).await;
+        std::mem::forget(handle);
+        host
+    }
+
+    pub(crate) struct MockServerHandle {
+        shutdown: Option<oneshot::Sender<()>>,
+        task: JoinHandle<()>,
+    }
+
+    impl MockServerHandle {
+        pub(crate) async fn shutdown(mut self) {
+            let _ = self.shutdown.take().unwrap().send(());
+            self.task.await.unwrap();
+        }
+    }
+
+    pub(crate) async fn start_mock_server_with_handle(
+        service: MockBridgeService,
+    ) -> (String, MockServerHandle) {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
+        let (shutdown, shutdown_signal) = oneshot::channel();
+        let task = tokio::spawn(async move {
             Server::builder()
                 .add_service(BridgeServer::new(service))
-                .serve_with_incoming(TcpListenerStream::new(listener))
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                    let _ = shutdown_signal.await;
+                })
                 .await
                 .unwrap();
         });
-        format!("127.0.0.1:{port}")
+        (
+            format!("127.0.0.1:{port}"),
+            MockServerHandle {
+                shutdown: Some(shutdown),
+                task,
+            },
+        )
     }
 
     /// A "Good"-quality `"10.0"` reading, regardless of which tag was requested --
@@ -288,6 +319,17 @@ pub(crate) mod mock_bridge {
                 quality: "Good".to_string(),
                 timestamp: "2024-01-15 10:23:45".to_string(),
             }],
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn mock_server_can_be_shutdown_and_joined() {
+            let (_host, handle) = start_mock_server_with_handle(MockBridgeService::default()).await;
+            handle.shutdown().await;
         }
     }
 }

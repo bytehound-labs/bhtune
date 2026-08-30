@@ -36,11 +36,15 @@ jobs:
             coverage:
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'codecov.yml'
               - '.github/workflows/**'
               - 'crates/**/*.rs'
               - 'crates/**/build.rs'
               - 'crates/**/Cargo.toml'
+              - 'crates/**/migrations/**'
               - 'crates/**/proto/**'
+              - 'crates/**/templates/**'
+              - 'tests/**'
 
   coverage_run:
     name: Generate coverage
@@ -65,6 +69,109 @@ jobs:
 
       - name: Generate coverage
         run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+
+      - name: Enforce exact 100% source-line coverage
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("lcov.info")
+          lines = path.read_text().splitlines()
+          normalized = []
+          current_file = None
+          record_lines = []
+          da_records = []
+          seen_lines = set()
+          total = 0
+          covered = 0
+          uncovered = []
+
+          def finish_record():
+              global current_file, record_lines, da_records, seen_lines
+              if current_file is None:
+                  raise SystemExit("Coverage report contains an end_of_record without an SF record.")
+              if not da_records:
+                  raise SystemExit(
+                      f"Coverage record for {current_file} contains no source-line DA records."
+                  )
+              normalized.extend(record_lines)
+              normalized.append(f"LF:{len(da_records)}")
+              normalized.append(
+                  f"LH:{sum(1 for _, hits in da_records if hits > 0)}"
+              )
+              normalized.append("end_of_record")
+
+          for line in lines:
+              if line.startswith("SF:"):
+                  if current_file is not None:
+                      raise SystemExit(
+                          f"Coverage record for {current_file} is missing end_of_record."
+                      )
+                  current_file = line[3:]
+                  if not current_file:
+                      raise SystemExit("Coverage report contains an empty SF record.")
+                  record_lines = [line]
+                  da_records = []
+                  seen_lines = set()
+              elif line.startswith("DA:"):
+                  if current_file is None:
+                      raise SystemExit("Coverage report contains a DA record outside an SF record.")
+                  fields = line[3:].split(",")
+                  if len(fields) < 2:
+                      raise SystemExit(
+                          f"Malformed DA record for {current_file}: {line}"
+                      )
+                  try:
+                      source_line = int(fields[0])
+                      hits = int(fields[1])
+                  except ValueError:
+                      raise SystemExit(
+                          f"Malformed DA record for {current_file}: {line}"
+                      )
+                  if source_line in seen_lines:
+                      raise SystemExit(
+                          f"Duplicate DA record for {current_file}:{source_line}."
+                      )
+                  seen_lines.add(source_line)
+                  da_records.append((source_line, hits))
+                  total += 1
+                  covered += hits > 0
+                  if hits <= 0:
+                      uncovered.append(f"{current_file}:{source_line}")
+                  record_lines.append(line)
+              elif line.startswith("LF:") or line.startswith("LH:"):
+                  if current_file is None:
+                      raise SystemExit(
+                          f"Coverage summary appears outside an SF record: {line}"
+                      )
+              elif line == "end_of_record":
+                  finish_record()
+                  current_file = None
+                  record_lines = []
+                  da_records = []
+                  seen_lines = set()
+              elif current_file is None:
+                  normalized.append(line)
+              else:
+                  record_lines.append(line)
+
+          if current_file is not None:
+              raise SystemExit(
+                  f"Coverage record for {current_file} is missing end_of_record."
+              )
+          if total == 0:
+              raise SystemExit("Coverage report contains no source-line DA records.")
+          if uncovered:
+              preview = ", ".join(uncovered[:20])
+              suffix = "" if len(uncovered) <= 20 else f" (+{len(uncovered) - 20} more)"
+              raise SystemExit(
+                  f"Rust source-line coverage: {covered}/{total}; "
+                  f"uncovered source lines: {preview}{suffix}"
+              )
+
+          path.write_text("\n".join(normalized) + "\n")
+          print(f"Rust source-line coverage: {covered}/{total} (100.00%).")
+          PY
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f

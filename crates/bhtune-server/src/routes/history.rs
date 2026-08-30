@@ -28,6 +28,7 @@ use bhtune_db::models::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::error::{ApiError, ErrorBody};
@@ -641,6 +642,18 @@ pub(crate) async fn delete_run(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    delete_run_with_hook(state, run_id, |_| async {}).await
+}
+
+async fn delete_run_with_hook<F, Fut>(
+    state: AppState,
+    run_id: i64,
+    after_lookup: F,
+) -> Result<StatusCode, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: Future<Output = ()>,
+{
     let run = TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
@@ -649,6 +662,7 @@ pub(crate) async fn delete_run(
             "run {run_id} has not finished yet; cancel it before deleting"
         )));
     }
+    after_lookup(&state).await;
     if TuneRunRow::delete(&state.pool, run_id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -1454,6 +1468,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn show_and_delete_propagate_database_failures_as_500() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = router().with_state(state.clone());
+        state.pool.close().await;
+
+        let show = app
+            .clone()
+            .oneshot(Request::get("/api/runs/1").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(show.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let delete = app
+            .oneshot(Request::delete("/api/runs/1").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
     async fn export_run_defaults_to_csv_with_the_expected_headers_and_body() {
         let state = crate::test_support::in_memory_state().await;
         let (run_id, _loop_id) = seed_full_run(&state).await;
@@ -1652,5 +1686,26 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(TuneRunRow::get(&pool, run_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_run_returns_404_when_the_row_vanishes_after_lookup() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+
+        let result = delete_run_with_hook(state.clone(), run_id, |state| {
+            let pool = state.pool.clone();
+            async move {
+                assert!(TuneRunRow::delete(&pool, run_id).await.unwrap());
+            }
+        })
+        .await;
+
+        assert!(
+            matches!(result, Err(ApiError::NotFound(message)) if message.contains(&run_id.to_string()))
+        );
     }
 }

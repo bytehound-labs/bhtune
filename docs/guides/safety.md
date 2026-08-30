@@ -53,12 +53,14 @@ during a tune, and choose a poll interval comfortably shorter than the loop's ex
 period. The whole-run and per-operation safety timeouts remain independent monotonic timers.
 
 Each run with at least one successful PV poll stores a timing snapshot in history. The CLI's
-`bhtune history show <run>` output and the web run-detail page show the requested interval,
-observed sample-gap count, mean and maximum sample gap, measured oscillation period when the test
-completed, and approximate samples per period. A live run is flagged when an adjacent sample gap
-is at least twice the requested interval, because that objectively means at least one complete
-polling opportunity was missed. This is a warning, not a validity verdict: it does not abort the
-run, change its calculated constants, or prevent an engineer from applying them.
+`bhtune history show <run>` output, the run-detail API, and structured logs retain the requested
+interval, observed sample-gap count, mean and maximum sample gap, measured oscillation period
+when the test completed, and approximate samples per period. The normal web run-detail page
+intentionally omits these low-level diagnostics so it can focus on actionable run and safety
+information. A live run is flagged in structured logs when an adjacent sample gap is at least
+twice the requested interval, because that objectively means at least one complete polling
+opportunity was missed. This is a warning, not a validity verdict: it does not abort the run,
+change its calculated constants, or prevent an engineer from applying them.
 
 ## Input validation
 
