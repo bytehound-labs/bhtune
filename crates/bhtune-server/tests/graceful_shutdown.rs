@@ -210,3 +210,22 @@ async fn exits_with_an_error_for_an_unparseable_bind_address() {
         "expected the bind-address error naming the problem on stderr, got: {stderr}"
     );
 }
+
+#[test]
+fn service_commands_use_the_linux_non_windows_dispatch_path() {
+    for action in ["install", "uninstall", "start", "stop", "status"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bhtune-server"))
+            .arg(action)
+            .output()
+            .expect("failed to execute bhtune-server service command");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "service command {action} should fail with the explanatory Linux stub"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(action),
+            "service command {action} should identify the requested action"
+        );
+    }
+}

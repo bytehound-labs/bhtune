@@ -846,6 +846,48 @@ mod tests {
     }
 
     #[test]
+    fn history_command_output_format_covers_every_variant() {
+        assert_eq!(
+            HistoryCommand::List {
+                outcome: None,
+                limit: 50,
+                offset: 0,
+                output: crate::output::OutputFormat::Json,
+            }
+            .output_format(),
+            crate::output::OutputFormat::Json
+        );
+        assert_eq!(
+            HistoryCommand::Show {
+                run_id: 1,
+                output: crate::output::OutputFormat::Json,
+            }
+            .output_format(),
+            crate::output::OutputFormat::Json
+        );
+        assert_eq!(
+            HistoryCommand::Revert {
+                run_id: 1,
+                bridge_host: None,
+                server: None,
+                yes: false,
+                output: crate::output::OutputFormat::Json,
+            }
+            .output_format(),
+            crate::output::OutputFormat::Json
+        );
+        assert_eq!(
+            HistoryCommand::Prune {
+                older_than_days: None,
+                dry_run: false,
+                output: crate::output::OutputFormat::Json,
+            }
+            .output_format(),
+            crate::output::OutputFormat::Json
+        );
+    }
+
+    #[test]
     fn finite_f32_accepts_finite_values_and_rejects_invalid_values() {
         assert_eq!(finite_f32("2.5").unwrap(), 2.5);
         assert!(finite_f32("not-a-number").is_err());

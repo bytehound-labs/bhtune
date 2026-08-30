@@ -309,6 +309,18 @@ pub(crate) async fn start_run(
     State(state): State<AppState>,
     Json(request): Json<StartRunRequest>,
 ) -> Result<(StatusCode, Json<RunDetailResponse>), ApiError> {
+    start_run_with_hook(state, request, |_| async {}).await
+}
+
+async fn start_run_with_hook<F, Fut>(
+    state: AppState,
+    request: StartRunRequest,
+    after_prepare: F,
+) -> Result<(StatusCode, Json<RunDetailResponse>), ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     // Optimistic pre-check: avoids a wasted `prepare()` call while a post-hoc PID write/revert
     // is holding the exclusive live-loop reservation. It deliberately does not reject an
     // already-running tune: independent tunes are allowed to execute concurrently.
@@ -329,6 +341,7 @@ pub(crate) async fn start_run(
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let run_id = prepared.run_id();
+    after_prepare(&state).await;
 
     let (ctrl_c, cancel_handle) = CtrlC::manual();
     let pool_for_task = state.pool.clone();
@@ -567,6 +580,40 @@ async fn reserve_connect_and_write(
     kind: WriteKind,
     allow_uncertain_quality: bool,
 ) -> Result<RunDetailResponse, ApiError> {
+    reserve_connect_and_write_with_hook(
+        state,
+        run_id,
+        run,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        kind,
+        allow_uncertain_quality,
+        |_| async {},
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reserve_connect_and_write_with_hook<F, Fut>(
+    state: &AppState,
+    run_id: i64,
+    run: &TuneRunRow,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain_quality: bool,
+    after_release: F,
+) -> Result<RunDetailResponse, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     state
         .active_run
         .reserve(run_id)
@@ -597,6 +644,7 @@ async fn reserve_connect_and_write(
     .await;
 
     state.active_run.release(run_id).await;
+    after_release(state).await;
     result?;
 
     build_run_detail(&state.pool, run_id).await?.ok_or_else(|| {
@@ -784,6 +832,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use bhtune_core::LoopConfig;
+    use bhtune_db::models::{Pagination, TuneRunFilter};
     use tower::ServiceExt;
 
     /// A fast-converging simulator-backed request body, mirroring `bhtune-cli`'s own
@@ -837,7 +886,15 @@ mod tests {
     /// Polls `GET /api/runs/{id}` (via the merged `history` router) until `outcome` is no
     /// longer `"running"`, bounded so a real bug can't hang the test suite forever.
     async fn wait_for_outcome(state: &AppState, run_id: i64) -> serde_json::Value {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        wait_for_outcome_with_timeout(state, run_id, std::time::Duration::from_secs(10)).await
+    }
+
+    async fn wait_for_outcome_with_timeout(
+        state: &AppState,
+        run_id: i64,
+        timeout: std::time::Duration,
+    ) -> serde_json::Value {
+        let deadline = tokio::time::Instant::now() + timeout;
         loop {
             let app = crate::build_router(state.clone());
             let response = app
@@ -853,10 +910,23 @@ mod tests {
                 return detail;
             }
             if tokio::time::Instant::now() >= deadline {
-                panic!("run {run_id} did not leave 'running' within 10s: {detail:?}");
+                panic!("run {run_id} did not leave 'running' within {timeout:?}: {detail:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn wait_for_outcome_panics_after_an_injected_deadline() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = start_opcda_run(&state).await;
+        let state_for_task = state.clone();
+        let join = tokio::spawn(async move {
+            wait_for_outcome_with_timeout(&state_for_task, run_id, std::time::Duration::ZERO).await
+        });
+
+        let panic = join.await.expect_err("a zero deadline should panic");
+        assert!(panic.is_panic());
     }
 
     #[tokio::test]
@@ -1014,6 +1084,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reservation_starting_after_prepare_marks_the_new_run_failed() {
+        let state = crate::test_support::in_memory_state().await;
+        let reservation_id = 9_999;
+        let result = start_run_with_hook(
+            state.clone(),
+            serde_json::from_value(fast_simulator_request_json()).unwrap(),
+            |state| {
+                let active_run = state.active_run.clone();
+                async move {
+                    active_run.reserve(reservation_id).await.unwrap();
+                }
+            },
+        )
+        .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, ApiError::Conflict(_)));
+        let filter = TuneRunFilter::default();
+        let runs = TuneRunRow::list(&state.pool, &filter, Pagination::default())
+            .await
+            .unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].outcome, TuneOutcome::Failed);
+        assert!(
+            runs[0]
+                .failure_reason
+                .as_deref()
+                .unwrap()
+                .contains("no tune task was started")
+        );
+        state.active_run.release(reservation_id).await;
+    }
+
+    #[tokio::test]
+    async fn starting_a_run_while_a_write_reservation_is_active_returns_409() {
+        let state = crate::test_support::in_memory_state().await;
+        let reservation_id = 9_998;
+        state.active_run.reserve(reservation_id).await.unwrap();
+
+        let response = post_json(
+            crate::build_router(state.clone()),
+            "/api/runs",
+            fast_simulator_request_json(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("exclusive PID write/revert")
+        );
+        state.active_run.release(reservation_id).await;
+    }
+
+    #[tokio::test]
     async fn unknown_template_name_returns_400() {
         let app = crate::build_router(crate::test_support::in_memory_state().await);
         let mut request = fast_simulator_request_json();
@@ -1051,10 +1177,10 @@ mod tests {
             request["restore_timeout_secs"] = serde_json::json!(timeout);
             let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
             let error = parsed.into_tune_args().unwrap_err();
-            assert!(matches!(&error, ApiError::BadRequest(_)));
-            if let ApiError::BadRequest(message) = &error {
-                assert!(message.contains("at least 4 seconds"));
-            }
+            assert!(matches!(
+                error,
+                ApiError::BadRequest(message) if message.contains("at least 4 seconds")
+            ));
         }
 
         let mut request = fast_simulator_request_json();
@@ -1072,10 +1198,10 @@ mod tests {
         request["restore_timeout_secs"] = serde_json::json!(0);
         let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
         let error = parsed.into_tune_args().unwrap_err();
-        assert!(matches!(&error, ApiError::BadRequest(_)));
-        if let ApiError::BadRequest(message) = &error {
-            assert!(message.contains("greater than zero"));
-        }
+        assert!(matches!(
+            error,
+            ApiError::BadRequest(message) if message.contains("greater than zero")
+        ));
 
         let mut request = fast_simulator_request_json();
         request["restore_timeout_secs"] = serde_json::json!(1);
@@ -1102,6 +1228,35 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("at least 4 seconds")
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_tag_override_returns_400_before_starting_a_run() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = crate::build_router(state.clone());
+        let mut request = fast_simulator_request_json();
+        request["tag_overrides"] = serde_json::json!({
+            "process_variable": "Loop\u{0000}PV"
+        });
+
+        let response = post_json(app, "/api/runs", request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("process_variable")
+        );
+        assert!(
+            TuneRunRow::list(
+                &state.pool,
+                &TuneRunFilter::default(),
+                Pagination::default(),
+            )
+            .await
+            .unwrap()
+            .is_empty()
         );
     }
 
@@ -1465,6 +1620,55 @@ mod tests {
         // The exclusive reservation must be free again for a later request, not left held by this one.
         assert!(state.active_run.reserve(999).await.is_ok());
         state.active_run.release(999).await;
+    }
+
+    #[tokio::test]
+    async fn write_reports_an_internal_error_when_the_run_vanishes_after_the_write() {
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+        let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+        let p_tag = run.tags.proportional_constant.clone().unwrap();
+        let i_tag = run.tags.integral_constant.clone().unwrap();
+        let d_tag = run.tags.derivative_constant.clone().unwrap();
+        let pool = state.pool.clone();
+
+        let error = reserve_connect_and_write_with_hook(
+            &state,
+            run_id,
+            &run,
+            &p_tag,
+            &i_tag,
+            &d_tag,
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 10.0,
+                integral: 10.0,
+                derivative: 10.0,
+            },
+            WriteKind::Write,
+            true,
+            move |_| async move {
+                assert!(TuneRunRow::delete(&pool, run_id).await.unwrap());
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, ApiError::Internal(_)));
     }
 
     #[tokio::test]

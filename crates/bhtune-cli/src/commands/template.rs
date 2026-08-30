@@ -233,10 +233,16 @@ async fn delete(pool: &SqlitePool, name: &str) -> anyhow::Result<()> {
             println!("Template '{name}' was already deleted.");
             Ok(())
         }
-        Err(bhtune_db::DbError::TemplateInUse { .. }) => anyhow::bail!(
+        Err(e) => classify_delete_error(name, e),
+    }
+}
+
+fn classify_delete_error(name: &str, error: bhtune_db::DbError) -> anyhow::Result<()> {
+    match error {
+        bhtune_db::DbError::TemplateInUse { .. } => anyhow::bail!(
             "cannot delete template '{name}': it is still referenced by one or more saved loops; delete or reassign those loops first"
         ),
-        Err(e) => Err(e.into()),
+        error => Err(error.into()),
     }
 }
 
@@ -305,6 +311,20 @@ mod tests {
         assert_eq!(
             catalog_import_messages(&[], &[]),
             vec!["Imported no new templates.".to_string()]
+        );
+    }
+
+    #[test]
+    fn delete_passes_through_non_template_in_use_database_errors() {
+        let error = classify_delete_error(
+            "Broken",
+            bhtune_db::DbError::InvalidBackup("test error".to_string()),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "not a valid bhtune backup file: test error"
         );
     }
 
@@ -540,6 +560,29 @@ mod tests {
 
         assert!(
             DcsTemplateRow::get_by_name(&pool, "Deletable Site")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_reports_a_row_removed_by_a_concurrent_delete_as_already_deleted() {
+        let pool = seeded_pool().await;
+        sqlx::query(
+            "CREATE TRIGGER remove_before_delete
+             BEFORE DELETE ON dcs_templates
+             BEGIN
+                 DELETE FROM dcs_templates WHERE name = 'Yokogawa CentumVP';
+             END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        delete(&pool, "Yokogawa CentumVP").await.unwrap();
+        assert!(
+            DcsTemplateRow::get_by_name(&pool, "Yokogawa CentumVP")
                 .await
                 .unwrap()
                 .is_none()

@@ -168,9 +168,10 @@ substitute for doing this deliberately.
 - Keep PRs small and focused — one logical change each.
 - Describe what changed and why; link an issue if one exists.
 - Include the targeted validation performed and any manual verification needed for the change.
-- Squash-merge only after every applicable required check, the CLA check, and the applicable
-  SonarQube zero-issue check pass. Do not use `NOSONAR` or a dashboard status change to hide a
-  real unresolved code issue.
+- After every applicable required check, the CLA check, and the applicable SonarQube zero-issue
+  check pass, queue the built-in GitHub squash auto-merge with
+  `gh pr merge <PR> --auto --squash --delete-branch` and confirm that the PR reaches `MERGED`.
+  Do not use `NOSONAR` or a dashboard status change to hide a real unresolved code issue.
 
 ## Contributing a DCS/PLC template
 

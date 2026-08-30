@@ -906,11 +906,7 @@ mod tests {
 
         assert!(!peaks.is_empty(), "expected at least one recorded peak");
         assert!(!troughs.is_empty(), "expected at least one recorded trough");
-        assert!(
-            switch_times.len() >= 2,
-            "expected multiple relay switches, got {}",
-            switch_times.len()
-        );
+        assert!(switch_times.len() >= 2, "expected multiple relay switches");
         assert!(mv_sign_init == 1 || mv_sign_init == -1);
         for pv in peaks.iter().chain(troughs.iter()) {
             assert!(pv.is_finite());

@@ -580,7 +580,7 @@ post-merge synchronization hooks. CI uses the repository's GitHub Actions secret
 - Cross-run comparison and overlay in the history explorer — charting several past runs of
   the same loop together (e.g. "has this valve degraded since last year?"). Everything else
   in the history explorer is already shipped: age-based retention, headless `history list`/
-  `show`/`prune`, and a GUI run list/detail screen with a PV/MV trend chart that includes the
+  `show`/`prune`, and a GUI run list/detail screen with a line-only PV/MV trend chart that includes the
   initial readings and terminal restored-MV boundary, keeps short runs left-anchored for
   12 configured poll intervals without synthetic points, and supports export (CSV/JSON) and
   delete — the boundary markers are presentation-only and do not change persisted samples or
@@ -593,11 +593,12 @@ status.
 
 All changes use a short-lived feature branch and pull request, including documentation and
 one-line fixes. Keep each pull request focused, run the applicable Rust/frontend/website checks,
-and update the branch if `main` advances before merging. Pull requests are squash-merged only
-after every required check and the applicable SonarQube analysis pass; a PR analysis must report
-zero `OPEN`/`CONFIRMED` issues, while any intentional Accepted or False Positive finding needs a
-documented rationale and related link. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the complete
-workflow. Contributions require signing the [Contributor License Agreement](CLA.md).
+and update the branch if `main` advances before merging. After every required check and the
+applicable SonarQube analysis pass, a maintainer or coding agent queues the built-in GitHub
+auto-merge as a squash merge; a PR analysis must report zero `OPEN`/`CONFIRMED` issues, while any
+intentional Accepted or False Positive finding needs a documented rationale and related link.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the complete workflow. Contributions require signing
+the [Contributor License Agreement](CLA.md).
 
 ## License
 

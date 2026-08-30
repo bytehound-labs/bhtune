@@ -582,17 +582,17 @@ pub fn load_config_store_from(
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), ConfigStoreError> {
-    if let Some(parent) = path
-        .parent()
+    path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent).map_err(|e| ConfigStoreError::Write {
-            path: path.to_path_buf(),
-            action: "create config directory",
-            source: e,
-        })?;
-    }
-    Ok(())
+        .map(|parent| {
+            fs::create_dir_all(parent).map_err(|e| ConfigStoreError::Write {
+                path: path.to_path_buf(),
+                action: "create config directory",
+                source: e,
+            })
+        })
+        .transpose()
+        .map(|_| ())
 }
 
 fn unique_suffix() -> String {
@@ -1444,6 +1444,14 @@ mod tests {
     }
 
     #[test]
+    fn load_config_store_wrapper_uses_the_explicit_path() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let store = load_config_store(Some(file.path())).unwrap();
+        assert_eq!(store.path, Some(file.path().to_path_buf()));
+        assert_eq!(store.config, BhtuneConfig::default());
+    }
+
+    #[test]
     fn load_config_store_from_explicit_missing_path_is_a_typed_error() {
         let path = PathBuf::from("/nonexistent/path-aware-bhtune.toml");
         let err = load_config_store_from(Some(&path), None, None, None, false).unwrap_err();
@@ -1527,6 +1535,21 @@ level = "info"
             parse_config_contents(&patched).unwrap().retention_days,
             None
         );
+    }
+
+    #[test]
+    fn patch_config_policy_removes_an_existing_retention_key() {
+        let (patched, config) = patch_config_policy(
+            Some("allow_uncertain_quality = true\nretention_days = 30\n"),
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: false,
+                retention_days: None,
+            },
+        )
+        .unwrap();
+        assert!(!patched.contains("retention_days"));
+        assert!(!config.allow_uncertain_quality);
+        assert_eq!(config.retention_days, None);
     }
 
     #[test]

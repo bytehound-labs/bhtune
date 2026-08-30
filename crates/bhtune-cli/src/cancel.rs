@@ -14,6 +14,8 @@
 //! exactly the two states `safety-cancellation` needs to tell apart (first Ctrl+C aborting
 //! the run, versus a second one during the restore forcing it to give up).
 
+use std::future::Future;
+
 use tokio::sync::watch;
 
 /// A handle to the process's Ctrl+C signal, threaded explicitly through every function that
@@ -40,35 +42,43 @@ pub struct CtrlC {
     rx: watch::Receiver<u32>,
 }
 
+fn install_with_signal_provider<F, Fut>(signal_provider: F) -> CtrlC
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(), std::io::Error>> + Send + 'static,
+{
+    let (tx, rx) = watch::channel(0u32);
+    tokio::spawn(async move {
+        let mut count = 0u32;
+        loop {
+            if signal_provider().await.is_err() {
+                // The OS-level listener itself failed to install/poll (e.g. an exhausted
+                // signal-handling resource -- vanishingly rare). Stop rather than spin; a
+                // `CtrlC` handle simply never fires again for the rest of this process,
+                // the same observable behavior as never receiving a signal at all.
+                return;
+            }
+            count = count.wrapping_add(1);
+            if tx.send(count).is_err() {
+                // Every receiver was dropped -- nothing left to notify.
+                return;
+            }
+        }
+    });
+    CtrlC { rx }
+}
+
 impl CtrlC {
     /// Spawns the one long-lived task that listens for Ctrl+C for the rest of the process's
     /// life, incrementing a counter on every delivery -- see the struct doc comment for why
     /// this must be called exactly once, and only from real process startup.
     pub(crate) fn install() -> CtrlC {
-        let (tx, rx) = watch::channel(0u32);
         // Fire-and-forget: nothing ever awaits or aborts this task, so its `JoinHandle` is
         // simply never bound (an explicit `let _ = ...` would trip clippy's
         // `let_underscore_future`, which can't tell this apart from a future that was meant
         // to run but never got polled -- this one is already spawned onto the runtime the
         // moment `tokio::spawn` returns).
-        tokio::spawn(async move {
-            let mut count = 0u32;
-            loop {
-                if tokio::signal::ctrl_c().await.is_err() {
-                    // The OS-level listener itself failed to install/poll (e.g. an exhausted
-                    // signal-handling resource -- vanishingly rare). Stop rather than spin; a
-                    // `CtrlC` handle simply never fires again for the rest of this process,
-                    // the same observable behavior as never receiving a signal at all.
-                    return;
-                }
-                count = count.wrapping_add(1);
-                if tx.send(count).is_err() {
-                    // Every receiver was dropped -- nothing left to notify.
-                    return;
-                }
-            }
-        });
-        CtrlC { rx }
+        install_with_signal_provider(tokio::signal::ctrl_c)
     }
 
     /// Resolves the next time Ctrl+C is delivered -- immediately, if one already arrived
@@ -194,6 +204,52 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(50), ctrl_c.signalled())
             .await
             .expect("a send delivered before signalled() was ever called must still be seen");
+    }
+
+    #[tokio::test]
+    async fn signal_listener_stops_when_signal_provider_fails() {
+        let called = std::sync::Arc::new(tokio::sync::Notify::new());
+        let provider_called = std::sync::Arc::clone(&called);
+        let _ctrl_c = install_with_signal_provider(move || {
+            provider_called.notify_one();
+            async { Err(std::io::Error::other("test signal provider failure")) }
+        });
+
+        tokio::time::timeout(Duration::from_millis(200), called.notified())
+            .await
+            .expect("the injected signal provider should be called");
+    }
+
+    #[tokio::test]
+    async fn signal_listener_stops_when_all_receivers_are_dropped() {
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let provider_started = std::sync::Arc::clone(&started);
+        let provider_release = std::sync::Arc::clone(&release);
+        let ctrl_c = install_with_signal_provider(move || {
+            provider_started.notify_one();
+            let provider_release = std::sync::Arc::clone(&provider_release);
+            async move {
+                provider_release.notified().await;
+                Ok(())
+            }
+        });
+
+        tokio::time::timeout(Duration::from_millis(200), started.notified())
+            .await
+            .expect("the injected signal provider should start");
+        drop(ctrl_c);
+        release.notify_one();
+        tokio::task::yield_now().await;
+    }
+
+    #[tokio::test]
+    async fn signalled_waits_forever_when_all_senders_are_dropped() {
+        let (tx, rx) = watch::channel(0u32);
+        drop(tx);
+        let mut ctrl_c = CtrlC { rx };
+        let result = tokio::time::timeout(Duration::from_millis(20), ctrl_c.signalled()).await;
+        assert!(result.is_err());
     }
 
     // `install()`'s own real-signal-handling behavior deliberately has no in-process test

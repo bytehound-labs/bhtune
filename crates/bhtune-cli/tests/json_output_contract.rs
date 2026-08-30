@@ -175,3 +175,21 @@ async fn tune_output_table_is_plain_text_not_json() {
         "Table-mode stdout should not itself parse as a single JSON value: {stdout:?}"
     );
 }
+
+#[test]
+fn an_invalid_explicit_config_path_fails_during_real_startup() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let missing_config = temp_dir.path().join("missing-bhtune.toml");
+    let output = Command::new(env!("CARGO_BIN_EXE_bhtune"))
+        .args(["--config"])
+        .arg(&missing_config)
+        .arg("template")
+        .arg("list")
+        .output()
+        .expect("failed to spawn/run the bhtune binary");
+
+    assert_eq!(output.status.code(), Some(bhtune_cli::EXIT_FAILURE as i32));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("stderr is not valid utf-8");
+    assert!(stderr.contains("missing-bhtune.toml"));
+}
