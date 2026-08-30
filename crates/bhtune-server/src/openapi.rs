@@ -151,6 +151,27 @@ mod tests {
     }
 
     #[test]
+    fn indexed_and_progressive_search_limits_require_positive_values() {
+        let spec = ApiDoc::openapi();
+        let value = serde_json::to_value(spec).expect("spec must serialize to a JSON value");
+
+        for path in ["/api/opc/search", "/api/opc/search-index/search"] {
+            assert_eq!(
+                value["paths"][path]["get"]["parameters"]
+                    .as_array()
+                    .and_then(|parameters| {
+                        parameters
+                            .iter()
+                            .find(|parameter| parameter["name"] == "max_results")
+                    })
+                    .and_then(|parameter| parameter.pointer("/schema/minimum")),
+                Some(&serde_json::json!(1)),
+                "{path} must document a positive max_results minimum"
+            );
+        }
+    }
+
+    #[test]
     fn start_run_schema_exposes_the_opcda_restore_timeout_floor() {
         let spec = ApiDoc::openapi();
         let value = serde_json::to_value(spec).expect("spec must serialize to a JSON value");

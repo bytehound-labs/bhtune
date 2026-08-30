@@ -328,6 +328,7 @@ pub struct OpcSearchIndexQuery {
     #[serde(default = "default_search_match_mode")]
     pub match_mode: String,
     #[serde(default = "default_index_search_max_results")]
+    #[param(minimum = 1)]
     pub max_results: u32,
 }
 
@@ -651,6 +652,7 @@ pub struct OpcSearchQuery {
     pub session_id: Option<String>,
     pub scope_node_key: Option<String>,
     #[serde(default = "default_search_max_results")]
+    #[param(minimum = 1)]
     pub max_results: u32,
     pub include_branches: Option<bool>,
     pub refresh: Option<bool>,

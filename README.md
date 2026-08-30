@@ -139,7 +139,8 @@ that node, and scrolls it into view; if it is no longer present, browsing falls 
 level.
 The diagnostic CLI exposes the bounded operations through `bhtune opc servers`, `browse`, and
 live `search`; `bhtune opc search-index status|search|refresh|control` manages and queries the
-persistent index. `bhtune opc browse --all` explicitly drains continuation pages instead of
+persistent index. Both search interfaces require a positive result limit. `bhtune opc browse
+--all` explicitly drains continuation pages instead of
 silently downloading an entire namespace. A browse session remains available for continuation
 after the command exits; release it explicitly with `bhtune opc close <session-id>`.
 An index can remain usable after a completed inventory reports a non-fatal gateway warning;
