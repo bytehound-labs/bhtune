@@ -416,6 +416,12 @@ function CalculatedResultsSection({
   readonly writingResponseLevel?: ResponseLevel;
   readonly onWrite: (result: RunResult) => void;
 }) {
+  const pidLabels = run.pid_parameter_labels ?? {
+    proportional: "P",
+    integral: "I",
+    derivative: "D",
+  };
+
   return (
     <section className="mb-6">
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
@@ -431,12 +437,13 @@ function CalculatedResultsSection({
             <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
               <tr>
                 <th className="px-4 py-2 font-medium">Response level</th>
-                <th className="px-4 py-2 font-medium">Kp</th>
-                <th className="px-4 py-2 font-medium">Ti (min)</th>
-                <th className="px-4 py-2 font-medium">Td (min)</th>
-                <th className="px-4 py-2 font-medium">P</th>
-                <th className="px-4 py-2 font-medium">I</th>
-                <th className="px-4 py-2 font-medium">D</th>
+                <th className="px-4 py-2 font-medium">
+                  {pidLabels.proportional}
+                </th>
+                <th className="px-4 py-2 font-medium">{pidLabels.integral}</th>
+                <th className="px-4 py-2 font-medium">
+                  {pidLabels.derivative}
+                </th>
                 <th className="px-4 py-2 font-medium">Actions</th>
               </tr>
             </thead>
@@ -501,9 +508,6 @@ function ResultRow({
       <td className="px-4 py-3 font-medium">
         {RESPONSE_LEVEL_LABELS[result.response_level]}
       </td>
-      <td className="px-4 py-3 font-mono">{num(result.kp)}</td>
-      <td className="px-4 py-3 font-mono">{num(result.ti_minutes)}</td>
-      <td className="px-4 py-3 font-mono">{num(result.td_minutes)}</td>
       <td className="px-4 py-3 font-mono">{num(result.proportional)}</td>
       <td className="px-4 py-3 font-mono">{num(result.integral)}</td>
       <td className="px-4 py-3 font-mono">{num(result.derivative)}</td>
@@ -788,7 +792,7 @@ export function RunDetailContent({
       <ConfigurationSection run={run} />
       {initialReadings && <InitialReadingsSection readings={initialReadings} />}
       {run.driver === "opcda" && (
-        <MvActuationSection actuations={run.mv_actuations} />
+        <MvActuationSection actuations={run.mv_actuations ?? []} />
       )}
       <CalculatedResultsSection
         run={run}

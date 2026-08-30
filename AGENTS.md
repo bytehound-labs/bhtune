@@ -3946,6 +3946,18 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     never alter MRFT timing: trends and exports remain commanded MV, while measured MV evidence
     lives only in the actuation audit. Simulator and replay drivers remain free of this live-I/O
     policy.
+20. **`[fixed, no flag needed]` Base Tag changes must invalidate Custom mappings, and historical
+    result labels must come from the run's template snapshot.** The New Run form routes manual
+    edits, template-driven suffix replacement, and OPC browser selection through
+    `applyTagNameChange`; it resets direct Custom tag mappings and custom direction/range read
+    mappings to their template/tag sources and clears their custom values, but preserves Fixed
+    value direction/range mappings and values. Request hydration treats null or omitted
+    direction/range values as Template tag sources, not Fixed value sources, so Duplicate this run
+    and newest-run prefill preserve the original Template/Custom/Fixed modes. The run-detail
+    Calculated results table uses proportional/integral/derivative labels from the snapshotted
+    template rather than the mutable catalog; it intentionally keeps all three template-specific
+    columns visible for P, PI, and PID, and PI runs display derivative `0` because the write path
+    explicitly clears stale derivative action.
 
 ## Documentation contract (`docs-contract`)
 
@@ -4410,7 +4422,12 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    and range sources — a live
    "Test read", and "Select tag" — manually verified
    end to end, including against a real populated tag tree served by a temporary,
-   never-committed mock gateway. The header also provides a persistent Catppuccin light/dark theme toggle
+   never-committed mock gateway. Every base Tag-name mutation goes through the shared
+   `applyTagNameChange` form-state helper: Custom tag mappings (including custom direction/range
+   read tags) reset to Template tag and clear their values, while Fixed value direction/range
+   mappings and values remain unchanged. Duplicate this run preserves Template/Custom/Fixed
+   mapping sources, including nullable or omitted template-derived direction/range values. The
+   header also provides a persistent Catppuccin light/dark theme toggle
    whose palette is shared across the full SPA. The Phase 7.5 documentation wrap-up is complete.
    See
    the Status section above for the full design and verification detail behind each.

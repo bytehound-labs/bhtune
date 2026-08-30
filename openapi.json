@@ -2288,6 +2288,26 @@
           }
         }
       },
+      "PidParameterLabelsResponse": {
+        "type": "object",
+        "description": "The operator-facing names for the three calculated PID constants, derived from the\ntemplate snapshot stored on the run rather than the mutable template catalog.",
+        "required": [
+          "proportional",
+          "integral",
+          "derivative"
+        ],
+        "properties": {
+          "derivative": {
+            "type": "string"
+          },
+          "integral": {
+            "type": "string"
+          },
+          "proportional": {
+            "type": "string"
+          }
+        }
+      },
       "ProcessType": {
         "type": "string",
         "description": "A process/loop category. Each has its own row in the tuning-constant matrices in\n[`crate::constants`] and its own default cycle/noise-protection settings.\n\nDiscriminants double as the row index into those matrices — see\n[`ProcessType::index`].",
@@ -2387,6 +2407,7 @@
           "template_origin",
           "allow_uncertain_quality",
           "config",
+          "pid_parameter_labels",
           "samples",
           "results",
           "writes",
@@ -2480,6 +2501,10 @@
                 "description": "`Some` exactly when `routes::runs::require_writable_run`'s tag-presence check would\npass -- i.e. when all three PID constant tags were configured on this run. The\nfrontend uses this (together with `driver`/`outcome`/`opc_server`/`bridge_host`) to\ndecide whether the post-hoc write/revert buttons are enabled and, when they are not,\nto explain why -- without duplicating `require_writable_run`'s logic client-side or\ndiscovering ineligibility only after a failed request (`api-post-run-write`)."
               }
             ]
+          },
+          "pid_parameter_labels": {
+            "$ref": "#/components/schemas/PidParameterLabelsResponse",
+            "description": "Operator-facing calculated-result column labels from the run's historical template\nsnapshot. Empty user-template suffixes use the conventional P/I/D labels."
           },
           "restore_detail": {
             "type": [
