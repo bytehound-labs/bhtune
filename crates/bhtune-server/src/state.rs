@@ -27,3 +27,34 @@ impl AppState {
             .map_err(|_| anyhow::anyhow!("configuration store lock is poisoned"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn config_snapshot_returns_an_independent_config_copy() {
+        let state = crate::test_support::in_memory_state().await;
+        let mut snapshot = state.config_snapshot().unwrap();
+        snapshot.allow_uncertain_quality = false;
+
+        assert!(state.config_snapshot().unwrap().allow_uncertain_quality);
+    }
+
+    #[tokio::test]
+    async fn config_snapshot_reports_a_poisoned_store_lock() {
+        let state = crate::test_support::in_memory_state().await;
+        let store = state.config_store.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = store.write().unwrap();
+            panic!("deliberately poison the test lock");
+        })
+        .join();
+
+        assert!(
+            state
+                .config_snapshot()
+                .unwrap_err()
+                .to_string()
+                .contains("poisoned")
+        );
+    }
+}

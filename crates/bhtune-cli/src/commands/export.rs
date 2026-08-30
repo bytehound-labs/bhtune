@@ -258,4 +258,21 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("999"));
     }
+
+    #[tokio::test]
+    async fn reports_the_destination_when_writing_an_export_fails() {
+        let (pool, run_id) = pool_with_one_sample().await;
+        let err = run(
+            &pool,
+            ExportArgs {
+                run_id,
+                format: ExportFormat::Csv,
+                output: Some(".".into()),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("failed to write '.'"));
+    }
 }

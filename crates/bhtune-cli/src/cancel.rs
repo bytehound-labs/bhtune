@@ -165,13 +165,16 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    #[tokio::test]
-    async fn never_does_not_resolve_signalled_even_after_a_yield() {
-        let mut ctrl_c = CtrlC::never();
+    async fn assert_not_signalled(mut ctrl_c: CtrlC) {
         tokio::select! {
-            () = ctrl_c.signalled() => panic!("never() must not resolve"),
+            () = ctrl_c.signalled() => panic!("signalled() must not resolve"),
             () = tokio::time::sleep(Duration::from_millis(20)) => {}
         }
+    }
+
+    #[tokio::test]
+    async fn never_does_not_resolve_signalled_even_after_a_yield() {
+        assert_not_signalled(CtrlC::never()).await;
     }
 
     #[tokio::test]
@@ -218,6 +221,41 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(200), called.notified())
             .await
             .expect("the injected signal provider should be called");
+    }
+
+    #[tokio::test]
+    async fn signal_listener_notifies_receivers_for_each_successful_signal() {
+        let (ready, release) = (
+            std::sync::Arc::new(tokio::sync::Notify::new()),
+            std::sync::Arc::new(tokio::sync::Notify::new()),
+        );
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider_ready = ready.clone();
+        let provider_release = release.clone();
+        let provider_calls = calls.clone();
+        let mut ctrl_c = install_with_signal_provider(move || {
+            provider_ready.notify_one();
+            let provider_release = provider_release.clone();
+            let call = provider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async move {
+                if call < 2 {
+                    provider_release.notified().await;
+                    Ok(())
+                } else {
+                    Err(std::io::Error::other("stop test listener"))
+                }
+            }
+        });
+
+        for _ in 0..2 {
+            tokio::time::timeout(Duration::from_millis(200), ready.notified())
+                .await
+                .expect("the injected provider should wait for the next signal");
+            release.notify_one();
+            tokio::time::timeout(Duration::from_millis(200), ctrl_c.signalled())
+                .await
+                .expect("the listener should notify its receiver");
+        }
     }
 
     #[tokio::test]
@@ -271,11 +309,18 @@ mod tests {
 
     #[tokio::test]
     async fn manual_does_not_resolve_signalled_before_any_trigger() {
-        let (mut ctrl_c, _handle) = CtrlC::manual();
-        tokio::select! {
-            () = ctrl_c.signalled() => panic!("signalled() must not resolve before trigger()"),
-            () = tokio::time::sleep(Duration::from_millis(20)) => {}
-        }
+        let (ctrl_c, _handle) = CtrlC::manual();
+        assert_not_signalled(ctrl_c).await;
+    }
+
+    #[tokio::test]
+    async fn no_signal_assertion_panics_when_a_signal_arrives() {
+        let (ctrl_c, handle) = CtrlC::manual();
+        handle.trigger();
+        let error = tokio::spawn(assert_not_signalled(ctrl_c))
+            .await
+            .unwrap_err();
+        assert!(error.is_panic());
     }
 
     #[tokio::test]

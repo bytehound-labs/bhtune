@@ -408,12 +408,13 @@ language, including exactly what happens on the first and second Ctrl+C:
   while real scheduling, gateway, read, and write delays remain visible. BHTune is not a
   hard-real-time controller: keep the host and gateway responsive, and choose a poll interval
   comfortably shorter than the expected oscillation period.
-- **Every polled run records timing diagnostics.** `bhtune history show <run>` and the web run
-  detail page report the requested interval, observed mean/maximum sample gap, measured
-  oscillation period, and approximate samples per period. A live run shows a warning when any
-  adjacent sample gap reaches at least twice the requested interval, proving that at least one
-  complete polling opportunity was missed. The warning is diagnostic only: it does not abort the
-  run or block PID write-back.
+- **Every polled run records timing diagnostics.** `bhtune history show <run>`, the run-detail API,
+  and structured logs retain the requested interval, observed mean/maximum sample gap, measured
+  oscillation period, and approximate samples per period. The normal web run-detail page focuses
+  on actionable run and safety information instead of displaying these low-level diagnostics.
+  A live run logs a warning when any adjacent sample gap reaches at least twice the requested
+  interval, proving that at least one complete polling opportunity was missed. The warning is
+  diagnostic only: it does not abort the run or block PID write-back.
 - **Accepted OPC DA MV commands are physically verified.** Relay writes are read back before a
   later relay step can replace them and no later than four seconds after acceptance. An early
   mismatch remains pending and is retried; a mismatch at the deadline, or when the next relay
@@ -503,6 +504,9 @@ The repository also validates high-risk boundaries and delivery artifacts automa
 - Pull requests compare the generated `openapi.json` with the base branch and reject removed
   operations, response shapes, enum values, or newly required request fields. Only explicitly
   allowlisted pre-v1 request-property removals are treated as compatible.
+- Rust workspace source-line coverage is a strict 100% gate: the coverage workflow rejects any
+  zero-hit canonical LCOV source-line record, and Codecov uses zero tolerance for both project
+  and patch coverage.
 - SonarCloud analyzes each applicable pull request and requires its Open/Confirmed issue count to
   be zero before merge.
 - Databases created before the current migration set are upgraded in a compatibility test that

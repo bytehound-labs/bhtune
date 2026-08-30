@@ -439,6 +439,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn import_reports_a_non_file_path_clearly() {
+        let pool = seeded_pool().await;
+        let err = import(&pool, Path::new(".")).await.unwrap_err();
+        assert!(err.to_string().contains("failed to read '.'"));
+    }
+
+    #[tokio::test]
     async fn export_errors_for_an_unknown_template() {
         let pool = seeded_pool().await;
         let dir = tempfile::tempdir().unwrap();
@@ -447,6 +454,20 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("Nonexistent"));
+    }
+
+    #[tokio::test]
+    async fn export_reports_a_non_file_destination_clearly() {
+        let pool = seeded_pool().await;
+        let err = export(
+            &pool,
+            "Yokogawa CentumVP",
+            Path::new("."),
+            TemplateFileFormat::Json,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("failed to write '.'"));
     }
 
     #[tokio::test]
