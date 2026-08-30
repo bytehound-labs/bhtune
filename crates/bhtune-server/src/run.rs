@@ -154,10 +154,18 @@ pub async fn serve(
         log_guard: _log_guard,
     } = server;
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    serve_http(
+        axum::serve(listener, app).with_graceful_shutdown(shutdown),
+        active_run,
+    )
+    .await
+}
 
+async fn serve_http(
+    server: impl std::future::IntoFuture<Output = std::io::Result<()>>,
+    active_run: ActiveRun,
+) -> anyhow::Result<()> {
+    server.into_future().await?;
     // Runs *after* axum has finished draining in-flight HTTP connections, not folded into
     // the shutdown future itself -- so a client mid-`GET /api/runs/:id` during shutdown still
     // gets its response before this starts cancelling the run it might have been asking
@@ -366,6 +374,23 @@ mod tests {
 
         let server = build_server(Some(&config_path)).await.unwrap();
         serve(server, async {}).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn serve_propagates_an_http_server_error() {
+        let error = serve_http(
+            async {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected accept failure",
+                ))
+            },
+            ActiveRun::default(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected accept failure"));
     }
 
     #[tokio::test]

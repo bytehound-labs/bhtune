@@ -1468,6 +1468,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn show_and_delete_propagate_database_failures_as_500() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = router().with_state(state.clone());
+        state.pool.close().await;
+
+        let show = app
+            .clone()
+            .oneshot(Request::get("/api/runs/1").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(show.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let delete = app
+            .oneshot(Request::delete("/api/runs/1").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
     async fn export_run_defaults_to_csv_with_the_expected_headers_and_body() {
         let state = crate::test_support::in_memory_state().await;
         let (run_id, _loop_id) = seed_full_run(&state).await;

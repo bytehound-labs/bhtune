@@ -95,8 +95,10 @@ and validation rules rather than treating "latest" as an unconditional upgrade p
   can be tested deterministically and validated by replaying golden-master traces. See
   `AGENTS.md` for the replay-validation approach and the correctness-critical details that need
   direct unit-test coverage.
-- Coverage is tracked by Codecov and enforced at 100% (`codecov.yml`). Add tests for new code —
-  including error branches and edge cases — in the same PR.
+- Coverage is tracked by Codecov and enforced at exactly 100% (`codecov.yml`). The coverage
+  workflow independently checks every canonical LCOV `DA` source-line record, rejects any
+  zero-hit line, and normalizes the report's aggregate `LF`/`LH` summary before uploading it.
+  Add tests for new code — including error branches and edge cases — in the same PR.
 - End-to-end browser tests live in `frontend/e2e/` (Playwright), driving a real
   `bhtune-server` running the simulator driver through the actual built UI — no mocked HTTP
   layer. Run locally with:

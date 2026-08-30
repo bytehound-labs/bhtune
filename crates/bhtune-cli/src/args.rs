@@ -888,11 +888,32 @@ mod tests {
     }
 
     #[test]
+    fn command_output_format_forwards_simulate_and_history_formats() {
+        let simulate = Cli::parse_from(["bhtune", "simulate", "--output", "json"]).command;
+        assert_eq!(simulate.output_format(), crate::output::OutputFormat::Json);
+
+        let history = Cli::parse_from(["bhtune", "history", "list", "--output", "json"]).command;
+        assert_eq!(history.output_format(), crate::output::OutputFormat::Json);
+    }
+
+    #[test]
     fn finite_f32_accepts_finite_values_and_rejects_invalid_values() {
         assert_eq!(finite_f32("2.5").unwrap(), 2.5);
         assert!(finite_f32("not-a-number").is_err());
         assert!(finite_f32("nan").is_err());
         assert!(finite_f32("inf").is_err());
+    }
+
+    #[test]
+    fn positive_integer_parsers_reject_non_numeric_input() {
+        assert_eq!(
+            positive_u32("not-a-number").unwrap_err(),
+            "'not-a-number' is not a valid non-negative integer"
+        );
+        assert_eq!(
+            positive_u64("not-a-number").unwrap_err(),
+            "'not-a-number' is not a valid non-negative integer"
+        );
     }
 
     #[test]

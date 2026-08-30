@@ -835,8 +835,18 @@ fn print_json_summary(run_id: i64, outcome: &RunOutcome, tune_outcome: TuneOutco
     });
     println!(
         "{}",
-        serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+        render_json_summary(&json, serde_json::to_string_pretty)
     );
+}
+
+fn render_json_summary<E>(
+    json: &serde_json::Value,
+    serialize: impl FnOnce(&serde_json::Value) -> Result<String, E>,
+) -> String
+where
+    E: std::fmt::Display,
+{
+    serialize(json).unwrap_or_else(|error| format!("{{\"error\": \"{error}\"}}"))
 }
 
 fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
@@ -4655,6 +4665,32 @@ mod tests {
     }
 
     #[test]
+    fn simulator_driver_requires_every_fixed_range_and_direction_value() {
+        let template = bhtune_core::built_in_templates().remove(0);
+        for (field, clear) in [
+            (
+                "pv_range_high",
+                (|args: &mut TuneArgs| args.pv_range_high = None) as fn(&mut TuneArgs),
+            ),
+            ("pv_range_low", |args: &mut TuneArgs| {
+                args.pv_range_low = None
+            }),
+            ("mv_range_high", |args: &mut TuneArgs| {
+                args.mv_range_high = None
+            }),
+            ("mv_range_low", |args: &mut TuneArgs| {
+                args.mv_range_low = None
+            }),
+            ("direction", |args: &mut TuneArgs| args.direction = None),
+        ] {
+            let mut args = fast_simulator_args();
+            clear(&mut args);
+            let error = build_loop_tags(&args, &template).unwrap_err();
+            assert!(error.to_string().contains(&field.replace('_', "-")));
+        }
+    }
+
+    #[test]
     fn restore_mv_errors_become_failed_restore_steps() {
         let outcome = restore_mv_outcome_or_failed(Err(anyhow::anyhow!("restore failed")));
 
@@ -4663,6 +4699,14 @@ mod tests {
             RestoreMvOutcome::Continue(RestoreStepOutcome::Failed(detail))
                 if detail == "restore failed"
         ));
+    }
+
+    #[test]
+    fn json_summary_renderer_has_a_displayable_fallback_for_an_encoding_failure() {
+        let rendered = render_json_summary(&serde_json::json!({"run_id": 1}), |_| {
+            Err::<String, _>("injected encoding failure")
+        });
+        assert_eq!(rendered, r#"{"error": "injected encoding failure"}"#);
     }
 
     #[test]

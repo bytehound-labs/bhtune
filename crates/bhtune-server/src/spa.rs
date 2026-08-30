@@ -239,6 +239,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_invalid_embedded_mime_type_omits_the_content_type_header() {
+        struct InvalidMimeAssets;
+
+        impl AssetSource for InvalidMimeAssets {
+            fn get(path: &str) -> Option<EmbeddedFile> {
+                (path == INDEX_HTML).then(|| fixture_file(b"fixture", "invalid\nmime"))
+            }
+        }
+
+        let response = get_fixture::<InvalidMimeAssets>("/").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/octet-stream"
+        );
+    }
+
+    #[tokio::test]
     async fn a_missing_path_with_a_file_extension_is_a_real_404() {
         let response = get_fixture::<FixtureAssets>("/assets/does-not-exist.js").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -248,6 +266,12 @@ mod tests {
     async fn a_client_route_returns_404_when_the_spa_entry_point_is_missing() {
         let response = get_fixture::<FixtureWithoutIndex>("/runs/1").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_asset_can_still_be_served_when_the_spa_entry_point_is_missing() {
+        let response = get_fixture::<FixtureWithoutIndex>("/assets/app.js").await;
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]

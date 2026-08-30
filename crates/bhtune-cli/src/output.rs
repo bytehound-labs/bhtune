@@ -33,12 +33,19 @@ pub enum OutputFormat {
 pub fn format_error(err: &anyhow::Error, format: OutputFormat) -> String {
     match format {
         OutputFormat::Table => format!("error: {err:#}"),
-        OutputFormat::Json => {
-            let payload = serde_json::json!({ "error": err.to_string() });
-            serde_json::to_string_pretty(&payload)
-                .unwrap_or_else(|_| format!("{{\"error\": \"{err}\"}}"))
-        }
+        OutputFormat::Json => format_json_error(err, serde_json::to_string_pretty),
     }
+}
+
+fn format_json_error<E>(
+    err: &anyhow::Error,
+    serialize: impl FnOnce(&serde_json::Value) -> Result<String, E>,
+) -> String
+where
+    E: std::fmt::Display,
+{
+    let payload = serde_json::json!({ "error": err.to_string() });
+    serialize(&payload).unwrap_or_else(|_| format!("{{\"error\": \"{err}\"}}"))
 }
 
 #[cfg(test)]
@@ -80,5 +87,12 @@ mod tests {
         let table = format_error(&err, OutputFormat::Table);
         assert!(table.contains("root cause"));
         assert!(table.contains("higher-level context"));
+    }
+
+    #[test]
+    fn format_error_keeps_a_displayable_fallback_when_json_encoding_fails() {
+        let err = anyhow::anyhow!("boom");
+        let output = format_json_error(&err, |_| Err::<String, _>("injected failure"));
+        assert_eq!(output, r#"{"error": "boom"}"#);
     }
 }

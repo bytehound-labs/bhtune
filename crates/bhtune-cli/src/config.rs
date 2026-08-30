@@ -1538,6 +1538,74 @@ level = "info"
     }
 
     #[test]
+    fn patch_helpers_report_malformed_toml_without_modifying_it() {
+        let malformed = "not = [valid";
+
+        let quality_error = patch_allow_uncertain_quality(Some(malformed), false).unwrap_err();
+        assert!(matches!(
+            quality_error,
+            ConfigStoreError::Malformed { path: None, .. }
+        ));
+
+        let retention_error = patch_retention_days(Some(malformed), Some(7)).unwrap_err();
+        assert!(matches!(
+            retention_error,
+            ConfigStoreError::Malformed { path: None, .. }
+        ));
+    }
+
+    #[test]
+    fn patch_policy_reports_malformed_toml_without_a_path() {
+        let error = patch_config_policy(
+            Some("not = [valid"),
+            &ConfigPolicyUpdate {
+                allow_uncertain_quality: false,
+                retention_days: Some(7),
+            },
+        )
+        .unwrap_err();
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn generated_sibling_names_fall_back_when_a_path_has_no_file_name() {
+        let path = Path::new("");
+        assert!(
+            sibling_with_suffix(path, "tmp")
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("bhtune.toml.tmp-")
+        );
+        assert!(
+            backup_path_for(path)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("bhtune.toml.backup-")
+        );
+    }
+
+    #[test]
+    fn discovered_config_propagates_an_unreadable_path() {
+        let error = load_discovered_config(Some(PathBuf::from("."))).unwrap_err();
+        assert!(error.to_string().contains("failed to read config file"));
+    }
+
+    #[test]
+    fn atomic_writer_reports_a_backup_copy_failure_from_the_real_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = write_config_file_atomically(dir.path(), b"replacement", false).unwrap_err();
+        assert!(matches!(
+            error,
+            ConfigStoreError::Write {
+                action: "create config backup",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn patch_config_policy_removes_an_existing_retention_key() {
         let (patched, config) = patch_config_policy(
             Some("allow_uncertain_quality = true\nretention_days = 30\n"),

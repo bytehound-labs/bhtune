@@ -310,6 +310,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn template_routes_propagate_database_failures_as_500() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = router().with_state(state.clone());
+        state.pool.close().await;
+
+        let get_response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/templates/Yokogawa%20CentumVP")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = minimal_valid_template("Database Failure");
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/templates")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let update_response = app
+            .clone()
+            .oneshot(
+                Request::put("/api/templates/Database%20Failure")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let delete_response = app
+            .oneshot(
+                Request::delete("/api/templates/Yokogawa%20CentumVP")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
     async fn create_then_get_round_trips_a_new_user_template() {
         let app = router().with_state(crate::test_support::in_memory_state().await);
         let body = minimal_valid_template("My Custom PLC");

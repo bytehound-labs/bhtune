@@ -440,15 +440,36 @@ pub(crate) async fn update_notes(
     Path(run_id): Path<i64>,
     Json(request): Json<UpdateNotesRequest>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {
+    update_notes_with_hook(state, run_id, request, |_| async {}).await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NotesHookStage {
+    AfterLookup,
+    AfterUpdate,
+}
+
+async fn update_notes_with_hook<F, Fut>(
+    state: AppState,
+    run_id: i64,
+    request: UpdateNotesRequest,
+    mut hook: F,
+) -> Result<Json<RunDetailResponse>, ApiError>
+where
+    F: FnMut(NotesHookStage) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
+    hook(NotesHookStage::AfterLookup).await;
     TuneRunRow::update_notes(
         &state.pool,
         run_id,
         normalized_notes(request.notes).as_deref(),
     )
     .await?;
+    hook(NotesHookStage::AfterUpdate).await;
     build_run_detail(&state.pool, run_id)
         .await?
         .map(Json)
@@ -475,10 +496,23 @@ pub(crate) async fn delete_notes(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {
+    delete_notes_with_hook(state, run_id, |_| async {}).await
+}
+
+async fn delete_notes_with_hook<F, Fut>(
+    state: AppState,
+    run_id: i64,
+    after_update: F,
+) -> Result<Json<RunDetailResponse>, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
     TuneRunRow::update_notes(&state.pool, run_id, None).await?;
+    after_update(&state).await;
     build_run_detail(&state.pool, run_id)
         .await?
         .map(Json)
@@ -614,6 +648,44 @@ where
     F: FnOnce(&AppState) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    reserve_connect_and_write_with_hooks(
+        state,
+        run_id,
+        run,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        kind,
+        allow_uncertain_quality,
+        |_| async {},
+        after_release,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reserve_connect_and_write_with_hooks<F, Fut, G, Gut>(
+    state: &AppState,
+    run_id: i64,
+    run: &TuneRunRow,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain_quality: bool,
+    before_write: F,
+    after_release: G,
+) -> Result<RunDetailResponse, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+    G: FnOnce(&AppState) -> Gut,
+    Gut: std::future::Future<Output = ()>,
+{
     state
         .active_run
         .reserve(run_id)
@@ -626,6 +698,7 @@ where
 
     let result: Result<PidWriteOutcome, ApiError> = async {
         let driver = connect_to_runs_recorded_driver(run).await?;
+        before_write(state).await;
         let outcome = write_pid_values(
             &state.pool,
             run_id,
@@ -1007,6 +1080,97 @@ mod tests {
             .unwrap();
         assert_eq!(cleared.status(), StatusCode::OK);
         assert!(body_json(cleared).await["notes"].is_null());
+    }
+
+    #[tokio::test]
+    async fn run_route_lookups_propagate_database_failures_as_500() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = crate::build_router(state.clone());
+        state.pool.close().await;
+
+        let update = app
+            .clone()
+            .oneshot(
+                Request::put("/api/runs/1/notes")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"notes":"updated"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let delete = app
+            .clone()
+            .oneshot(
+                Request::delete("/api/runs/1/notes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let write = post_json(
+            app.clone(),
+            "/api/runs/1/write",
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(write.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let revert = post_empty(app, "/api/runs/1/revert").await;
+        assert_eq!(revert.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn note_routes_propagate_failures_after_each_successful_database_step() {
+        let update_state = crate::test_support::in_memory_state().await;
+        let update_run_id = start_opcda_run(&update_state).await;
+        let update_pool = update_state.pool.clone();
+        let update_result = update_notes_with_hook(
+            update_state.clone(),
+            update_run_id,
+            UpdateNotesRequest {
+                notes: "updated".to_string(),
+            },
+            move |_| {
+                let pool = update_pool.clone();
+                async move { pool.close().await }
+            },
+        )
+        .await;
+        assert!(matches!(update_result, Err(ApiError::Internal(_))));
+
+        let detail_state = crate::test_support::in_memory_state().await;
+        let detail_run_id = start_opcda_run(&detail_state).await;
+        let detail_pool = detail_state.pool.clone();
+        let detail_result = update_notes_with_hook(
+            detail_state.clone(),
+            detail_run_id,
+            UpdateNotesRequest {
+                notes: "updated".to_string(),
+            },
+            move |stage| {
+                let pool = detail_pool.clone();
+                async move {
+                    if stage == NotesHookStage::AfterUpdate {
+                        pool.close().await;
+                    }
+                }
+            },
+        )
+        .await;
+        assert!(matches!(detail_result, Err(ApiError::Internal(_))));
+
+        let delete_state = crate::test_support::in_memory_state().await;
+        let delete_run_id = start_opcda_run(&delete_state).await;
+        let delete_result = delete_notes_with_hook(delete_state.clone(), delete_run_id, |state| {
+            let pool = state.pool.clone();
+            async move { pool.close().await }
+        })
+        .await;
+        assert!(matches!(delete_result, Err(ApiError::Internal(_))));
     }
 
     #[tokio::test]
@@ -1672,6 +1836,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_propagates_an_unexpected_database_failure_and_releases_its_reservation() {
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+        let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+        let p_tag = run.tags.proportional_constant.clone().unwrap();
+        let i_tag = run.tags.integral_constant.clone().unwrap();
+        let d_tag = run.tags.derivative_constant.clone().unwrap();
+
+        let error = reserve_connect_and_write_with_hooks(
+            &state,
+            run_id,
+            &run,
+            &p_tag,
+            &i_tag,
+            &d_tag,
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 10.0,
+                integral: 10.0,
+                derivative: 10.0,
+            },
+            WriteKind::Write,
+            true,
+            |state| {
+                let pool = state.pool.clone();
+                async move { pool.close().await }
+            },
+            |_| async {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, ApiError::Internal(_)));
+        assert!(state.active_run.reserve(999).await.is_ok());
+        state.active_run.release(999).await;
+    }
+
+    #[tokio::test]
     async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
         use crate::test_support::mock_bridge::{
             MockBridgeService, good_reading, start_mock_server,
@@ -1864,21 +2080,26 @@ mod tests {
         let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
         let base = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
 
-        for missing_tag in ["proportional", "integral", "derivative"] {
-            let mut run = base.clone();
-            match missing_tag {
-                "proportional" => run.tags.proportional_constant = None,
-                "integral" => run.tags.integral_constant = None,
-                "derivative" => run.tags.derivative_constant = None,
-                _ => unreachable!(),
-            }
+        let mut missing_proportional = base.clone();
+        missing_proportional.tags.proportional_constant = None;
+        let mut missing_integral = base.clone();
+        missing_integral.tags.integral_constant = None;
+        let mut missing_derivative = base;
+        missing_derivative.tags.derivative_constant = None;
 
-            let Err(ApiError::BadRequest(error)) = require_writable_run(&run) else {
-                panic!("missing {missing_tag} tag should produce a bad-request error");
-            };
+        for (missing_tag, run) in [
+            ("proportional", missing_proportional),
+            ("integral", missing_integral),
+            ("derivative", missing_derivative),
+        ] {
+            let error = require_writable_run(&run).unwrap_err();
             assert!(
-                error.contains("no PID constant tags configured"),
-                "missing {missing_tag} tag should be rejected: {error}"
+                matches!(
+                    error,
+                    ApiError::BadRequest(ref message)
+                        if message.contains("no PID constant tags configured")
+                ),
+                "missing {missing_tag} tag should be rejected: {error:?}"
             );
         }
     }
@@ -1889,20 +2110,23 @@ mod tests {
         let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
         let base = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
 
-        for missing_field in ["opc_server", "bridge_host"] {
-            let mut run = base.clone();
-            match missing_field {
-                "opc_server" => run.opc_server = None,
-                "bridge_host" => run.bridge_host = None,
-                _ => unreachable!(),
-            }
+        let mut missing_server = base.clone();
+        missing_server.opc_server = None;
+        let mut missing_bridge = base;
+        missing_bridge.bridge_host = None;
 
-            let Err(ApiError::BadRequest(error)) = require_writable_run(&run) else {
-                panic!("missing {missing_field} should produce a bad-request error");
-            };
+        for (missing_field, run) in [
+            ("opc_server", missing_server),
+            ("bridge_host", missing_bridge),
+        ] {
+            let error = require_writable_run(&run).unwrap_err();
             assert!(
-                error.contains("no recorded OPC server"),
-                "missing {missing_field} should be rejected: {error}"
+                matches!(
+                    error,
+                    ApiError::BadRequest(ref message)
+                        if message.contains("no recorded OPC server")
+                ),
+                "missing {missing_field} should be rejected: {error:?}"
             );
         }
     }
@@ -2117,6 +2341,36 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("never recorded pre-write values")
+        );
+    }
+
+    #[tokio::test]
+    async fn revert_run_returns_400_when_the_driver_connection_fails() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+        let mut previous_write =
+            bhtune_db::models::NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());
+        previous_write.previous = Some(WriteReadback {
+            proportional: 10.0,
+            integral: 20.0,
+            derivative: 30.0,
+        });
+        previous_write.success = true;
+        TuneWriteRow::insert(&state.pool, run_id, previous_write)
+            .await
+            .unwrap();
+
+        let response = post_empty(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/revert"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("failed to connect")
         );
     }
 

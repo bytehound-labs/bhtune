@@ -362,6 +362,12 @@ mod tests {
     fn map_store_error_maps_non_conflicts_to_internal_errors() {
         let error = map_store_error(ConfigStoreError::PathNotResolved);
         assert!(matches!(error, ApiError::Internal(_)));
+
+        let error = map_store_error(ConfigStoreError::Conflict {
+            path: None,
+            message: "stale".to_string(),
+        });
+        assert!(matches!(error, ApiError::Conflict(message) if message == "stale"));
     }
 
     #[tokio::test]

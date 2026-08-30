@@ -291,6 +291,13 @@ mod tests {
             .unwrap();
     }
 
+    fn expect_invalid_backup(error: DbError) -> String {
+        match error {
+            DbError::InvalidBackup(message) => message,
+            other => panic!("expected InvalidBackup, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn backup_to_produces_a_reopenable_file_with_the_same_data() {
         let dir = tempfile::tempdir().unwrap();
@@ -436,10 +443,7 @@ mod tests {
         let missing = dir.path().join("never-written.db");
 
         let err = validate_backup_file(&missing).await.unwrap_err();
-        match err {
-            DbError::InvalidBackup(message) => assert!(message.contains("does not exist")),
-            other => panic!("expected InvalidBackup, got {other:?}"),
-        }
+        assert!(expect_invalid_backup(err).contains("does not exist"));
     }
 
     #[tokio::test]
@@ -449,12 +453,7 @@ mod tests {
         // cannot open a directory as a database file — this fails at connection time,
         // before any query (including `PRAGMA integrity_check`) is ever issued.
         let err = validate_backup_file(dir.path()).await.unwrap_err();
-        match err {
-            DbError::InvalidBackup(message) => {
-                assert!(message.contains("failed to open as a SQLite database"))
-            }
-            other => panic!("expected InvalidBackup, got {other:?}"),
-        }
+        assert!(expect_invalid_backup(err).contains("failed to open as a SQLite database"));
     }
 
     #[tokio::test]
@@ -483,12 +482,7 @@ mod tests {
         drop(file);
 
         let err = validate_backup_file(&db_path).await.unwrap_err();
-        match err {
-            DbError::InvalidBackup(message) => {
-                assert!(message.contains("integrity_check reported"))
-            }
-            other => panic!("expected InvalidBackup, got {other:?}"),
-        }
+        assert!(expect_invalid_backup(err).contains("integrity_check reported"));
     }
 
     #[tokio::test]
@@ -510,10 +504,20 @@ mod tests {
         pool.close().await;
 
         let err = validate_backup_file(&db_path).await.unwrap_err();
-        match err {
-            DbError::InvalidBackup(message) => assert!(message.contains("tune_runs")),
-            other => panic!("expected InvalidBackup, got {other:?}"),
-        }
+        assert!(expect_invalid_backup(err).contains("tune_runs"));
+    }
+
+    #[test]
+    fn invalid_backup_assertion_fails_clearly_for_another_database_error() {
+        let panic = std::panic::catch_unwind(|| {
+            expect_invalid_backup(DbError::DatabaseInUse(PathBuf::from("live.db")))
+        })
+        .unwrap_err();
+        assert!(
+            panic
+                .downcast_ref::<String>()
+                .is_some_and(|message| message.contains("InvalidBackup"))
+        );
     }
 
     #[tokio::test]
@@ -603,6 +607,29 @@ mod tests {
             template_names(&outcome.pool).await,
             vec!["From Backup".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn restore_from_preserves_the_live_database_when_staging_the_replacement_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let live_path = dir.path().join("live.db");
+        let backup_path = dir.path().join("backup.db");
+        let pool = connect(&live_path).await.unwrap();
+        seed_one_template(&pool, "Live Template", now).await;
+        backup_to(&pool, &backup_path).await.unwrap();
+
+        // `restore_from` stages the replacement beside the live database. A directory at
+        // that exact staging path makes the copy fail before the atomic rename can touch
+        // the live file.
+        std::fs::create_dir(sibling_path(&live_path, ".restoring-tmp")).unwrap();
+        let error = restore_from(pool, &live_path, &backup_path, now)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, DbError::Io(_)));
+
+        let reopened = connect(&live_path).await.unwrap();
+        assert_eq!(template_names(&reopened).await, vec!["Live Template"]);
     }
 
     #[tokio::test]
