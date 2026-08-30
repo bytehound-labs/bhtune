@@ -51,6 +51,7 @@ type NewRunFormProps = {
   readonly templatesPending: boolean;
   readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
   readonly onChange: FormChange;
+  readonly onTagNameChange: (value: string) => void;
   readonly onDriverChange: (value: TuneDriver) => void;
   readonly onTemplateChange: (value: string) => void;
   readonly onProcessTypeChange: (value: ProcessType) => void;
@@ -110,6 +111,7 @@ function connectionFields({
   templates,
   templatesPending,
   onChange,
+  onTagNameChange,
   onDriverChange,
   onTemplateChange,
   onOpenTagBrowser,
@@ -119,6 +121,7 @@ function connectionFields({
   | "templates"
   | "templatesPending"
   | "onChange"
+  | "onTagNameChange"
   | "onDriverChange"
   | "onTemplateChange"
   | "onOpenTagBrowser"
@@ -180,7 +183,7 @@ function connectionFields({
           required={!isSimulator}
           disabled={isSimulator}
           value={form.tagname}
-          onChange={(value) => onChange("tagname", value)}
+          onChange={onTagNameChange}
           hint={tagNameHint(form.driver)}
         />
         {form.driver === "opcda" && (
@@ -424,6 +427,7 @@ export function NewRunForm({
   templatesPending,
   onSubmit,
   onChange,
+  onTagNameChange,
   onDriverChange,
   onTemplateChange,
   onProcessTypeChange,
@@ -444,6 +448,7 @@ export function NewRunForm({
         templates,
         templatesPending,
         onChange,
+        onTagNameChange,
         onDriverChange,
         onTemplateChange,
         onOpenTagBrowser,

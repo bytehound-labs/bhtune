@@ -77,6 +77,10 @@ three, in the units your DCS/PLC template expects (Proportional Band % or Gain, 
 Reset Rate, Derivative Time or Derivative Gain — see
 [DCS/PLC templates](../dcs-templates.md)), so the choice is made after seeing the numbers, not
 before.
+The web run-detail **Calculated results** table uses the constant names from the run's
+snapshotted template, so a Yokogawa run shows `P`, `I`, and `D` rather than generic engine
+labels. It keeps the derivative column for PI runs and displays `0`, because the write path
+explicitly clears stale derivative action for controllers without a derivative term.
 
 ## Controller type and process type
 

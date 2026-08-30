@@ -59,6 +59,7 @@ use crate::routes::{config, draft, health, history, opc, runs, stream, templates
         history::WriteResponse,
         history::MvActuationResponse,
         history::PidConstantTagsResponse,
+        history::PidParameterLabelsResponse,
         history::RunDetailResponse,
         history::RunExportFormat,
         runs::StartRunRequest,

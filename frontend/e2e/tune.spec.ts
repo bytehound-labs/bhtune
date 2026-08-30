@@ -107,40 +107,68 @@ test.describe("running a tune", () => {
     const rows = resultsSection.locator("tbody tr");
     await expect(rows).toHaveCount(3);
 
-    async function kp(level: "aggressive" | "moderate" | "sluggish") {
+    await expect(
+      resultsSection.getByRole("columnheader", {
+        name: "Response level",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      resultsSection.getByRole("columnheader", { name: "P", exact: true }),
+    ).toBeVisible();
+    await expect(
+      resultsSection.getByRole("columnheader", { name: "I", exact: true }),
+    ).toBeVisible();
+    await expect(
+      resultsSection.getByRole("columnheader", { name: "D", exact: true }),
+    ).toBeVisible();
+    await expect(
+      resultsSection.getByRole("columnheader", { name: "Kp", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      resultsSection.getByRole("columnheader", {
+        name: "Ti (min)",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await expect(
+      resultsSection.getByRole("columnheader", {
+        name: "Td (min)",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+
+    async function proportional(level: "aggressive" | "moderate" | "sluggish") {
       const row = rows.filter({ hasText: level });
       await expect(row).toHaveCount(1);
-      const kpText = await row.locator("td").nth(1).innerText();
-      return Number.parseFloat(kpText);
+      const proportionalText = await row.locator("td").nth(1).innerText();
+      return Number.parseFloat(proportionalText);
     }
-    async function tiMinutes(level: "aggressive" | "moderate" | "sluggish") {
+    async function integral(level: "aggressive" | "moderate" | "sluggish") {
       const row = rows.filter({ hasText: level });
-      const tiText = await row.locator("td").nth(2).innerText();
-      return Number.parseFloat(tiText);
+      const integralText = await row.locator("td").nth(2).innerText();
+      return Number.parseFloat(integralText);
     }
-    async function tdMinutes(level: "aggressive" | "moderate" | "sluggish") {
+    async function derivative(level: "aggressive" | "moderate" | "sluggish") {
       const row = rows.filter({ hasText: level });
-      const tdText = await row.locator("td").nth(3).innerText();
-      return Number.parseFloat(tdText);
+      const derivativeText = await row.locator("td").nth(3).innerText();
+      return Number.parseFloat(derivativeText);
     }
 
-    const aggressiveKp = await kp("aggressive");
-    const moderateKp = await kp("moderate");
-    const sluggishKp = await kp("sluggish");
+    const aggressiveProportional = await proportional("aggressive");
+    const moderateProportional = await proportional("moderate");
+    const sluggishProportional = await proportional("sluggish");
 
-    expect(aggressiveKp).toBeGreaterThan(0);
-    expect(moderateKp).toBeGreaterThan(0);
-    expect(sluggishKp).toBeGreaterThan(0);
-    expect(aggressiveKp).toBeGreaterThan(moderateKp);
-    expect(moderateKp).toBeGreaterThan(sluggishKp);
+    expect(aggressiveProportional).toBeGreaterThan(0);
+    expect(moderateProportional).toBeGreaterThan(0);
+    expect(sluggishProportional).toBeGreaterThan(0);
 
-    // The regression `e2e_simulator.rs` was written to catch (a sub-second relay-period
-    // truncation bug silently zeroing ti_minutes/td_minutes for every controller type):
-    // re-asserted here through the real rendered UI. This run's controller type is "pi"
-    // (the form's own default), so ti_minutes must be genuinely nonzero and td_minutes
-    // must be exactly zero (PI has no derivative term).
-    expect(await tiMinutes("aggressive")).toBeGreaterThan(0);
-    expect(await tdMinutes("aggressive")).toBe(0);
+    // The regression `e2e_simulator.rs` was written to catch a sub-second relay-period
+    // truncation bug silently zeroing the integral result for every controller type. This
+    // run's controller type is "pi" (the form's own default), so the template-specific I
+    // value must be genuinely nonzero and the always-visible D value must be exactly zero.
+    expect(await integral("aggressive")).toBeGreaterThan(0);
+    expect(await derivative("aggressive")).toBe(0);
 
     await expect(
       page.getByRole("heading", { name: "Timing", exact: true }),

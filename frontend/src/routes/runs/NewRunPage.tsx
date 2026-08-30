@@ -30,6 +30,7 @@ import {
   draftFromForm,
   formFromDraft,
   formFromRequest,
+  applyTagNameChange,
   initialForm,
   templateTagFor,
   templateValueTagFor,
@@ -213,6 +214,10 @@ export function NewRunPage() {
     setForm((previous) => ({ ...previous, [key]: value }));
   }
 
+  function setTagName(value: string) {
+    setForm((previous) => applyTagNameChange(previous, value));
+  }
+
   function setTagSource(key: TagOverrideKey, source: TagMappingSource) {
     setForm((previous) => {
       const template = templates.data?.find(
@@ -334,7 +339,7 @@ export function NewRunPage() {
       const tagname = template
         ? replaceTagSuffix(previous.tagname, template.process_variable_suffix)
         : previous.tagname;
-      return { ...previous, template: value, tagname };
+      return { ...applyTagNameChange(previous, tagname), template: value };
     });
   }
 
@@ -436,6 +441,7 @@ export function NewRunPage() {
         templatesPending={templates.isPending}
         onSubmit={handleSubmit}
         onChange={set}
+        onTagNameChange={setTagName}
         onDriverChange={setDriver}
         onTemplateChange={setTemplate}
         onProcessTypeChange={setProcessType}
@@ -457,7 +463,7 @@ export function NewRunPage() {
           template={activeTemplate}
           initialTag={form.tagname}
           onClose={() => setTagBrowserOpen(false)}
-          onSelect={(tag) => set("tagname", tag)}
+          onSelect={setTagName}
         />
       )}
     </div>
