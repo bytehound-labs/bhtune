@@ -81,11 +81,11 @@ export function RunDetailPage() {
   const [pidAction, setPidAction] = useState<PidAction | null>(null);
   const [pidActionAlert, setPidActionAlert] = useState<string | null>(null);
   const pidActionPending = writeRun.isPending || revertRun.isPending;
-  const pidActionError = pidAction
-    ? pidAction.kind === "write"
-      ? writeRun.error
-      : revertRun.error
-    : null;
+  const pidActionError = (() => {
+    if (!pidAction) return null;
+    if (pidAction.kind === "write") return writeRun.error;
+    return revertRun.error;
+  })();
 
   useEffect(() => {
     if (run.data?.id === runId) {

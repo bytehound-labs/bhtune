@@ -541,8 +541,8 @@ export function Modal({
         disabled={!dismissible}
         className="absolute inset-0 cursor-default disabled:cursor-not-allowed"
       />
-      <div
-        role="dialog"
+      <dialog
+        open
         aria-modal="true"
         aria-labelledby={titleId}
         className={`relative z-10 max-h-[calc(100vh-2rem)] w-full ${widthClassName} overflow-hidden rounded-lg border border-slate-700 bg-slate-900 shadow-xl`}
@@ -565,7 +565,7 @@ export function Modal({
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
-      </div>
+      </dialog>
     </div>,
     document.body,
   );
