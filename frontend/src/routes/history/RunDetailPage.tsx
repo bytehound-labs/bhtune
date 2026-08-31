@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
+import { userFacingErrorMessage } from "../../api/errors";
 import {
   useCancelRun,
   useDeleteRunNotes,
@@ -17,6 +18,7 @@ import {
   type RunResult,
   type RunWrite,
   writeEligibility,
+  writeFailureMessage,
 } from "./runDetailHelpers";
 import { RunDetailActions } from "./RunDetailActions";
 import { PidActionModal, type PidAction } from "./PidActionModal";
@@ -26,6 +28,7 @@ import {
   type RunErrorItem,
 } from "./RunDetailSections";
 import { ErrorBanner, LoadingState } from "../../components/ui";
+import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
 
 const EMPTY_TREND_SAMPLES: readonly SampleResponse[] = [];
 
@@ -76,6 +79,7 @@ export function RunDetailPage() {
   const [notes, setNotes] = useState("");
   const [notesDirty, setNotesDirty] = useState(false);
   const [pidAction, setPidAction] = useState<PidAction | null>(null);
+  const [pidActionAlert, setPidActionAlert] = useState<string | null>(null);
   const pidActionPending = writeRun.isPending || revertRun.isPending;
   const pidActionError = pidAction
     ? pidAction.kind === "write"
@@ -136,12 +140,14 @@ export function RunDetailPage() {
   function requestWrite(result: RunResult) {
     writeRun.reset();
     revertRun.reset();
+    setPidActionAlert(null);
     setPidAction({ kind: "write", result });
   }
 
   function requestRevert(write: RunWrite) {
     writeRun.reset();
     revertRun.reset();
+    setPidActionAlert(null);
     setPidAction({ kind: "revert", write });
   }
 
@@ -156,18 +162,57 @@ export function RunDetailPage() {
     if (!pidAction || pidActionPending) return;
 
     if (pidAction.kind === "write") {
+      const responseLevel = pidAction.result.response_level;
+      setPidAction(null);
       writeRun.mutate(
         {
           id: runId,
-          responseLevel: pidAction.result.response_level,
+          responseLevel,
         },
         {
-          onSuccess: () => setPidAction(null),
+          onSuccess: (data) => {
+            const latestWrite = data.writes.at(-1);
+            if (
+              latestWrite?.kind === "write" &&
+              latestWrite.response_level === responseLevel &&
+              !latestWrite.success
+            ) {
+              setPidActionAlert(
+                `${RESPONSE_LEVEL_LABELS[responseLevel]}: ${writeFailureMessage(latestWrite)}`,
+              );
+            }
+          },
+          onError: (error) => {
+            setPidActionAlert(
+              userFacingErrorMessage(error, "Unable to apply PID settings."),
+            );
+          },
         },
       );
     } else {
+      const responseLevel = pidAction.write.response_level;
+      setPidAction(null);
       revertRun.mutate(runId, {
-        onSuccess: () => setPidAction(null),
+        onSuccess: (data) => {
+          const latestWrite = data.writes.at(-1);
+          if (
+            latestWrite?.kind === "revert" &&
+            latestWrite.response_level === responseLevel &&
+            !latestWrite.success
+          ) {
+            setPidActionAlert(
+              `${RESPONSE_LEVEL_LABELS[responseLevel]}: ${writeFailureMessage(latestWrite)}`,
+            );
+          }
+        },
+        onError: (error) => {
+          setPidActionAlert(
+            userFacingErrorMessage(
+              error,
+              "Unable to restore the previous PID settings.",
+            ),
+          );
+        },
       });
     }
   }
@@ -232,6 +277,7 @@ export function RunDetailPage() {
         <LoadingState message="Loading run…" />
       )}
       <RunDetailErrors errors={errors} />
+      {pidActionAlert && <ErrorBanner message={pidActionAlert} />}
 
       {run.isSuccess && (
         <RunDetailContent

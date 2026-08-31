@@ -84,8 +84,12 @@ explicitly clears stale derivative action for controllers without a derivative t
 When results exist, the web GUI promotes this panel above the trend. Each response level has a
 **Review & write** action that shows the exact destination tags and values in a safety review
 popup before writing. The popup is centered over the viewport and shared with the OPC server and
-tag browsers; the newest successful write can be restored from the same popup using its recorded
-pre-write values. The run-detail sections are independently collapsible and start expanded except
+tag browsers. Confirming an Apply closes the popup immediately; successful writes stay silent,
+while transport failures or failed physical writes/readbacks appear in a page-level alert. The
+newest successful write can be restored from the same popup using its recorded pre-write values.
+Confirming a restore closes the popup immediately as well; successful restores stay silent, while
+transport failures or failed physical restores/readbacks appear in a page-level alert.
+The run-detail sections are independently collapsible and start expanded except
 for **MV actuation verification**, which appears below PID change history and starts collapsed so
 the primary results and PID actions remain prominent.
 

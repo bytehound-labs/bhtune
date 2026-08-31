@@ -154,10 +154,14 @@ run heading and becomes the first major action area, before the trend and diagno
 Each Aggressive/Moderate/Sluggish row has a **Review & write** action that opens a safety review
 popup showing the selected response level, the loop tag, the exact destination tags, and the
 values that will be written. The popup is centered over the viewport and uses the same shared
-dialog component as the OPC server and tag browsers. It stays open while BHTune writes and
-verifies the values, keeps request errors visible, and closes after a successful HTTP response; the write-history
-audit remains the source of truth for the physical outcome. The newest successful write in
+dialog component as the OPC server and tag browsers. Confirming an Apply closes it immediately
+while BHTune writes and verifies the values in the background. Successful writes stay silent;
+transport failures and failed physical writes/readbacks appear in a page-level alert, and the
+write-history audit remains the source of truth for the physical outcome. The newest successful write in
 **PID change history** has a **Restore previous values** action using the same review dialog.
+Confirming a restore also closes the popup immediately and runs in the background; successful
+restores stay silent, while transport failures and failed physical restores/readbacks appear in a
+page-level alert.
 Before results exist, the panel remains in its lower diagnostic position. The panel uses the
 constant names and converted values from the run's snapshotted template: for example, a
 Yokogawa run shows `P`, `I`, and `D` rather than the engine's intermediate `Kp`, `Ti`, and `Td`

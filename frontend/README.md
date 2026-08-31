@@ -81,10 +81,15 @@ cases identically without fabricating samples.
 When calculated results exist, the run detail screen promotes the **Calculated results** panel
 above the trend as the primary post-tune action area. Each response-level row uses **Review &
 write** to open a centered viewport popup with the exact loop tag, destination tags, parameter
-labels, and values; the popup cannot be dismissed while writing and verifying. The same shared
+labels, and values. Confirming an Apply closes the popup immediately while the request continues
+in the background; successful writes stay silent, while transport failures or a failed physical
+write/readback appear as a page-level alert and remain in the audit history. The same shared
 popup component is used for OPC server discovery and tag browsing. The newest successful write
 in the history table offers **Restore previous values** through the same popup, using its
-recorded pre-write values. The panel stays in its lower position when no results exist, and the
+recorded pre-write values. Confirming a restore closes the popup immediately while the request
+continues in the background; successful restores stay silent, while transport failures or failed
+physical restores/readbacks appear as a page-level alert. The panel stays in its lower position
+when no results exist, and the
 existing eligibility explanation remains visible for simulator or otherwise ineligible runs.
 Run-detail sections are independently collapsible. Calculated results, Trend, Summary, Notes,
 Test configuration, Initial readings, and PID change history start expanded; MV actuation

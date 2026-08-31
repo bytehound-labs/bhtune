@@ -161,9 +161,11 @@ a trusted network.
      Aggressive/Moderate/Sluggish row has a **Review & write** button that works independently
      of any `--write-pid` choice made before the run started. The safety review modal names the
      loop tag, response level, snapshotted parameter labels, exact destination tags, and exact
-     values before anything is sent. It opens as a centered viewport popup, remains open while
-     BHTune writes and verifies the values, cannot be dismissed during that operation, and keeps
-     request errors visible. The same popup component is used by the OPC server and tag browsers.
+     values before anything is sent. It opens as a centered viewport popup. Confirming an Apply
+     closes the popup immediately while BHTune writes and verifies the values in the background;
+     successful writes stay silent, while transport failures or failed physical writes/readbacks
+     appear in a page-level alert. The same popup component is used by the OPC server and tag
+     browsers.
      When no results exist, the panel stays in its lower diagnostic position and explains that
      no results were calculated.
    - A mutable **Notes** field with **Save notes** and **Clear notes** actions. Notes are
@@ -171,7 +173,9 @@ a trusted network.
    - A **PID change history** table of every PID change this tune has made, each with a pre-write
      readback, a post-write readback, and a rollback status. The newest successful write
      shows a **Restore previous values** button that opens the same safety review modal and
-     lists the recorded pre-write values before restoring them.
+     lists the recorded pre-write values before restoring them. Confirming a restore closes the
+     popup immediately while BHTune works in the background; successful restores stay silent,
+     while transport failures or failed physical restores/readbacks appear in a page-level alert.
 
      Both buttons are disabled — with the reason shown as text, never a silent, unexplained
      grey button — unless the run is finished, used the OPC DA driver, has PID constant tags

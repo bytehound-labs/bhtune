@@ -59,3 +59,10 @@ export function writeKey(write: RunWrite): string {
     write.derivative_written,
   ].join(":");
 }
+
+export function writeFailureMessage(write: RunWrite): string {
+  if (write.kind === "revert") {
+    return "The previous PID values could not be restored. Check the OPC connection and try again.";
+  }
+  return "The PID settings could not be applied. Check the OPC connection and try again.";
+}

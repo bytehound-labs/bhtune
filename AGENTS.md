@@ -555,9 +555,10 @@ checks exactly (not-still-running, `opcda` driver, `pid_constant_tags` present, 
 needed a small, deliberate addition to the shared `Button` component (`ui.tsx`), which had no
 `title` prop before. Both actions open the shared styled PID review modal, which names the
 loop, response level, snapshotted parameter labels, exact destination tags, and exact P/I/D
-values before the request is sent. The modal stays open and disables Escape, backdrop, close,
-and duplicate submission while the write or restore is pending; it closes after a successful
-HTTP response and keeps request errors visible inside the modal. The Revert button's
+values before the request is sent. Apply and Restore both close immediately after confirmation;
+successful operations stay silent, while transport failures or failed physical writes/readbacks
+appear in a page-level alert. The request continues in the background and the write-history audit
+remains authoritative for the physical outcome. The Revert button's
 visibility is intentionally narrow: it renders only on the single newest `writes[]` row, and
 only when that row is a successful write (`kind === "write" && success`) — once superseded by
 a later write or revert, the button disappears, matching the server's own "revert always
@@ -4121,14 +4122,13 @@ package` refuses even to assemble. Giving `bhtune-core`/`bhtune-driver`/`bhtune-
   root, covering both root and `frontend/package.json`), and `github-actions`, each labeled
   (`dependencies`/`rust`/`frontend`/`ci` — created on the repo, since Dependabot silently
   skips labels that don't already exist).
-- **Branch protection on `main`** — required status checks naming every job context
-  (`check`, `frontend`, `Windows validation`, `MSRV`, `Package verification`, `coverage`,
-  `e2e`), `strict: false`, `enforce_admins: false` (preserves the existing direct-push
-  workflow), `allow_force_pushes`/`allow_deletions: false`. `opcda-bridge`'s own rule only
-  requires `check`+`coverage` because its `checks.yml` uses a `dorny/paths-filter` +
-  aggregator-gate structure where `check` is a final job that gates on `windows`/`msrv`/
-  `package` all having passed — `bhtune`'s five jobs are independent with no such
-  aggregator, so equivalent protection means requiring all of them individually.
+- **Branch protection on `main`** — both repositories require pull requests and protected
+  status checks, with `strict: true`, `enforce_admins: true` (direct pushes, including
+  administrator pushes, are blocked), and `allow_force_pushes`/`allow_deletions: false`.
+  Repository merge settings allow squash merges only; merge commits and rebase merges are
+  disabled. `bhtune` requires `Required validation status`, `Required coverage status`,
+  `Required E2E status`, and `Required Sonar quality status`; `opcda-bridge` requires
+  `check`, `coverage`, `release-integrity`, and `Required Sonar quality status`.
 - **Secret scanning + push protection enabled** on both `bytehound-labs/bhtune` and
   `bytehound-labs/opcda-bridge` (both public repositories) — confirmed disabled on both
   before this audit. `secret_scanning_validity_checks` did not take via the API on either

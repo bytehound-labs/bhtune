@@ -286,7 +286,7 @@ test.describe("post-tune PID actions", () => {
     ).toBeVisible();
   });
 
-  test("locks the review modal while writing and closes after HTTP success", async ({
+  test("closes the write review modal immediately and stays silent after success", async ({
     page,
   }) => {
     await openRun(page);
@@ -303,7 +303,31 @@ test.describe("post-tune PID actions", () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(completedRun()),
+        body: JSON.stringify({
+          ...completedRun(),
+          writes: [
+            ...completedRun().writes,
+            {
+              kind: "write",
+              response_level: "aggressive",
+              written_at: "2026-01-01T12:05:30Z",
+              success: true,
+              allow_uncertain_quality: true,
+              proportional_previous: 5,
+              integral_previous: 6,
+              derivative_previous: 7,
+              proportional_written: 20.5,
+              integral_written: 1.2,
+              derivative_written: 0,
+              proportional_readback: 20.5,
+              integral_readback: 1.2,
+              derivative_readback: 0,
+              rollback_state: null,
+              rollback_error: null,
+              error_message: null,
+            },
+          ],
+        }),
       });
     });
 
@@ -318,23 +342,18 @@ test.describe("post-tune PID actions", () => {
     await modal.getByRole("button", { name: "Write PID settings" }).click();
     await request;
 
-    await expect(modal.getByRole("status")).toContainText(
-      "Writing and verifying",
-    );
-    await expect(modal.getByRole("button", { name: "Cancel" })).toBeDisabled();
-    await expect(modal.getByRole("button", { name: "Close" })).toBeDisabled();
-    await expect(
-      modal.getByRole("button", { name: /Writing and verifying/ }),
-    ).toBeDisabled();
-
-    await page.keyboard.press("Escape");
-    await expect(modal).toBeVisible();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
 
     releaseWrite();
-    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Review & write" }).first(),
+    ).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
-  test("shows a failed request inside the review modal", async ({ page }) => {
+  test("shows a failed request at the top after the write modal closes", async ({
+    page,
+  }) => {
     await openRun(page);
     await page.route(`**/api/runs/${RUN_ID}/write`, async (route) => {
       await route.fulfill({
@@ -352,24 +371,117 @@ test.describe("post-tune PID actions", () => {
     await modal.getByRole("button", { name: "Write PID settings" }).click();
 
     await expect(
-      modal.getByText("The server could not complete the request. Try again.", {
-        exact: true,
+      page.getByRole("alert").filter({
+        hasText: "The server could not complete the request. Try again.",
       }),
     ).toBeVisible();
-    await expect(modal).toBeVisible();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
   });
 
-  test("reviews the newest successful write before restoring its previous values", async ({
+  test("shows a later readback failure at the top without reopening the modal", async ({
     page,
   }) => {
     await openRun(page);
-    await page.route(`**/api/runs/${RUN_ID}/revert`, async (route) => {
-      expect(route.request().method()).toBe("POST");
-      expect(route.request().postData()).toBeNull();
+
+    let releaseWrite: () => void = () => undefined;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    await page.route(`**/api/runs/${RUN_ID}/write`, async (route) => {
+      await writeGate;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(completedRun()),
+        body: JSON.stringify({
+          ...completedRun(),
+          writes: [
+            ...completedRun().writes,
+            {
+              kind: "write",
+              response_level: "aggressive",
+              written_at: "2026-01-01T12:05:30Z",
+              success: false,
+              allow_uncertain_quality: true,
+              proportional_previous: 5,
+              integral_previous: null,
+              derivative_previous: null,
+              proportional_written: 20.5,
+              integral_written: null,
+              derivative_written: null,
+              proportional_readback: null,
+              integral_readback: null,
+              derivative_readback: null,
+              rollback_state: "failed",
+              rollback_error: "rollback failed",
+              error_message: "PID readback was outside tolerance",
+            },
+          ],
+        }),
+      });
+    });
+
+    await resultsSection(page)
+      .getByRole("button", { name: "Review & write" })
+      .first()
+      .click();
+    const modal = page.getByRole("dialog");
+    const request = page.waitForRequest((candidate) =>
+      candidate.url().endsWith(`/api/runs/${RUN_ID}/write`),
+    );
+    await modal.getByRole("button", { name: "Write PID settings" }).click();
+    await request;
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+
+    releaseWrite();
+    const topAlert = page.getByRole("alert").first();
+    await expect(topAlert).toContainText(
+      "Aggressive: The PID settings could not be applied.",
+    );
+    await expect(topAlert).toBeVisible();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+  });
+
+  test("closes the restore review modal immediately and stays silent after success", async ({
+    page,
+  }) => {
+    await openRun(page);
+    let releaseRevert: () => void = () => undefined;
+    const revertGate = new Promise<void>((resolve) => {
+      releaseRevert = resolve;
+    });
+    await page.route(`**/api/runs/${RUN_ID}/revert`, async (route) => {
+      expect(route.request().method()).toBe("POST");
+      expect(route.request().postData()).toBeNull();
+      await revertGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...completedRun(),
+          writes: [
+            ...completedRun().writes,
+            {
+              kind: "revert",
+              response_level: "sluggish",
+              written_at: "2026-01-01T12:05:30Z",
+              success: true,
+              allow_uncertain_quality: true,
+              proportional_previous: 30,
+              integral_previous: 1.8,
+              derivative_previous: 0,
+              proportional_written: 11,
+              integral_written: 22,
+              derivative_written: 33,
+              proportional_readback: 11,
+              integral_readback: 22,
+              derivative_readback: 33,
+              rollback_state: null,
+              rollback_error: null,
+              error_message: null,
+            },
+          ],
+        }),
       });
     });
 
@@ -398,6 +510,73 @@ test.describe("post-tune PID actions", () => {
       .getByRole("button", { name: "Restore previous values" })
       .click();
     await request;
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+
+    releaseRevert();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
+  test("shows a later restore readback failure at the top without reopening the modal", async ({
+    page,
+  }) => {
+    await openRun(page);
+    let releaseRevert: () => void = () => undefined;
+    const revertGate = new Promise<void>((resolve) => {
+      releaseRevert = resolve;
+    });
+    await page.route(`**/api/runs/${RUN_ID}/revert`, async (route) => {
+      await revertGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...completedRun(),
+          writes: [
+            ...completedRun().writes,
+            {
+              kind: "revert",
+              response_level: "sluggish",
+              written_at: "2026-01-01T12:05:30Z",
+              success: false,
+              allow_uncertain_quality: true,
+              proportional_previous: 30,
+              integral_previous: null,
+              derivative_previous: null,
+              proportional_written: 11,
+              integral_written: null,
+              derivative_written: null,
+              proportional_readback: null,
+              integral_readback: null,
+              derivative_readback: null,
+              rollback_state: null,
+              rollback_error: null,
+              error_message: "PID restore readback was outside tolerance",
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.getByRole("button", { name: "Restore previous values" }).click();
+    const modal = page.getByRole("dialog");
+    const request = page.waitForRequest((candidate) =>
+      candidate.url().endsWith(`/api/runs/${RUN_ID}/revert`),
+    );
+    await modal
+      .getByRole("button", { name: "Restore previous values" })
+      .click();
+    await request;
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+
+    releaseRevert();
+    const topAlert = page.getByRole("alert").first();
+    await expect(topAlert).toContainText(
+      "Sluggish: The previous PID values could not be restored.",
+    );
+    await expect(topAlert).toBeVisible();
     await expect(page.getByRole("dialog")).not.toBeVisible();
   });
 });

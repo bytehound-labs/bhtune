@@ -33,6 +33,7 @@ import {
   type RunResult,
   type RunWrite,
   type WriteEligibility,
+  writeFailureMessage,
   writeKey,
 } from "./runDetailHelpers";
 import { PidResultsPanel } from "./PidResultsPanel";
@@ -574,18 +575,11 @@ function WriteErrors({ writes }: { readonly writes: readonly RunWrite[] }) {
       {failedWrites.map((write) => (
         <ErrorBanner
           key={`${writeKey(write)}:error`}
-          message={`${RESPONSE_LEVEL_LABELS[write.response_level]}: ${failureMessage(write)}`}
+          message={`${RESPONSE_LEVEL_LABELS[write.response_level]}: ${writeFailureMessage(write)}`}
         />
       ))}
     </div>
   );
-}
-
-function failureMessage(write: RunWrite): string {
-  if (write.kind === "revert") {
-    return "The previous PID values could not be restored. Check the OPC connection and try again.";
-  }
-  return "The PID settings could not be applied. Check the OPC connection and try again.";
 }
 
 export function RunDetailContent({
