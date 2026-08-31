@@ -22,12 +22,30 @@ interface ConfigForm {
   allowUncertainQuality: boolean;
   retentionMode: RetentionMode;
   retentionDays: number | "";
+  tuning: {
+    mrftDelaySecs: number | "";
+    pollIntervalMs: number | "";
+    timeoutSecs: number | "";
+    opTimeoutSecs: number | "";
+    restoreTimeoutSecs: number | "";
+  };
+  resetTuning: boolean;
 }
+
+const defaultTuning = {
+  mrftDelaySecs: 0,
+  pollIntervalMs: 800,
+  timeoutSecs: 3600,
+  opTimeoutSecs: 30,
+  restoreTimeoutSecs: 30,
+} as const;
 
 const defaultForm: ConfigForm = {
   allowUncertainQuality: true,
   retentionMode: "forever",
   retentionDays: "",
+  tuning: defaultTuning,
+  resetTuning: false,
 };
 
 function formFromResponse(config: GlobalConfigResponse): ConfigForm {
@@ -35,6 +53,23 @@ function formFromResponse(config: GlobalConfigResponse): ConfigForm {
     allowUncertainQuality: config.toml.allow_uncertain_quality ?? true,
     retentionMode: config.toml.retention_days === null ? "forever" : "days",
     retentionDays: config.toml.retention_days ?? "",
+    tuning: {
+      mrftDelaySecs:
+        config.toml.tuning.mrft_delay_secs ??
+        config.effective.tuning.mrft_delay_secs,
+      pollIntervalMs:
+        config.toml.tuning.poll_interval_ms ??
+        config.effective.tuning.poll_interval_ms,
+      timeoutSecs:
+        config.toml.tuning.timeout_secs ?? config.effective.tuning.timeout_secs,
+      opTimeoutSecs:
+        config.toml.tuning.op_timeout_secs ??
+        config.effective.tuning.op_timeout_secs,
+      restoreTimeoutSecs:
+        config.toml.tuning.restore_timeout_secs ??
+        config.effective.tuning.restore_timeout_secs,
+    },
+    resetTuning: false,
   };
 }
 
@@ -50,6 +85,13 @@ function sourceLabel(source: string): string {
     cli: "command-line option",
   };
   return labels[source] ?? source;
+}
+
+function tuningSource(
+  config: GlobalConfigResponse,
+  key: keyof GlobalConfigResponse["source"]["tuning"],
+): string {
+  return sourceLabel(config.source.tuning[key]);
 }
 
 export function ConfigPage() {
@@ -79,6 +121,21 @@ export function ConfigPage() {
     }
   };
 
+  const updateTuning = <K extends keyof ConfigForm["tuning"]>(
+    key: K,
+    value: ConfigForm["tuning"][K],
+  ) => {
+    setSaveMessage(null);
+    setForm(() => ({
+      ...displayedForm,
+      tuning: { ...displayedForm.tuning, [key]: value },
+      resetTuning: false,
+    }));
+    if (savedFormKey === null && config.data) {
+      setSavedFormKey(formKey(loadedForm));
+    }
+  };
+
   const request = useMemo(
     () => ({
       allow_uncertain_quality: displayedForm.allowUncertainQuality,
@@ -86,6 +143,36 @@ export function ConfigPage() {
         displayedForm.retentionMode === "forever"
           ? null
           : displayedForm.retentionDays,
+      tuning: displayedForm.resetTuning
+        ? {
+            mrft_delay_secs: null,
+            poll_interval_ms: null,
+            timeout_secs: null,
+            op_timeout_secs: null,
+            restore_timeout_secs: null,
+          }
+        : {
+            mrft_delay_secs:
+              displayedForm.tuning.mrftDelaySecs === ""
+                ? null
+                : displayedForm.tuning.mrftDelaySecs,
+            poll_interval_ms:
+              displayedForm.tuning.pollIntervalMs === ""
+                ? null
+                : displayedForm.tuning.pollIntervalMs,
+            timeout_secs:
+              displayedForm.tuning.timeoutSecs === ""
+                ? null
+                : displayedForm.tuning.timeoutSecs,
+            op_timeout_secs:
+              displayedForm.tuning.opTimeoutSecs === ""
+                ? null
+                : displayedForm.tuning.opTimeoutSecs,
+            restore_timeout_secs:
+              displayedForm.tuning.restoreTimeoutSecs === ""
+                ? null
+                : displayedForm.tuning.restoreTimeoutSecs,
+          },
     }),
     [displayedForm],
   );
@@ -106,6 +193,30 @@ export function ConfigPage() {
       setSaveMessage("Enter a positive whole number of retention days.");
       return;
     }
+    const tuningValues = displayedForm.tuning;
+    if (
+      typeof tuningValues.mrftDelaySecs !== "number" ||
+      !Number.isInteger(tuningValues.mrftDelaySecs) ||
+      tuningValues.mrftDelaySecs < 0 ||
+      tuningValues.mrftDelaySecs > 3600 ||
+      typeof tuningValues.pollIntervalMs !== "number" ||
+      !Number.isInteger(tuningValues.pollIntervalMs) ||
+      tuningValues.pollIntervalMs < 1 ||
+      typeof tuningValues.timeoutSecs !== "number" ||
+      !Number.isInteger(tuningValues.timeoutSecs) ||
+      tuningValues.timeoutSecs < 1 ||
+      typeof tuningValues.opTimeoutSecs !== "number" ||
+      !Number.isInteger(tuningValues.opTimeoutSecs) ||
+      tuningValues.opTimeoutSecs < 1 ||
+      typeof tuningValues.restoreTimeoutSecs !== "number" ||
+      !Number.isInteger(tuningValues.restoreTimeoutSecs) ||
+      tuningValues.restoreTimeoutSecs < 1
+    ) {
+      setSaveMessage(
+        "Enter valid whole-number values for all tune timing and safety settings.",
+      );
+      return;
+    }
 
     saveConfig.mutate(
       {
@@ -113,6 +224,7 @@ export function ConfigPage() {
         allow_uncertain_quality: request.allow_uncertain_quality,
         retention_days:
           request.retention_days === "" ? null : request.retention_days,
+        tuning: request.tuning,
       },
       {
         onSuccess: (data) => {
@@ -249,6 +361,81 @@ export function ConfigPage() {
                 : "Must be a positive whole number. The server applies retention during maintenance sweeps."
             }
           />
+        </FormSection>
+
+        <FormSection title="Tune timing and safety">
+          <p className="text-sm text-slate-400">
+            These settings apply to future tunes. Changes do not alter runs that
+            are already prepared or in progress.
+          </p>
+          <NumberField
+            label="MRFT delay"
+            value={displayedForm.tuning.mrftDelaySecs}
+            onChange={(value) => updateTuning("mrftDelaySecs", value)}
+            min={0}
+            max={3600}
+            step={1}
+            required
+            hint={`Effective: ${currentConfig.effective.tuning.mrft_delay_secs} s (${tuningSource(currentConfig, "mrft_delay_secs")}).`}
+          />
+          <NumberField
+            label="Poll interval"
+            value={displayedForm.tuning.pollIntervalMs}
+            onChange={(value) => updateTuning("pollIntervalMs", value)}
+            min={1}
+            step={1}
+            required
+            hint={`Effective: ${currentConfig.effective.tuning.poll_interval_ms} ms (${tuningSource(currentConfig, "poll_interval_ms")}).`}
+          />
+          <NumberField
+            label="Whole-run timeout"
+            value={displayedForm.tuning.timeoutSecs}
+            onChange={(value) => updateTuning("timeoutSecs", value)}
+            min={1}
+            step={1}
+            required
+            hint={`Effective: ${currentConfig.effective.tuning.timeout_secs} s (${tuningSource(currentConfig, "timeout_secs")}).`}
+          />
+          <NumberField
+            label="Driver-operation timeout"
+            value={displayedForm.tuning.opTimeoutSecs}
+            onChange={(value) => updateTuning("opTimeoutSecs", value)}
+            min={1}
+            step={1}
+            required
+            hint={`Effective: ${currentConfig.effective.tuning.op_timeout_secs} s (${tuningSource(currentConfig, "op_timeout_secs")}).`}
+          />
+          <NumberField
+            label="Restore timeout"
+            value={displayedForm.tuning.restoreTimeoutSecs}
+            onChange={(value) => updateTuning("restoreTimeoutSecs", value)}
+            min={1}
+            step={1}
+            required
+            hint={`Effective: ${currentConfig.effective.tuning.restore_timeout_secs} s (${tuningSource(currentConfig, "restore_timeout_secs")}). OPC DA tunes require at least 4 s.`}
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              onClick={() => {
+                setSaveMessage(null);
+                setForm({
+                  ...displayedForm,
+                  tuning: defaultTuning,
+                  resetTuning: true,
+                });
+                if (savedFormKey === null && config.data) {
+                  setSavedFormKey(formKey(loadedForm));
+                }
+              }}
+            >
+              Reset tuning to built-in defaults
+            </Button>
+            {displayedForm.resetTuning && (
+              <span className="text-sm text-slate-400">
+                Saving will remove all five [tuning] overrides.
+              </span>
+            )}
+          </div>
         </FormSection>
 
         <div className="flex items-center gap-3">

@@ -13,7 +13,7 @@
 // (temp DB, temp XDG dirs, `BHTUNE_BIND` env var) from the Rust side, translated to Node
 // since this runs from the frontend workspace.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +36,12 @@ if (!existsSync(bin)) {
 }
 
 const stateDir = mkdtempSync(join(tmpdir(), "bhtune-e2e-"));
+const configDir = join(stateDir, "bhtune");
+mkdirSync(configDir, { recursive: true });
+writeFileSync(
+  join(configDir, "bhtune.toml"),
+  "[tuning]\npoll_interval_ms = 5\ntimeout_secs = 30\n",
+);
 console.log(
   `e2e: starting ${bin} on 127.0.0.1:${PORT} (state dir: ${stateDir})`,
 );

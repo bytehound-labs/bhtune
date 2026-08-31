@@ -1,16 +1,10 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import type {
+  GlobalConfigResponse,
+  UpdateGlobalConfigRequest,
+} from "../src/api/config";
 
-interface ConfigResponse {
-  revision: string;
-  toml: {
-    allow_uncertain_quality: boolean | null;
-    retention_days: number | null;
-  };
-  effective: {
-    allow_uncertain_quality: boolean;
-    retention_days: number | null;
-  };
-}
+type ConfigResponse = GlobalConfigResponse;
 
 async function getConfig(request: APIRequestContext): Promise<ConfigResponse> {
   const response = await request.get("/api/config");
@@ -21,9 +15,11 @@ async function getConfig(request: APIRequestContext): Promise<ConfigResponse> {
 async function saveConfig(
   request: APIRequestContext,
   config: ConfigResponse,
-  values: {
-    allow_uncertain_quality: boolean;
-    retention_days: number | null;
+  values: Pick<
+    UpdateGlobalConfigRequest,
+    "allow_uncertain_quality" | "retention_days"
+  > & {
+    tuning?: UpdateGlobalConfigRequest["tuning"];
   },
 ) {
   const response = await request.put("/api/config", {
@@ -52,6 +48,7 @@ test.describe("global configuration", () => {
         initialConfig.toml.allow_uncertain_quality ??
         initialConfig.effective.allow_uncertain_quality,
       retention_days: initialConfig.toml.retention_days,
+      tuning: initialConfig.toml.tuning,
     });
   });
 
@@ -120,6 +117,68 @@ test.describe("global configuration", () => {
       page.getByRole("button", { name: "Save configuration" }).click(),
     ]);
     await expect(page.getByText(/bhtune\.toml\.backup-.*\.bak/)).toBeVisible();
+  });
+
+  test("saves and resets global tune timing and safety settings", async ({
+    page,
+  }) => {
+    await page.goto("/config");
+
+    await expect(page.getByLabel("MRFT delay")).toHaveValue("0");
+    await expect(page.getByLabel("Poll interval")).toHaveValue("5");
+    await expect(page.getByLabel("Whole-run timeout")).toHaveValue("30");
+    await expect(page.getByLabel("Driver-operation timeout")).toHaveValue("30");
+    await expect(page.getByLabel("Restore timeout")).toHaveValue("30");
+
+    await page.getByLabel("MRFT delay").fill("2");
+    await page.getByLabel("Poll interval").fill("7");
+    await page.getByLabel("Whole-run timeout").fill("60");
+    await page.getByLabel("Driver-operation timeout").fill("4");
+    await page.getByLabel("Restore timeout").fill("4");
+
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/config") &&
+          response.request().method() === "PUT" &&
+          response.ok(),
+      ),
+      page.getByRole("button", { name: "Save configuration" }).click(),
+    ]);
+
+    await page.reload();
+    await expect(page.getByLabel("MRFT delay")).toHaveValue("2");
+    await expect(page.getByLabel("Poll interval")).toHaveValue("7");
+    await expect(page.getByLabel("Whole-run timeout")).toHaveValue("60");
+    await expect(page.getByLabel("Driver-operation timeout")).toHaveValue("4");
+    await expect(page.getByLabel("Restore timeout")).toHaveValue("4");
+
+    await page
+      .getByRole("button", { name: "Reset tuning to built-in defaults" })
+      .click();
+    await expect(
+      page.getByText("Saving will remove all five [tuning] overrides."),
+    ).toBeVisible();
+    await expect(page.getByLabel("MRFT delay")).toHaveValue("0");
+    await expect(page.getByLabel("Poll interval")).toHaveValue("800");
+    await expect(page.getByLabel("Whole-run timeout")).toHaveValue("3600");
+    await expect(page.getByLabel("Driver-operation timeout")).toHaveValue("30");
+    await expect(page.getByLabel("Restore timeout")).toHaveValue("30");
+
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/config") &&
+          response.request().method() === "PUT" &&
+          response.ok(),
+      ),
+      page.getByRole("button", { name: "Save configuration" }).click(),
+    ]);
+
+    await page.reload();
+    await expect(
+      page.getByText("Effective: 800 ms (built-in default)."),
+    ).toBeVisible();
   });
 
   test("validates retention days and supports disabling retention", async ({

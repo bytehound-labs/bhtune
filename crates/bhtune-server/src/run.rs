@@ -407,6 +407,10 @@ mod tests {
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
 
         retention_tick_live(&pool, &store).await;
@@ -429,6 +433,10 @@ mod tests {
             config: Default::default(),
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
 
         retention_tick_live(&pool, &store).await;
@@ -444,6 +452,10 @@ mod tests {
             config: Default::default(),
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
         let poisoned = Arc::clone(&store);
         std::thread::spawn(move || {
@@ -470,6 +482,10 @@ mod tests {
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
 
         retention_tick_live(&pool, &store).await;
@@ -491,6 +507,10 @@ mod tests {
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
 
         spawn_retention_sweeper(pool.clone(), store);

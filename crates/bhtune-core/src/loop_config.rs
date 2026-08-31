@@ -39,10 +39,10 @@ impl LoopConfig {
     /// debug shortcut reach a live control loop as a "relay amplitude".
     pub const RELAY_AMP_PERCENT_MAX: f32 = 50.0;
 
-    /// Maximum allowed `mrft_delay_secs`. Chosen to match the default `--timeout-secs` (one
-    /// hour): genuine pre/post-test recording padding is realistically a few minutes at
-    /// most, so anything larger is far more likely a units mistake (e.g. milliseconds typed
-    /// as seconds) than a deliberate choice.
+    /// Maximum allowed `mrft_delay_secs`. Chosen to match the built-in whole-run timeout
+    /// (one hour): genuine pre/post-test recording padding is realistically a few minutes
+    /// at most, so anything larger is far more likely a units mistake (e.g. milliseconds
+    /// typed as seconds) than a deliberate choice.
     pub const MRFT_DELAY_SECS_MAX: u32 = 3600;
 
     /// Applies `process_type`'s default skip/test/noise-protection values, keeping the

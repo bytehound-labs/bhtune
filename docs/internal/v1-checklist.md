@@ -30,8 +30,9 @@ reflected in code and docs, not just here).
 - [ ] NOT PLANNED — any encryption toggle for logging. Nothing in BHTune is encrypted; every tune
       run is recorded to SQLite by default. A "verbose tick-level logging" flag, if wanted, is a
       normal `cli-logging` flag with its own semantics.
-- [ ] REQUIRED — pre-test and post-test recording padding (an `--mrft-delay`-equivalent flag): PV
-      is still read/recorded every tick during the pad; no switch evaluation happens during it.
+- [ ] REQUIRED — pre-test and post-test recording padding, configured globally as
+      `[tuning].mrft_delay_secs`: PV is still read/recorded every tick during the pad; no switch
+      evaluation happens during it.
 - [ ] NOT PLANNED — any app-unlock/login-bypass flag. BHTune has no login gate to bypass.
 
 ## 2. Relay amplitude validation
@@ -51,7 +52,9 @@ validation.
 - [x] REQUIRED — Loop Configuration: set/browse the PV tag; derive/fill the rest of the tag set
       from it.
 - [ ] REQUIRED — Algorithm Settings: process type (6 types), controller type, relay amplitude,
-      cycles to skip/test, noise protection delay.
+      cycles to skip/test, noise protection delay. The cycle and noise values show concrete
+      process-type defaults and can be reset independently; installation-wide timing and safety
+      values are configured in `[tuning]`.
   - [ ] REQUIRED — **P and PI are the only controller types offered for four of the six process
         types, and PID is only offered for the two Temperature types** — this is a real domain
         rule, not an oversight, and must not be "fixed" into always offering PID.

@@ -74,10 +74,13 @@ fn write_man_page_recursive(dir: &Path, cmd: clap::Command, name: &str) {
     clap_mangen::Man::new(cmd)
         .render(&mut buffer)
         .expect("rendering a valid clap::Command to roff never fails");
-    write(
-        &dir.join(format!("{name}.1")),
-        String::from_utf8(buffer).expect("clap_mangen always emits valid UTF-8 roff"),
-    );
+    let roff = String::from_utf8(buffer)
+        .expect("clap_mangen always emits valid UTF-8 roff")
+        .split('\n')
+        .map(|line| line.trim_end_matches([' ', '\t']))
+        .collect::<Vec<_>>()
+        .join("\n");
+    write(&dir.join(format!("{name}.1")), roff);
 
     for sub in subcommands {
         let sub_name = format!("{name}-{}", sub.get_name());

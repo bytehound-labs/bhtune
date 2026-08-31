@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH bhtune-history-revert 1  "bhtune-history-revert " 
+.TH bhtune-history-revert 1  "bhtune-history-revert "
 .SH NAME
 bhtune\-history\-revert \- Undo a run\*(Aqs PID write\-back, writing its recorded pre\-write P/I/D values back to the live loop. Reverts whichever `write`\-kind write\-back that run last recorded; refuses if the run has none, if that write\-back\*(Aqs pre\-read itself failed (nothing to revert to), or if the run did not use the `opcda` driver (nothing live to revert against)
 .SH SYNOPSIS
-\fBbhtune\-history\-revert\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-yes\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRUN_ID\fR> 
+\fBbhtune\-history\-revert\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-yes\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRUN_ID\fR>
 .SH DESCRIPTION
 Undo a run\*(Aqs PID write\-back, writing its recorded pre\-write P/I/D values back to the live loop. Reverts whichever `write`\-kind write\-back that run last recorded; refuses if the run has none, if that write\-back\*(Aqs pre\-read itself failed (nothing to revert to), or if the run did not use the `opcda` driver (nothing live to revert against)
 .SH OPTIONS

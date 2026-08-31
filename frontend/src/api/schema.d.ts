@@ -461,16 +461,50 @@ export interface components {
     ConfigSources: {
       allow_uncertain_quality: string;
       retention_days: string;
+      tuning: components["schemas"]["ConfigTuningSources"];
     };
     ConfigTomlValues: {
       allow_uncertain_quality?: boolean | null;
       /** Format: int32 */
       retention_days?: number | null;
+      tuning: components["schemas"]["ConfigTuningTomlValues"];
+    };
+    ConfigTuningSources: {
+      mrft_delay_secs: string;
+      op_timeout_secs: string;
+      poll_interval_ms: string;
+      restore_timeout_secs: string;
+      timeout_secs: string;
+    };
+    ConfigTuningTomlValues: {
+      /** Format: int32 */
+      mrft_delay_secs?: number | null;
+      /** Format: int64 */
+      op_timeout_secs?: number | null;
+      /** Format: int64 */
+      poll_interval_ms?: number | null;
+      /** Format: int64 */
+      restore_timeout_secs?: number | null;
+      /** Format: int64 */
+      timeout_secs?: number | null;
+    };
+    ConfigTuningValues: {
+      /** Format: int32 */
+      mrft_delay_secs: number;
+      /** Format: int64 */
+      op_timeout_secs: number;
+      /** Format: int64 */
+      poll_interval_ms: number;
+      /** Format: int64 */
+      restore_timeout_secs: number;
+      /** Format: int64 */
+      timeout_secs: number;
     };
     ConfigValues: {
       allow_uncertain_quality: boolean;
       /** Format: int32 */
       retention_days?: number | null;
+      tuning: components["schemas"]["ConfigTuningValues"];
     };
     /**
      * @description Direct-acting (increasing MV increases PV) or Reverse-acting (increasing MV decreases
@@ -583,6 +617,25 @@ export interface components {
       mv_range_low: components["schemas"]["DraftValueSource"];
       pv_range_high: components["schemas"]["DraftValueSource"];
       pv_range_low: components["schemas"]["DraftValueSource"];
+    };
+    /**
+     * @description Concrete tune timing values after configuration defaults have been resolved.
+     *
+     *     Stored as one compact snapshot because these values are consumed together and have no
+     *     SQL-level filtering requirement. `None` on [`TuneRunRow::effective_tuning`] identifies
+     *     runs created before this snapshot existed or callers that have not recorded it yet.
+     */
+    EffectiveTuning: {
+      /** Format: int32 */
+      mrft_delay_secs: number;
+      /** Format: int64 */
+      op_timeout_secs: number;
+      /** Format: int64 */
+      poll_interval_ms: number;
+      /** Format: int64 */
+      restore_timeout_secs: number;
+      /** Format: int64 */
+      timeout_secs: number;
     };
     /**
      * @description The JSON body of every non-2xx response: `{"error": "<message>"}`. `pub`/`ToSchema` so
@@ -919,6 +972,7 @@ export interface components {
       completed_at?: string | null;
       config: components["schemas"]["LoopConfig"];
       driver: components["schemas"]["TuneDriver"];
+      effective_tuning?: null | components["schemas"]["EffectiveTuning"];
       failure_reason?: string | null;
       /** Format: int64 */
       id: number;
@@ -1033,13 +1087,13 @@ export interface components {
       tick_index: number;
     };
     /**
-     * @description The body of `POST /api/runs` -- full field parity with [`TuneArgs`], since starting a run
-     *     over HTTP must be able to express everything `bhtune tune` can. Every field that has a
-     *     CLI default (`--sim-gain`, `--poll-interval-ms`, etc.) repeats that exact default here via
-     *     `#[serde(default = "...")]`, so an HTTP caller that omits a field gets identical behavior
-     *     to a CLI invocation that omits the matching flag. `Option<T>` fields need no
-     *     `#[serde(default)]` of their own -- serde already treats a missing key as `None` for an
-     *     `Option` field.
+     * @description The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values
+     *     are intentionally absent: they are resolved from the global `[tuning]` configuration by
+     *     `prepare()`, just as they are for a CLI invocation. Every field that has a CLI default
+     *     (`--sim-gain`, etc.) repeats that exact default here via `#[serde(default = "...")]`, so an
+     *     HTTP caller that omits a field gets identical behavior to a CLI invocation that omits the
+     *     matching flag. `Option<T>` fields need no `#[serde(default)]` of their own -- serde already
+     *     treats a missing key as `None` for an `Option` field.
      *
      *     Also derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s
      *     response (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses
@@ -1076,11 +1130,6 @@ export interface components {
        */
       driver: components["schemas"]["TuneDriver"];
       /**
-       * Format: int32
-       * @description Pre/post-test recording padding, in seconds.
-       */
-      mrft_delay?: number;
-      /**
        * Format: float
        * @description Fixed MV range high, overriding a live tag read.
        */
@@ -1101,16 +1150,6 @@ export interface components {
        *     the run-history endpoints.
        */
       notes?: string | null;
-      /**
-       * Format: int64
-       * @description Cap on any single driver read/write during the run, in seconds.
-       */
-      op_timeout_secs?: number;
-      /**
-       * Format: int64
-       * @description How often to poll the driver, in milliseconds.
-       */
-      poll_interval_ms?: number;
       process_type: components["schemas"]["ProcessType"];
       /**
        * Format: float
@@ -1128,14 +1167,6 @@ export interface components {
        * @description Relay amplitude, as a percentage of the MV range.
        */
       relay_amp: number;
-      /**
-       * Format: int64
-       * @description Cap on restoring the loop to its pre-test state after the run ends, in seconds.
-       *     OPC DA runs require at least 4 seconds so the internal MV actuation confirmation
-       *     window can complete; simulator runs only require a positive value.
-       * @example 30
-       */
-      restore_timeout_secs?: number;
       /** @description OPC DA server ProgID. Required with `driver: "opcda"`. */
       server?: string | null;
       /**
@@ -1178,12 +1209,6 @@ export interface components {
       tagname: string;
       /** @description DCS/PLC template name (see `GET /api/templates`). */
       template: string;
-      /**
-       * Format: int64
-       * @description Hard wall-clock cap on this run's total duration, in seconds. See
-       *     [`TuneArgs::timeout_secs`] -- always enforced, exactly as for a CLI-driven run.
-       */
-      timeout_secs?: number;
       write_pid?: null | components["schemas"]["ResponseLevel"];
       /**
        * @description Confirm an unattended PID write-back. Required alongside `write_pid` -- the request
@@ -1313,11 +1338,24 @@ export interface components {
       /** Format: int32 */
       retention_days?: number | null;
       revision: string;
+      tuning?: null | components["schemas"]["UpdateTuningRequest"];
     };
     /** @description The body of `PUT /api/runs/{id}/notes`. */
     UpdateNotesRequest: {
       /** @description Replacement note text. Blank or whitespace-only text clears the note. */
       notes: string;
+    };
+    UpdateTuningRequest: {
+      /** Format: int32 */
+      mrft_delay_secs?: number | null;
+      /** Format: int64 */
+      op_timeout_secs?: number | null;
+      /** Format: int64 */
+      poll_interval_ms?: number | null;
+      /** Format: int64 */
+      restore_timeout_secs?: number | null;
+      /** Format: int64 */
+      timeout_secs?: number | null;
     };
     /**
      * @description Distinguishes a normal write-back from `bhtune history revert` undoing an earlier one.
@@ -1422,7 +1460,7 @@ export interface operations {
           "application/json": components["schemas"]["ConfigResponse"];
         };
       };
-      /** @description The request contains an invalid retention policy. */
+      /** @description The request contains an invalid retention or tuning policy. */
       400: {
         headers: {
           [name: string]: unknown;

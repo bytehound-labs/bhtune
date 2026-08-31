@@ -141,6 +141,11 @@ null or omitted template values as Fixed value mappings.
 The New tune page keeps Connection, Test parameters, Loop mapping, Simulator parameters, and
 Automatic PID settings in independently collapsible sections; controls that do not apply to
 the selected driver are disabled with an explanation.
+Test parameters show the selected process type's default cycles-to-skip, cycles-to-count, and
+noise-protection values in a **Process defaults** subgroup. Changing the process type replaces
+all three values, and **Reset process defaults** restores them without changing the other tune
+settings. These are process-type defaults, not DCS/PLC template settings; CLI and HTTP callers
+may omit them to use the same server-side defaults.
 
 In **Simulator** mode, the form disables the OPC DA connection, tag, quality, timeout, and
 automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
@@ -320,7 +325,8 @@ before installing the Windows service — are in
 
 ## Configuration
 
-Every setting resolves with the same precedence, highest first:
+Settings with command-line or environment overrides resolve with the same precedence, highest
+first:
 
 **CLI flag > environment variable > config file > built-in default**
 
@@ -353,11 +359,24 @@ JSON Schema (also covers one DCS/PLC template catalog entry — see below).
 | Allow Uncertain OPC quality              | —                  | —                       | `allow_uncertain_quality` | `true`                                                                                                                                                                      |
 | History retention                        | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days`          | unset — retain forever; a configured value must be a positive whole number                                                                                                  |
 
-The web GUI's **Config** page reads and updates the two global policy keys in the selected
-TOML file. Updates preserve unrelated comments and keys, create a timestamped sibling backup
-for an existing file, and take effect for new server operations without a restart. A revision
-token prevents overwriting a file changed by another process; command-line and environment
-overrides remain higher precedence than TOML values.
+The five operational tune timing and safety values are global TOML settings under `[tuning]`;
+they have no per-run CLI or HTTP override. Missing keys use these built-in defaults:
+
+| Setting                  | TOML key                      |  Default | Validation                                   |
+| ------------------------ | ----------------------------- | -------: | -------------------------------------------- |
+| MRFT delay padding       | `tuning.mrft_delay_secs`      |    `0` s | `0..=3600`                                   |
+| Poll interval            | `tuning.poll_interval_ms`     | `800` ms | at least `1`                                 |
+| Whole-run timeout        | `tuning.timeout_secs`         | `3600` s | at least `1`                                 |
+| Driver-operation timeout | `tuning.op_timeout_secs`      |   `30` s | at least `1`                                 |
+| Restore timeout          | `tuning.restore_timeout_secs` |   `30` s | at least `1`; OPC DA requires at least `4` s |
+
+The web GUI's **Config** page reads and updates the global quality, retention, and tuning
+settings in the selected TOML file. It reports whether each tuning value comes from the file or
+the built-in default, and **Reset tuning to built-in defaults** removes the `[tuning]` overrides.
+Updates preserve unrelated comments and keys, create a timestamped sibling backup for an existing
+file, and take effect for future tune preparations without a restart. Already-prepared or
+running tunes keep the effective values captured at start. A revision token prevents overwriting
+a file changed by another process.
 
 ## DCS/PLC templates
 
@@ -402,8 +421,9 @@ Windows Task Scheduler, CI):
 - **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
   (bad flags, unreachable driver/database), `2` aborted by Ctrl+C, `3` the test completed but
   the requested PID write-back failed, `4` the test was forcibly stopped for running past
-  `--timeout-secs`, `5` a poor-quality OPC reading aborted the run, and
-  `6` the post-run restore could not be confirmed (a second Ctrl+C, or `--restore-timeout-secs`
+  `[tuning].timeout_secs`, `5` a poor-quality OPC reading aborted the run, and
+  `6` the post-run restore could not be confirmed (a second Ctrl+C, or
+  `[tuning].restore_timeout_secs`
   elapsing), and `7` an accepted OPC DA MV command could not be confirmed before its deadline
   or before the next relay command was required. Restore-incomplete exit code `6` takes
   precedence over `7` when both occur. A caller never has to parse stdout just to find out
@@ -421,16 +441,16 @@ language, including exactly what happens on the first and second Ctrl+C:
   is rejected before any driver connection or database write.
 - **Every numeric input is validated before it can reach a live loop** — CLI flags reject
   non-finite (`NaN`/infinite), zero, or negative values at parse time with a clear error; loop
-  configuration rejects an out-of-range cycle count or MRFT delay; and the PV/MV ranges plus the
+  configuration rejects an out-of-range cycle count or `[tuning].mrft_delay_secs`; and the PV/MV ranges plus the
   initial MV, whether they came from a flag or a driver tag read, are checked for finiteness and
   correct ordering immediately after the initial read and before the loop is switched to manual.
-- **`--timeout-secs <seconds>`** (default `3600`) is a mandatory wall-clock limit on the whole
-  test — there is no way to disable it. If it elapses, the loop is automatically restored to its
+- **`[tuning].timeout_secs`** (default `3600`) is a mandatory wall-clock limit on the whole test
+  — there is no way to disable it. If it elapses, the loop is automatically restored to its
   pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`). Both Ctrl+C
   and the timeout stay effective even if a single driver read or write stalls mid-tick (a
   wedged gateway, a black-holed network): every driver call is separately capped by
-  **`--op-timeout-secs`** (default `30`), so a hung call is abandoned rather than blocking the
-  whole run indefinitely.
+  **`[tuning].op_timeout_secs`** (default `30`), so a hung call is abandoned rather than blocking
+  the whole run indefinitely.
 - **Live OPC DA sample time is monotonic.** BHTune pairs the run's UTC start timestamp with a
   monotonic clock and derives every live MRFT/sample timestamp from actual elapsed time. NTP or
   manual system-clock changes therefore cannot move the tuning algorithm backward or forward,
@@ -455,11 +475,11 @@ language, including exactly what happens on the first and second Ctrl+C:
   does not count, even if the read started before the deadline.
   The fresh read started at that deadline has its own one-second bound, so a stalled MV read
   cannot consume the full per-operation timeout and leave the run waiting indefinitely.
-- **`--restore-timeout-secs <seconds>`** (default `30`; OPC DA minimum `4`) bounds putting the loop back afterwards,
-  independently of `--timeout-secs`. If the restore can't be confirmed within that time, or a
-  _second_ Ctrl+C arrives while it's in progress, the process prints which tag and value to
-  check by hand and exits `6` — distinct from `2`, since "aborted and restored" and "aborted,
-  restore abandoned" call for very different responses.
+- **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) bounds putting the loop
+  back afterwards, independently of `[tuning].timeout_secs`. If the restore can't be confirmed
+  within that time, or a _second_ Ctrl+C arrives while it's in progress, the process prints which
+  tag and value to check by hand and exits `6` — distinct from `2`, since "aborted and restored"
+  and "aborted, restore abandoned" call for very different responses.
 - **Restoration is guaranteed on every exit path and never gives up early** — a run only ever
   mutates a loop after switching it to manual, and _any_ way that run can end (a clean
   completion, an abort, or an error partway through setup) always attempts to put back exactly

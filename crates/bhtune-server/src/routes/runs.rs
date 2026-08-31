@@ -14,9 +14,7 @@ use axum::routing::{post, put};
 use axum::{Json, Router};
 use bhtune_cli::args::{DriverKindArg, TuneArgs};
 use bhtune_cli::cancel::CtrlC;
-use bhtune_cli::commands::tune::{
-    PidWriteOutcome, drive, prepare, validate_restore_timeout_secs, write_pid_values,
-};
+use bhtune_cli::commands::tune::{PidWriteOutcome, drive, prepare, write_pid_values};
 use bhtune_cli::output::OutputFormat;
 use bhtune_core::{
     ControllerDirection, ControllerType, PidParameters, ProcessType, ResponseLevel, TagOverrides,
@@ -47,23 +45,14 @@ fn default_sim_dead_time() -> f32 {
 fn default_sim_initial_value() -> f32 {
     50.0
 }
-fn default_poll_interval_ms() -> u64 {
-    800
-}
-fn default_timeout_secs() -> u64 {
-    3600
-}
-fn default_op_or_restore_timeout_secs() -> u64 {
-    30
-}
 
-/// The body of `POST /api/runs` -- full field parity with [`TuneArgs`], since starting a run
-/// over HTTP must be able to express everything `bhtune tune` can. Every field that has a
-/// CLI default (`--sim-gain`, `--poll-interval-ms`, etc.) repeats that exact default here via
-/// `#[serde(default = "...")]`, so an HTTP caller that omits a field gets identical behavior
-/// to a CLI invocation that omits the matching flag. `Option<T>` fields need no
-/// `#[serde(default)]` of their own -- serde already treats a missing key as `None` for an
-/// `Option` field.
+/// The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values
+/// are intentionally absent: they are resolved from the global `[tuning]` configuration by
+/// `prepare()`, just as they are for a CLI invocation. Every field that has a CLI default
+/// (`--sim-gain`, etc.) repeats that exact default here via `#[serde(default = "...")]`, so an
+/// HTTP caller that omits a field gets identical behavior to a CLI invocation that omits the
+/// matching flag. `Option<T>` fields need no `#[serde(default)]` of their own -- serde already
+/// treats a missing key as `None` for an `Option` field.
 ///
 /// Also derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s
 /// response (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses
@@ -91,9 +80,6 @@ pub struct StartRunRequest {
     /// Seconds a switch must persist before it's accepted (default: looked up per
     /// `process_type`).
     pub noise_protection_secs: Option<u32>,
-    /// Pre/post-test recording padding, in seconds.
-    #[serde(default)]
-    pub mrft_delay: u32,
     /// Which driver drives this tune. `"replay"` is rejected -- that driver exists only
     /// for offline golden-trace validation, not for starting a live/simulated run.
     pub driver: TuneDriver,
@@ -138,13 +124,6 @@ pub struct StartRunRequest {
     /// Per-tune replacements for template-derived OPC tag names. Blank or missing fields use
     /// the template-derived tag.
     pub tag_overrides: Option<TagOverrides>,
-    /// How often to poll the driver, in milliseconds.
-    #[serde(default = "default_poll_interval_ms")]
-    pub poll_interval_ms: u64,
-    /// Hard wall-clock cap on this run's total duration, in seconds. See
-    /// [`TuneArgs::timeout_secs`] -- always enforced, exactly as for a CLI-driven run.
-    #[serde(default = "default_timeout_secs")]
-    pub timeout_secs: u64,
     /// Operator notes to attach to this run. Notes can be edited or cleared later through
     /// the run-history endpoints.
     #[serde(default)]
@@ -156,15 +135,6 @@ pub struct StartRunRequest {
     /// Non-interactively write this response level's calculated PID parameters back to the
     /// DCS. Requires `yes: true`.
     pub write_pid: Option<ResponseLevel>,
-    /// Cap on any single driver read/write during the run, in seconds.
-    #[serde(default = "default_op_or_restore_timeout_secs")]
-    pub op_timeout_secs: u64,
-    /// Cap on restoring the loop to its pre-test state after the run ends, in seconds.
-    /// OPC DA runs require at least 4 seconds so the internal MV actuation confirmation
-    /// window can complete; simulator runs only require a positive value.
-    #[serde(default = "default_op_or_restore_timeout_secs")]
-    #[schema(minimum = 4, example = 30)]
-    pub restore_timeout_secs: u64,
 }
 
 /// `value.is_finite()`, as an [`ApiError::BadRequest`] on failure -- the HTTP-path
@@ -191,30 +161,14 @@ fn require_finite_if_some(field: &str, value: Option<f32>) -> Result<(), ApiErro
     }
 }
 
-/// `value >= 1`, as an [`ApiError::BadRequest`] on failure -- the HTTP-path equivalent of
-/// `bhtune-cli`'s `positive_u64` clap `value_parser`, for the same reason [`require_finite`]
-/// exists: a [`TuneArgs`] built directly in Rust code bypasses clap's parsers entirely.
-fn require_positive(field: &str, value: u64) -> Result<(), ApiError> {
-    if value >= 1 {
-        Ok(())
-    } else {
-        Err(ApiError::BadRequest(format!(
-            "'{field}' must be at least 1, got {value}"
-        )))
-    }
-}
-
 impl StartRunRequest {
     /// Validates and converts this request into a [`TuneArgs`], ready for
     /// [`bhtune_cli::commands::tune::prepare`].
     ///
-    /// Only validates the specific fields that have **no** downstream safety net regardless
-    /// of transport: `relay_amp`, `cycles_count` (after `process_type`-defaulting), and
-    /// `mrft_delay` are already checked by [`bhtune_core::LoopConfig::validate`], called
-    /// from inside `prepare()` itself, so re-checking them here would be redundant. Every
-    /// other numeric field bypasses clap's `value_parser`s entirely when constructed this
-    /// way (see AGENTS.md's `server-start-tune-api` notes) and has no other guard, so this
-    /// function is where that gap is closed.
+    /// Only validates numeric fields whose clap `value_parser`s are bypassed when a
+    /// [`TuneArgs`] is built directly in Rust code. Operational timing values are not
+    /// request fields; `prepare()` resolves and validates the global configuration before
+    /// connecting to a driver or mutating the database/live loop.
     pub(crate) fn into_tune_args(self) -> Result<TuneArgs, ApiError> {
         require_finite("relay_amp", self.relay_amp)?;
         require_finite("sim_gain", self.sim_gain)?;
@@ -227,9 +181,6 @@ impl StartRunRequest {
         require_finite_if_some("pv_range_low", self.pv_range_low)?;
         require_finite_if_some("mv_range_high", self.mv_range_high)?;
         require_finite_if_some("mv_range_low", self.mv_range_low)?;
-        require_positive("poll_interval_ms", self.poll_interval_ms)?;
-        require_positive("timeout_secs", self.timeout_secs)?;
-        require_positive("op_timeout_secs", self.op_timeout_secs)?;
         if let Some(tag_overrides) = &self.tag_overrides {
             tag_overrides
                 .validate()
@@ -238,8 +189,6 @@ impl StartRunRequest {
 
         let driver = DriverKindArg::try_from(self.driver)
             .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-        validate_restore_timeout_secs(driver, self.restore_timeout_secs)
-            .map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
         Ok(TuneArgs {
             tagname: self.tagname,
@@ -250,7 +199,6 @@ impl StartRunRequest {
             cycles_skip: self.cycles_skip,
             cycles_count: self.cycles_count,
             noise_protection_secs: self.noise_protection_secs,
-            mrft_delay: self.mrft_delay,
             driver,
             bridge_host: self.bridge_host,
             server: self.server,
@@ -267,13 +215,9 @@ impl StartRunRequest {
             mv_range_low: self.mv_range_low,
             direction: self.direction.map(Into::into),
             tag_overrides: self.tag_overrides,
-            poll_interval_ms: self.poll_interval_ms,
-            timeout_secs: self.timeout_secs,
             notes: self.notes,
             yes: self.yes,
             write_pid: self.write_pid.map(Into::into),
-            op_timeout_secs: self.op_timeout_secs,
-            restore_timeout_secs: self.restore_timeout_secs,
             // `drive()`'s doc comment requires `Json` for every HTTP-started run: `execute`'s
             // interactive write-back prompt (`maybe_write_back`) only skips reading stdin
             // when `output == OutputFormat::Json`, and this background task has no stdin to
@@ -909,9 +853,8 @@ mod tests {
     use tower::ServiceExt;
 
     /// A fast-converging simulator-backed request body, mirroring `bhtune-cli`'s own
-    /// `fast_simulator_args()` test fixture (`commands::tune`'s test module) field-for-field
-    /// -- that fixture's doc comment explains why these exact values converge in well under
-    /// a second of real wall-clock time.
+    /// `fast_simulator_args()` test fixture for the per-run inputs. Global timing is supplied
+    /// by `in_memory_state()`'s fast test configuration.
     fn fast_simulator_request_json() -> serde_json::Value {
         serde_json::json!({
             "tagname": "ignored-for-simulator",
@@ -931,7 +874,6 @@ mod tests {
             "mv_range_high": 100.0,
             "mv_range_low": 0.0,
             "direction": "reverse",
-            "poll_interval_ms": 5,
             "notes": "http test note",
         })
     }
@@ -1022,7 +964,6 @@ mod tests {
     async fn notes_can_be_edited_while_running_and_after_completion_then_deleted() {
         let state = crate::test_support::in_memory_state().await;
         let mut request = fast_simulator_request_json();
-        request["poll_interval_ms"] = serde_json::json!(1000);
         request["cycles_count"] = serde_json::json!(50);
 
         let response = post_json(crate::build_router(state.clone()), "/api/runs", request).await;
@@ -1177,11 +1118,8 @@ mod tests {
     async fn starting_a_second_run_while_one_is_active_succeeds() {
         let state = crate::test_support::in_memory_state().await;
 
-        // Slow enough (1s/tick, many cycles) that it is still active by the time the second
-        // request below is issued, mirroring `bhtune-cli`'s own
-        // `ctrl_c_aborts_a_running_tune_and_restores_the_loop` timing rationale.
+        // Many cycles keep the first run active by the time the second request below is issued.
         let mut slow_request = fast_simulator_request_json();
-        slow_request["poll_interval_ms"] = serde_json::json!(1000);
         slow_request["cycles_count"] = serde_json::json!(50);
 
         let first = post_json(
@@ -1334,65 +1272,20 @@ mod tests {
     }
 
     #[test]
-    fn opcda_restore_timeout_requires_the_four_second_confirmation_window() {
-        for timeout in [1, 3] {
-            let mut request = fast_simulator_request_json();
-            request["driver"] = serde_json::json!("opcda");
-            request["restore_timeout_secs"] = serde_json::json!(timeout);
-            let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
-            let error = parsed.into_tune_args().unwrap_err();
-            assert!(matches!(
-                error,
-                ApiError::BadRequest(message) if message.contains("at least 4 seconds")
-            ));
-        }
-
+    fn legacy_http_timing_fields_are_ignored() {
         let mut request = fast_simulator_request_json();
-        request["driver"] = serde_json::json!("opcda");
-        request["restore_timeout_secs"] = serde_json::json!(4);
-        let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
-        let args = parsed.into_tune_args().expect("4 seconds must be accepted");
-        assert_eq!(args.restore_timeout_secs, 4);
-        assert_eq!(args.driver, DriverKindArg::Opcda);
-    }
-
-    #[test]
-    fn simulator_restore_timeout_remains_positive_only() {
-        let mut request = fast_simulator_request_json();
-        request["restore_timeout_secs"] = serde_json::json!(0);
-        let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
-        let error = parsed.into_tune_args().unwrap_err();
-        assert!(matches!(
-            error,
-            ApiError::BadRequest(message) if message.contains("greater than zero")
-        ));
-
-        let mut request = fast_simulator_request_json();
+        request["mrft_delay"] = serde_json::json!(123);
+        request["poll_interval_ms"] = serde_json::json!(1);
+        request["timeout_secs"] = serde_json::json!(1);
+        request["op_timeout_secs"] = serde_json::json!(1);
         request["restore_timeout_secs"] = serde_json::json!(1);
+
         let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
         let args = parsed
             .into_tune_args()
-            .expect("one second remains valid for the simulator");
-        assert_eq!(args.restore_timeout_secs, 1);
-        assert_eq!(args.driver, DriverKindArg::Simulator);
-    }
-
-    #[tokio::test]
-    async fn opcda_restore_timeout_below_four_returns_400_before_prepare() {
-        let app = crate::build_router(crate::test_support::in_memory_state().await);
-        let mut request = fast_simulator_request_json();
-        request["driver"] = serde_json::json!("opcda");
-        request["restore_timeout_secs"] = serde_json::json!(3);
-
-        let response = post_json(app, "/api/runs", request).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let error = body_json(response).await;
-        assert!(
-            error["error"]
-                .as_str()
-                .unwrap()
-                .contains("at least 4 seconds")
-        );
+            .expect("legacy fields must not affect request parsing");
+        assert_eq!(args.template, "Yokogawa CentumVP");
+        assert_eq!(args.relay_amp, 10.0);
     }
 
     #[tokio::test]
@@ -1479,10 +1372,8 @@ mod tests {
     }
 
     /// Omits every field with a `#[serde(default = "...")]` custom default function. Every
-    /// other test in this module sets these explicitly (for fast, deterministic convergence),
-    /// which left the default-value functions themselves untested. Cancels immediately after
-    /// starting rather than waiting for completion, since `poll_interval_ms` here really is
-    /// the slow, real CLI default (800ms/tick).
+    /// other test in this module sets these explicitly, which left the simulator defaults
+    /// themselves untested. The timing values are global configuration, not request defaults.
     #[tokio::test]
     async fn omitted_fields_with_custom_defaults_fall_back_to_the_cli_defaults() {
         let state = crate::test_support::in_memory_state().await;
@@ -1493,10 +1384,6 @@ mod tests {
         object.remove("sim_dead_time");
         object.remove("sim_initial_pv");
         object.remove("sim_initial_mv");
-        object.remove("poll_interval_ms");
-        object.remove("timeout_secs");
-        object.remove("op_timeout_secs");
-        object.remove("restore_timeout_secs");
 
         let parsed: StartRunRequest = serde_json::from_value(request.clone()).unwrap();
         assert_eq!(parsed.sim_gain, 1.0);
@@ -1504,10 +1391,6 @@ mod tests {
         assert_eq!(parsed.sim_dead_time, 5.0);
         assert_eq!(parsed.sim_initial_pv, 50.0);
         assert_eq!(parsed.sim_initial_mv, 50.0);
-        assert_eq!(parsed.poll_interval_ms, 800);
-        assert_eq!(parsed.timeout_secs, 3600);
-        assert_eq!(parsed.op_timeout_secs, 30);
-        assert_eq!(parsed.restore_timeout_secs, 30);
 
         let response = post_json(crate::build_router(state.clone()), "/api/runs", request).await;
         assert_eq!(response.status(), StatusCode::CREATED);
@@ -1515,23 +1398,6 @@ mod tests {
 
         state.active_run.cancel(run_id).await;
         wait_for_outcome(&state, run_id).await;
-    }
-
-    #[tokio::test]
-    async fn zero_poll_interval_ms_is_rejected() {
-        let app = crate::build_router(crate::test_support::in_memory_state().await);
-        let mut request = fast_simulator_request_json();
-        request["poll_interval_ms"] = serde_json::json!(0);
-
-        let response = post_json(app, "/api/runs", request).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let error = body_json(response).await;
-        assert!(
-            error["error"]
-                .as_str()
-                .unwrap()
-                .contains("poll_interval_ms")
-        );
     }
 
     #[tokio::test]

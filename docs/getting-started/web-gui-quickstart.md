@@ -65,7 +65,7 @@ a trusted network.
 ## Run a tune
 
 1. **Tune** (`/runs/new`) — the app's default landing page, and the first item in the header
-   nav. One form covering everything `bhtune tune` takes as flags: connection (which driver —
+   nav. One form covering the per-tune settings for `bhtune tune`: connection (which driver —
    OPC DA or the simulator), tag mapping, test parameters (process type, controller type,
    relay amplitude, cycles), simulator parameters (gain/time constant/dead time/noise, when
    the simulator driver is selected), and automatic PID settings. Submitting POSTs to the same
@@ -77,13 +77,17 @@ a trusted network.
    the tune.
 
    - Switching the driver to **Simulator** greys out every field the simulator genuinely
-     ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, quality/timeout
+     ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, and quality
      options) rather than hiding them, so the form doesn't reflow and the greyed field itself
      explains what the simulator doesn't use. The template stays enabled intentionally: the
      simulator ignores its DCS tag mappings, but its PID type and unit conventions still format
      calculated results (for example, Yokogawa uses proportional band while the other built-in
      templates use gain). PV/MV ranges, controller direction, and every engine parameter also
      stay enabled because the simulator needs them.
+   - Test parameters show concrete **Process defaults** for cycles to skip, cycles to count, and
+     noise protection based on the selected Process type. Changing Process type replaces all
+     three values; **Reset process defaults** restores those values without resetting the rest
+     of the form. These are process-type defaults rather than DCS/PLC template settings.
    - Switching to **OPC DA** reveals a **Browse servers** button next to the ProgID field.
      It opens an on-demand picker populated by the bridge gateway, listing every OPC DA server
      registered on it as clickable buttons — no need to already know (or spell correctly) a
@@ -135,6 +139,11 @@ a trusted network.
      parameters, Loop mapping, Simulator parameters, and Automatic PID settings are independently
      collapsible and open by default. Controls that do not apply to the selected driver stay
      visible but disabled with an explanation.
+   - Installation-wide MRFT timing and safety values are managed on the **Config** page, not on
+     this form: MRFT delay, poll interval, whole-run timeout, driver-operation timeout, and
+     restore timeout. They are stored under `[tuning]` in `bhtune.toml`, apply to future tune
+     preparations, and are frozen into each run when it starts. The three process-dependent
+     defaults in **Test parameters** remain per-tune values.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
    in real time over Server-Sent Events (`GET /api/runs/:id/stream`), with line-only PV/MV series
@@ -222,10 +231,11 @@ curl http://127.0.0.1:8787/api/health
 
 The web GUI displays this application version beside its connection status in the header.
 
-Starting a tune over HTTP directly (no browser) needs the same fields the CLI's `tune`/
-`simulate` commands take — see `/api/docs` for the full request schema, including the extra
+Starting a tune over HTTP directly (no browser) needs the same per-tune fields as the CLI's
+`tune`/`simulate` commands — see `/api/docs` for the full request schema, including the extra
 range/direction fields the simulator driver requires that a real OPC DA driver would instead
-read live from the DCS.
+read live from the DCS. The global `[tuning]` settings are read from the server's configuration
+when the run is prepared.
 
 ## Next steps
 
@@ -233,5 +243,5 @@ read live from the DCS.
   unattended runs.
 - [Safety](../guides/safety.md) — cancellation, quality enforcement, and write-back rollback,
   all shared between the CLI and the server.
-- [Configuration](../reference/config.md) — TOML-backed global quality and retention policies.
+- [Configuration](../reference/config.md) — TOML-backed global tuning, quality, and retention policies.
 - [DCS/PLC templates](../dcs-templates.md) — the tag-mapping system behind the Templates screen.

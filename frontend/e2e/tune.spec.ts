@@ -47,13 +47,13 @@ async function startTune(page: Page) {
  * results are sane and correctly ordered, not just that the page didn't crash.
  *
  * Mirrors `crates/bhtune-cli/tests/e2e_simulator.rs`'s own "flow / PI / reverse" matrix
- * case and its millisecond-scale simulator parameters (`sim_tau`/`sim_dead_time`/
- * `poll_interval_ms`), for the same reason that test uses them: the form's human-oriented
- * defaults (`sim_tau=2`, `poll_interval_ms=800`) are realistic for an actual plant loop but
- * would make this test take minutes. `direction=reverse` is likewise required -- confirmed
- * (see that Rust test's own comment) to be the only direction that produces a genuine relay
- * oscillation against this fixed simulator configuration; it's already the form's default
- * whenever `driver=simulator`, so it isn't set explicitly below.
+ * case and its millisecond-scale simulator parameters (`sim_tau`/`sim_dead_time`). The
+ * Playwright server starts with a temporary global `[tuning]` configuration using a 5 ms
+ * poll interval and a 30 s whole-run timeout, since those values are installation-wide
+ * settings rather than New Tune form fields. `direction=reverse` is likewise required --
+ * confirmed (see that Rust test's own comment) to be the only direction that produces a
+ * genuine relay oscillation against this fixed simulator configuration; it's already the
+ * form's default whenever `driver=simulator`, so it isn't set explicitly below.
  */
 test.describe("running a tune", () => {
   test.beforeEach(async ({ page }) => {
@@ -72,6 +72,13 @@ test.describe("running a tune", () => {
         });
       }
     });
+    await page.route("**/api/runs/last-request", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "null",
+      }),
+    );
   });
 
   test("completes a full simulator tune and renders sane, ordered results", async ({
@@ -81,11 +88,12 @@ test.describe("running a tune", () => {
 
     await page.goto("/runs/new");
 
-    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
+    await page
+      .getByRole("combobox", { name: "Template", exact: true })
+      .selectOption("Yokogawa CentumVP");
     await page.getByLabel("Cycles to skip").fill("1");
     await page.getByLabel("Cycles to count").fill("2");
     await page.getByLabel("Noise protection (s)").fill("0");
-    await page.getByLabel("Poll interval (ms)").fill("5");
     await page.getByLabel("Time constant τ (s)").fill("0.01");
     await page.getByLabel("Dead time (s)").fill("0.025");
 
@@ -204,11 +212,12 @@ test.describe("running a tune", () => {
     test.setTimeout(45_000);
 
     await page.goto("/runs/new");
-    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
+    await page
+      .getByRole("combobox", { name: "Template", exact: true })
+      .selectOption("Yokogawa CentumVP");
     await page.getByLabel("Cycles to skip").fill("1");
     await page.getByLabel("Cycles to count").fill("2");
     await page.getByLabel("Noise protection (s)").fill("0");
-    await page.getByLabel("Poll interval (ms)").fill("5");
     await page.getByLabel("Time constant τ (s)").fill("0.01");
     await page.getByLabel("Dead time (s)").fill("0.025");
 
@@ -240,11 +249,12 @@ test.describe("running a tune", () => {
     test.setTimeout(45_000);
 
     await page.goto("/runs/new");
-    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
+    await page
+      .getByRole("combobox", { name: "Template", exact: true })
+      .selectOption("Yokogawa CentumVP");
     await page.getByLabel("Cycles to skip").fill("1");
     await page.getByLabel("Cycles to count").fill("2");
     await page.getByLabel("Noise protection (s)").fill("0");
-    await page.getByLabel("Poll interval (ms)").fill("5");
     await page.getByLabel("Time constant τ (s)").fill("0.01");
     await page.getByLabel("Dead time (s)").fill("0.025");
 
@@ -274,12 +284,11 @@ test.describe("running a tune", () => {
 
     await page.goto("/runs/new");
 
-    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
-    // Deliberately slower than the completion test above (but still far faster than the
-    // form's human-oriented defaults) -- reliably leaves a multi-second window to click
-    // "Cancel tune" before the tune would otherwise finish on its own, without wasting CI
-    // time waiting on the form's real ~minutes-scale defaults.
-    await page.getByLabel("Poll interval (ms)").fill("200");
+    await page
+      .getByRole("combobox", { name: "Template", exact: true })
+      .selectOption("Yokogawa CentumVP");
+    // Deliberately slower than the completion test above -- reliably leaves a multi-second
+    // window to click "Cancel tune" before the tune would otherwise finish on its own.
     await page.getByLabel("Time constant τ (s)").fill("1");
     await page.getByLabel("Dead time (s)").fill("1");
 

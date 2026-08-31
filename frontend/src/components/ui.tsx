@@ -351,6 +351,7 @@ export function NumberField({
         step={step}
         min={min}
         max={max}
+        required={required}
         disabled={disabled}
         onChange={(e) =>
           onChange(e.target.value === "" ? "" : e.target.valueAsNumber)

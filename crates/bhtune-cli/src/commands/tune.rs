@@ -22,10 +22,10 @@ use bhtune_core::{
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, MvActuationKind, MvActuationStatus, NewTuneMvActuation, NewTuneWrite,
-    RollbackState, SampleQuality, TimingBasis, TimingMetrics, TuneDriver, TuneMvActuationRow,
-    TuneResultRow, TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
-    WriteReadback,
+    DcsTemplateRow, EffectiveTuning, MvActuationKind, MvActuationStatus, NewTuneMvActuation,
+    NewTuneWrite, RollbackState, SampleQuality, TimingBasis, TimingMetrics, TuneDriver,
+    TuneMvActuationRow, TuneResultRow, TuneRunInitialReadings, TuneRunRow, TuneSampleRow,
+    TuneWriteRow, WriteKind, WriteReadback,
 };
 use bhtune_driver::{Driver, TagValue, TagWrite};
 use chrono::{DateTime, Utc};
@@ -49,6 +49,52 @@ const MV_SPAN_TOLERANCE_FRACTION: f32 = 0.001;
 const RELAY_STEP_TOLERANCE_FRACTION: f32 = 0.25;
 const MIN_RELAY_STEP: f32 = 0.01;
 
+/// Concrete timing policy frozen during [`prepare`] and carried unchanged through the
+/// complete tune lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EffectiveTiming {
+    mrft_delay_secs: u32,
+    poll_interval_ms: u64,
+    timeout_secs: u64,
+    op_timeout_secs: u64,
+    restore_timeout_secs: u64,
+}
+
+impl From<crate::config::EffectiveTuningConfig> for EffectiveTiming {
+    fn from(value: crate::config::EffectiveTuningConfig) -> Self {
+        Self {
+            mrft_delay_secs: value.mrft_delay_secs,
+            poll_interval_ms: value.poll_interval_ms,
+            timeout_secs: value.timeout_secs,
+            op_timeout_secs: value.op_timeout_secs,
+            restore_timeout_secs: value.restore_timeout_secs,
+        }
+    }
+}
+
+impl From<EffectiveTiming> for EffectiveTuning {
+    fn from(value: EffectiveTiming) -> Self {
+        Self {
+            mrft_delay_secs: value.mrft_delay_secs,
+            poll_interval_ms: value.poll_interval_ms,
+            timeout_secs: value.timeout_secs,
+            op_timeout_secs: value.op_timeout_secs,
+            restore_timeout_secs: value.restore_timeout_secs,
+        }
+    }
+}
+
+#[cfg(test)]
+fn test_effective_timing(args: &TuneArgs) -> EffectiveTiming {
+    EffectiveTiming {
+        mrft_delay_secs: args.mrft_delay,
+        poll_interval_ms: args.poll_interval_ms,
+        timeout_secs: args.timeout_secs,
+        op_timeout_secs: args.op_timeout_secs,
+        restore_timeout_secs: args.restore_timeout_secs,
+    }
+}
+
 /// Validates the restore budget shared by CLI and HTTP-started tunes.
 ///
 /// Every driver requires a positive timeout. OPC DA additionally needs the complete fixed MV
@@ -59,11 +105,14 @@ pub fn validate_restore_timeout_secs(
     restore_timeout_secs: u64,
 ) -> anyhow::Result<()> {
     if restore_timeout_secs == 0 {
-        anyhow::bail!("--restore-timeout-secs must be greater than zero");
+        anyhow::bail!("[tuning].restore_timeout_secs must be greater than zero");
     }
-    if driver == DriverKindArg::Opcda && restore_timeout_secs < MV_ACTUATION_CONFIRMATION_SECS {
+    if driver == DriverKindArg::Opcda
+        && restore_timeout_secs < crate::config::MIN_OPC_RESTORE_TIMEOUT_SECS
+    {
         anyhow::bail!(
-            "--restore-timeout-secs must be at least {MV_ACTUATION_CONFIRMATION_SECS} seconds for OPC DA MV confirmation"
+            "[tuning].restore_timeout_secs must be at least {} seconds for OPC DA MV confirmation",
+            crate::config::MIN_OPC_RESTORE_TIMEOUT_SECS
         );
     }
     Ok(())
@@ -80,8 +129,9 @@ pub enum TuneOutcome {
     /// The user pressed Ctrl+C; the loop was restored to its original mode/setpoint before
     /// returning.
     Aborted,
-    /// `--timeout-secs` elapsed before the engine reported completion; the loop was restored
-    /// to its original mode/setpoint before returning, exactly like [`TuneOutcome::Aborted`]
+    /// `[tuning].timeout_secs` elapsed before the engine reported completion; the loop was
+    /// restored to its original mode/setpoint before returning, exactly like
+    /// [`TuneOutcome::Aborted`]
     /// but distinguished so a scheduler's alerting can tell "this run had to be killed for
     /// running too long" apart from "an operator stopped it on purpose".
     TimedOut,
@@ -105,9 +155,10 @@ pub enum TuneOutcome {
     WriteBackFailed,
     /// The run ended (via normal completion, Ctrl+C, or a timeout) without being able to
     /// confirm the loop was fully restored to its pre-test mode/MV/setpoint -- a second
-    /// Ctrl+C arrived while the restore was in flight, or `--restore-timeout-secs` elapsed
-    /// first. The loop may still be sitting at a relay-test MV/mode; an operator must check
-    /// it by hand using the tag/value named in the warning printed to stderr. See
+    /// Ctrl+C arrived while the restore was in flight, or
+    /// `[tuning].restore_timeout_secs` elapsed first. The loop may still be sitting at a
+    /// relay-test MV/mode; an operator must check it by hand using the tag/value named in the
+    /// warning printed to stderr. See
     /// `safety-cancellation` in AGENTS.md.
     RestoreIncomplete,
 }
@@ -172,12 +223,13 @@ pub(crate) async fn run_with_ctrl_c(
         tags,
         driver,
         config,
+        timing,
         time_anchor,
         write_pid,
         allow_uncertain_quality,
     } = prepared;
 
-    let outcome = execute(
+    let outcome = execute_with_timing(
         pool,
         run_id,
         &args,
@@ -185,6 +237,7 @@ pub(crate) async fn run_with_ctrl_c(
         &tags,
         driver.as_ref(),
         config,
+        timing,
         time_anchor,
         write_pid,
         allow_uncertain_quality,
@@ -241,6 +294,7 @@ pub struct PreparedTune {
     tags: LoopTags,
     driver: Box<dyn Driver>,
     config: LoopConfig,
+    timing: EffectiveTiming,
     time_anchor: RunTimeAnchor,
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
@@ -280,7 +334,6 @@ struct RequestSnapshot<'a> {
     cycles_skip: Option<u32>,
     cycles_count: Option<u32>,
     noise_protection_secs: Option<u32>,
-    mrft_delay: u32,
     driver: TuneDriver,
     bridge_host: Option<&'a str>,
     server: Option<&'a str>,
@@ -297,13 +350,9 @@ struct RequestSnapshot<'a> {
     mv_range_low: Option<f32>,
     direction: Option<ControllerDirection>,
     tag_overrides: Option<&'a TagOverrides>,
-    poll_interval_ms: u64,
-    timeout_secs: u64,
     notes: Option<&'a str>,
     yes: bool,
     write_pid: Option<ResponseLevel>,
-    op_timeout_secs: u64,
-    restore_timeout_secs: u64,
 }
 
 /// The fast setup phase shared by [`run_with_ctrl_c`] (the CLI's entry point) and [`drive`]
@@ -330,7 +379,11 @@ pub async fn prepare(
              human present to confirm must be an explicit, deliberate choice"
         );
     }
-    validate_restore_timeout_secs(args.driver, args.restore_timeout_secs)?;
+    let timing: EffectiveTiming = crate::config::resolve_and_validate_tuning_config(
+        &app_config.tuning,
+        args.driver == DriverKindArg::Opcda,
+    )?
+    .into();
     if let Some(tag_overrides) = &args.tag_overrides {
         tag_overrides.validate()?;
     }
@@ -354,7 +407,6 @@ pub async fn prepare(
         cycles_skip: args.cycles_skip,
         cycles_count: args.cycles_count,
         noise_protection_secs: args.noise_protection_secs,
-        mrft_delay: args.mrft_delay,
         driver: db_driver,
         bridge_host: args.bridge_host.as_deref(),
         server: args.server.as_deref(),
@@ -371,13 +423,9 @@ pub async fn prepare(
         mv_range_low: args.mv_range_low,
         direction: args.direction.map(Into::into),
         tag_overrides: args.tag_overrides.as_ref(),
-        poll_interval_ms: args.poll_interval_ms,
-        timeout_secs: args.timeout_secs,
         notes: args.notes.as_deref(),
         yes: args.yes,
         write_pid: args.write_pid.map(Into::into),
-        op_timeout_secs: args.op_timeout_secs,
-        restore_timeout_secs: args.restore_timeout_secs,
     })
     .expect(
         "RequestSnapshot serialization is infallible: plain enum/scalar fields, no maps and \
@@ -402,9 +450,9 @@ pub async fn prepare(
     let template_origin = template_row.origin;
     let template = template_row.template;
 
-    let config = build_loop_config(&args)?;
+    let config = build_loop_config_with_timing(&args, timing)?;
     let tags = build_loop_tags(&args, &template)?;
-    let driver = crate::driver::build(&args).await?;
+    let driver = crate::driver::build_with_poll_interval(&args, timing.poll_interval_ms).await?;
 
     let time_anchor = RunTimeAnchor::now();
     let started_at = time_anchor.utc();
@@ -420,6 +468,7 @@ pub async fn prepare(
         started_at,
     )
     .await?;
+    TuneRunRow::record_effective_tuning(pool, run.id, timing.into()).await?;
     TuneRunRow::record_allow_uncertain_quality(pool, run.id, allow_uncertain_quality).await?;
 
     // The *resolved, effective* connection this run actually used -- `None`/`None` for a
@@ -460,6 +509,7 @@ pub async fn prepare(
         tags,
         driver,
         config,
+        timing,
         time_anchor,
         write_pid,
         allow_uncertain_quality,
@@ -506,12 +556,13 @@ pub async fn drive(
         tags,
         driver,
         config,
+        timing,
         time_anchor,
         write_pid,
         allow_uncertain_quality,
     } = prepared;
 
-    let outcome = execute(
+    let outcome = execute_with_timing(
         pool,
         run_id,
         &args,
@@ -519,6 +570,7 @@ pub async fn drive(
         &tags,
         driver.as_ref(),
         config,
+        timing,
         time_anchor,
         write_pid,
         allow_uncertain_quality,
@@ -564,7 +616,7 @@ enum RunOutcome {
     Aborted(AbortReason),
     /// The run ended (via normal completion or [`RunOutcome::Aborted`]) but the subsequent
     /// restore attempt ([`attempt_restore_with_actuation`]) could not be confirmed -- a
-    /// second Ctrl+C arrived, or `--restore-timeout-secs` elapsed.
+    /// second Ctrl+C arrived, or `[tuning].restore_timeout_secs` elapsed.
     /// `reason` is a human-readable description of what happened, already including the
     /// original abort trigger (if any) -- see `execute`'s composition of it. Write-back is
     /// always skipped in this case, since writing new PID constants to a loop whose mode/MV
@@ -579,11 +631,11 @@ enum RunOutcome {
 enum AbortReason {
     /// Ctrl+C.
     UserInterrupt,
-    /// `--timeout-secs` elapsed before the engine reported completion. Carries the
+    /// `[tuning].timeout_secs` elapsed before the engine reported completion. Carries the
     /// configured limit that was hit, for the printed/JSON summary.
     Timeout { timeout_secs: u64 },
     /// A single driver read/write during a poll tick did not resolve within
-    /// `--op-timeout-secs` -- distinct from [`AbortReason::Timeout`], which bounds the whole
+    /// `[tuning].op_timeout_secs` -- distinct from [`AbortReason::Timeout`], which bounds the whole
     /// run rather than one operation. Carries the tag that stalled and the configured limit,
     /// for the printed/JSON summary. Maps to the same [`TuneOutcome::TimedOut`] as
     /// `Timeout`, since both mean "gave up waiting", differing only in what exactly timed
@@ -716,7 +768,7 @@ fn print_table_summary(run_id: i64, outcome: &RunOutcome) {
         }
         RunOutcome::Aborted(AbortReason::Timeout { timeout_secs }) => {
             println!(
-                "Tune aborted: exceeded the {timeout_secs}s --timeout-secs limit before completing; loop restored."
+                "Tune aborted: exceeded the {timeout_secs}s [tuning].timeout_secs limit before completing; loop restored."
             );
         }
         RunOutcome::Aborted(AbortReason::OperationTimedOut {
@@ -724,7 +776,7 @@ fn print_table_summary(run_id: i64, outcome: &RunOutcome) {
             op_timeout_secs,
         }) => {
             println!(
-                "Tune aborted: tag '{tag}' did not respond within the {op_timeout_secs}s --op-timeout-secs limit; loop restored."
+                "Tune aborted: tag '{tag}' did not respond within the {op_timeout_secs}s [tuning].op_timeout_secs limit; loop restored."
             );
         }
         RunOutcome::Aborted(AbortReason::PoorQuality { tag, quality }) => {
@@ -849,7 +901,10 @@ where
     serialize(json).unwrap_or_else(|error| format!("{{\"error\": \"{error}\"}}"))
 }
 
-fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
+fn build_loop_config_with_timing(
+    args: &TuneArgs,
+    timing: EffectiveTiming,
+) -> anyhow::Result<LoopConfig> {
     let process_type: ProcessType = args.process_type.into();
     let controller_type: ControllerType = args.controller_type.into();
 
@@ -872,7 +927,7 @@ fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
         noise_protection_secs: args
             .noise_protection_secs
             .unwrap_or_else(|| process_type.default_noise_protection_secs()),
-        mrft_delay_secs: args.mrft_delay,
+        mrft_delay_secs: timing.mrft_delay_secs,
     };
     // Real range validation at the model level (see `LoopConfig::validate`), not just this
     // flag parse -- catches an out-of-range `--relay-amp` (including the legacy predecessor's
@@ -880,6 +935,11 @@ fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
     // connection or database write.
     config.validate()?;
     Ok(config)
+}
+
+#[cfg(test)]
+fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
+    build_loop_config_with_timing(args, test_effective_timing(args))
 }
 
 /// Builds the loop's full tag set. For `--driver opcda`, derives from `--tagname` and the
@@ -1315,7 +1375,7 @@ async fn persist_completed_results(
 /// concrete (and therefore `!Send`) future type, which is exactly the compile error this
 /// split avoids -- see `ActiveRun::start`'s `Send` bound in `bhtune-server`.
 #[allow(clippy::too_many_arguments)]
-async fn execute<R: std::io::BufRead>(
+async fn execute_with_timing<R: std::io::BufRead>(
     pool: &SqlitePool,
     run_id: i64,
     args: &TuneArgs,
@@ -1323,6 +1383,7 @@ async fn execute<R: std::io::BufRead>(
     tags: &LoopTags,
     driver: &dyn Driver,
     config: LoopConfig,
+    effective_timing: EffectiveTiming,
     time_anchor: RunTimeAnchor,
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
@@ -1359,7 +1420,7 @@ async fn execute<R: std::io::BufRead>(
     let mut guard = MutationGuard::default();
     let mut mv_actuations = MvActuationTracker::for_run(args, &initial);
     if let Err(e) = transition_to_manual(driver, tags, template, &initial, &mut guard).await {
-        return Err(restore_best_effort_then_propagate(
+        return Err(restore_best_effort_then_propagate_with_timing(
             pool,
             run_id,
             driver,
@@ -1368,6 +1429,7 @@ async fn execute<R: std::io::BufRead>(
             &initial,
             &guard,
             args,
+            effective_timing,
             allow_uncertain_quality,
             ctrl_c,
             &mut mv_actuations,
@@ -1400,12 +1462,13 @@ async fn execute<R: std::io::BufRead>(
         DriverKindArg::Opcda => TimingBasis::LiveMonotonic,
         DriverKindArg::Simulator => TimingBasis::SimulatedFixedStep,
     };
-    let mut timing = PollTimingAccumulator::new(timing_basis, args.poll_interval_ms);
+    let mut timing = PollTimingAccumulator::new(timing_basis, effective_timing.poll_interval_ms);
 
-    let poll_result = run_polling_loop(
+    let poll_result = run_polling_loop_with_timing(
         pool,
         run_id,
         args,
+        effective_timing,
         tags,
         driver,
         &mut engine,
@@ -1438,6 +1501,7 @@ async fn execute<R: std::io::BufRead>(
                 pool,
                 run_id,
                 args,
+                effective_timing,
                 template,
                 tags,
                 driver,
@@ -1461,6 +1525,7 @@ async fn execute<R: std::io::BufRead>(
                 pool,
                 run_id,
                 args,
+                effective_timing,
                 template,
                 tags,
                 driver,
@@ -1484,6 +1549,7 @@ async fn execute<R: std::io::BufRead>(
                 &initial,
                 &guard,
                 args,
+                effective_timing,
                 allow_uncertain_quality,
                 ctrl_c,
                 &mut mv_actuations,
@@ -1495,11 +1561,46 @@ async fn execute<R: std::io::BufRead>(
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn execute<R: std::io::BufRead>(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneArgs,
+    template: &DcsTemplate,
+    tags: &LoopTags,
+    driver: &dyn Driver,
+    config: LoopConfig,
+    time_anchor: RunTimeAnchor,
+    write_pid: Option<ResponseLevel>,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    reader: &mut R,
+) -> anyhow::Result<RunOutcome> {
+    execute_with_timing(
+        pool,
+        run_id,
+        args,
+        template,
+        tags,
+        driver,
+        config,
+        test_effective_timing(args),
+        time_anchor,
+        write_pid,
+        allow_uncertain_quality,
+        ctrl_c,
+        reader,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn attempt_and_record_restore(
     pool: &SqlitePool,
     run_id: i64,
     args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
@@ -1509,10 +1610,11 @@ async fn attempt_and_record_restore(
     ctrl_c: &mut CtrlC,
     mv_actuations: &mut Option<MvActuationTracker>,
 ) -> RestoreAttempt {
-    let restore_attempt = attempt_restore_with_actuation(
+    let restore_attempt = attempt_restore_with_actuation_with_timing(
         pool,
         run_id,
         args,
+        effective_timing,
         driver,
         tags,
         template,
@@ -1538,6 +1640,7 @@ async fn finish_completed_run<R: std::io::BufRead>(
     pool: &SqlitePool,
     run_id: i64,
     args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     template: &DcsTemplate,
     tags: &LoopTags,
     driver: &dyn Driver,
@@ -1569,7 +1672,7 @@ async fn finish_completed_run<R: std::io::BufRead>(
     )
     .await
     {
-        let error = restore_best_effort_then_propagate(
+        let error = restore_best_effort_then_propagate_with_timing(
             pool,
             run_id,
             driver,
@@ -1578,6 +1681,7 @@ async fn finish_completed_run<R: std::io::BufRead>(
             initial,
             guard,
             args,
+            effective_timing,
             allow_uncertain_quality,
             ctrl_c,
             mv_actuations,
@@ -1592,6 +1696,7 @@ async fn finish_completed_run<R: std::io::BufRead>(
         pool,
         run_id,
         args,
+        effective_timing,
         driver,
         tags,
         template,
@@ -1638,6 +1743,7 @@ async fn finish_aborted_run(
     pool: &SqlitePool,
     run_id: i64,
     args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     template: &DcsTemplate,
     tags: &LoopTags,
     driver: &dyn Driver,
@@ -1653,6 +1759,7 @@ async fn finish_aborted_run(
         pool,
         run_id,
         args,
+        effective_timing,
         driver,
         tags,
         template,
@@ -1701,6 +1808,7 @@ async fn finish_failed_run(
     initial: &InitialState,
     guard: &MutationGuard,
     args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     mv_actuations: &mut Option<MvActuationTracker>,
@@ -1709,9 +1817,9 @@ async fn finish_failed_run(
 ) -> anyhow::Result<RunOutcome> {
     // Best-effort: a failed test still stroked the valve, so try to put it back even
     // though the overall run is going to be reported as failed regardless. Still
-    // bounded/interruptible (a second Ctrl+C or `--restore-timeout-secs` still cuts
+    // bounded/interruptible (a second Ctrl+C or `[tuning].restore_timeout_secs` still cuts
     // it short) and still warns loudly on an incomplete restore.
-    let error = restore_best_effort_then_propagate(
+    let error = restore_best_effort_then_propagate_with_timing(
         pool,
         run_id,
         driver,
@@ -1720,6 +1828,7 @@ async fn finish_failed_run(
         initial,
         guard,
         args,
+        effective_timing,
         allow_uncertain_quality,
         ctrl_c,
         mv_actuations,
@@ -2304,7 +2413,7 @@ async fn restore_mode_attribute_step(
 }
 
 /// The outcome of racing one driver call ([`read_pv_sample`]/[`write_value`], during a poll
-/// tick) against Ctrl+C and `--op-timeout-secs` -- see [`bounded_driver_call`]. Distinct
+/// tick) against Ctrl+C and `[tuning].op_timeout_secs` -- see [`bounded_driver_call`]. Distinct
 /// from a genuine `Err` from the call itself (a rejected write, a malformed value, a
 /// transport error), which [`bounded_driver_call`] still propagates via `?` rather than
 /// wrapping here, since those are real failures, not "gave up waiting".
@@ -2314,7 +2423,7 @@ enum TickOperation<T> {
     Completed(T),
     /// Ctrl+C (or a second Ctrl+C) fired first; `fut` was dropped, abandoning it in flight.
     Cancelled,
-    /// `--op-timeout-secs` elapsed first; `fut` was dropped, abandoning it in flight.
+    /// `[tuning].op_timeout_secs` elapsed first; `fut` was dropped, abandoning it in flight.
     TimedOut,
 }
 
@@ -2323,7 +2432,7 @@ enum TickOperation<T> {
 /// polling loop -- or the restore, via [`attempt_restore_with_actuation`] -- uninterruptible.
 /// This is what
 /// fixes finding 2 of the live-plant safety review: previously, `run_polling_loop`'s Ctrl+C
-/// and `--timeout-secs` listeners only ran *between* tick-body awaits, so a hung call inside
+/// and `[tuning].timeout_secs` listeners only ran *between* tick-body awaits, so a hung call inside
 /// one was invisible to both. `fut` is taken by value (not `&mut`) and is simply dropped,
 /// abandoning the in-flight operation, on the losing branches -- there is no cancellation
 /// signal sent to the driver itself, only to this call's own wait for it. A genuine `Err`
@@ -2558,9 +2667,10 @@ fn mv_verification_read_limit(
 /// [`AbortReason::PoorQuality`]. Only a finite, acceptable-quality mismatch can become
 /// [`AbortReason::MvActuationUnconfirmed`].
 #[allow(clippy::too_many_arguments)]
-async fn verify_pending_mv_actuation_with(
+async fn verify_pending_mv_actuation_with_timing(
     pool: &SqlitePool,
-    args: &TuneArgs,
+    _args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     tag: &str,
     driver: &dyn Driver,
     ctrl_c: &mut CtrlC,
@@ -2578,8 +2688,16 @@ async fn verify_pending_mv_actuation_with(
         return Ok(None);
     }
 
-    match read_pending_mv_verification(args, tag, driver, ctrl_c, tracker, trigger, call_limit)
-        .await?
+    match read_pending_mv_verification_with_timing(
+        effective_timing,
+        tag,
+        driver,
+        ctrl_c,
+        tracker,
+        trigger,
+        call_limit,
+    )
+    .await?
     {
         PendingMvVerificationRead::Deferred => Ok(None),
         PendingMvVerificationRead::DeadlineTimedOut {
@@ -2632,7 +2750,7 @@ async fn verify_pending_mv_actuation_with(
             checked_instant,
         } => match resolve_pending_mv_read(
             pool,
-            args,
+            effective_timing,
             tag,
             tracker,
             operation,
@@ -2649,6 +2767,36 @@ async fn verify_pending_mv_actuation_with(
             }
         },
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn verify_pending_mv_actuation_with(
+    pool: &SqlitePool,
+    args: &TuneArgs,
+    tag: &str,
+    driver: &dyn Driver,
+    ctrl_c: &mut CtrlC,
+    allow_uncertain_quality: bool,
+    tracker: &mut MvActuationTracker,
+    trigger: MvVerificationTrigger,
+    call_limit: MvVerificationCallLimit,
+    audit_policy: ActuationAuditPolicy,
+) -> anyhow::Result<Option<AbortReason>> {
+    verify_pending_mv_actuation_with_timing(
+        pool,
+        args,
+        test_effective_timing(args),
+        tag,
+        driver,
+        ctrl_c,
+        allow_uncertain_quality,
+        tracker,
+        trigger,
+        call_limit,
+        audit_policy,
+    )
+    .await
 }
 
 enum PendingMvVerificationRead {
@@ -2699,8 +2847,8 @@ fn pending_verification_ready(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn read_pending_mv_verification(
-    args: &TuneArgs,
+async fn read_pending_mv_verification_with_timing(
+    effective_timing: EffectiveTiming,
     tag: &str,
     driver: &dyn Driver,
     ctrl_c: &mut CtrlC,
@@ -2717,7 +2865,7 @@ async fn read_pending_mv_verification(
             mv_verification_read_limit(trigger, pending, call_limit)
         };
         let read = bounded_driver_call(
-            args.op_timeout_secs,
+            effective_timing.op_timeout_secs,
             ctrl_c,
             read_numeric_sample(driver, tag),
         );
@@ -2731,6 +2879,7 @@ async fn read_pending_mv_verification(
                         call_limit = MvVerificationCallLimit::None;
                     }
                 }
+
                 MvVerificationLimitKind::Deadline => {
                     let pending = tracker
                         .pending
@@ -2770,10 +2919,33 @@ async fn read_pending_mv_verification(
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn read_pending_mv_verification(
+    args: &TuneArgs,
+    tag: &str,
+    driver: &dyn Driver,
+    ctrl_c: &mut CtrlC,
+    tracker: &mut MvActuationTracker,
+    trigger: MvVerificationTrigger,
+    call_limit: MvVerificationCallLimit,
+) -> anyhow::Result<PendingMvVerificationRead> {
+    read_pending_mv_verification_with_timing(
+        test_effective_timing(args),
+        tag,
+        driver,
+        ctrl_c,
+        tracker,
+        trigger,
+        call_limit,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn resolve_pending_mv_read(
     pool: &SqlitePool,
-    args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     tag: &str,
     tracker: &mut MvActuationTracker,
     operation: anyhow::Result<TickOperation<(f32, bhtune_driver::Quality)>>,
@@ -2828,7 +3000,7 @@ async fn resolve_pending_mv_read(
                 .expect("pending actuation existed before the verification read");
             let detail = format!(
                 "MV verification read did not complete within {} seconds",
-                args.op_timeout_secs
+                effective_timing.op_timeout_secs
             );
             record_final_actuation_observation(
                 pool,
@@ -2843,7 +3015,7 @@ async fn resolve_pending_mv_read(
             return Ok(PendingMvVerificationResult::Abort(
                 AbortReason::OperationTimedOut {
                     tag: tag.to_string(),
-                    op_timeout_secs: args.op_timeout_secs,
+                    op_timeout_secs: effective_timing.op_timeout_secs,
                 },
             ));
         }
@@ -3047,9 +3219,10 @@ async fn verify_pending_mv_actuation(
         .as_ref()
         .and_then(|pending| verification_trigger(pending, Instant::now()))
         .unwrap_or(MvVerificationTrigger::Scheduled);
-    verify_pending_mv_actuation_with(
+    verify_pending_mv_actuation_with_timing(
         pool,
         args,
+        test_effective_timing(args),
         tag,
         driver,
         ctrl_c,
@@ -3132,7 +3305,7 @@ fn utc_after_elapsed(now: DateTime<Utc>, elapsed: Duration) -> anyhow::Result<Da
 
 /// The outcome of [`attempt_restore_with_actuation`] -- whether the restore was confirmed to run
 /// every applicable step to completion, or was abandoned/only partially successful because a
-/// second Ctrl+C arrived, `--restore-timeout-secs` elapsed, or one or more individual restore
+/// second Ctrl+C arrived, `[tuning].restore_timeout_secs` elapsed, or one or more individual restore
 /// steps themselves failed.
 enum RestoreAttempt {
     /// The restore ran to completion and [`RestoreReport::all_succeeded`] was `true`. A
@@ -3140,7 +3313,7 @@ enum RestoreAttempt {
     /// [`RestoreAttempt::Incomplete`]
     /// below via the report's own failure summary.
     Confirmed,
-    /// The restore could not be confirmed: a second Ctrl+C arrived, `--restore-timeout-secs`
+    /// The restore could not be confirmed: a second Ctrl+C arrived, `[tuning].restore_timeout_secs`
     /// elapsed, or one or more restore steps failed. `reason` is a
     /// human-readable description of which, for composing into the final
     /// [`RunOutcome::RestoreIncomplete`] message and the stderr warning already printed by
@@ -3167,9 +3340,10 @@ enum RestoreHandoffOutcome {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn try_confirm_final_snapback_handoff(
+async fn try_confirm_final_snapback_handoff_with_timing(
     pool: &SqlitePool,
-    args: &TuneArgs,
+    _args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tag: &str,
     initial_mv: f32,
@@ -3208,7 +3382,7 @@ async fn try_confirm_final_snapback_handoff(
     let read = tokio::time::timeout_at(
         handoff_deadline,
         bounded_driver_call(
-            args.op_timeout_secs,
+            effective_timing.op_timeout_secs,
             ctrl_c,
             read_numeric_sample(driver, tag),
         ),
@@ -3251,7 +3425,7 @@ async fn try_confirm_final_snapback_handoff(
         TickOperation::TimedOut => {
             let detail = format!(
                 "the authoritative restore superseded the final MRFT snapback after its handoff read exceeded the {}s operation timeout",
-                args.op_timeout_secs
+                effective_timing.op_timeout_secs
             );
             record_handoff_observation_best_effort(pool, &pending, checked_at, None, None, &detail)
                 .await;
@@ -3302,10 +3476,11 @@ async fn try_confirm_final_snapback_handoff(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn restore_mv_with_verification(
+async fn restore_mv_with_verification_with_timing(
     pool: &SqlitePool,
     run_id: i64,
     args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tag: &str,
     initial_mv: f32,
@@ -3318,7 +3493,7 @@ async fn restore_mv_with_verification(
         let write = tokio::time::timeout_at(
             restore_deadline,
             bounded_driver_call(
-                args.op_timeout_secs,
+                effective_timing.op_timeout_secs,
                 ctrl_c,
                 write_value(driver, tag, initial_mv),
             ),
@@ -3326,8 +3501,8 @@ async fn restore_mv_with_verification(
         .await;
         return Ok(match write {
             Err(_) => RestoreMvOutcome::Interrupted(format!(
-                "the restore did not complete within the {}s --restore-timeout-secs limit",
-                args.restore_timeout_secs
+                "the restore did not complete within the {}s [tuning].restore_timeout_secs limit",
+                effective_timing.restore_timeout_secs
             )),
             Ok(Err(error)) => {
                 RestoreMvOutcome::Continue(RestoreStepOutcome::Failed(error.to_string()))
@@ -3341,7 +3516,7 @@ async fn restore_mv_with_verification(
                 }
                 TickOperation::TimedOut => RestoreStepOutcome::Failed(format!(
                     "MV restore write did not complete within {}s",
-                    args.op_timeout_secs
+                    effective_timing.op_timeout_secs
                 )),
             }),
         });
@@ -3351,9 +3526,10 @@ async fn restore_mv_with_verification(
         return Ok(RestoreMvOutcome::Continue(RestoreStepOutcome::Succeeded));
     }
 
-    match try_confirm_final_snapback_handoff(
+    match try_confirm_final_snapback_handoff_with_timing(
         pool,
         args,
+        effective_timing,
         driver,
         tag,
         initial_mv,
@@ -3378,7 +3554,7 @@ async fn restore_mv_with_verification(
     let write = tokio::time::timeout_at(
         restore_deadline,
         bounded_driver_call(
-            args.op_timeout_secs,
+            effective_timing.op_timeout_secs,
             ctrl_c,
             write_value(driver, tag, initial_mv),
         ),
@@ -3387,8 +3563,8 @@ async fn restore_mv_with_verification(
     match write {
         Err(_) => {
             return Ok(RestoreMvOutcome::Interrupted(format!(
-                "the restore did not complete within the {}s --restore-timeout-secs limit",
-                args.restore_timeout_secs
+                "the restore did not complete within the {}s [tuning].restore_timeout_secs limit",
+                effective_timing.restore_timeout_secs
             )));
         }
         Ok(Ok(TickOperation::Completed(()))) => {}
@@ -3401,7 +3577,7 @@ async fn restore_mv_with_verification(
             return Ok(RestoreMvOutcome::Continue(RestoreStepOutcome::Failed(
                 format!(
                     "MV restore write did not complete within {}s",
-                    args.op_timeout_secs
+                    effective_timing.op_timeout_secs
                 ),
             )));
         }
@@ -3439,9 +3615,10 @@ async fn restore_mv_with_verification(
             .as_ref()
             .and_then(|pending| verification_trigger(pending, Instant::now()))
             .unwrap_or(MvVerificationTrigger::Scheduled);
-        let verification = verify_pending_mv_actuation_with(
+        let verification = verify_pending_mv_actuation_with_timing(
             pool,
             args,
+            effective_timing,
             tag,
             driver,
             ctrl_c,
@@ -3478,8 +3655,8 @@ async fn restore_mv_with_verification(
             }
             Ok(Some(_)) if Instant::now() >= restore_deadline => {
                 return Ok(RestoreMvOutcome::Interrupted(format!(
-                    "the restore did not complete within the {}s --restore-timeout-secs limit",
-                    args.restore_timeout_secs
+                    "the restore did not complete within the {}s [tuning].restore_timeout_secs limit",
+                    effective_timing.restore_timeout_secs
                 )));
             }
             Ok(Some(reason)) => {
@@ -3494,6 +3671,64 @@ async fn restore_mv_with_verification(
             }
         }
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn try_confirm_final_snapback_handoff(
+    pool: &SqlitePool,
+    args: &TuneArgs,
+    driver: &dyn Driver,
+    tag: &str,
+    initial_mv: f32,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    tracker: &mut MvActuationTracker,
+    restore_deadline: Instant,
+) -> anyhow::Result<Option<RestoreHandoffOutcome>> {
+    try_confirm_final_snapback_handoff_with_timing(
+        pool,
+        args,
+        test_effective_timing(args),
+        driver,
+        tag,
+        initial_mv,
+        allow_uncertain_quality,
+        ctrl_c,
+        tracker,
+        restore_deadline,
+    )
+    .await
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn restore_mv_with_verification(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneArgs,
+    driver: &dyn Driver,
+    tag: &str,
+    initial_mv: f32,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    tracker: &mut Option<MvActuationTracker>,
+    restore_deadline: Instant,
+) -> anyhow::Result<RestoreMvOutcome> {
+    restore_mv_with_verification_with_timing(
+        pool,
+        run_id,
+        args,
+        test_effective_timing(args),
+        driver,
+        tag,
+        initial_mv,
+        allow_uncertain_quality,
+        ctrl_c,
+        tracker,
+        restore_deadline,
+    )
+    .await
 }
 
 /// Restores the loop, bounded by `restore_timeout_secs` and a second Ctrl+C, so a restore
@@ -3512,10 +3747,11 @@ async fn restore_mv_with_verification(
 /// only need to fold the returned `reason` into their own context (e.g. the original
 /// [`AbortReason`], if any) for the final [`RunOutcome`].
 #[allow(clippy::too_many_arguments)]
-async fn attempt_restore_with_actuation(
+async fn attempt_restore_with_actuation_with_timing(
     pool: &SqlitePool,
     run_id: i64,
     args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
@@ -3525,12 +3761,14 @@ async fn attempt_restore_with_actuation(
     ctrl_c: &mut CtrlC,
     mv_actuations: &mut Option<MvActuationTracker>,
 ) -> RestoreAttempt {
-    let restore_deadline = Instant::now() + Duration::from_secs(args.restore_timeout_secs);
+    let restore_deadline =
+        Instant::now() + Duration::from_secs(effective_timing.restore_timeout_secs);
     let mv = match restore_mv_outcome_or_failed(
-        restore_mv_with_verification(
+        restore_mv_with_verification_with_timing(
             pool,
             run_id,
             args,
+            effective_timing,
             driver,
             &tags.manipulated_variable,
             initial.mv_ini,
@@ -3567,13 +3805,45 @@ async fn attempt_restore_with_actuation(
         }
         () = tokio::time::sleep_until(restore_deadline) => {
             let reason = format!(
-                "the restore did not complete within the {}s --restore-timeout-secs limit",
-                args.restore_timeout_secs
+                "the restore did not complete within the {}s [tuning].restore_timeout_secs limit",
+                effective_timing.restore_timeout_secs
             );
             let _ = warn_restore_incomplete(tags, initial, &reason);
             RestoreAttempt::Incomplete { reason }
         }
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn attempt_restore_with_actuation(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneArgs,
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    mv_actuations: &mut Option<MvActuationTracker>,
+) -> RestoreAttempt {
+    attempt_restore_with_actuation_with_timing(
+        pool,
+        run_id,
+        args,
+        test_effective_timing(args),
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        allow_uncertain_quality,
+        ctrl_c,
+        mv_actuations,
+    )
+    .await
 }
 
 /// Prints a loud, operator-facing warning (to stderr, so it survives `--output json` and any
@@ -3700,7 +3970,7 @@ async fn record_timing_metrics_if_present(
 /// neither an incomplete restore nor a failure recording its status should ever mask the
 /// real reason the run is failing.
 #[allow(clippy::too_many_arguments)]
-async fn restore_best_effort_then_propagate(
+async fn restore_best_effort_then_propagate_with_timing(
     pool: &SqlitePool,
     run_id: i64,
     driver: &dyn Driver,
@@ -3709,15 +3979,17 @@ async fn restore_best_effort_then_propagate(
     initial: &InitialState,
     guard: &MutationGuard,
     args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     mv_actuations: &mut Option<MvActuationTracker>,
     err: anyhow::Error,
 ) -> anyhow::Error {
-    let attempt = attempt_restore_with_actuation(
+    let attempt = attempt_restore_with_actuation_with_timing(
         pool,
         run_id,
         args,
+        effective_timing,
         driver,
         tags,
         template,
@@ -3746,34 +4018,70 @@ async fn restore_best_effort_then_propagate(
     err
 }
 
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn restore_best_effort_then_propagate(
+    pool: &SqlitePool,
+    run_id: i64,
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    args: &TuneArgs,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    mv_actuations: &mut Option<MvActuationTracker>,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    restore_best_effort_then_propagate_with_timing(
+        pool,
+        run_id,
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        args,
+        test_effective_timing(args),
+        allow_uncertain_quality,
+        ctrl_c,
+        mv_actuations,
+        err,
+    )
+    .await
+}
+
 /// Distinguishes *why* [`run_polling_loop`] ended without a normal engine completion, so
 /// `execute` can record and report the right [`AbortReason`].
 enum PollOutcome {
-    /// The engine reported [`Action::Complete`] and any post-completion `--mrft-delay`
+    /// The engine reported [`Action::Complete`] and any post-completion
+    /// `[tuning].mrft_delay_secs`
     /// padding has elapsed.
     Completed(Action),
-    /// Ctrl+C, `--timeout-secs`, `--op-timeout-secs`, or a poor-quality PV sample ended the
+    /// Ctrl+C, `[tuning].timeout_secs`, `[tuning].op_timeout_secs`, or a poor-quality PV sample ended the
     /// run before that.
     Aborted(AbortReason),
 }
 
-/// Polls the driver on `args.poll_interval_ms`, driving `engine` once the pre-test
-/// `--mrft-delay` padding period has elapsed, and continuing to record (but not evaluate)
+/// Polls the driver on the frozen global polling interval, driving `engine` once the pre-test
+/// `[tuning].mrft_delay_secs` padding period has elapsed, and continuing to record (but not evaluate)
 /// samples for the same padding period after completion. Returns `Ok(PollOutcome::Completed`
 /// on a normal finish, `Ok(PollOutcome::Aborted)` if interrupted by Ctrl+C, by
-/// `args.timeout_secs` elapsing, or by a single driver call exceeding
-/// `args.op_timeout_secs` -- the last of these via [`bounded_driver_call`], which wraps
+/// the frozen whole-run timeout elapsing, or by a single driver call exceeding the frozen
+/// operation timeout -- the last of these via [`bounded_driver_call`], which wraps
 /// every driver read/write in the tick body so a stalled call is abandoned rather than
 /// awaited forever, keeping Ctrl+C and both timeouts effective even mid-hung-read/write. The
 /// outer `tokio::select!` below still separately covers the *idle* wait between ticks (via
 /// `ctrl_c`, shared with every `bounded_driver_call` inside the winning tick body -- see
 /// that function's doc comment for why reusing it across nested `select!`s is safe) and the
-/// whole-run `--timeout-secs` deadline.
+/// whole-run `[tuning].timeout_secs` deadline.
 #[allow(clippy::too_many_arguments)]
-async fn run_polling_loop(
+async fn run_polling_loop_with_timing(
     pool: &SqlitePool,
     run_id: i64,
     args: &TuneArgs,
+    effective_timing: EffectiveTiming,
     tags: &LoopTags,
     driver: &dyn Driver,
     engine: &mut MrftEngine,
@@ -3787,11 +4095,12 @@ async fn run_polling_loop(
 ) -> anyhow::Result<PollOutcome> {
     let start_time = time_anchor.utc();
     let mut tick_time =
-        TickTimeSource::for_driver(args.driver, time_anchor, args.poll_interval_ms)?;
-    let poll_interval = Duration::from_millis(args.poll_interval_ms.max(1));
+        TickTimeSource::for_driver(args.driver, time_anchor, effective_timing.poll_interval_ms)?;
+    let poll_interval = Duration::from_millis(effective_timing.poll_interval_ms);
     let mut next_poll_at = Instant::now();
 
-    let pre_delay_end = start_time + chrono::Duration::seconds(args.mrft_delay as i64);
+    let pre_delay_end =
+        start_time + chrono::Duration::seconds(i64::from(effective_timing.mrft_delay_secs));
     let mut tick_index: i64 = 0;
     let mut completion: Option<Action> = None;
     let mut post_delay_end: Option<DateTime<Utc>> = None;
@@ -3801,7 +4110,7 @@ async fn run_polling_loop(
     // never crosses hysteresis, a stalled driver read). Created once and raced via
     // `tokio::select!` on every iteration below, rather than checked only after each
     // completed tick, so it fires even if a single `read_f32` call itself hangs.
-    let timeout = tokio::time::sleep(Duration::from_secs(args.timeout_secs));
+    let timeout = tokio::time::sleep(Duration::from_secs(effective_timing.timeout_secs));
     tokio::pin!(timeout);
 
     loop {
@@ -3816,9 +4125,10 @@ async fn run_polling_loop(
                         .pending
                         .as_ref()
                         .and_then(|pending| verification_trigger(pending, Instant::now()))
-                    && let Some(reason) = verify_pending_mv_actuation_with(
+                    && let Some(reason) = verify_pending_mv_actuation_with_timing(
                         pool,
                         args,
+                        effective_timing,
                         &tags.manipulated_variable,
                         driver,
                         ctrl_c,
@@ -3846,7 +4156,7 @@ async fn run_polling_loop(
             _ = tokio::time::sleep_until(next_poll_at) => {
                 next_poll_at = Instant::now() + poll_interval;
                 let (pv, quality) = match bounded_driver_call(
-                    args.op_timeout_secs,
+                    effective_timing.op_timeout_secs,
                     ctrl_c,
                     read_pv_sample(driver, &tags.process_variable),
                 )
@@ -3861,13 +4171,13 @@ async fn run_polling_loop(
                         tracing::warn!(
                             run_id,
                             tick_index,
-                            op_timeout_secs = args.op_timeout_secs,
+                            op_timeout_secs = effective_timing.op_timeout_secs,
                             tag = %tags.process_variable,
-                            "--op-timeout-secs elapsed reading the PV; aborting run"
+                            "[tuning].op_timeout_secs elapsed reading the PV; aborting run"
                         );
                         return Ok(PollOutcome::Aborted(AbortReason::OperationTimedOut {
                             tag: tags.process_variable.clone(),
-                            op_timeout_secs: args.op_timeout_secs,
+                            op_timeout_secs: effective_timing.op_timeout_secs,
                         }));
                     }
                 };
@@ -3928,9 +4238,10 @@ async fn run_polling_loop(
                         } else {
                             MvVerificationTrigger::Replacement
                         };
-                        if let Some(reason) = verify_pending_mv_actuation_with(
+                        if let Some(reason) = verify_pending_mv_actuation_with_timing(
                             pool,
                             args,
+                            effective_timing,
                             &tags.manipulated_variable,
                             driver,
                             ctrl_c,
@@ -3977,7 +4288,7 @@ async fn run_polling_loop(
                                 .transpose()?;
                             guard.mv_written = true;
                             match bounded_driver_call(
-                                args.op_timeout_secs,
+                                effective_timing.op_timeout_secs,
                                 ctrl_c,
                                 write_value(driver, &tags.manipulated_variable, v),
                             )
@@ -4021,13 +4332,13 @@ async fn run_polling_loop(
                                     tracing::warn!(
                                         run_id,
                                         tick_index,
-                                        op_timeout_secs = args.op_timeout_secs,
+                                        op_timeout_secs = effective_timing.op_timeout_secs,
                                         tag = %tags.manipulated_variable,
-                                        "--op-timeout-secs elapsed writing the MV; aborting run"
+                                        "[tuning].op_timeout_secs elapsed writing the MV; aborting run"
                                     );
                                     return Ok(PollOutcome::Aborted(AbortReason::OperationTimedOut {
                                         tag: tags.manipulated_variable.clone(),
-                                        op_timeout_secs: args.op_timeout_secs,
+                                        op_timeout_secs: effective_timing.op_timeout_secs,
                                     }));
                                 }
                             }
@@ -4039,8 +4350,11 @@ async fn run_polling_loop(
                                 "MRFT engine reported completion; recording post-test padding"
                             );
                             completion = Some(action);
-                            post_delay_end =
-                                Some(now + chrono::Duration::seconds(args.mrft_delay as i64));
+                            post_delay_end = Some(
+                                now + chrono::Duration::seconds(i64::from(
+                                    effective_timing.mrft_delay_secs,
+                                )),
+                            );
                         }
                     }
                 }
@@ -4062,11 +4376,11 @@ async fn run_polling_loop(
                 tracing::warn!(
                     run_id,
                     tick_index,
-                    timeout_secs = args.timeout_secs,
-                    "--timeout-secs elapsed before completion; aborting run"
+                    timeout_secs = effective_timing.timeout_secs,
+                    "[tuning].timeout_secs elapsed before completion; aborting run"
                 );
                 return Ok(PollOutcome::Aborted(AbortReason::Timeout {
-                    timeout_secs: args.timeout_secs,
+                    timeout_secs: effective_timing.timeout_secs,
                 }));
             }
         }
@@ -4075,6 +4389,42 @@ async fn run_polling_loop(
     Ok(PollOutcome::Completed(completion.expect(
         "the loop only `break`s after `completion` is set",
     )))
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+async fn run_polling_loop(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneArgs,
+    tags: &LoopTags,
+    driver: &dyn Driver,
+    engine: &mut MrftEngine,
+    time_anchor: RunTimeAnchor,
+    ctrl_c: &mut CtrlC,
+    guard: &mut MutationGuard,
+    allow_uncertain_quality: bool,
+    timing: &mut PollTimingAccumulator,
+    mv_actuations: &mut Option<MvActuationTracker>,
+    config: LoopConfig,
+) -> anyhow::Result<PollOutcome> {
+    run_polling_loop_with_timing(
+        pool,
+        run_id,
+        args,
+        test_effective_timing(args),
+        tags,
+        driver,
+        engine,
+        time_anchor,
+        ctrl_c,
+        guard,
+        allow_uncertain_quality,
+        timing,
+        mv_actuations,
+        config,
+    )
+    .await
 }
 
 async fn persist_results(
@@ -4644,12 +4994,19 @@ mod tests {
         (run.id, config, template, tags)
     }
 
-    /// `run()`'s tests all pass explicit `TuneArgs.bridge_host`/`server` values (or the
-    /// simulator driver, which ignores both), so an all-default `BhtuneConfig` never
-    /// actually supplies anything here -- it's only present because `run()`'s signature
-    /// requires it.
+    /// Keep the shared execution tests fast now that timing values come from global
+    /// configuration rather than per-run arguments.
     fn test_config() -> crate::config::BhtuneConfig {
-        crate::config::BhtuneConfig::default()
+        crate::config::BhtuneConfig {
+            tuning: crate::config::TuningConfig {
+                mrft_delay_secs: Some(0),
+                poll_interval_ms: Some(5),
+                timeout_secs: Some(5),
+                op_timeout_secs: Some(30),
+                restore_timeout_secs: Some(30),
+            },
+            ..crate::config::BhtuneConfig::default()
+        }
     }
 
     fn time_anchor_at(utc: DateTime<Utc>) -> RunTimeAnchor {
@@ -4865,6 +5222,29 @@ mod tests {
         assert_eq!(request["driver"], "simulator");
         assert_eq!(request["server"], serde_json::Value::Null);
         assert_eq!(request["notes"], "test note");
+        for timing_field in [
+            "mrft_delay",
+            "mrft_delay_secs",
+            "poll_interval_ms",
+            "timeout_secs",
+            "op_timeout_secs",
+            "restore_timeout_secs",
+        ] {
+            assert!(
+                request.get(timing_field).is_none(),
+                "{timing_field} must not be part of the per-run request snapshot"
+            );
+        }
+        assert_eq!(
+            runs[0].effective_tuning,
+            Some(EffectiveTuning {
+                mrft_delay_secs: 0,
+                poll_interval_ms: 5,
+                timeout_secs: 5,
+                op_timeout_secs: 30,
+                restore_timeout_secs: 30,
+            })
+        );
         assert!(
             TuneMvActuationRow::list_for_run(&pool, runs[0].id)
                 .await
@@ -5109,7 +5489,7 @@ mod tests {
         assert!(err.to_string().contains("no OPC server specified"));
     }
 
-    /// `--mrft-delay` is whole seconds (the smallest non-zero value costs ~1s of logical
+    /// `[tuning].mrft_delay_secs` is whole seconds (the smallest non-zero value costs ~1s of logical
     /// simulator time both before switching and after completion). Fixed-step timestamps make
     /// the result deterministic, but the polling interval still paces those ticks in real time;
     /// the SQLite-backed test cannot use Tokio's paused clock without also expiring sqlx's own
@@ -5117,12 +5497,13 @@ mod tests {
     #[tokio::test]
     async fn mrft_delay_pads_the_run_with_extra_recorded_samples() {
         let pool = seeded_pool().await;
-        let mut args = fast_simulator_args();
-        args.mrft_delay = 1;
+        let args = fast_simulator_args();
         // This test intentionally consumes about two seconds before ordinary MRFT work. Keep
         // its safety budget independent of a loaded CI host while retaining the real timeout.
-        args.timeout_secs = 30;
-        run(&pool, args, &test_config()).await.unwrap();
+        let mut config = test_config();
+        config.tuning.mrft_delay_secs = Some(1);
+        config.tuning.timeout_secs = Some(30);
+        run(&pool, args, &config).await.unwrap();
 
         let runs = TuneRunRow::list(
             &pool,
@@ -5612,12 +5993,12 @@ mod tests {
         );
     }
 
-    // --- safety-cancellation: `--op-timeout-secs` / mid-tick Ctrl+C via `bounded_driver_call`
+    // --- safety-cancellation: `[tuning].op_timeout_secs` / mid-tick Ctrl+C via `bounded_driver_call`
 
     /// Proves the wiring, not just the mechanism (see the dedicated `bounded_driver_call`
     /// unit tests below for that): a PV read that never resolves at all -- the gateway is
     /// down, DCOM is wedged, the network is black-holed -- must abort the run via
-    /// `--op-timeout-secs` rather than hang the poll loop forever, exactly the scenario
+    /// `[tuning].op_timeout_secs` rather than hang the poll loop forever, exactly the scenario
     /// finding 2 of the live-plant safety review names as the most severe of the three
     /// consequences of the pre-`safety-cancellation` design. Real (unpaused) time, paying a
     /// real ~1s wall-clock cost: `start_paused` interacts badly with the real sqlx
@@ -5831,7 +6212,7 @@ mod tests {
         empty_reads: std::collections::HashSet<String>,
         /// Tags whose `read`/`write` never resolves (`.await`s `std::future::pending`
         /// forever), simulating a stalled OPC DA call (gateway down, DCOM wedged, network
-        /// black-holed) so `--op-timeout-secs`/Ctrl+C-during-a-tick can actually be exercised.
+        /// black-holed) so `[tuning].op_timeout_secs`/Ctrl+C-during-a-tick can actually be exercised.
         /// Finite delays are configured separately below; both delay forms await before any
         /// mutex guard is acquired.
         hang_reads: std::collections::HashSet<String>,
@@ -5851,7 +6232,8 @@ mod tests {
         /// tag's *initial* read (before any mutation is attempted, subject to finding 5 the
         /// same as every other read) in good standing while still forcing quality to
         /// degrade partway through polling -- deterministically, with no reliance on real
-        /// elapsed time or a Ctrl+C race, unlike `--timeout-secs`/`--op-timeout-secs`-driven
+        /// elapsed time or a Ctrl+C race, unlike `[tuning].timeout_secs`/
+        /// `[tuning].op_timeout_secs`-driven
         /// aborts.
         degrade_quality_after: std::collections::HashMap<String, (usize, bhtune_driver::Quality)>,
         /// Tracks how many times each tag has been read so far, for
@@ -8408,7 +8790,7 @@ mod tests {
         assert!(matches!(
             deadline_outcome,
             RestoreMvOutcome::Interrupted(ref detail)
-                if detail.contains("--restore-timeout-secs")
+                if detail.contains("[tuning].restore_timeout_secs")
         ));
 
         let now = Instant::now();
@@ -8580,7 +8962,7 @@ mod tests {
         assert!(matches!(
             outcome,
             RestoreMvOutcome::Interrupted(ref detail)
-                if detail.contains("--restore-timeout-secs")
+                if detail.contains("[tuning].restore_timeout_secs")
         ));
     }
 
@@ -8818,16 +9200,17 @@ mod tests {
         let pool = seeded_pool().await;
         let mut args = fast_simulator_args();
         args.driver = DriverKindArg::Opcda;
-        args.restore_timeout_secs = MV_ACTUATION_CONFIRMATION_SECS - 1;
         args.server = Some("Mock.Server".to_string());
         args.bridge_host = Some("127.0.0.1:1".to_string());
+        let mut config = test_config();
+        config.tuning.restore_timeout_secs = Some(MV_ACTUATION_CONFIRMATION_SECS - 1);
 
-        let error = prepare(&pool, args, &test_config())
+        let error = prepare(&pool, args, &config)
             .await
             .err()
             .expect("short OPC DA restore timeout must be rejected");
 
-        assert!(error.to_string().contains("--restore-timeout-secs"));
+        assert!(error.to_string().contains("tuning.restore_timeout_secs"));
         assert!(
             TuneRunRow::list(
                 &pool,
@@ -11848,7 +12231,7 @@ mod tests {
     }
 
     // --- `attempt_restore` / `RestoreAttempt`: confirmed vs. incomplete, and both ways to ---
-    // --- become incomplete (a second Ctrl+C, and `--restore-timeout-secs` elapsing) ---------
+    // --- become incomplete (a second Ctrl+C, and `[tuning].restore_timeout_secs` elapsing) ---
 
     #[tokio::test(start_paused = true)]
     async fn attempt_restore_confirms_a_normal_restore() {
@@ -11924,7 +12307,7 @@ mod tests {
 
         match outcome {
             RestoreAttempt::Incomplete { reason } => {
-                assert!(reason.contains("--restore-timeout-secs"));
+                assert!(reason.contains("[tuning].restore_timeout_secs"));
             }
             RestoreAttempt::Confirmed => panic!("expected RestoreAttempt::Incomplete"),
         }
@@ -12040,7 +12423,7 @@ mod tests {
         assert!(matches!(
             outcome,
             RestoreAttempt::Incomplete { ref reason }
-                if reason.contains("--restore-timeout-secs")
+                if reason.contains("[tuning].restore_timeout_secs")
         ));
         assert_eq!(
             driver.value_of(&tags.manipulated_variable).as_deref(),
