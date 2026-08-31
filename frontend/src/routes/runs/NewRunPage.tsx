@@ -32,6 +32,7 @@ import {
   formFromRequest,
   applyTagNameChange,
   initialForm,
+  processDefaultsFor,
   templateTagFor,
   templateValueTagFor,
   type FormState,
@@ -210,6 +211,13 @@ export function NewRunPage() {
     setForm(initialForm);
   }
 
+  function resetProcessDefaults() {
+    setForm((previous) => ({
+      ...previous,
+      ...processDefaultsFor(previous.processType),
+    }));
+  }
+
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((previous) => ({ ...previous, [key]: value }));
   }
@@ -346,6 +354,7 @@ export function NewRunPage() {
   function setProcessType(value: ProcessType) {
     setForm((previous) => ({
       ...previous,
+      ...processDefaultsFor(value),
       processType: value,
       controllerType:
         previous.controllerType === "pid" &&
@@ -445,6 +454,7 @@ export function NewRunPage() {
         onDriverChange={setDriver}
         onTemplateChange={setTemplate}
         onProcessTypeChange={setProcessType}
+        onResetProcessDefaults={resetProcessDefaults}
         onTagSourceChange={setTagSource}
         onTagChange={setTagValue}
         onValueSourceChange={setValueSource}

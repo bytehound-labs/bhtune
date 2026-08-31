@@ -12,9 +12,9 @@ use bhtune_core::{
 use bhtune_db::{
     DbError, connect_in_memory,
     models::{
-        DcsTemplateRow, MvActuationKind, MvActuationStatus, NewTuneMvActuation, NewTuneWrite,
-        Pagination, RollbackState, SampleQuality, TemplateOrigin, TimingBasis, TimingMetrics,
-        TuneDriver, TuneMvActuationRow, TuneOutcome, TuneResultRow, TuneRunFilter,
+        DcsTemplateRow, EffectiveTuning, MvActuationKind, MvActuationStatus, NewTuneMvActuation,
+        NewTuneWrite, Pagination, RollbackState, SampleQuality, TemplateOrigin, TimingBasis,
+        TimingMetrics, TuneDriver, TuneMvActuationRow, TuneOutcome, TuneResultRow, TuneRunFilter,
         TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
     },
 };
@@ -124,6 +124,16 @@ fn sample_timing_metrics() -> TimingMetrics {
     }
 }
 
+fn sample_effective_tuning() -> EffectiveTuning {
+    EffectiveTuning {
+        mrft_delay_secs: 12,
+        poll_interval_ms: 900,
+        timeout_secs: 4_000,
+        op_timeout_secs: 31,
+        restore_timeout_secs: 32,
+    }
+}
+
 /// Starts a run and immediately drives it to `outcome`, for filter/pagination tests that
 /// only care about the resulting row shape, not the transition itself (covered separately by
 /// the lifecycle tests below).
@@ -210,6 +220,10 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
         started.timing_metrics.is_none(),
         "timing metrics stay absent until polling has produced a diagnostic snapshot"
     );
+    assert!(
+        started.effective_tuning.is_none(),
+        "old/source-compatible start calls have no effective tuning snapshot"
+    );
 
     let readings = sample_initial_readings();
     let with_readings = TuneRunRow::record_initial_readings(&pool, started.id, readings.clone())
@@ -236,6 +250,43 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
 
     let fetched = TuneRunRow::get(&pool, started.id).await.unwrap().unwrap();
     assert_eq!(fetched, completed);
+}
+
+#[tokio::test]
+async fn run_effective_tuning_round_trips_without_changing_lifecycle_state() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC-EFFECTIVE-TUNING",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(run.effective_tuning, None);
+
+    let effective_tuning = sample_effective_tuning();
+    let updated = TuneRunRow::record_effective_tuning(&pool, run.id, effective_tuning)
+        .await
+        .unwrap();
+
+    assert_eq!(updated.effective_tuning, Some(effective_tuning));
+    assert_eq!(updated.outcome, TuneOutcome::Running);
+    assert_eq!(updated.completed_at, None);
+    assert_eq!(
+        TuneRunRow::get(&pool, run.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .effective_tuning,
+        Some(effective_tuning)
+    );
 }
 
 #[tokio::test]

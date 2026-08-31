@@ -5,8 +5,9 @@
 # optional — anything left out (or the whole file, if it doesn't exist)
 # falls back to its environment variable or built-in default.
 #
-# Precedence for every setting: CLI flag > environment variable > config
-# file > built-in default.
+# Precedence for settings with CLI/environment overrides: CLI flag > environment
+# variable > config file > built-in default. Global tune timing and safety
+# settings use this file or their built-in defaults; they are not per-run flags.
 #
 # Default file locations (first one found wins):
 #   Linux/macOS: $XDG_CONFIG_HOME/bhtune/bhtune.toml
@@ -46,6 +47,23 @@ allow_uncertain_quality = true
 # Optional automatic history retention. Omit this key to retain runs forever;
 # when present, it must be a positive whole number of days.
 retention_days = 30
+
+# Global MRFT timing and safety settings. These values apply to future tunes;
+# an already prepared or running tune keeps the values it captured at start.
+# Omit the whole [tuning] table or any key to use that key's built-in default.
+# The Configuration page can edit or reset this section.
+[tuning]
+# Pre/post-test recording padding, in seconds. Valid range: 0..=3600.
+mrft_delay_secs = 0
+# Driver polling interval, in milliseconds. Must be at least 1.
+poll_interval_ms = 800
+# Whole-run wall-clock timeout, in seconds. Must be at least 1.
+timeout_secs = 3600
+# Maximum duration of one driver read/write, in seconds. Must be at least 1.
+op_timeout_secs = 30
+# Maximum duration of post-run restoration, in seconds. Must be at least 1.
+# OPC DA tunes require at least 4 seconds for MV actuation confirmation.
+restore_timeout_secs = 30
 
 # Structured logging. Every key here is optional and falls back to its own
 # CLI flag / built-in default independently -- e.g. you can set only

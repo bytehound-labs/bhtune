@@ -598,6 +598,40 @@ async fn tune_runs_timing_metrics_are_nullable_validated_json_with_a_typed_shape
     assert!(invalid_json.is_err());
 }
 
+#[tokio::test]
+async fn tune_runs_effective_tuning_snapshot_is_nullable_and_validated_json() {
+    let pool = connect_in_memory().await.unwrap();
+    let run_id = seed_failed_run(&pool, None).await;
+
+    let effective_tuning_json: Option<String> =
+        sqlx::query_scalar("SELECT effective_tuning_json FROM tune_runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        effective_tuning_json.is_none(),
+        "rows inserted without the new snapshot remain compatible"
+    );
+
+    let invalid_json =
+        sqlx::query("UPDATE tune_runs SET effective_tuning_json = 'not json' WHERE id = ?")
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+    assert!(invalid_json.is_err());
+
+    sqlx::query(
+        r#"UPDATE tune_runs
+           SET effective_tuning_json = '{"mrft_delay_secs":0,"poll_interval_ms":800,"timeout_secs":3600,"op_timeout_secs":30,"restore_timeout_secs":30}'
+           WHERE id = ?"#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+}
+
 /// Covers the `CHECK` constraints `safety-quality` added: `tune_runs.allow_uncertain_quality`
 /// must be `0` or `1`, and `tune_samples.pv_quality` must be one of `good`/`uncertain`/`bad`.
 #[tokio::test]

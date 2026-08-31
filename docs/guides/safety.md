@@ -15,25 +15,47 @@ GUI's run detail screen, which triggers the same code path) is always safe:
 - **First Ctrl+C** stops polling immediately and starts the restore (see
   [Restoration](#restoration) below). It works no matter when it's pressed — including mid-read
   or mid-write to a stalled driver, not just while idle between poll ticks. Every in-flight
-  driver call is bounded by `--op-timeout-secs` (default 30s), so a stalled OPC DA read or
-  write is abandoned rather than waited on forever, which is what makes cancellation reliable
-  even against a wedged gateway or a black-holed network.
+  driver call is bounded by the global `[tuning].op_timeout_secs` setting (default 30s), so a
+  stalled OPC DA read or write is abandoned rather than waited on forever, which is what makes
+  cancellation reliable even against a wedged gateway or a black-holed network.
 - **Second Ctrl+C**, pressed while the restore itself is still running, forces an immediate hard
   stop instead of waiting any longer for the restore to finish. BHTune prints exactly which MV
   tag it was restoring and what value it was last written to, so you can put it back by hand.
   This exits with a distinct code (`6`, see the exit code table below) rather than the normal
   abort code, because "aborted and restored" and "aborted, restore abandoned — go check the
   loop" are different situations for whoever (or whatever scheduler) is watching the exit code.
-- **`--timeout-secs`** (default 3600) is the overall wall-clock budget for the whole test. It
-  fires the same restore path as Ctrl+C — including working correctly mid-hung-read — and is
+- **`[tuning].timeout_secs`** (default 3600) is the overall wall-clock budget for the whole test.
+  It fires the same restore path as Ctrl+C — including working correctly mid-hung-read — and is
   meant as the backstop for scheduled/unattended runs where nobody is present to press Ctrl+C at
   all.
-- **`--restore-timeout-secs`** (default 30) bounds the restore step itself, independent of
-  `--timeout-secs` — a restore triggered by a timeout doesn't inherit an already-expired budget.
+- **`[tuning].restore_timeout_secs`** (default 30) bounds the restore step itself, independent
+  of `[tuning].timeout_secs` — a restore triggered by a timeout doesn't inherit an already-expired
+  budget.
 
-Try it yourself: start a run with a long poll interval and press Ctrl+C while it's waiting
-between ticks (works immediately); then point it at an unreachable `--bridge-host` and press
-Ctrl+C — it should abort and report within `--op-timeout-secs`, not hang.
+These five values are global installation settings in the browser's **Configuration** page or
+the `[tuning]` section of `bhtune.toml`; they apply to future runs only. Try it yourself: set a
+long `[tuning].poll_interval_ms`, start a run, and press Ctrl+C while it's waiting between ticks
+(works immediately); then point it at an unreachable `--bridge-host` and press Ctrl+C — it
+should abort and report within `[tuning].op_timeout_secs`, not hang.
+
+## Global tune timing settings
+
+The `[tuning]` section controls the operational timing and safety limits shared by all new tunes:
+
+| Setting                |  Default | Purpose                                  |
+| ---------------------- | -------: | ---------------------------------------- |
+| `mrft_delay_secs`      |    `0` s | Pre/post-test recording padding          |
+| `poll_interval_ms`     | `800` ms | Delay between driver polls               |
+| `timeout_secs`         | `3600` s | Whole-run wall-clock limit               |
+| `op_timeout_secs`      |   `30` s | Limit for one driver read or write       |
+| `restore_timeout_secs` |   `30` s | Limit for restoring the loop after a run |
+
+Values must be valid before a tune can touch the loop. `mrft_delay_secs` accepts `0` through
+`3600`; the other settings must be positive whole numbers. OPC DA preparation additionally
+requires `restore_timeout_secs` of at least four seconds because accepted MV commands have a
+four-second actuation-confirmation window. Simulator runs may use a shorter positive restore
+timeout. Configuration changes affect future tune preparations only; an already-prepared or
+running tune keeps its captured values.
 
 ## Timing and host responsiveness
 
@@ -87,8 +109,9 @@ For relay commands it is capped at 25% of the actual step, preventing a wide ran
 small command appear confirmed accidentally. Restore confirmation uses the same precision/span
 tolerance without the relay cap. The final MRFT snapback hands responsibility to the
 authoritative restore write, so BHTune does not wait twice for the same original-MV target.
-The restore readback is attempted immediately; only a mismatch is retried, and a
-`--restore-timeout-secs` value below four seconds is rejected before a live loop is mutated.
+The restore readback is attempted immediately; only a mismatch is retried.
+A `restore_timeout_secs` value below four seconds is rejected during OPC DA preparation, before
+a live loop is mutated.
 An MV read that starts before the deadline but returns after it is still treated as late and does
 not confirm the command. The fresh read started at the deadline is independently capped at one
 second, rather than inheriting the full per-operation timeout, so a stalled read cannot hold the
@@ -192,7 +215,7 @@ are equally specific:
 | `1`  | Setup error (unknown template, bad flag combination, database/driver connection failure) |
 | `2`  | Aborted by Ctrl+C, restore confirmed                                                     |
 | `3`  | Test completed, but the requested PID write-back failed                                  |
-| `4`  | `--timeout-secs` elapsed before the test finished                                        |
+| `4`  | `[tuning].timeout_secs` elapsed before the test finished                                 |
 | `5`  | A non-`Good` OPC sample aborted the run                                                  |
 | `6`  | The post-run restore could not be confirmed — check the loop by hand                     |
 | `7`  | An accepted OPC DA MV command could not be confirmed; restore was confirmed              |

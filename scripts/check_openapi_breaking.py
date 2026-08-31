@@ -16,13 +16,20 @@ from pathlib import Path
 from typing import Any
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+RUNS_PATH = "/api/runs"
 
-# These are deliberate pre-v1 removals: the per-tune quality switch moved to the
-# TOML-backed global configuration page. Keep this allowlist tied to the exact
-# operation and schema so unrelated request-property removals remain breaking.
+# These are deliberate pre-v1 removals: the per-tune quality switch and timing
+# settings moved to the TOML-backed global configuration page. Keep this allowlist
+# tied to the exact operation and schema so unrelated request-property removals
+# remain breaking.
 INTENTIONAL_REMOVED_REQUEST_PROPERTIES = frozenset(
     {
-        ("POST", "/api/runs", "StartRunRequest", "allow_uncertain_quality"),
+        ("POST", RUNS_PATH, "StartRunRequest", "allow_uncertain_quality"),
+        ("POST", RUNS_PATH, "StartRunRequest", "mrft_delay"),
+        ("POST", RUNS_PATH, "StartRunRequest", "poll_interval_ms"),
+        ("POST", RUNS_PATH, "StartRunRequest", "timeout_secs"),
+        ("POST", RUNS_PATH, "StartRunRequest", "op_timeout_secs"),
+        ("POST", RUNS_PATH, "StartRunRequest", "restore_timeout_secs"),
         ("PUT", "/api/runs/draft", "NewRunDraft", "allow_uncertain_quality"),
     }
 )

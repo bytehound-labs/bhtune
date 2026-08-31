@@ -64,7 +64,7 @@ export function RunDetailPage() {
   const trendSamples = isRunning
     ? stream.samples
     : (run.data?.samples ?? EMPTY_TREND_SAMPLES);
-  const trendPollIntervalMs = run.data?.original_request?.poll_interval_ms;
+  const trendPollIntervalMs = run.data?.effective_tuning?.poll_interval_ms;
   const trendPoints = useMemo(() => {
     if (!run.data) return [];
 

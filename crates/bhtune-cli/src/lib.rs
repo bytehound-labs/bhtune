@@ -34,9 +34,10 @@
 //! suite -- see `logging`'s test module doc comment.
 //!
 //! Non-interactive/scheduled use (cron, CI, batch campaigns) is `tune`/`simulate`'s
-//! `--yes`/`--write-pid <level>`/`--timeout-secs` flags (bypassing the interactive
-//! write-back prompt and mandatorily bounding an unattended run's wall-clock duration) plus
-//! this module's distinguished exit codes ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`],
+//! `--yes`/`--write-pid <level>` flags (bypassing the interactive write-back prompt) plus
+//! the global `[tuning]` timing configuration, which mandatorily bounds unattended runs and
+//! caps individual driver operations, and this module's distinguished exit codes
+//! ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`],
 //! [`EXIT_POOR_QUALITY`], [`EXIT_ACTUATION_FAILED`], [`EXIT_WRITE_BACK_FAILED`],
 //! [`EXIT_RESTORE_INCOMPLETE`]), so a
 //! scheduler can tell "aborted", "timed out", "the plant data couldn't be trusted", "test ran
@@ -82,8 +83,8 @@ pub const EXIT_ABORTED: u8 = 2;
 /// from either of those. See `commands::tune::TuneOutcome` and AGENTS.md's `cli-automation`
 /// section.
 pub const EXIT_WRITE_BACK_FAILED: u8 = 3;
-/// A `tune`/`simulate` run was aborted because `--timeout-secs` elapsed before the engine
-/// reported completion; the loop was restored to its pre-test mode, exactly like
+/// A `tune`/`simulate` run was aborted because `[tuning].timeout_secs` elapsed before the
+/// engine reported completion; the loop was restored to its pre-test mode, exactly like
 /// [`EXIT_ABORTED`]. Distinct from it so a scheduler's alerting can tell "this run had to be
 /// killed for running too long" (possibly a stuck relay, a misconfigured tag mapping, or a
 /// stalled driver read -- worth investigating) apart from "an operator stopped it on
@@ -102,8 +103,9 @@ pub const EXIT_TIMED_OUT: u8 = 4;
 pub const EXIT_POOR_QUALITY: u8 = 5;
 /// A `tune`/`simulate` run ended (via normal completion, Ctrl+C, or a timeout) without being
 /// able to confirm the loop was fully restored to its pre-test mode/MV/setpoint -- either a
-/// second Ctrl+C was received while the restore was in flight, or `--restore-timeout-secs`
-/// elapsed first. Distinct from every other exit code because it means the loop may have
+/// second Ctrl+C was received while the restore was in flight, or
+/// `[tuning].restore_timeout_secs` elapsed first. Distinct from every other exit code because
+/// it means the loop may have
 /// been left mutated with no further attempt made to fix it: an operator must check it by
 /// hand, using the tag/value named in the warning printed to stderr. See
 /// `commands::tune::TuneOutcome::RestoreIncomplete` and AGENTS.md's `safety-cancellation`

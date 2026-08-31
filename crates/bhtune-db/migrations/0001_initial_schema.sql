@@ -237,7 +237,7 @@ CREATE TABLE tune_runs (
     -- either the run never mutated the loop in the first place, or it's
     -- still genuinely in progress; `restore_detail` is only ever set
     -- alongside `incomplete`, naming what a second Ctrl+C,
-    -- `--restore-timeout-secs`, or an individual failed restore step
+    -- `[tuning].restore_timeout_secs`, or an individual failed restore step
     -- prevented from being confirmed.
     restore_status             TEXT CHECK (restore_status IS NULL OR restore_status IN ('confirmed', 'incomplete')),
     restore_detail              TEXT,

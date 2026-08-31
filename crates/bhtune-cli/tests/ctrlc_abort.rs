@@ -21,6 +21,9 @@ use std::time::Duration;
 async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
     let db_dir = tempfile::tempdir().unwrap();
     let db_path = db_dir.path().join("bhtune.db");
+    let config_path = db_dir.path().join("bhtune.toml");
+    std::fs::write(&config_path, "[tuning]\npoll_interval_ms = 1000\n")
+        .expect("failed to write test configuration");
     // Without this, `run()`'s logging setup (see `bhtune_cli::logging`) would resolve the
     // real platform default log directory (`~/.local/share/bhtune/logs` or similar) using
     // this test process's *actual* inherited environment, since `Command::new` inherits the
@@ -31,6 +34,8 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
     let child = Command::new(env!("CARGO_BIN_EXE_bhtune"))
         .arg("--db")
         .arg(&db_path)
+        .arg("--config")
+        .arg(&config_path)
         .arg("--log-dir")
         .arg(log_dir.path())
         .args([
@@ -72,8 +77,6 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
             // Slow enough (1s/tick) that the ~300ms head start below is comfortably inside
             // the very first poll wait, and the process can't possibly reach a relay switch
             // (let alone all 3 required to complete) before the signal arrives.
-            "--poll-interval-ms",
-            "1000",
             "--notes",
             "ctrlc-abort-test",
         ])

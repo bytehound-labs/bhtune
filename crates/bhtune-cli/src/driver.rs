@@ -13,7 +13,10 @@ pub const SIMULATOR_MV_TAG: &str = "Sim.MV";
 /// Builds the driver `args` selects. For `--driver simulator`, `args.tagname` is ignored;
 /// the caller must build its [`bhtune_core::LoopTags`] using [`SIMULATOR_PV_TAG`]/
 /// [`SIMULATOR_MV_TAG`] instead of deriving from a template.
-pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Driver>> {
+pub async fn build_with_poll_interval(
+    args: &TuneArgs,
+    poll_interval_ms: u64,
+) -> anyhow::Result<Box<dyn Driver>> {
     match args.driver {
         DriverKindArg::Opcda => {
             let server = args
@@ -44,7 +47,7 @@ pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Driver>> {
                 args.sim_gain,
                 args.sim_tau,
                 args.sim_dead_time,
-                args.poll_interval_ms as f32 / 1000.0,
+                poll_interval_ms as f32 / 1000.0,
             )
             .with_noise_amplitude(args.sim_noise);
             let driver = SimulatorDriver::new(
@@ -58,6 +61,11 @@ pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Driver>> {
             Ok(Box::new(driver))
         }
     }
+}
+
+#[cfg(test)]
+pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Driver>> {
+    build_with_poll_interval(args, args.poll_interval_ms).await
 }
 
 #[cfg(test)]

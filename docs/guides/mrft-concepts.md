@@ -32,11 +32,13 @@ unchanged.
    time the PV crosses the switch threshold, in the direction that opposes the process's own
    moves — this is what "closes the loop" around the relay instead of a PID block.
 4. **Every PV sample is polled and logged** (by default every 800 ms, matching the legacy tool's
-   timer), building up a picture of the resulting oscillation: its peaks, its troughs, and the
+   timer) using the global `[tuning].poll_interval_ms` setting, building up a picture of the
+   resulting oscillation: its peaks, its troughs, and the
    exact times each switch happened.
-5. **The first few cycles are skipped** (`--cycles-skip`, defaulted per process type) before any
-   switch is counted, and then a fixed number of cycles are counted (`--cycles-count`) to
-   measure the steady-state oscillation.
+5. **The first few cycles are skipped** (the visible Process defaults are selected per process
+   type) before any switch is counted, and then a fixed number of cycles are counted to measure
+   the steady-state oscillation. Noise-protection delays around relay switches are also shown as
+   process defaults in the New tune form.
 6. **On the final step, the MV snaps back to its starting value** rather than taking one more
    full relay step — so the loop is left close to where it started, not mid-swing.
 7. **The loop is restored** to its original mode (and setpoint, if it was changed) — see
@@ -47,6 +49,12 @@ commanded target before another relay can replace it. This verification uses a f
 four-second confirmation window; a command that remains outside tolerance, or whose matching
 readback arrives after the deadline, aborts the test and starts restoration. Simulator and replay
 runs do not add this live-I/O verification step.
+
+The other operational timing and safety limits are installation-wide settings under `[tuning]`:
+MRFT delay padding, the whole-run timeout, driver-operation timeout, and restore timeout. They
+are configured on the web GUI's Config page or in `bhtune.toml`, apply to future tune starts, and
+are frozen into each run when preparation begins. OPC DA requires a restore timeout of at least
+four seconds because MV actuation confirmation can take up to that long.
 
 The MV values shown in the trend, persisted samples, and sample exports are the **commanded**
 values produced by the MRFT engine. The actual MV values returned by OPC DA readbacks are
@@ -102,7 +110,11 @@ the primary results and PID actions remain prominent.
 - **Process type** (flow, pressure — line or vessel, level, temperature — mixing or heat
   exchange) drives the default cycles-skip/cycles-count/noise-protection values and which row of
   the tuning-constant matrices is used. These defaults come from the same lookup tables the
-  legacy tool used; override them explicitly if your process needs something different.
+  legacy tool used. The web form displays the selected process type's values in its Process
+  defaults subgroup and provides a reset action; changing process type also restores its values.
+  They are not DCS/PLC template properties: templates define tag conventions and PID units.
+  Override the process defaults explicitly if your process needs something different. CLI and
+  HTTP callers may omit them to use the server-side defaults.
 
 ## Next steps
 

@@ -443,6 +443,9 @@ pub struct RunDetailResponse {
     /// Whether this run accepted `Uncertain` OPC quality, captured when the run started.
     pub allow_uncertain_quality: bool,
     pub config: LoopConfig,
+    /// Concrete global timing and safety values frozen when this run was prepared. `None`
+    /// identifies a run created before effective-tuning snapshots were stored.
+    pub effective_tuning: Option<bhtune_db::models::EffectiveTuning>,
     /// The resolved OPC DA server ProgID this run actually used, or `None` for a
     /// simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
     /// trusts over any `--server` flag -- see `bhtune-cli::commands::history`.
@@ -519,6 +522,7 @@ pub(crate) async fn build_run_detail(
         template_origin: run.template_origin,
         allow_uncertain_quality: run.allow_uncertain_quality,
         config: run.config,
+        effective_tuning: run.effective_tuning,
         opc_server: run.opc_server,
         bridge_host: run.bridge_host,
         pid_constant_tags,

@@ -72,6 +72,17 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
         "string",
         "null"
       ]
+    },
+    "tuning": {
+      "description": "Global tune timing defaults. Missing keys remain `None` and resolve through\n[`resolve_tuning_config`] only when a tune is prepared.",
+      "$ref": "#/$defs/TuningConfig",
+      "default": {
+        "mrft_delay_secs": null,
+        "op_timeout_secs": null,
+        "poll_interval_ms": null,
+        "restore_timeout_secs": null,
+        "timeout_secs": null
+      }
     }
   },
   "$defs": {
@@ -102,6 +113,53 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
             "string",
             "null"
           ]
+        }
+      }
+    },
+    "TuningConfig": {
+      "description": "Optional values authored in the `[tuning]` table.\n\nMissing keys stay `None` so callers can distinguish an explicit TOML value from a\nbuilt-in default. Use [`resolve_tuning_config`] to obtain the concrete values used by a\ntune and [`validate_tuning_config`] before preparing the run.",
+      "type": "object",
+      "properties": {
+        "mrft_delay_secs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "maximum": 3600,
+          "minimum": 0
+        },
+        "op_timeout_secs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1
+        },
+        "poll_interval_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1
+        },
+        "restore_timeout_secs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1
+        },
+        "timeout_secs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1
         }
       }
     }

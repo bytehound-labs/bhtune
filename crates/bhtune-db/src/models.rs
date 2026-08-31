@@ -437,6 +437,21 @@ pub struct TimingMetrics {
     pub approximate_samples_per_period: Option<f64>,
 }
 
+/// Concrete tune timing values after configuration defaults have been resolved.
+///
+/// Stored as one compact snapshot because these values are consumed together and have no
+/// SQL-level filtering requirement. `None` on [`TuneRunRow::effective_tuning`] identifies
+/// runs created before this snapshot existed or callers that have not recorded it yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct EffectiveTuning {
+    pub mrft_delay_secs: u32,
+    pub poll_interval_ms: u64,
+    pub timeout_secs: u64,
+    pub op_timeout_secs: u64,
+    pub restore_timeout_secs: u64,
+}
+
 /// The outcome of a best-effort loop-restore attempt made after a run ended --
 /// `safety-restore-guard` (finding 3 of the live-plant safety review). Recorded via
 /// [`TuneRunRow::record_restore_status`]; `NULL` in the database (mapped to `None` on
@@ -448,10 +463,10 @@ pub struct TimingMetrics {
 pub enum RestoreStatus {
     /// `restore()` ran every applicable step to completion with no failures.
     Confirmed,
-    /// A second Ctrl+C arrived, `--restore-timeout-secs` elapsed, or one or more individual
-    /// restore steps themselves failed, before the restore could be confirmed complete. The
-    /// loop may still be at a relay-test MV/mode -- see `restore_detail` for what an
-    /// operator (or `bhtune restore-loop`) needs to check by hand.
+    /// A second Ctrl+C arrived, `[tuning].restore_timeout_secs` elapsed, or one or more
+    /// individual restore steps themselves failed, before the restore could be confirmed
+    /// complete. The loop may still be at a relay-test MV/mode -- see `restore_detail` for
+    /// what an operator (or `bhtune restore-loop`) needs to check by hand.
     Incomplete,
 }
 
@@ -543,13 +558,17 @@ pub struct TuneRunRow {
     /// Polling-cadence diagnostics collected from successful PV samples. `None` for runs
     /// created before timing diagnostics existed or attempts that ended before polling began.
     pub timing_metrics: Option<TimingMetrics>,
+    /// Concrete timing values used by this run after configuration defaults were resolved.
+    /// `None` for runs created before effective-tuning snapshots existed or until
+    /// [`TuneRunRow::record_effective_tuning`] is called.
+    pub effective_tuning: Option<EffectiveTuning>,
     /// Outcome of the best-effort restore attempted after this run ended -- `None` if no
     /// restore was ever attempted (the run never mutated the loop, or hasn't ended yet). See
     /// [`RestoreStatus`] and [`TuneRunRow::record_restore_status`].
     pub restore_status: Option<RestoreStatus>,
     /// Set only alongside `restore_status = Some(RestoreStatus::Incomplete)`: what a second
-    /// Ctrl+C, `--restore-timeout-secs`, or an individual failed restore step prevented from
-    /// being confirmed.
+    /// Ctrl+C, `[tuning].restore_timeout_secs`, or an individual failed restore step
+    /// prevented from being confirmed.
     pub restore_detail: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -763,6 +782,33 @@ impl TuneRunRow {
         .bind(opc_server)
         .bind(bridge_host)
         .bind(request_json)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Records the concrete tune timing policy after all configuration defaults have been
+    /// resolved. This is a follow-up update rather than another [`Self::start`] parameter so
+    /// existing repository callers remain source-compatible. Production orchestration should
+    /// call it immediately after `start()` and before any driver I/O.
+    pub async fn record_effective_tuning(
+        pool: &SqlitePool,
+        run_id: i64,
+        effective_tuning: EffectiveTuning,
+    ) -> DbResult<TuneRunRow> {
+        let effective_tuning_json = serde_json::to_string(&effective_tuning)
+            .expect("EffectiveTuning serialization is infallible");
+        let row = sqlx::query(
+            r#"
+            UPDATE tune_runs SET effective_tuning_json = ?
+            WHERE id = ?
+            RETURNING *
+            "#,
+        )
+        .bind(effective_tuning_json)
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -1288,6 +1334,9 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
     let request_json: String = row.try_get("request_json").map_err(DbError::Query)?;
     let timing_metrics_json: Option<String> =
         row.try_get("timing_metrics_json").map_err(DbError::Query)?;
+    let effective_tuning_json: Option<String> = row
+        .try_get("effective_tuning_json")
+        .map_err(DbError::Query)?;
     let template: DcsTemplate =
         serde_json::from_str(&template_snapshot_json).map_err(|source| {
             DbError::InvalidJsonShape {
@@ -1304,6 +1353,14 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         .map(|json| {
             serde_json::from_str(&json).map_err(|source| DbError::InvalidJsonShape {
                 column: "timing_metrics_json",
+                source,
+            })
+        })
+        .transpose()?;
+    let effective_tuning = effective_tuning_json
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|source| DbError::InvalidJsonShape {
+                column: "effective_tuning_json",
                 source,
             })
         })
@@ -1331,6 +1388,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
             .try_get("allow_uncertain_quality")
             .map_err(DbError::Query)?,
         timing_metrics,
+        effective_tuning,
         restore_status,
         restore_detail: row.try_get("restore_detail").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
@@ -2337,6 +2395,7 @@ mod tests {
             ("template_snapshot_json", "template_snapshot_json"),
             ("tags_json", "tags_json"),
             ("timing_metrics_json", "timing_metrics_json"),
+            ("effective_tuning_json", "effective_tuning_json"),
         ] {
             let (pool, run_id) = sample_run().await;
             let query = match column {
@@ -2346,6 +2405,9 @@ mod tests {
                 "tags_json" => sqlx::query("UPDATE tune_runs SET tags_json = ? WHERE id = ?"),
                 "timing_metrics_json" => {
                     sqlx::query("UPDATE tune_runs SET timing_metrics_json = ? WHERE id = ?")
+                }
+                "effective_tuning_json" => {
+                    sqlx::query("UPDATE tune_runs SET effective_tuning_json = ? WHERE id = ?")
                 }
                 _ => unreachable!(),
             };

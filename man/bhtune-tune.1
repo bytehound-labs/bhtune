@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH bhtune-tune 1  "bhtune-tune " 
+.TH bhtune-tune 1  "bhtune-tune "
 .SH NAME
 bhtune\-tune \- Run an MRFT tune against a real OPC DA loop or the in\-process simulator
 .SH SYNOPSIS
-\fBbhtune\-tune\fR [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-pv\-range\-high\fR] [\fB\-\-pv\-range\-low\fR] [\fB\-\-mv\-range\-high\fR] [\fB\-\-mv\-range\-low\fR] [\fB\-\-direction\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-t\fR|\fB\-\-tagname\fR> <\fB\-\-template\fR> <\fB\-\-process\-type\fR> <\fB\-\-controller\-type\fR> <\fB\-\-relay\-amp\fR> <\fB\-\-driver\fR> 
+\fBbhtune\-tune\fR [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-pv\-range\-high\fR] [\fB\-\-pv\-range\-low\fR] [\fB\-\-mv\-range\-high\fR] [\fB\-\-mv\-range\-low\fR] [\fB\-\-direction\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-t\fR|\fB\-\-tagname\fR> <\fB\-\-template\fR> <\fB\-\-process\-type\fR> <\fB\-\-controller\-type\fR> <\fB\-\-relay\-amp\fR> <\fB\-\-driver\fR>
 .SH DESCRIPTION
 Run an MRFT tune against a real OPC DA loop or the in\-process simulator
 .SH OPTIONS
@@ -58,9 +58,6 @@ Relay cycles to count once the skip period ends (default: looked up per `\-\-pro
 .TP
 \fB\-\-noise\-protection\-secs\fR \fI<NOISE_PROTECTION_SECS>\fR
 Seconds a switch must persist before it\*(Aqs accepted (default: looked up per `\-\-process\-type`)
-.TP
-\fB\-\-mrft\-delay\fR \fI<MRFT_DELAY>\fR [default: 0]
-Pre/post\-test recording padding, in seconds (legacy: `\-\-mrftDelayTime`)
 .TP
 \fB\-\-driver\fR \fI<DRIVER>\fR
 Which driver drives this tune
@@ -127,12 +124,6 @@ direct
 reverse
 .RE
 .TP
-\fB\-\-poll\-interval\-ms\fR \fI<POLL_INTERVAL_MS>\fR [default: 800]
-How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer)
-.TP
-\fB\-\-timeout\-secs\fR \fI<TIMEOUT_SECS>\fR [default: 3600]
-Hard wall\-clock cap on this run\*(Aqs total duration (including any `\-\-mrft\-delay` padding), in seconds. If the engine hasn\*(Aqt reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C \-\- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop\*(Aqs expected test duration \-\- temperature loops in particular can need much longer than the default
-.TP
 \fB\-\-notes\fR \fI<NOTES>\fR
 Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes
 .TP
@@ -153,12 +144,6 @@ moderate
 .IP \(bu 2
 sluggish
 .RE
-.TP
-\fB\-\-op\-timeout\-secs\fR \fI<OP_TIMEOUT_SECS>\fR [default: 30]
-Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black\-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `\-\-timeout\-secs` both stay effective even mid\-hung\-read/write \-\- see AGENTS.md\*(Aqs `safety\-cancellation` section. Distinct from `\-\-timeout\-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration
-.TP
-\fB\-\-restore\-timeout\-secs\fR \fI<RESTORE_TIMEOUT_SECS>\fR [default: 30]
-Cap on restoring the loop to its pre\-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of `\-\-timeout\-secs`, since a restore triggered *by* a timeout would otherwise inherit an already\-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits `EXIT_RESTORE_INCOMPLETE` with a warning naming the loop and its last\-written value, instead of hanging indefinitely
 .TP
 \fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
 How to print this run\*(Aqs final outcome line

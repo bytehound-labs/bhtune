@@ -1,7 +1,6 @@
-//! `CLI flag > env var > TOML config file > built-in default` precedence for bhtune's global
-//! settings (database location, opcda-bridge gateway address, default OPC server), mirroring
-//! `opcda-bridge-client`'s `config.rs` (see AGENTS.md's `cli-config` notes) so both projects'
-//! configuration surfaces stay recognizable to the same user.
+//! Global bhtune configuration, including the shared `[tuning]` timing policy and the
+//! `CLI flag > env var > TOML config file > built-in default` precedence used by settings
+//! that expose command-line or environment overrides.
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -23,6 +22,206 @@ pub const DEFAULT_BRIDGE_HOST: &str = "localhost:7600";
 /// commands consume -- one `bhtune.toml` file and one precedence chain for every bhtune
 /// setting, CLI or server.
 pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
+
+/// Built-in pre/post-MRFT recording padding when `[tuning].mrft_delay_secs` is absent.
+pub const DEFAULT_TUNING_MRFT_DELAY_SECS: u32 = 0;
+/// Built-in driver polling interval when `[tuning].poll_interval_ms` is absent.
+pub const DEFAULT_TUNING_POLL_INTERVAL_MS: u64 = 800;
+/// Built-in whole-run timeout when `[tuning].timeout_secs` is absent.
+pub const DEFAULT_TUNING_TIMEOUT_SECS: u64 = 3_600;
+/// Built-in per-driver-operation timeout when `[tuning].op_timeout_secs` is absent.
+pub const DEFAULT_TUNING_OP_TIMEOUT_SECS: u64 = 30;
+/// Built-in post-run restoration timeout when `[tuning].restore_timeout_secs` is absent.
+pub const DEFAULT_TUNING_RESTORE_TIMEOUT_SECS: u64 = 30;
+/// Largest supported pre/post-MRFT recording delay.
+pub const MAX_TUNING_MRFT_DELAY_SECS: u32 = 3_600;
+/// Minimum restoration timeout for OPC DA runs.
+pub const MIN_OPC_RESTORE_TIMEOUT_SECS: u64 = 4;
+
+/// Optional values authored in the `[tuning]` table.
+///
+/// Missing keys stay `None` so callers can distinguish an explicit TOML value from a
+/// built-in default. Use [`resolve_tuning_config`] to obtain the concrete values used by a
+/// tune and [`validate_tuning_config`] before preparing the run.
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TuningConfig {
+    #[cfg_attr(feature = "schemars", schemars(range(max = 3_600)))]
+    pub mrft_delay_secs: Option<u32>,
+    #[cfg_attr(feature = "schemars", schemars(range(min = 1)))]
+    pub poll_interval_ms: Option<u64>,
+    #[cfg_attr(feature = "schemars", schemars(range(min = 1)))]
+    pub timeout_secs: Option<u64>,
+    #[cfg_attr(feature = "schemars", schemars(range(min = 1)))]
+    pub op_timeout_secs: Option<u64>,
+    #[cfg_attr(feature = "schemars", schemars(range(min = 1)))]
+    pub restore_timeout_secs: Option<u64>,
+}
+
+/// Concrete tuning timing policy after absent TOML keys have received built-in defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectiveTuningConfig {
+    pub mrft_delay_secs: u32,
+    pub poll_interval_ms: u64,
+    pub timeout_secs: u64,
+    pub op_timeout_secs: u64,
+    pub restore_timeout_secs: u64,
+}
+
+impl Default for EffectiveTuningConfig {
+    fn default() -> Self {
+        Self {
+            mrft_delay_secs: DEFAULT_TUNING_MRFT_DELAY_SECS,
+            poll_interval_ms: DEFAULT_TUNING_POLL_INTERVAL_MS,
+            timeout_secs: DEFAULT_TUNING_TIMEOUT_SECS,
+            op_timeout_secs: DEFAULT_TUNING_OP_TIMEOUT_SECS,
+            restore_timeout_secs: DEFAULT_TUNING_RESTORE_TIMEOUT_SECS,
+        }
+    }
+}
+
+/// Origin of one effective tuning value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuningConfigSource {
+    Toml,
+    BuiltInDefault,
+}
+
+/// Per-field provenance for the effective `[tuning]` policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TuningConfigSources {
+    pub mrft_delay_secs: TuningConfigSource,
+    pub poll_interval_ms: TuningConfigSource,
+    pub timeout_secs: TuningConfigSource,
+    pub op_timeout_secs: TuningConfigSource,
+    pub restore_timeout_secs: TuningConfigSource,
+}
+
+/// Validation error for concrete tuning timing values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuningConfigError {
+    MrftDelayOutOfRange { value: u32 },
+    PollIntervalTooSmall { value: u64 },
+    TimeoutTooSmall { value: u64 },
+    OpTimeoutTooSmall { value: u64 },
+    RestoreTimeoutTooSmall { value: u64, minimum: u64 },
+}
+
+impl std::fmt::Display for TuningConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MrftDelayOutOfRange { value } => write!(
+                f,
+                "tuning.mrft_delay_secs must be between 0 and {MAX_TUNING_MRFT_DELAY_SECS}, got {value}"
+            ),
+            Self::PollIntervalTooSmall { value } => {
+                write!(f, "tuning.poll_interval_ms must be at least 1, got {value}")
+            }
+            Self::TimeoutTooSmall { value } => {
+                write!(f, "tuning.timeout_secs must be at least 1, got {value}")
+            }
+            Self::OpTimeoutTooSmall { value } => {
+                write!(f, "tuning.op_timeout_secs must be at least 1, got {value}")
+            }
+            Self::RestoreTimeoutTooSmall { value, minimum } => write!(
+                f,
+                "tuning.restore_timeout_secs must be at least {minimum}, got {value}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TuningConfigError {}
+
+/// Resolve optional `[tuning]` values against the built-in defaults.
+pub fn resolve_tuning_config(config: &TuningConfig) -> EffectiveTuningConfig {
+    EffectiveTuningConfig {
+        mrft_delay_secs: config
+            .mrft_delay_secs
+            .unwrap_or(DEFAULT_TUNING_MRFT_DELAY_SECS),
+        poll_interval_ms: config
+            .poll_interval_ms
+            .unwrap_or(DEFAULT_TUNING_POLL_INTERVAL_MS),
+        timeout_secs: config.timeout_secs.unwrap_or(DEFAULT_TUNING_TIMEOUT_SECS),
+        op_timeout_secs: config
+            .op_timeout_secs
+            .unwrap_or(DEFAULT_TUNING_OP_TIMEOUT_SECS),
+        restore_timeout_secs: config
+            .restore_timeout_secs
+            .unwrap_or(DEFAULT_TUNING_RESTORE_TIMEOUT_SECS),
+    }
+}
+
+/// Report whether each effective tuning value came from TOML or a built-in default.
+pub fn tuning_config_sources(config: &TuningConfig) -> TuningConfigSources {
+    fn source<T>(value: Option<T>) -> TuningConfigSource {
+        if value.is_some() {
+            TuningConfigSource::Toml
+        } else {
+            TuningConfigSource::BuiltInDefault
+        }
+    }
+
+    TuningConfigSources {
+        mrft_delay_secs: source(config.mrft_delay_secs),
+        poll_interval_ms: source(config.poll_interval_ms),
+        timeout_secs: source(config.timeout_secs),
+        op_timeout_secs: source(config.op_timeout_secs),
+        restore_timeout_secs: source(config.restore_timeout_secs),
+    }
+}
+
+/// Validate concrete tuning timing values.
+///
+/// `require_opc_restore_minimum` raises the restoration minimum from one second to
+/// [`MIN_OPC_RESTORE_TIMEOUT_SECS`], matching the live OPC DA actuation-confirmation window.
+pub fn validate_tuning_config(
+    config: &EffectiveTuningConfig,
+    require_opc_restore_minimum: bool,
+) -> Result<(), TuningConfigError> {
+    if config.mrft_delay_secs > MAX_TUNING_MRFT_DELAY_SECS {
+        return Err(TuningConfigError::MrftDelayOutOfRange {
+            value: config.mrft_delay_secs,
+        });
+    }
+    if config.poll_interval_ms == 0 {
+        return Err(TuningConfigError::PollIntervalTooSmall {
+            value: config.poll_interval_ms,
+        });
+    }
+    if config.timeout_secs == 0 {
+        return Err(TuningConfigError::TimeoutTooSmall {
+            value: config.timeout_secs,
+        });
+    }
+    if config.op_timeout_secs == 0 {
+        return Err(TuningConfigError::OpTimeoutTooSmall {
+            value: config.op_timeout_secs,
+        });
+    }
+    let restore_minimum = if require_opc_restore_minimum {
+        MIN_OPC_RESTORE_TIMEOUT_SECS
+    } else {
+        1
+    };
+    if config.restore_timeout_secs < restore_minimum {
+        return Err(TuningConfigError::RestoreTimeoutTooSmall {
+            value: config.restore_timeout_secs,
+            minimum: restore_minimum,
+        });
+    }
+    Ok(())
+}
+
+/// Resolve and validate a raw `[tuning]` table in one step.
+pub fn resolve_and_validate_tuning_config(
+    config: &TuningConfig,
+    require_opc_restore_minimum: bool,
+) -> Result<EffectiveTuningConfig, TuningConfigError> {
+    let effective = resolve_tuning_config(config);
+    validate_tuning_config(&effective, require_opc_restore_minimum)?;
+    Ok(effective)
+}
 
 /// bhtune's configuration, loaded from an optional TOML file. Every field is optional; a
 /// value missing from the file (or the file itself missing) falls back to the env var / CLI
@@ -64,6 +263,10 @@ pub struct BhtuneConfig {
     /// `bool`'s ordinary `false`.
     #[serde(default = "default_allow_uncertain_quality")]
     pub allow_uncertain_quality: bool,
+    /// Global tune timing defaults. Missing keys remain `None` and resolve through
+    /// [`resolve_tuning_config`] only when a tune is prepared.
+    #[serde(default)]
+    pub tuning: TuningConfig,
     /// `[log]` sub-table: level/directory/format/rotation for `crate::logging`'s tracing
     /// setup, mirroring `opcda-bridge-gateway`'s own `log.*` config conventions.
     #[serde(default)]
@@ -112,6 +315,7 @@ impl Default for BhtuneConfig {
             bind: None,
             retention_days: None,
             allow_uncertain_quality: default_allow_uncertain_quality(),
+            tuning: TuningConfig::default(),
             log: LogConfig::default(),
         }
     }
@@ -136,14 +340,49 @@ pub struct LoadedConfigStore {
     /// Raw file value, if the key was present. This distinguishes an explicit `true` from
     /// the defaulted value when reporting configuration provenance.
     pub toml_allow_uncertain_quality: Option<bool>,
+    /// Raw optional values from the TOML `[tuning]` table.
+    pub toml_tuning: TuningConfig,
+    /// Per-field TOML/default provenance for [`Self::toml_tuning`].
+    pub tuning_sources: TuningConfigSources,
 }
 
-/// The two config-page-owned settings that can be patched in place while preserving every
-/// unrelated key and comment in the source TOML.
+/// Config-page-owned settings that can be patched in place while preserving every unrelated
+/// key and comment in the source TOML.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigPolicyUpdate {
     pub allow_uncertain_quality: bool,
     pub retention_days: Option<u32>,
+    pub mrft_delay_secs: Option<u32>,
+    pub poll_interval_ms: Option<u64>,
+    pub timeout_secs: Option<u64>,
+    pub op_timeout_secs: Option<u64>,
+    pub restore_timeout_secs: Option<u64>,
+}
+
+impl ConfigPolicyUpdate {
+    pub fn tuning(&self) -> TuningConfig {
+        TuningConfig {
+            mrft_delay_secs: self.mrft_delay_secs,
+            poll_interval_ms: self.poll_interval_ms,
+            timeout_secs: self.timeout_secs,
+            op_timeout_secs: self.op_timeout_secs,
+            restore_timeout_secs: self.restore_timeout_secs,
+        }
+    }
+}
+
+impl Default for ConfigPolicyUpdate {
+    fn default() -> Self {
+        Self {
+            allow_uncertain_quality: default_allow_uncertain_quality(),
+            retention_days: None,
+            mrft_delay_secs: None,
+            poll_interval_ms: None,
+            timeout_secs: None,
+            op_timeout_secs: None,
+            restore_timeout_secs: None,
+        }
+    }
 }
 
 /// Result of safely saving a patched TOML config file.
@@ -327,6 +566,8 @@ fn load_config_store_from_resolution(
                             .and_then(|item| item.as_value())
                             .and_then(|value| value.as_bool())
                     });
+                let toml_tuning = config.tuning;
+                let tuning_sources = tuning_config_sources(&toml_tuning);
                 let revision = revision_token_for_raw(Some(&raw));
                 Ok(LoadedConfigStore {
                     path: Some(path),
@@ -335,6 +576,8 @@ fn load_config_store_from_resolution(
                     config,
                     revision,
                     toml_allow_uncertain_quality,
+                    toml_tuning,
+                    tuning_sources,
                 })
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound && resolution.missing_is_allowed => {
@@ -346,6 +589,8 @@ fn load_config_store_from_resolution(
                     config: BhtuneConfig::default(),
                     revision,
                     toml_allow_uncertain_quality: None,
+                    toml_tuning: TuningConfig::default(),
+                    tuning_sources: tuning_config_sources(&TuningConfig::default()),
                 })
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -360,6 +605,8 @@ fn load_config_store_from_resolution(
             config: BhtuneConfig::default(),
             revision: revision_token_for_raw(None),
             toml_allow_uncertain_quality: None,
+            toml_tuning: TuningConfig::default(),
+            tuning_sources: tuning_config_sources(&TuningConfig::default()),
         }),
     }
 }
@@ -532,11 +779,91 @@ pub fn patch_retention_days(
     .map(|(patched, _)| patched)
 }
 
+fn patch_optional_tuning_value<T>(
+    document: &mut toml_edit::DocumentMut,
+    key: &str,
+    value: Option<T>,
+) where
+    T: Into<toml_edit::Value>,
+{
+    match value {
+        Some(value) => {
+            if document.get("tuning").is_none() {
+                document["tuning"] = toml_edit::table();
+            }
+            document["tuning"][key] = toml_edit::value(value);
+        }
+        None => {
+            if let Some(table) = document
+                .get_mut("tuning")
+                .and_then(toml_edit::Item::as_table_like_mut)
+            {
+                table.remove(key);
+            }
+        }
+    }
+}
+
+fn optional_u64_to_toml_integer(
+    field: &'static str,
+    value: Option<u64>,
+) -> Result<Option<i64>, String> {
+    value
+        .map(|value| {
+            i64::try_from(value)
+                .map_err(|_| format!("tuning.{field} is too large to store as a TOML integer"))
+        })
+        .transpose()
+}
+
+/// Patch all five `[tuning]` values while preserving unrelated keys, comments, and formatting.
+/// A `None` value removes only that key.
+pub fn patch_tuning_config(
+    raw: Option<&str>,
+    tuning: &TuningConfig,
+) -> Result<String, ConfigStoreError> {
+    resolve_and_validate_tuning_config(tuning, false)
+        .map_err(|source| config_malformed(None, source))?;
+    let poll_interval_ms =
+        optional_u64_to_toml_integer("poll_interval_ms", tuning.poll_interval_ms)
+            .map_err(|source| config_malformed(None, source))?;
+    let timeout_secs = optional_u64_to_toml_integer("timeout_secs", tuning.timeout_secs)
+        .map_err(|source| config_malformed(None, source))?;
+    let op_timeout_secs = optional_u64_to_toml_integer("op_timeout_secs", tuning.op_timeout_secs)
+        .map_err(|source| config_malformed(None, source))?;
+    let restore_timeout_secs =
+        optional_u64_to_toml_integer("restore_timeout_secs", tuning.restore_timeout_secs)
+            .map_err(|source| config_malformed(None, source))?;
+    let (patched, parsed) = patch_config_contents(raw, |document| {
+        patch_optional_tuning_value(
+            document,
+            "mrft_delay_secs",
+            tuning.mrft_delay_secs.map(i64::from),
+        );
+        patch_optional_tuning_value(document, "poll_interval_ms", poll_interval_ms);
+        patch_optional_tuning_value(document, "timeout_secs", timeout_secs);
+        patch_optional_tuning_value(document, "op_timeout_secs", op_timeout_secs);
+        patch_optional_tuning_value(document, "restore_timeout_secs", restore_timeout_secs);
+    })
+    .map_err(|source| config_malformed(None, source))?;
+    resolve_and_validate_tuning_config(&parsed.tuning, false)
+        .map_err(|source| config_malformed(None, source))?;
+    Ok(patched)
+}
+
 fn patch_config_policy(
     raw: Option<&str>,
     update: &ConfigPolicyUpdate,
 ) -> Result<(String, BhtuneConfig), String> {
-    patch_config_contents(raw, |document| {
+    let tuning = update.tuning();
+    resolve_and_validate_tuning_config(&tuning, false).map_err(|e| e.to_string())?;
+    let poll_interval_ms =
+        optional_u64_to_toml_integer("poll_interval_ms", tuning.poll_interval_ms)?;
+    let timeout_secs = optional_u64_to_toml_integer("timeout_secs", tuning.timeout_secs)?;
+    let op_timeout_secs = optional_u64_to_toml_integer("op_timeout_secs", tuning.op_timeout_secs)?;
+    let restore_timeout_secs =
+        optional_u64_to_toml_integer("restore_timeout_secs", tuning.restore_timeout_secs)?;
+    let result = patch_config_contents(raw, |document| {
         document["allow_uncertain_quality"] = toml_edit::value(update.allow_uncertain_quality);
         match update.retention_days {
             Some(days) => {
@@ -546,7 +873,18 @@ fn patch_config_policy(
                 document.as_table_mut().remove("retention_days");
             }
         }
-    })
+        patch_optional_tuning_value(
+            document,
+            "mrft_delay_secs",
+            tuning.mrft_delay_secs.map(i64::from),
+        );
+        patch_optional_tuning_value(document, "poll_interval_ms", poll_interval_ms);
+        patch_optional_tuning_value(document, "timeout_secs", timeout_secs);
+        patch_optional_tuning_value(document, "op_timeout_secs", op_timeout_secs);
+        patch_optional_tuning_value(document, "restore_timeout_secs", restore_timeout_secs);
+    })?;
+    resolve_and_validate_tuning_config(&result.1.tuning, false).map_err(|e| e.to_string())?;
+    Ok(result)
 }
 
 /// Load the path-aware TOML config store using real environment-based auto-discovery.
@@ -839,6 +1177,8 @@ pub fn save_config_store(
         write_config_file_atomically(&path, patched_raw.as_bytes(), state.original_raw.is_none())?;
     let revision = revision_token_for_raw(Some(&patched_raw));
     let toml_allow_uncertain_quality = Some(update.allow_uncertain_quality);
+    let toml_tuning = update.tuning();
+    let tuning_sources = tuning_config_sources(&toml_tuning);
 
     Ok(ConfigSaveResult {
         backup_path,
@@ -849,6 +1189,8 @@ pub fn save_config_store(
             config,
             revision,
             toml_allow_uncertain_quality,
+            toml_tuning,
+            tuning_sources,
         },
     })
 }
@@ -1012,6 +1354,11 @@ mod tests {
             bind in prop::option::of("[A-Za-z0-9_.:-]{0,32}"),
             retention_days in prop::option::of(1u32..),
             allow_uncertain_quality in any::<bool>(),
+            mrft_delay_secs in prop::option::of(0u32..=MAX_TUNING_MRFT_DELAY_SECS),
+            poll_interval_ms in prop::option::of(1u64..=1_000_000),
+            timeout_secs in prop::option::of(1u64..=1_000_000),
+            op_timeout_secs in prop::option::of(1u64..=1_000_000),
+            restore_timeout_secs in prop::option::of(1u64..=1_000_000),
             level in prop::option::of("[A-Za-z0-9_.:-]{0,16}"),
             dir in prop::option::of("[A-Za-z0-9_./:-]{0,32}"),
             format in prop::option::of("[A-Za-z0-9_.:-]{0,16}"),
@@ -1025,6 +1372,13 @@ mod tests {
                 bind,
                 retention_days,
                 allow_uncertain_quality,
+                tuning: TuningConfig {
+                    mrft_delay_secs,
+                    poll_interval_ms,
+                    timeout_secs,
+                    op_timeout_secs,
+                    restore_timeout_secs,
+                },
                 log: LogConfig {
                     level,
                     dir,
@@ -1060,6 +1414,149 @@ mod tests {
             error
                 .to_string()
                 .contains("retention_days must be at least 1")
+        );
+    }
+
+    #[test]
+    fn missing_tuning_table_preserves_none_and_resolves_built_in_defaults() {
+        let config = parse_config_contents("bridge_host = \"gateway:7600\"\n").unwrap();
+
+        assert_eq!(config.tuning, TuningConfig::default());
+        assert_eq!(
+            resolve_and_validate_tuning_config(&config.tuning, true).unwrap(),
+            EffectiveTuningConfig::default()
+        );
+    }
+
+    #[test]
+    fn tuning_table_round_trips_all_optional_values() {
+        let raw = r#"
+[tuning]
+mrft_delay_secs = 12
+poll_interval_ms = 900
+timeout_secs = 4000
+op_timeout_secs = 31
+restore_timeout_secs = 32
+"#;
+        let config = parse_config_contents(raw).unwrap();
+
+        assert_eq!(
+            config.tuning,
+            TuningConfig {
+                mrft_delay_secs: Some(12),
+                poll_interval_ms: Some(900),
+                timeout_secs: Some(4_000),
+                op_timeout_secs: Some(31),
+                restore_timeout_secs: Some(32),
+            }
+        );
+        let encoded = toml::to_string(&config).unwrap();
+        assert_eq!(parse_config_contents(&encoded).unwrap(), config);
+    }
+
+    #[test]
+    fn tuning_resolution_preserves_partial_raw_values_and_tracks_sources() {
+        let raw = TuningConfig {
+            poll_interval_ms: Some(250),
+            restore_timeout_secs: Some(8),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_tuning_config(&raw),
+            EffectiveTuningConfig {
+                poll_interval_ms: 250,
+                restore_timeout_secs: 8,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            tuning_config_sources(&raw),
+            TuningConfigSources {
+                mrft_delay_secs: TuningConfigSource::BuiltInDefault,
+                poll_interval_ms: TuningConfigSource::Toml,
+                timeout_secs: TuningConfigSource::BuiltInDefault,
+                op_timeout_secs: TuningConfigSource::BuiltInDefault,
+                restore_timeout_secs: TuningConfigSource::Toml,
+            }
+        );
+    }
+
+    #[test]
+    fn tuning_validation_rejects_each_invalid_general_value() {
+        let cases = [
+            (
+                EffectiveTuningConfig {
+                    mrft_delay_secs: MAX_TUNING_MRFT_DELAY_SECS + 1,
+                    ..Default::default()
+                },
+                TuningConfigError::MrftDelayOutOfRange {
+                    value: MAX_TUNING_MRFT_DELAY_SECS + 1,
+                },
+            ),
+            (
+                EffectiveTuningConfig {
+                    poll_interval_ms: 0,
+                    ..Default::default()
+                },
+                TuningConfigError::PollIntervalTooSmall { value: 0 },
+            ),
+            (
+                EffectiveTuningConfig {
+                    timeout_secs: 0,
+                    ..Default::default()
+                },
+                TuningConfigError::TimeoutTooSmall { value: 0 },
+            ),
+            (
+                EffectiveTuningConfig {
+                    op_timeout_secs: 0,
+                    ..Default::default()
+                },
+                TuningConfigError::OpTimeoutTooSmall { value: 0 },
+            ),
+            (
+                EffectiveTuningConfig {
+                    restore_timeout_secs: 0,
+                    ..Default::default()
+                },
+                TuningConfigError::RestoreTimeoutTooSmall {
+                    value: 0,
+                    minimum: 1,
+                },
+            ),
+        ];
+
+        for (config, expected) in cases {
+            assert_eq!(validate_tuning_config(&config, false), Err(expected));
+            assert!(!expected.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn opc_restore_timeout_requires_four_seconds_but_general_validation_allows_one() {
+        let config = EffectiveTuningConfig {
+            restore_timeout_secs: MIN_OPC_RESTORE_TIMEOUT_SECS - 1,
+            ..Default::default()
+        };
+
+        assert_eq!(validate_tuning_config(&config, false), Ok(()));
+        assert_eq!(
+            validate_tuning_config(&config, true),
+            Err(TuningConfigError::RestoreTimeoutTooSmall {
+                value: MIN_OPC_RESTORE_TIMEOUT_SECS - 1,
+                minimum: MIN_OPC_RESTORE_TIMEOUT_SECS,
+            })
+        );
+        assert!(
+            validate_tuning_config(
+                &EffectiveTuningConfig {
+                    restore_timeout_secs: MIN_OPC_RESTORE_TIMEOUT_SECS,
+                    ..Default::default()
+                },
+                true,
+            )
+            .is_ok()
         );
     }
 
@@ -1441,6 +1938,42 @@ mod tests {
         assert_eq!(store.original_raw, None);
         assert_eq!(store.config, BhtuneConfig::default());
         assert_eq!(store.revision, "absent:v1");
+        assert_eq!(store.toml_tuning, TuningConfig::default());
+        assert_eq!(
+            store.tuning_sources,
+            tuning_config_sources(&TuningConfig::default())
+        );
+    }
+
+    #[test]
+    fn load_config_store_tracks_raw_tuning_values_and_sources() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "[tuning]\npoll_interval_ms = 250\nrestore_timeout_secs = 8"
+        )
+        .unwrap();
+
+        let store = load_config_store(Some(file.path())).unwrap();
+
+        assert_eq!(
+            store.toml_tuning,
+            TuningConfig {
+                poll_interval_ms: Some(250),
+                restore_timeout_secs: Some(8),
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            store.tuning_sources,
+            TuningConfigSources {
+                mrft_delay_secs: TuningConfigSource::BuiltInDefault,
+                poll_interval_ms: TuningConfigSource::Toml,
+                timeout_secs: TuningConfigSource::BuiltInDefault,
+                op_timeout_secs: TuningConfigSource::BuiltInDefault,
+                restore_timeout_secs: TuningConfigSource::Toml,
+            }
+        );
     }
 
     #[test]
@@ -1538,6 +2071,97 @@ level = "info"
     }
 
     #[test]
+    fn patch_tuning_config_updates_values_and_preserves_comments_and_unknown_keys() {
+        let raw = r#"# keep root comment
+unknown_key = "keep me"
+
+[tuning]
+# keep tuning comment
+mrft_delay_secs = 1
+unknown_tuning_key = "keep this too"
+"#;
+        let patched = patch_tuning_config(
+            Some(raw),
+            &TuningConfig {
+                mrft_delay_secs: Some(10),
+                poll_interval_ms: Some(250),
+                timeout_secs: Some(900),
+                op_timeout_secs: Some(5),
+                restore_timeout_secs: Some(6),
+            },
+        )
+        .unwrap();
+
+        assert!(patched.contains("# keep root comment"));
+        assert!(patched.contains("# keep tuning comment"));
+        assert!(patched.contains("unknown_key = \"keep me\""));
+        assert!(patched.contains("unknown_tuning_key = \"keep this too\""));
+        assert_eq!(
+            parse_config_contents(&patched).unwrap().tuning,
+            TuningConfig {
+                mrft_delay_secs: Some(10),
+                poll_interval_ms: Some(250),
+                timeout_secs: Some(900),
+                op_timeout_secs: Some(5),
+                restore_timeout_secs: Some(6),
+            }
+        );
+    }
+
+    #[test]
+    fn patch_tuning_config_none_removes_all_managed_keys_but_keeps_unknown_content() {
+        let raw = r#"
+[tuning]
+mrft_delay_secs = 10
+poll_interval_ms = 250
+timeout_secs = 900
+op_timeout_secs = 5
+restore_timeout_secs = 6
+unknown_tuning_key = "keep"
+"#;
+
+        let patched = patch_tuning_config(Some(raw), &TuningConfig::default()).unwrap();
+
+        for key in [
+            "mrft_delay_secs",
+            "poll_interval_ms",
+            "timeout_secs",
+            "op_timeout_secs",
+            "restore_timeout_secs",
+        ] {
+            assert!(!patched.contains(key));
+        }
+        assert!(patched.contains("unknown_tuning_key = \"keep\""));
+        assert_eq!(
+            parse_config_contents(&patched).unwrap().tuning,
+            TuningConfig::default()
+        );
+    }
+
+    #[test]
+    fn patch_tuning_config_rejects_invalid_and_unrepresentable_values() {
+        let invalid = patch_tuning_config(
+            None,
+            &TuningConfig {
+                poll_interval_ms: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(invalid.to_string().contains("poll_interval_ms"));
+
+        let too_large = patch_tuning_config(
+            None,
+            &TuningConfig {
+                timeout_secs: Some(u64::MAX),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(too_large.to_string().contains("too large"));
+    }
+
+    #[test]
     fn patch_helpers_report_malformed_toml_without_modifying_it() {
         let malformed = "not = [valid";
 
@@ -1561,6 +2185,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: false,
                 retention_days: Some(7),
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -1612,6 +2237,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: false,
                 retention_days: None,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -1879,6 +2505,11 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: false,
                 retention_days: Some(14),
+                mrft_delay_secs: Some(12),
+                poll_interval_ms: Some(250),
+                timeout_secs: Some(900),
+                op_timeout_secs: Some(5),
+                restore_timeout_secs: Some(6),
             },
         )
         .unwrap();
@@ -1888,6 +2519,21 @@ level = "info"
         assert_eq!(result.state.path, Some(expected_path.clone()));
         assert_eq!(result.state.config.retention_days, Some(14));
         assert!(!result.state.config.allow_uncertain_quality);
+        assert_eq!(
+            result.state.config.tuning,
+            TuningConfig {
+                mrft_delay_secs: Some(12),
+                poll_interval_ms: Some(250),
+                timeout_secs: Some(900),
+                op_timeout_secs: Some(5),
+                restore_timeout_secs: Some(6),
+            }
+        );
+        assert_eq!(result.state.toml_tuning, result.state.config.tuning);
+        assert_eq!(
+            result.state.tuning_sources,
+            tuning_config_sources(&result.state.toml_tuning)
+        );
         let saved = fs::read_to_string(expected_path).unwrap();
         assert_eq!(result.state.original_raw.as_deref(), Some(saved.as_str()));
     }
@@ -1906,6 +2552,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: false,
                 retention_days: Some(21),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -1932,6 +2579,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: true,
                 retention_days: Some(9),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -1957,6 +2605,8 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: false,
                 retention_days: Some(5),
+                poll_interval_ms: Some(250),
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -1966,6 +2616,50 @@ level = "info"
             ConfigStoreError::Conflict { message, .. }
                 if message.contains("stale config revision token")
         ));
+    }
+
+    #[test]
+    fn save_config_store_resets_tuning_keys_without_removing_unknown_tuning_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        fs::write(
+            &path,
+            "[tuning]\npoll_interval_ms = 250\nrestore_timeout_secs = 8\nunknown = \"keep\"\n",
+        )
+        .unwrap();
+        let store = load_config_store(Some(&path)).unwrap();
+
+        let result =
+            save_config_store(&store, &store.revision, &ConfigPolicyUpdate::default()).unwrap();
+
+        let saved = fs::read_to_string(path).unwrap();
+        assert!(!saved.contains("poll_interval_ms"));
+        assert!(!saved.contains("restore_timeout_secs"));
+        assert!(saved.contains("unknown = \"keep\""));
+        assert_eq!(result.state.toml_tuning, TuningConfig::default());
+        assert_eq!(result.state.config.tuning, TuningConfig::default());
+    }
+
+    #[test]
+    fn save_config_store_rejects_invalid_tuning_updates_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.toml");
+        let original = "bridge_host = \"before:7600\"\n";
+        fs::write(&path, original).unwrap();
+        let store = load_config_store(Some(&path)).unwrap();
+
+        let error = save_config_store(
+            &store,
+            &store.revision,
+            &ConfigPolicyUpdate {
+                poll_interval_ms: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConfigStoreError::Malformed { .. }));
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
     }
 
     #[test]
@@ -1983,6 +2677,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: false,
                 retention_days: Some(5),
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -2003,6 +2698,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: true,
                 retention_days: None,
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -2016,6 +2712,8 @@ level = "info"
             config: BhtuneConfig::default(),
             revision: revision_token_for_raw(None),
             toml_allow_uncertain_quality: None,
+            toml_tuning: TuningConfig::default(),
+            tuning_sources: tuning_config_sources(&TuningConfig::default()),
         };
         let err = save_config_store(
             &state,
@@ -2023,6 +2721,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: true,
                 retention_days: None,
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -2038,6 +2737,8 @@ level = "info"
             config: BhtuneConfig::default(),
             revision: revision_token_for_raw(None),
             toml_allow_uncertain_quality: None,
+            toml_tuning: TuningConfig::default(),
+            tuning_sources: tuning_config_sources(&TuningConfig::default()),
         };
         let err = save_config_store(
             &appeared,
@@ -2045,6 +2746,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: true,
                 retention_days: None,
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -2068,6 +2770,8 @@ level = "info"
             config: BhtuneConfig::default(),
             revision: revision_token_for_raw(Some("")),
             toml_allow_uncertain_quality: None,
+            toml_tuning: TuningConfig::default(),
+            tuning_sources: tuning_config_sources(&TuningConfig::default()),
         };
         let err = save_config_store(
             &unreadable,
@@ -2075,6 +2779,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: true,
                 retention_days: None,
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -2092,6 +2797,8 @@ level = "info"
             config: BhtuneConfig::default(),
             revision: revision_token_for_raw(Some("[")),
             toml_allow_uncertain_quality: None,
+            toml_tuning: TuningConfig::default(),
+            tuning_sources: tuning_config_sources(&TuningConfig::default()),
         };
         let err = save_config_store(
             &malformed,
@@ -2099,6 +2806,7 @@ level = "info"
             &ConfigPolicyUpdate {
                 allow_uncertain_quality: true,
                 retention_days: None,
+                ..Default::default()
             },
         )
         .unwrap_err();
