@@ -6,6 +6,7 @@ from check_openapi_breaking import find_breaking_changes
 
 JSON_CONTENT_TYPE = "application/json"
 RUNS_PATH = "/api/runs"
+OTHER_PATH = "/api/other"
 TIMING_FIELDS = (
     "mrft_delay",
     "poll_interval_ms",
@@ -166,16 +167,16 @@ class OpenApiBreakingTests(unittest.TestCase):
     def test_quality_removal_on_another_operation_remains_breaking(self):
         old = spec_with_quality_field()
         new = spec_with_quality_field(remove_quality=True)
-        old["paths"]["/api/other"] = old["paths"].pop(RUNS_PATH)
-        new["paths"]["/api/other"] = new["paths"].pop(RUNS_PATH)
+        old["paths"][OTHER_PATH] = old["paths"].pop(RUNS_PATH)
+        new["paths"][OTHER_PATH] = new["paths"].pop(RUNS_PATH)
         errors = find_breaking_changes(old, new)
         self.assertTrue(any("'allow_uncertain_quality' was removed" in error for error in errors))
 
     def test_timing_removals_on_another_operation_remain_breaking(self):
         old = spec_with_timing_fields()
         new = spec_with_timing_fields(remove_timing=True)
-        old["paths"]["/api/other"] = old["paths"].pop(RUNS_PATH)
-        new["paths"]["/api/other"] = new["paths"].pop(RUNS_PATH)
+        old["paths"][OTHER_PATH] = old["paths"].pop(RUNS_PATH)
+        new["paths"][OTHER_PATH] = new["paths"].pop(RUNS_PATH)
         errors = find_breaking_changes(old, new)
         self.assertTrue(any("'mrft_delay' was removed" in error for error in errors))
 
