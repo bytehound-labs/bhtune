@@ -28,16 +28,13 @@ import {
 } from "../../components/ui";
 import type { TrendPoint } from "../../lib/trend";
 import {
+  formatNumber,
   type RunResult,
   type RunWrite,
   type WriteEligibility,
   writeKey,
 } from "./runDetailHelpers";
-
-function num(value: number | null | undefined): string {
-  if (value === null || value === undefined) return "—";
-  return String(Number(value.toFixed(4)));
-}
+import { PidResultsPanel } from "./PidResultsPanel";
 
 function dateTime(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : "—";
@@ -83,8 +80,8 @@ function LiveProgress({ stream }: { readonly stream: RunStreamState }) {
       </p>
       {latest ? (
         <p className="mt-2 font-mono text-slate-400">
-          Tick {latest.tick_index}: PV {num(latest.sample.pv)}, MV{" "}
-          {num(latest.state.mv_value_current)}, cycles{" "}
+          Tick {latest.tick_index}: PV {formatNumber(latest.sample.pv)}, MV{" "}
+          {formatNumber(latest.state.mv_value_current)}, cycles{" "}
           {latest.state.cycles_completed} completed /{" "}
           {latest.state.cycles_remaining} remaining
         </p>
@@ -251,7 +248,7 @@ function ConfigurationSection({ run }: { readonly run: RunDetailResponse }) {
       />
       <Field
         label="Relay amplitude"
-        value={`${num(run.config.relay_amp_percent)}%`}
+        value={`${formatNumber(run.config.relay_amp_percent)}%`}
       />
       <Field
         label="Cycles (skip / count)"
@@ -276,21 +273,24 @@ function InitialReadingsSection({
 }) {
   return (
     <Section title="Initial readings">
-      <Field label="PV initial" value={num(readings.pv_ini)} />
-      <Field label="MV initial" value={num(readings.mv_ini)} />
+      <Field label="PV initial" value={formatNumber(readings.pv_ini)} />
+      <Field label="MV initial" value={formatNumber(readings.mv_ini)} />
       <Field
         label="PV range"
-        value={`${num(readings.pv_range_low)} – ${num(readings.pv_range_high)}`}
+        value={`${formatNumber(readings.pv_range_low)} – ${formatNumber(readings.pv_range_high)}`}
       />
       <Field
         label="MV range"
-        value={`${num(readings.mv_range_low)} – ${num(readings.mv_range_high)}`}
+        value={`${formatNumber(readings.mv_range_low)} – ${formatNumber(readings.mv_range_high)}`}
       />
       <Field
         label="Controller direction"
         value={DIRECTION_LABELS[readings.controller_direction]}
       />
-      <Field label="Setpoint initial" value={num(readings.setpoint_ini)} />
+      <Field
+        label="Setpoint initial"
+        value={formatNumber(readings.setpoint_ini)}
+      />
       <Field label="Mode (raw)" value={readings.mode_raw ?? "—"} />
       <Field
         label="Mode attribute (raw)"
@@ -358,16 +358,20 @@ function MvActuationRow({ actuation }: { readonly actuation: MvActuation }) {
           check {dateTime(actuation.last_checked_at)}
         </div>
       </td>
-      <td className="px-4 py-3 font-mono">{num(actuation.target_mv)}</td>
       <td className="px-4 py-3 font-mono">
-        <div>{num(actuation.readback_mv)}</div>
+        {formatNumber(actuation.target_mv)}
+      </td>
+      <td className="px-4 py-3 font-mono">
+        <div>{formatNumber(actuation.readback_mv)}</div>
         {actuation.readback_quality && (
           <div className="font-sans text-xs text-slate-400">
             {SAMPLE_QUALITY_LABELS[actuation.readback_quality]}
           </div>
         )}
       </td>
-      <td className="px-4 py-3 font-mono">{num(actuation.tolerance)}</td>
+      <td className="px-4 py-3 font-mono">
+        {formatNumber(actuation.tolerance)}
+      </td>
       <td className="px-4 py-3 text-slate-400">
         {dateTime(actuation.confirmation_due_at)}
       </td>
@@ -403,128 +407,6 @@ function actuationStatusTone(
   }
 }
 
-function CalculatedResultsSection({
-  run,
-  eligibility,
-  writePending,
-  writingResponseLevel,
-  onWrite,
-}: {
-  readonly run: RunDetailResponse;
-  readonly eligibility: WriteEligibility;
-  readonly writePending: boolean;
-  readonly writingResponseLevel?: ResponseLevel;
-  readonly onWrite: (result: RunResult) => void;
-}) {
-  const pidLabels = run.pid_parameter_labels ?? {
-    proportional: "P",
-    integral: "I",
-    derivative: "D",
-  };
-
-  return (
-    <section className="mb-6">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-        Calculated results
-      </h2>
-      {run.results.length === 0 ? (
-        <p className="text-sm text-slate-500">
-          No results were calculated for this tune.
-        </p>
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-800">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
-              <tr>
-                <th className="px-4 py-2 font-medium">Response level</th>
-                <th className="px-4 py-2 font-medium">
-                  {pidLabels.proportional}
-                </th>
-                <th className="px-4 py-2 font-medium">{pidLabels.integral}</th>
-                <th className="px-4 py-2 font-medium">
-                  {pidLabels.derivative}
-                </th>
-                <th className="px-4 py-2 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {run.results.map((result) => (
-                <ResultRow
-                  key={result.response_level}
-                  result={result}
-                  run={run}
-                  eligibility={eligibility}
-                  writePending={writePending}
-                  writingResponseLevel={writingResponseLevel}
-                  onWrite={onWrite}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {!eligibility.eligible && eligibility.reason && (
-        <p className="mt-2 text-xs text-slate-500">
-          PID changes unavailable: {eligibility.reason}
-        </p>
-      )}
-    </section>
-  );
-}
-
-function ResultRow({
-  result,
-  run,
-  eligibility,
-  writePending,
-  writingResponseLevel,
-  onWrite,
-}: {
-  readonly result: RunResult;
-  readonly run: RunDetailResponse;
-  readonly eligibility: WriteEligibility;
-  readonly writePending: boolean;
-  readonly writingResponseLevel?: ResponseLevel;
-  readonly onWrite: (result: RunResult) => void;
-}) {
-  const isWriting =
-    writePending && writingResponseLevel === result.response_level;
-
-  function handleWrite() {
-    const tags = run.pid_constant_tags;
-    if (!eligibility.eligible || !tags) return;
-
-    const confirmed = window.confirm(
-      `Apply ${RESPONSE_LEVEL_LABELS[result.response_level]} PID constants to tag "${run.tag_name}"?\n\n` +
-        `${tags.proportional}: ${num(result.proportional)}\n` +
-        `${tags.integral}: ${num(result.integral)}\n` +
-        `${tags.derivative}: ${num(result.derivative)}`,
-    );
-    if (confirmed) onWrite(result);
-  }
-
-  return (
-    <tr>
-      <td className="px-4 py-3 font-medium">
-        {RESPONSE_LEVEL_LABELS[result.response_level]}
-      </td>
-      <td className="px-4 py-3 font-mono">{num(result.proportional)}</td>
-      <td className="px-4 py-3 font-mono">{num(result.integral)}</td>
-      <td className="px-4 py-3 font-mono">{num(result.derivative)}</td>
-      <td className="px-4 py-3">
-        <Button
-          variant="primary"
-          disabled={!eligibility.eligible || writePending}
-          title={eligibility.reason}
-          onClick={handleWrite}
-        >
-          {isWriting ? "Writing…" : "Apply"}
-        </Button>
-      </td>
-    </tr>
-  );
-}
-
 function WriteHistorySection({
   run,
   eligibility,
@@ -536,7 +418,7 @@ function WriteHistorySection({
   readonly eligibility: WriteEligibility;
   readonly canRevertLastWrite: boolean;
   readonly revertPending: boolean;
-  readonly onRevert: () => void;
+  readonly onRevert: (write: RunWrite) => void;
 }) {
   return (
     <section className="mb-6">
@@ -572,7 +454,7 @@ function WriteTable({
   readonly eligibility: WriteEligibility;
   readonly canRevertLastWrite: boolean;
   readonly revertPending: boolean;
-  readonly onRevert: () => void;
+  readonly onRevert: (write: RunWrite) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-slate-800">
@@ -595,7 +477,6 @@ function WriteTable({
             <WriteRow
               key={writeKey(write)}
               write={write}
-              run={run}
               eligibility={eligibility}
               isLastWrite={write === run.writes.at(-1)}
               canRevertLastWrite={canRevertLastWrite}
@@ -611,7 +492,6 @@ function WriteTable({
 
 function WriteRow({
   write,
-  run,
   eligibility,
   isLastWrite,
   canRevertLastWrite,
@@ -619,26 +499,12 @@ function WriteRow({
   onRevert,
 }: {
   readonly write: RunWrite;
-  readonly run: RunDetailResponse;
   readonly eligibility: WriteEligibility;
   readonly isLastWrite: boolean;
   readonly canRevertLastWrite: boolean;
   readonly revertPending: boolean;
-  readonly onRevert: () => void;
+  readonly onRevert: (write: RunWrite) => void;
 }) {
-  function handleRevert() {
-    const tags = run.pid_constant_tags;
-    if (!eligibility.eligible || !tags) return;
-
-    const confirmed = window.confirm(
-      `Restore the previous PID values on tag "${run.tag_name}"?\n\n` +
-        `${tags.proportional}: ${num(write.proportional_previous)}\n` +
-        `${tags.integral}: ${num(write.integral_previous)}\n` +
-        `${tags.derivative}: ${num(write.derivative_previous)}`,
-    );
-    if (confirmed) onRevert();
-  }
-
   return (
     <tr>
       <td className="px-4 py-3">
@@ -649,16 +515,19 @@ function WriteRow({
       </td>
       <td className="px-4 py-3 text-slate-400">{dateTime(write.written_at)}</td>
       <td className="px-4 py-3 font-mono text-slate-400">
-        {num(write.proportional_previous)} / {num(write.integral_previous)} /{" "}
-        {num(write.derivative_previous)}
+        {formatNumber(write.proportional_previous)} /{" "}
+        {formatNumber(write.integral_previous)} /{" "}
+        {formatNumber(write.derivative_previous)}
       </td>
       <td className="px-4 py-3 font-mono">
-        {num(write.proportional_written)} / {num(write.integral_written)} /{" "}
-        {num(write.derivative_written)}
+        {formatNumber(write.proportional_written)} /{" "}
+        {formatNumber(write.integral_written)} /{" "}
+        {formatNumber(write.derivative_written)}
       </td>
       <td className="px-4 py-3 font-mono text-slate-400">
-        {num(write.proportional_readback)} / {num(write.integral_readback)} /{" "}
-        {num(write.derivative_readback)}
+        {formatNumber(write.proportional_readback)} /{" "}
+        {formatNumber(write.integral_readback)} /{" "}
+        {formatNumber(write.derivative_readback)}
       </td>
       <td className="px-4 py-3">
         <Badge tone={write.success ? "success" : "error"}>
@@ -674,7 +543,7 @@ function WriteRow({
             variant="danger"
             disabled={revertPending}
             title={eligibility.reason}
-            onClick={handleRevert}
+            onClick={() => onRevert(write)}
           >
             {revertPending ? "Restoring…" : "Restore previous values"}
           </Button>
@@ -773,11 +642,21 @@ export function RunDetailContent({
   readonly onSaveNotes: () => void;
   readonly onClearNotes: () => void;
   readonly onWrite: (result: RunResult) => void;
-  readonly onRevert: () => void;
+  readonly onRevert: (write: RunWrite) => void;
 }) {
   return (
     <>
       {isRunning && <LiveProgress stream={stream} />}
+      {run.results.length > 0 && (
+        <PidResultsPanel
+          run={run}
+          eligibility={eligibility}
+          writePending={writePending}
+          writingResponseLevel={writingResponseLevel}
+          promoted
+          onWrite={onWrite}
+        />
+      )}
       <TrendSection points={trendPoints} pollIntervalMs={trendPollIntervalMs} />
       <SummarySection run={run} />
       <NotesSection
@@ -794,13 +673,15 @@ export function RunDetailContent({
       {run.driver === "opcda" && (
         <MvActuationSection actuations={run.mv_actuations ?? []} />
       )}
-      <CalculatedResultsSection
-        run={run}
-        eligibility={eligibility}
-        writePending={writePending}
-        writingResponseLevel={writingResponseLevel}
-        onWrite={onWrite}
-      />
+      {run.results.length === 0 && (
+        <PidResultsPanel
+          run={run}
+          eligibility={eligibility}
+          writePending={writePending}
+          writingResponseLevel={writingResponseLevel}
+          onWrite={onWrite}
+        />
+      )}
       <WriteHistorySection
         run={run}
         eligibility={eligibility}

@@ -78,6 +78,15 @@ poll intervals on the x-axis and leave unused future space blank, then fit the f
 run once that horizon is reached. The same `TrendChart` component renders live and historical
 cases identically without fabricating samples.
 
+When calculated results exist, the run detail screen promotes the **Calculated results** panel
+above the trend as the primary post-tune action area. Each response-level row uses **Review &
+write** to open a safety review modal with the exact loop tag, destination tags, parameter
+labels, and values; the modal cannot be dismissed while writing and verifying. The newest
+successful write in the history table offers **Restore previous values** through the same modal,
+using its recorded pre-write values. The panel stays in its lower position when no results
+exist, and the existing eligibility explanation remains visible for simulator or otherwise
+ineligible runs.
+
 ## Scripts
 
 | Command                 | Purpose                                                                 |

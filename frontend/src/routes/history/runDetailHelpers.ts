@@ -9,6 +9,11 @@ export interface WriteEligibility {
   readonly reason?: string;
 }
 
+export function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return String(Number(value.toFixed(4)));
+}
+
 /**
  * Mirrors `routes::runs::require_writable_run` so post-run PID controls can explain why
  * they are disabled before making a request.

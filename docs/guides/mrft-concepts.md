@@ -81,6 +81,10 @@ The web run-detail **Calculated results** table uses the constant names from the
 snapshotted template, so a Yokogawa run shows `P`, `I`, and `D` rather than generic engine
 labels. It keeps the derivative column for PI runs and displays `0`, because the write path
 explicitly clears stale derivative action for controllers without a derivative term.
+When results exist, the web GUI promotes this panel above the trend. Each response level has a
+**Review & write** action that shows the exact destination tags and values in a safety review
+modal before writing; the newest successful write can be restored from the same modal using its
+recorded pre-write values.
 
 ## Controller type and process type
 

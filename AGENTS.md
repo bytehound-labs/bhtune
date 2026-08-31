@@ -553,13 +553,17 @@ checks exactly (not-still-running, `opcda` driver, `pid_constant_tags` present, 
 `bridge_host` present) so a disabled button always carries a `title` tooltip and a persistent
 "Write/revert disabled: ..." note explaining why, rather than a mystery grey control — this
 needed a small, deliberate addition to the shared `Button` component (`ui.tsx`), which had no
-`title` prop before. Both actions are gated behind a `window.confirm` naming the loop, the
-exact tag names, and the exact P/I/D values that will be written or restored, sourced
-directly from the same row being acted on. The Revert button's visibility is intentionally
-narrow: it renders only on the single newest `writes[]` row, and only when that row is a
-successful write (`kind === "write" && success`) — once superseded by a later write or
-revert, the button disappears, matching the server's own "revert always targets the most
-recent write" rule. Verified with real browser automation (`@playwright/test`'s `chromium`
+`title` prop before. Both actions open the shared styled PID review modal, which names the
+loop, response level, snapshotted parameter labels, exact destination tags, and exact P/I/D
+values before the request is sent. The modal stays open and disables Escape, backdrop, close,
+and duplicate submission while the write or restore is pending; it closes after a successful
+HTTP response and keeps request errors visible inside the modal. The Revert button's
+visibility is intentionally narrow: it renders only on the single newest `writes[]` row, and
+only when that row is a successful write (`kind === "write" && success`) — once superseded by
+a later write or revert, the button disappears, matching the server's own "revert always
+targets the most recent write" rule. When calculated results exist, the single results panel
+is promoted directly below the run heading and before the trend; without results it remains
+in its lower diagnostic position. Verified with real browser automation (`@playwright/test`'s `chromium`
 launcher driven from standalone Node scripts, since the `chrome-devtools-*` MCP tools
 timed out repeatedly in this environment) against a real running `bhtune-server` and Vite
 dev server: an eligible opcda run (hand-crafted via direct SQLite edits, since no real OPC
@@ -4398,7 +4402,9 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    item first. `api-post-run-write`/`ui-post-run-write` add `POST /api/runs/{id}/write`/
    `revert` and matching Write/Revert buttons on the run detail page, reusing the CLI's
    existing pre-read/verify/rollback/audit path under a new `ActiveRun::reserve`
-   exclusive-reservation lock. `ui-prefill-last-run` seeds the New Run form from the newest
+   exclusive-reservation lock. The follow-on PID action UX promotes calculated results above
+   the trend once they exist and routes Write/Revert through one styled, pending-safe review
+   modal that shows exact tags and values. `ui-prefill-last-run` seeds the New Run form from the newest
    run's stored request server-side as a compatibility fallback, plus a "Reset to defaults"
    action and a "Duplicate this run" action. The follow-on New Tune draft flow stores every
    editable field except Notes in the app-wide `settings` row at `new_run_draft`, autosaves

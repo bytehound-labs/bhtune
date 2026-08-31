@@ -13,8 +13,13 @@ import {
 } from "../../api/runs";
 import type { DuplicateRunState } from "../runs/NewRunPage";
 import { composeTrendPoints } from "../../lib/trend";
-import { type RunResult, writeEligibility } from "./runDetailHelpers";
+import {
+  type RunResult,
+  type RunWrite,
+  writeEligibility,
+} from "./runDetailHelpers";
 import { RunDetailActions } from "./RunDetailActions";
+import { PidActionModal, type PidAction } from "./PidActionModal";
 import {
   RunDetailContent,
   RunDetailErrors,
@@ -70,6 +75,13 @@ export function RunDetailPage() {
   }, [initialReadings, isRunning, run.data, trendSamples]);
   const [notes, setNotes] = useState("");
   const [notesDirty, setNotesDirty] = useState(false);
+  const [pidAction, setPidAction] = useState<PidAction | null>(null);
+  const pidActionPending = writeRun.isPending || revertRun.isPending;
+  const pidActionError = pidAction
+    ? pidAction.kind === "write"
+      ? writeRun.error
+      : revertRun.error
+    : null;
 
   useEffect(() => {
     if (run.data?.id === runId) {
@@ -121,11 +133,43 @@ export function RunDetailPage() {
     navigate("/runs/new", { state: duplicateState });
   }
 
-  function writeResult(result: RunResult) {
-    writeRun.mutate({
-      id: runId,
-      responseLevel: result.response_level,
-    });
+  function requestWrite(result: RunResult) {
+    writeRun.reset();
+    revertRun.reset();
+    setPidAction({ kind: "write", result });
+  }
+
+  function requestRevert(write: RunWrite) {
+    writeRun.reset();
+    revertRun.reset();
+    setPidAction({ kind: "revert", write });
+  }
+
+  function closePidAction() {
+    if (pidActionPending) return;
+    setPidAction(null);
+    writeRun.reset();
+    revertRun.reset();
+  }
+
+  function confirmPidAction() {
+    if (!pidAction || pidActionPending) return;
+
+    if (pidAction.kind === "write") {
+      writeRun.mutate(
+        {
+          id: runId,
+          responseLevel: pidAction.result.response_level,
+        },
+        {
+          onSuccess: () => setPidAction(null),
+        },
+      );
+    } else {
+      revertRun.mutate(runId, {
+        onSuccess: () => setPidAction(null),
+      });
+    }
   }
 
   function handleNotesChange(value: string) {
@@ -158,16 +202,6 @@ export function RunDetailPage() {
       key: "clear-notes",
       error: deleteNotes.error,
       fallback: "Unable to clear notes.",
-    },
-    {
-      key: "write",
-      error: writeRun.error,
-      fallback: "Unable to apply PID settings.",
-    },
-    {
-      key: "revert",
-      error: revertRun.error,
-      fallback: "Unable to restore the previous PID settings.",
     },
   ];
 
@@ -220,8 +254,18 @@ export function RunDetailPage() {
           onNotesChange={handleNotesChange}
           onSaveNotes={saveNotes}
           onClearNotes={clearNotes}
-          onWrite={writeResult}
-          onRevert={() => revertRun.mutate(runId)}
+          onWrite={requestWrite}
+          onRevert={requestRevert}
+        />
+      )}
+      {run.data && (
+        <PidActionModal
+          run={run.data}
+          action={pidAction}
+          pending={pidActionPending}
+          error={pidActionError}
+          onClose={closePidAction}
+          onConfirm={confirmPidAction}
         />
       )}
     </div>

@@ -155,17 +155,22 @@ a trusted network.
    initial-reading and restored-MV boundary markers are presentation-only and do not alter
    persisted samples or CSV/JSON exports. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
-   [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
-   - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own
-     **Apply** button to send that response level's constants to the loop after the fact —
-     independently of any `--write-pid` choice made before the run started. A confirmation
-     dialog names the tag and the exact tag/value pairs before anything is sent.
+   [Safety](../guides/safety.md#cancellation)). Once calculated results exist, the same page
+   promotes them directly below the heading and before the trend:
+   - The **Calculated results** panel is the primary post-tune action area. Each
+     Aggressive/Moderate/Sluggish row has a **Review & write** button that works independently
+     of any `--write-pid` choice made before the run started. The safety review modal names the
+     loop tag, response level, snapshotted parameter labels, exact destination tags, and exact
+     values before anything is sent. It remains open while BHTune writes and verifies the
+     values, cannot be dismissed during that operation, and keeps request errors visible.
+     When no results exist, the panel stays in its lower diagnostic position and explains that
+     no results were calculated.
    - A mutable **Notes** field with **Save notes** and **Clear notes** actions. Notes are
      metadata, so editing them does not interrupt an active tune.
    - A **PID change history** table of every PID change this tune has made, each with a pre-write
      readback, a post-write readback, and a rollback status. The newest successful write
-     shows a **Restore previous values** button that writes the pre-write values back, also behind a
-     confirmation dialog.
+     shows a **Restore previous values** button that opens the same safety review modal and
+     lists the recorded pre-write values before restoring them.
 
      Both buttons are disabled — with the reason shown as text, never a silent, unexplained
      grey button — unless the run is finished, used the OPC DA driver, has PID constant tags

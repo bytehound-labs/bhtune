@@ -41,6 +41,7 @@ export function Button({
   variant = "neutral",
   disabled = false,
   title,
+  autoFocus = false,
 }: {
   readonly children: ReactNode;
   readonly onClick?: () => void;
@@ -48,6 +49,7 @@ export function Button({
   readonly variant?: keyof typeof buttonVariants;
   readonly disabled?: boolean;
   readonly title?: string;
+  readonly autoFocus?: boolean;
 }) {
   return (
     <button
@@ -55,6 +57,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      autoFocus={autoFocus}
       className={`rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${buttonVariants[variant]}`}
     >
       {children}
@@ -447,32 +450,33 @@ export function FormSection({
 /**
  * A centered overlay dialog: a fixed, full-viewport backdrop behind a bordered panel,
  * following the same dark `slate` theme as every other component here. First built for the
- * OPC tag-tree browser (`ui-opc-browser`) -- no earlier screen needed a true modal, since
- * `RunDetailPage`'s write/revert confirmations use the browser's native `window.confirm`
- * instead, which doesn't fit an interactive, multi-step tree browse. Closes on a backdrop
- * click, the header's close button, or Escape. The backdrop is a native button behind the
- * dialog panel, so it does not interfere with controls inside the panel.
+ * OPC tag-tree browser (`ui-opc-browser`) and the run-detail PID action review flow. Closes
+ * on a backdrop click, the header's close button, or Escape unless `dismissible` is false.
+ * The backdrop is a native button behind the dialog panel, so it does not interfere with
+ * controls inside the panel.
  */
 export function Modal({
   title,
   onClose,
   children,
   widthClassName = "max-w-lg",
+  dismissible = true,
 }: {
   readonly title: string;
   readonly onClose: () => void;
   readonly children: ReactNode;
   readonly widthClassName?: string;
+  readonly dismissible?: boolean;
 }) {
   const titleId = useId();
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (dismissible && event.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [dismissible, onClose]);
 
   return (
     <div className="modal-backdrop relative fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-12">
@@ -480,7 +484,8 @@ export function Modal({
         type="button"
         aria-label="Dismiss modal backdrop"
         onClick={onClose}
-        className="absolute inset-0 cursor-default"
+        disabled={!dismissible}
+        className="absolute inset-0 cursor-default disabled:cursor-not-allowed"
       />
       <dialog
         open
@@ -495,8 +500,12 @@ export function Modal({
           <button
             type="button"
             onClick={onClose}
+            disabled={!dismissible}
             aria-label="Close"
-            className="text-slate-400 hover:text-slate-200"
+            title={
+              !dismissible ? "Finish the current operation first" : undefined
+            }
+            className="text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
           >
             ✕
           </button>
