@@ -4196,7 +4196,10 @@ The repository now has a layered hardening gate for both source changes and rele
 - **API compatibility.** `scripts/check_openapi_breaking.py` is a dependency-free comparison
   for removed operations/responses/properties/enum values, newly required request fields, and
   newly mandatory authentication. Its unit tests run in CI, and pull requests compare the
-  generated revision to the base branch in addition to the existing drift check.
+  generated revision to the base branch in addition to the existing drift check. The only
+  request-property removals allowed by the comparator are exact pre-v1 migrations of the
+  per-tune quality/timing settings into global configuration; unrelated removals remain
+  breaking.
 - **Database compatibility.** Migration `0002_history_query_indexes.sql` is the first
   forward migration after the initial schema. `pool.rs` constructs a representative database
   at migration 0001, inserts data, opens it through the normal connection path, and verifies

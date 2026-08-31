@@ -552,7 +552,8 @@ The repository also validates high-risk boundaries and delivery artifacts automa
   `tests/golden/` tree.
 - Pull requests compare the generated `openapi.json` with the base branch and reject removed
   operations, response shapes, enum values, or newly required request fields. Only explicitly
-  allowlisted pre-v1 request-property removals are treated as compatible.
+  allowlisted pre-v1 request-property removals are treated as compatible; the allowlist includes
+  the per-tune quality and timing settings that are owned by global configuration.
 - Rust workspace source-line coverage is a strict 100% gate: the coverage workflow rejects any
   zero-hit canonical LCOV source-line record, and Codecov uses zero tolerance for both project
   and patch coverage.

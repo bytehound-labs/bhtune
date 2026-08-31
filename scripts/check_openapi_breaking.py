@@ -17,12 +17,18 @@ from typing import Any
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 
-# These are deliberate pre-v1 removals: the per-tune quality switch moved to the
-# TOML-backed global configuration page. Keep this allowlist tied to the exact
-# operation and schema so unrelated request-property removals remain breaking.
+# These are deliberate pre-v1 removals: the per-tune quality switch and timing
+# settings moved to the TOML-backed global configuration page. Keep this allowlist
+# tied to the exact operation and schema so unrelated request-property removals
+# remain breaking.
 INTENTIONAL_REMOVED_REQUEST_PROPERTIES = frozenset(
     {
         ("POST", "/api/runs", "StartRunRequest", "allow_uncertain_quality"),
+        ("POST", "/api/runs", "StartRunRequest", "mrft_delay"),
+        ("POST", "/api/runs", "StartRunRequest", "poll_interval_ms"),
+        ("POST", "/api/runs", "StartRunRequest", "timeout_secs"),
+        ("POST", "/api/runs", "StartRunRequest", "op_timeout_secs"),
+        ("POST", "/api/runs", "StartRunRequest", "restore_timeout_secs"),
         ("PUT", "/api/runs/draft", "NewRunDraft", "allow_uncertain_quality"),
     }
 )
