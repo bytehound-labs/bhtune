@@ -1029,6 +1029,15 @@ export interface components {
       proportional: string;
     };
     /**
+     * @description The operator-facing names for the three calculated PID constants, derived from the
+     *     template snapshot stored on the run rather than the mutable template catalog.
+     */
+    PidParameterLabelsResponse: {
+      derivative: string;
+      integral: string;
+      proportional: string;
+    };
+    /**
      * @description A process/loop category. Each has its own row in the tuning-constant matrices in
      *     [`crate::constants`] and its own default cycle/noise-protection settings.
      *
@@ -1111,6 +1120,11 @@ export interface components {
       outcome: components["schemas"]["TuneOutcome"];
       pid_constant_tags?:
         null | components["schemas"]["PidConstantTagsResponse"];
+      /**
+       * @description Operator-facing calculated-result column labels from the run's historical template
+       *     snapshot. Empty user-template suffixes use the conventional P/I/D labels.
+       */
+      pid_parameter_labels: components["schemas"]["PidParameterLabelsResponse"];
       restore_detail?: string | null;
       restore_status?: null | components["schemas"]["RestoreStatus"];
       results: components["schemas"]["ResultResponse"][];

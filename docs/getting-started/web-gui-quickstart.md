@@ -114,6 +114,10 @@ a trusted network.
      replacement) and proceeds immediately only for `Good` OPC quality; `Uncertain` or `Bad`
      quality opens a warning with choices to select a different tag or proceed anyway. Proceeding
      only selects the item; tune execution still applies its live-reading quality safeguards.
+     Changing the base Tag name — by editing it, selecting a browser tag, or switching templates
+     — resets every **Custom tag** selector to **Template tag** and clears custom tag values,
+     including custom direction/range read tags. **Fixed value** direction and range selections
+     and values remain unchanged.
      The **Config** page controls whether `Uncertain` readings are accepted during tuning;
      they are accepted by default, while `Bad` quality is always rejected.
      Reopening the browser expands the available path to the current Tag name, selects that node,
@@ -186,7 +190,14 @@ a trusted network.
      confirmation prompt — deleting a tune also removes its recorded measurements and
      results, and cannot be undone).
    - A **Duplicate this run** button, returning to the New tune form prefilled from this run's
-     tune settings instead of the newest run's; Notes starts blank.
+     tune settings instead of the newest run's; Notes starts blank. It preserves the original
+     Template tag, Custom tag, and Fixed value mapping sources, including template-derived
+     direction and range values that were stored as null or omitted fields.
+
+   - The **Calculated results** table uses the constant names and converted values from the
+     run's snapshotted template. A Yokogawa run therefore shows `P`, `I`, and `D` instead of
+     the engine's intermediate `Kp`, `Ti`, and `Td` columns. The derivative column remains
+     visible for PI runs and shows `0`, the explicit value used to clear stale derivative action.
 
    Detailed polling timing diagnostics remain available through `bhtune history show`, the
    run-detail API, and structured logs, but are not part of the normal web run-detail view.

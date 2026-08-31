@@ -19,7 +19,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use bhtune_core::{
-    ControllerDirection, ControllerType, LoopConfig, ProcessType, ResponseLevel, Tick,
+    ControllerDirection, ControllerType, DcsTemplate, LoopConfig, ProcessType, ResponseLevel, Tick,
 };
 use bhtune_db::models::{
     MvActuationKind, MvActuationStatus, Pagination, RestoreStatus, RollbackState, SampleQuality,
@@ -399,6 +399,33 @@ pub struct PidConstantTagsResponse {
     pub derivative: String,
 }
 
+/// The operator-facing names for the three calculated PID constants, derived from the
+/// template snapshot stored on the run rather than the mutable template catalog.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PidParameterLabelsResponse {
+    pub proportional: String,
+    pub integral: String,
+    pub derivative: String,
+}
+
+impl From<&DcsTemplate> for PidParameterLabelsResponse {
+    fn from(template: &DcsTemplate) -> Self {
+        Self {
+            proportional: pid_parameter_label(&template.proportional_constant_suffix, "P"),
+            integral: pid_parameter_label(&template.integral_constant_suffix, "I"),
+            derivative: pid_parameter_label(&template.derivative_constant_suffix, "D"),
+        }
+    }
+}
+
+fn pid_parameter_label(suffix: &str, fallback: &str) -> String {
+    if suffix.is_empty() {
+        fallback.to_owned()
+    } else {
+        suffix.to_owned()
+    }
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RunDetailResponse {
     pub id: i64,
@@ -429,6 +456,9 @@ pub struct RunDetailResponse {
     /// to explain why -- without duplicating `require_writable_run`'s logic client-side or
     /// discovering ineligibility only after a failed request (`api-post-run-write`).
     pub pid_constant_tags: Option<PidConstantTagsResponse>,
+    /// Operator-facing calculated-result column labels from the run's historical template
+    /// snapshot. Empty user-template suffixes use the conventional P/I/D labels.
+    pub pid_parameter_labels: PidParameterLabelsResponse,
     pub initial_readings: Option<InitialReadingsResponse>,
     pub timing_metrics: Option<TimingMetrics>,
     pub samples: Vec<SampleResponse>,
@@ -474,6 +504,7 @@ pub(crate) async fn build_run_detail(
         }),
         _ => None,
     };
+    let pid_parameter_labels = PidParameterLabelsResponse::from(&run.template);
 
     Ok(Some(RunDetailResponse {
         id: run.id,
@@ -491,6 +522,7 @@ pub(crate) async fn build_run_detail(
         opc_server: run.opc_server,
         bridge_host: run.bridge_host,
         pid_constant_tags,
+        pid_parameter_labels,
         initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
         timing_metrics: run.timing_metrics,
         samples: samples.iter().map(SampleResponse::from).collect(),
@@ -1028,11 +1060,28 @@ mod tests {
         assert_eq!(body["pid_constant_tags"]["proportional"], "Loop1.P");
         assert_eq!(body["pid_constant_tags"]["integral"], "Loop1.I");
         assert_eq!(body["pid_constant_tags"]["derivative"], "Loop1.D");
+        assert_eq!(body["pid_parameter_labels"]["proportional"], "P");
+        assert_eq!(body["pid_parameter_labels"]["integral"], "I");
+        assert_eq!(body["pid_parameter_labels"]["derivative"], "D");
         // `seed_one_run` never calls `record_connection`, so `request_json` is left at the
         // column default `"{}"` -- not a valid `StartRunRequest`, so `original_request` must
         // gracefully read `null` rather than the request failing (see
         // `parse_stored_request`'s doc comment).
         assert!(body["original_request"].is_null());
+    }
+
+    #[test]
+    fn pid_parameter_labels_fall_back_for_blank_template_suffixes() {
+        let mut template = bhtune_core::built_in_templates().remove(0);
+        template.proportional_constant_suffix.clear();
+        template.integral_constant_suffix.clear();
+        template.derivative_constant_suffix.clear();
+
+        let labels = PidParameterLabelsResponse::from(&template);
+
+        assert_eq!(labels.proportional, "P");
+        assert_eq!(labels.integral, "I");
+        assert_eq!(labels.derivative, "D");
     }
 
     /// `pid_constant_tags` must be `null`, not merely three `null` fields, when the run's

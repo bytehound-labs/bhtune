@@ -40,6 +40,25 @@ export const RESPONSE_LEVELS: readonly ResponseLevel[] = [
   "sluggish",
 ];
 
+const TAG_OVERRIDE_KEYS: readonly TagOverrideKey[] = [
+  "processVariable",
+  "manipulatedVariable",
+  "setpointVariable",
+  "controllerMode",
+  "modeAttribute",
+  "proportionalConstant",
+  "integralConstant",
+  "derivativeConstant",
+];
+
+const VALUE_MAPPING_KEYS: readonly ValueMappingKey[] = [
+  "direction",
+  "pvRangeHigh",
+  "pvRangeLow",
+  "mvRangeHigh",
+  "mvRangeLow",
+];
+
 /** Mirrors `bhtune_core::ProcessType::allows_pid`. */
 export const TEMPERATURE_PROCESS_TYPES = new Set<ProcessType>([
   "temperature_mixing",
@@ -293,6 +312,36 @@ const TAG_SOURCE_FIELDS: readonly [TagOverrideKey, keyof TagOverrides][] = [
   ["derivativeConstant", "derivative_constant"],
 ];
 
+/**
+ * Applies a new base tag and invalidates every custom mapping that could still point at the
+ * previous loop. Fixed direction/range values are independent of the base tag and remain intact.
+ */
+export function applyTagNameChange(
+  form: FormState,
+  tagname: string,
+): FormState {
+  if (form.tagname === tagname) return form;
+
+  const tagSources = { ...form.tagSources };
+  for (const key of TAG_OVERRIDE_KEYS) {
+    if (tagSources[key] === "custom") tagSources[key] = "template";
+  }
+
+  const valueSources = { ...form.valueSources };
+  for (const key of VALUE_MAPPING_KEYS) {
+    if (valueSources[key] === "custom") valueSources[key] = "tag";
+  }
+
+  return {
+    ...form,
+    tagname,
+    tagSources,
+    valueSources,
+    tagOverrides: { ...EMPTY_TAG_OVERRIDES },
+    valueTagOverrides: { ...EMPTY_VALUE_TAG_OVERRIDES },
+  };
+}
+
 function inferTagSources(
   overrides: TagOverrides | null | undefined,
 ): TagMappingSources {
@@ -323,23 +372,23 @@ function inferRequestValueSources(
   const overrides = request.tag_overrides;
   return {
     direction: valueSource(
-      request.direction !== undefined,
+      request.direction !== null && request.direction !== undefined,
       overrides?.controller_direction,
     ),
     pvRangeHigh: valueSource(
-      request.pv_range_high !== undefined,
+      request.pv_range_high !== null && request.pv_range_high !== undefined,
       overrides?.upper_pv_range,
     ),
     pvRangeLow: valueSource(
-      request.pv_range_low !== undefined,
+      request.pv_range_low !== null && request.pv_range_low !== undefined,
       overrides?.lower_pv_range,
     ),
     mvRangeHigh: valueSource(
-      request.mv_range_high !== undefined,
+      request.mv_range_high !== null && request.mv_range_high !== undefined,
       overrides?.upper_mv_range,
     ),
     mvRangeLow: valueSource(
-      request.mv_range_low !== undefined,
+      request.mv_range_low !== null && request.mv_range_low !== undefined,
       overrides?.lower_mv_range,
     ),
   };

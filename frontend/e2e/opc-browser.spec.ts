@@ -175,9 +175,22 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
 
     await templateField.selectOption("Yokogawa CentumVP");
     await tagField.fill("Simulink.Device1.Python.MV");
+    const mvRow = mappingRow(page, "Manipulated variable (MV)");
+    await mvRow
+      .getByRole("button", { name: "Custom tag", exact: true })
+      .click();
+    await mvRow
+      .getByLabel("Manipulated variable (MV) custom tag")
+      .fill("Simulink.Device1.Python.PY");
     await templateField.selectOption("Allen-Bradley PlantPAx");
 
     await expect(tagField).toHaveValue("Simulink.Device1.Python.Inp_PV");
+    await expect(
+      mvRow.getByRole("button", { name: "Template tag", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      mvRow.getByLabel("Manipulated variable (MV) custom tag"),
+    ).toHaveCount(0);
   });
 
   test("shows template defaults and applies a per-tune MV tag override", async ({
@@ -209,7 +222,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("keeps custom tags pinned while the template and base tag change", async ({
+  test("resets custom mappings when the base tag changes but keeps fixed values", async ({
     page,
   }) => {
     const templateField = page
@@ -217,6 +230,9 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .filter({ hasText: /^Template/ })
       .getByRole("combobox");
     const mvRow = mappingRow(page, "Manipulated variable (MV)");
+    const directionRow = mappingRow(page, "Controller direction");
+    const pvHighRow = mappingRow(page, "PV range high");
+    const pvLowRow = mappingRow(page, "PV range low");
 
     await templateField.selectOption("Yokogawa CentumVP");
     await page.getByLabel("Tag name").fill("Loop101.PV");
@@ -226,14 +242,50 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await mvRow
       .getByLabel("Manipulated variable (MV) custom tag")
       .fill("Loop101.PY");
+    await directionRow
+      .getByRole("button", { name: "Custom tag", exact: true })
+      .click();
+    await directionRow
+      .getByLabel("Controller direction custom read tag")
+      .fill("Loop101.ACTION");
+    await pvLowRow
+      .getByRole("button", { name: "Custom tag", exact: true })
+      .click();
+    await pvLowRow
+      .getByLabel("PV range low custom read tag")
+      .fill("Loop101.PVLOW");
+    await pvHighRow
+      .getByRole("button", { name: "Fixed value", exact: true })
+      .click();
+    await pvHighRow.getByLabel("PV range high fixed value").fill("90");
 
     await page.getByLabel("Tag name").fill("Loop202.PV");
-    await templateField.selectOption("Allen-Bradley PlantPAx");
 
-    await expect(page.getByLabel("Tag name")).toHaveValue("Loop202.Inp_PV");
+    await expect(page.getByLabel("Tag name")).toHaveValue("Loop202.PV");
+    await expect(
+      mvRow.getByRole("button", { name: "Template tag", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
     await expect(
       mvRow.getByLabel("Manipulated variable (MV) custom tag"),
-    ).toHaveValue("Loop101.PY");
+    ).toHaveCount(0);
+    await expect(
+      directionRow.getByRole("button", { name: "Template tag", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      directionRow.getByLabel("Controller direction custom read tag"),
+    ).toHaveCount(0);
+    await expect(
+      pvLowRow.getByRole("button", { name: "Template tag", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      pvLowRow.getByLabel("PV range low custom read tag"),
+    ).toHaveCount(0);
+    await expect(
+      pvHighRow.getByRole("button", { name: "Fixed value", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(pvHighRow.getByLabel("PV range high fixed value")).toHaveValue(
+      "90",
+    );
   });
 
   test("resets one mapping row or all mapping overrides", async ({ page }) => {
@@ -561,6 +613,12 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(page.getByLabel("Tag name")).toHaveValue(
       "Simulink.Device1._System.PV",
     );
+    await expect(
+      mappingRow(page, "Manipulated variable (MV)").getByRole("button", {
+        name: "Template tag",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(readTags).toEqual([originalTag]);
 
     await page.getByRole("button", { name: "Browse tags" }).click();

@@ -156,6 +156,15 @@ every row.
 The selected source and values are retained in the saved draft. Simulator direction and ranges
 are stored separately from OPC fixed overrides, so changing drivers cannot turn simulator
 settings into live OPC overrides.
+Changing the base Tag name — whether it is typed manually, selected in the OPC tag browser, or
+changed by switching templates — resets every **Custom tag** selector to **Template tag** and
+clears its custom value, including custom direction/range read tags. **Fixed value** direction
+and range mappings, including their values, are preserved. **Duplicate this run** preserves
+the original Template tag, Custom tag, and Fixed value source selections instead of inferring
+null or omitted template values as Fixed value mappings.
+The New tune page keeps Connection, Test parameters, Loop mapping, Simulator parameters, and
+Automatic PID settings in independently collapsible sections; controls that do not apply to
+the selected driver are disabled with an explanation.
 
 In **Simulator** mode, the form disables the OPC DA connection, tag, quality, operation/restore
 timeout, and automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
@@ -163,6 +172,11 @@ template remains selectable: the simulator ignores its tag mappings, but its PID
 conventions still format the calculated results (for example, Yokogawa uses proportional band
 while the other built-in templates use gain). PV/MV ranges and controller direction remain
 editable because the simulator has no live tags from which to read them.
+
+The run-detail **Calculated results** table uses the constant names and converted values from
+the run's snapshotted template. For example, a Yokogawa run shows `P`, `I`, and `D` rather than
+the engine's intermediate `Kp`, `Ti`, and `Td` columns; the derivative column remains visible
+for PI runs and shows `0`, which is the value used to clear any stale derivative action.
 
 ## Installation
 
