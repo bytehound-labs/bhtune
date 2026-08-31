@@ -101,7 +101,7 @@ test.describe("running a tune", () => {
       timeout: 30_000,
     });
 
-    const resultsSection = page.locator("section").filter({
+    const resultsSection = page.locator("details").filter({
       has: page.getByRole("heading", { name: "Calculated results" }),
     });
     const rows = resultsSection.locator("tbody tr");

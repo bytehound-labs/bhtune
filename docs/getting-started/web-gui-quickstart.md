@@ -155,17 +155,27 @@ a trusted network.
    initial-reading and restored-MV boundary markers are presentation-only and do not alter
    persisted samples or CSV/JSON exports. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
-   [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
-   - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own
-     **Apply** button to send that response level's constants to the loop after the fact —
-     independently of any `--write-pid` choice made before the run started. A confirmation
-     dialog names the tag and the exact tag/value pairs before anything is sent.
+   [Safety](../guides/safety.md#cancellation)). Once calculated results exist, the same page
+   promotes them directly below the heading and before the trend:
+   - The **Calculated results** panel is the primary post-tune action area. Each
+     Aggressive/Moderate/Sluggish row has a **Review & write** button that works independently
+     of any `--write-pid` choice made before the run started. The safety review modal names the
+     loop tag, response level, snapshotted parameter labels, exact destination tags, and exact
+     values before anything is sent. It opens as a centered viewport popup. Confirming an Apply
+     closes the popup immediately while BHTune writes and verifies the values in the background;
+     successful writes stay silent, while transport failures or failed physical writes/readbacks
+     appear in a page-level alert. The same popup component is used by the OPC server and tag
+     browsers.
+     When no results exist, the panel stays in its lower diagnostic position and explains that
+     no results were calculated.
    - A mutable **Notes** field with **Save notes** and **Clear notes** actions. Notes are
      metadata, so editing them does not interrupt an active tune.
    - A **PID change history** table of every PID change this tune has made, each with a pre-write
      readback, a post-write readback, and a rollback status. The newest successful write
-     shows a **Restore previous values** button that writes the pre-write values back, also behind a
-     confirmation dialog.
+     shows a **Restore previous values** button that opens the same safety review modal and
+     lists the recorded pre-write values before restoring them. Confirming a restore closes the
+     popup immediately while BHTune works in the background; successful restores stay silent,
+     while transport failures or failed physical restores/readbacks appear in a page-level alert.
 
      Both buttons are disabled — with the reason shown as text, never a silent, unexplained
      grey button — unless the run is finished, used the OPC DA driver, has PID constant tags
@@ -183,6 +193,11 @@ a trusted network.
      run's snapshotted template. A Yokogawa run therefore shows `P`, `I`, and `D` instead of
      the engine's intermediate `Kp`, `Ti`, and `Td` columns. The derivative column remains
      visible for PI runs and shows `0`, the explicit value used to clear stale derivative action.
+   - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
+     Notes, Test configuration, Initial readings, and PID change history start expanded so the
+     main result and audit information is immediately visible. **MV actuation verification**
+     follows PID change history at the bottom and starts collapsed; open it when the detailed
+     command/readback audit is needed.
 
    Detailed polling timing diagnostics remain available through `bhtune history show`, the
    run-detail API, and structured logs, but are not part of the normal web run-detail view.

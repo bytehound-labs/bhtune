@@ -9,6 +9,11 @@ export interface WriteEligibility {
   readonly reason?: string;
 }
 
+export function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return String(Number(value.toFixed(4)));
+}
+
 /**
  * Mirrors `routes::runs::require_writable_run` so post-run PID controls can explain why
  * they are disabled before making a request.
@@ -53,4 +58,11 @@ export function writeKey(write: RunWrite): string {
     write.integral_written,
     write.derivative_written,
   ].join(":");
+}
+
+export function writeFailureMessage(write: RunWrite): string {
+  if (write.kind === "revert") {
+    return "The previous PID values could not be restored. Check the OPC connection and try again.";
+  }
+  return "The PID settings could not be applied. Check the OPC connection and try again.";
 }

@@ -553,13 +553,18 @@ checks exactly (not-still-running, `opcda` driver, `pid_constant_tags` present, 
 `bridge_host` present) so a disabled button always carries a `title` tooltip and a persistent
 "Write/revert disabled: ..." note explaining why, rather than a mystery grey control — this
 needed a small, deliberate addition to the shared `Button` component (`ui.tsx`), which had no
-`title` prop before. Both actions are gated behind a `window.confirm` naming the loop, the
-exact tag names, and the exact P/I/D values that will be written or restored, sourced
-directly from the same row being acted on. The Revert button's visibility is intentionally
-narrow: it renders only on the single newest `writes[]` row, and only when that row is a
-successful write (`kind === "write" && success`) — once superseded by a later write or
-revert, the button disappears, matching the server's own "revert always targets the most
-recent write" rule. Verified with real browser automation (`@playwright/test`'s `chromium`
+`title` prop before. Both actions open the shared styled PID review modal, which names the
+loop, response level, snapshotted parameter labels, exact destination tags, and exact P/I/D
+values before the request is sent. Apply and Restore both close immediately after confirmation;
+successful operations stay silent, while transport failures or failed physical writes/readbacks
+appear in a page-level alert. The request continues in the background and the write-history audit
+remains authoritative for the physical outcome. The Revert button's
+visibility is intentionally narrow: it renders only on the single newest `writes[]` row, and
+only when that row is a successful write (`kind === "write" && success`) — once superseded by
+a later write or revert, the button disappears, matching the server's own "revert always
+targets the most recent write" rule. When calculated results exist, the single results panel
+is promoted directly below the run heading and before the trend; without results it remains
+in its lower diagnostic position. Verified with real browser automation (`@playwright/test`'s `chromium`
 launcher driven from standalone Node scripts, since the `chrome-devtools-*` MCP tools
 timed out repeatedly in this environment) against a real running `bhtune-server` and Vite
 dev server: an eligible opcda run (hand-crafted via direct SQLite edits, since no real OPC
@@ -4117,14 +4122,13 @@ package` refuses even to assemble. Giving `bhtune-core`/`bhtune-driver`/`bhtune-
   root, covering both root and `frontend/package.json`), and `github-actions`, each labeled
   (`dependencies`/`rust`/`frontend`/`ci` — created on the repo, since Dependabot silently
   skips labels that don't already exist).
-- **Branch protection on `main`** — required status checks naming every job context
-  (`check`, `frontend`, `Windows validation`, `MSRV`, `Package verification`, `coverage`,
-  `e2e`), `strict: false`, `enforce_admins: false` (preserves the existing direct-push
-  workflow), `allow_force_pushes`/`allow_deletions: false`. `opcda-bridge`'s own rule only
-  requires `check`+`coverage` because its `checks.yml` uses a `dorny/paths-filter` +
-  aggregator-gate structure where `check` is a final job that gates on `windows`/`msrv`/
-  `package` all having passed — `bhtune`'s five jobs are independent with no such
-  aggregator, so equivalent protection means requiring all of them individually.
+- **Branch protection on `main`** — both repositories require pull requests and protected
+  status checks, with `strict: true`, `enforce_admins: true` (direct pushes, including
+  administrator pushes, are blocked), and `allow_force_pushes`/`allow_deletions: false`.
+  Repository merge settings allow squash merges only; merge commits and rebase merges are
+  disabled. `bhtune` requires `Required validation status`, `Required coverage status`,
+  `Required E2E status`, and `Required Sonar quality status`; `opcda-bridge` requires
+  `check`, `coverage`, `release-integrity`, and `Required Sonar quality status`.
 - **Secret scanning + push protection enabled** on both `bytehound-labs/bhtune` and
   `bytehound-labs/opcda-bridge` (both public repositories) — confirmed disabled on both
   before this audit. `secret_scanning_validity_checks` did not take via the API on either
@@ -4398,8 +4402,15 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    item first. `api-post-run-write`/`ui-post-run-write` add `POST /api/runs/{id}/write`/
    `revert` and matching Write/Revert buttons on the run detail page, reusing the CLI's
    existing pre-read/verify/rollback/audit path under a new `ActiveRun::reserve`
-   exclusive-reservation lock. `ui-prefill-last-run` seeds the New Run form from the newest
-   run's stored request server-side as a compatibility fallback, plus a "Reset to defaults"
+   exclusive-reservation lock. The follow-on PID action UX promotes calculated results above
+   the trend once they exist and routes Write/Revert through one styled, pending-safe review
+   centered viewport popup that is rendered through one shared body-level `Modal` component for
+   PID review, OPC server discovery, and OPC tag browsing, and shows exact tags and values.
+   Run-detail sections are independently collapsible: Calculated results, Trend, Summary, Notes,
+   Test configuration, Initial readings, and PID change history start open, while MV actuation
+   verification follows PID history at the bottom and starts closed.
+   `ui-prefill-last-run` seeds the New Run form from the newest run's stored request server-side
+   as a compatibility fallback, plus a "Reset to defaults"
    action and a "Duplicate this run" action. The follow-on New Tune draft flow stores every
    editable field except Notes in the app-wide `settings` row at `new_run_draft`, autosaves
    with debounced, serialized `PUT /api/runs/draft` requests, preserves inactive-driver
