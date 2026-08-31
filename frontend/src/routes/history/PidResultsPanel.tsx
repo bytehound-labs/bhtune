@@ -1,6 +1,6 @@
 import type { RunDetailResponse, ResponseLevel } from "../../api/runs";
 import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
-import { Button } from "../../components/ui";
+import { Button, CollapsibleSection } from "../../components/ui";
 import {
   formatNumber,
   type RunResult,
@@ -31,38 +31,35 @@ export function PidResultsPanel({
   };
 
   return (
-    <section
+    <CollapsibleSection
+      title="Calculated results"
+      defaultOpen
       className={
         promoted
           ? "mb-8 rounded-xl border border-emerald-800/70 bg-gradient-to-br from-emerald-950/40 via-slate-950/20 to-slate-900/40 p-5 shadow-lg shadow-emerald-950/20"
           : "mb-6"
       }
-    >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-300">
-            Calculated results
-          </h2>
-          {promoted && run.results.length > 0 && (
-            <p className="text-sm text-slate-300">
-              Choose a response level to review the exact PID values before
-              writing them to the controller.
-            </p>
-          )}
-        </div>
-        {promoted && run.results.length > 0 && (
-          <span className="shrink-0 rounded-full border border-emerald-700/70 bg-emerald-950/60 px-3 py-1 text-xs font-medium text-emerald-300">
+      trailing={
+        promoted && run.results.length > 0 ? (
+          <span className="rounded-full border border-emerald-700/70 bg-emerald-950/60 px-3 py-1 text-xs font-medium text-emerald-300">
             Ready to review
           </span>
-        )}
-      </div>
+        ) : undefined
+      }
+    >
+      {promoted && run.results.length > 0 && (
+        <p className="mb-4 text-sm text-slate-300">
+          Choose a response level to review the exact PID values before writing
+          them to the controller.
+        </p>
+      )}
 
       {run.results.length === 0 ? (
-        <p className="mt-3 text-sm text-slate-500">
+        <p className="text-sm text-slate-500">
           No results were calculated for this tune.
         </p>
       ) : (
-        <div className="mt-4 overflow-x-auto rounded-lg border border-slate-800">
+        <div className="overflow-x-auto rounded-lg border border-slate-800">
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
               <tr>
@@ -97,7 +94,7 @@ export function PidResultsPanel({
           PID changes unavailable: {eligibility.reason}
         </p>
       )}
-    </section>
+    </CollapsibleSection>
   );
 }
 

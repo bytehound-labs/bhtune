@@ -161,8 +161,9 @@ a trusted network.
      Aggressive/Moderate/Sluggish row has a **Review & write** button that works independently
      of any `--write-pid` choice made before the run started. The safety review modal names the
      loop tag, response level, snapshotted parameter labels, exact destination tags, and exact
-     values before anything is sent. It remains open while BHTune writes and verifies the
-     values, cannot be dismissed during that operation, and keeps request errors visible.
+     values before anything is sent. It opens as a centered viewport popup, remains open while
+     BHTune writes and verifies the values, cannot be dismissed during that operation, and keeps
+     request errors visible. The same popup component is used by the OPC server and tag browsers.
      When no results exist, the panel stays in its lower diagnostic position and explains that
      no results were calculated.
    - A mutable **Notes** field with **Save notes** and **Clear notes** actions. Notes are
@@ -188,6 +189,11 @@ a trusted network.
      run's snapshotted template. A Yokogawa run therefore shows `P`, `I`, and `D` instead of
      the engine's intermediate `Kp`, `Ti`, and `Td` columns. The derivative column remains
      visible for PI runs and shows `0`, the explicit value used to clear stale derivative action.
+   - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
+     Notes, Test configuration, Initial readings, and PID change history start expanded so the
+     main result and audit information is immediately visible. **MV actuation verification**
+     follows PID change history at the bottom and starts collapsed; open it when the detailed
+     command/readback audit is needed.
 
    Detailed polling timing diagnostics remain available through `bhtune history show`, the
    run-detail API, and structured logs, but are not part of the normal web run-detail view.

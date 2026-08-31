@@ -4,6 +4,7 @@
  * success) stays consistent across every screen rather than being re-invented per file.
  */
 import { useEffect, useId, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 export function PageHeading({
   title,
@@ -73,6 +74,45 @@ export function Card({ children }: { readonly children: ReactNode }) {
   );
 }
 
+/** A reusable native details section with an accessible heading and disclosure indicator. */
+export function CollapsibleSection({
+  title,
+  children,
+  defaultOpen = true,
+  trailing,
+  className = "mb-6",
+}: {
+  readonly title: string;
+  readonly children: ReactNode;
+  readonly defaultOpen?: boolean;
+  readonly trailing?: ReactNode;
+  readonly className?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <details
+      className={`group ${className}`}
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+    >
+      <summary className="mb-3 flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+        <h2>{title}</h2>
+        <span className="flex shrink-0 items-center gap-3">
+          {trailing}
+          <span
+            aria-hidden="true"
+            className="text-base transition-transform group-open:rotate-90"
+          >
+            ▸
+          </span>
+        </span>
+      </summary>
+      {children}
+    </details>
+  );
+}
+
 export function ErrorBanner({ message }: { readonly message: string }) {
   return (
     <div className="rounded-md border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-300">
@@ -127,20 +167,36 @@ export function Badge({
 export function Section({
   title,
   children,
+  collapsible = false,
+  defaultOpen = true,
 }: {
   readonly title: string;
   readonly children: ReactNode;
+  readonly collapsible?: boolean;
+  readonly defaultOpen?: boolean;
 }) {
+  const content = (
+    <Card>
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+        {children}
+      </dl>
+    </Card>
+  );
+
+  if (collapsible) {
+    return (
+      <CollapsibleSection title={title} defaultOpen={defaultOpen}>
+        {content}
+      </CollapsibleSection>
+    );
+  }
+
   return (
     <section className="mb-6">
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
         {title}
       </h2>
-      <Card>
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-          {children}
-        </dl>
-      </Card>
+      {content}
     </section>
   );
 }
@@ -407,7 +463,6 @@ export function FormSection({
   readonly collapsible?: boolean;
   readonly defaultOpen?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
   const content = (
     <Card>
       <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
@@ -418,22 +473,9 @@ export function FormSection({
 
   if (collapsible) {
     return (
-      <details
-        className="group mb-6"
-        open={isOpen}
-        onToggle={(event) => setIsOpen(event.currentTarget.open)}
-      >
-        <summary className="mb-3 flex cursor-pointer list-none items-center justify-between text-sm font-semibold uppercase tracking-wide text-slate-400">
-          <span>{title}</span>
-          <span
-            aria-hidden="true"
-            className="text-base transition-transform group-open:rotate-90"
-          >
-            ▸
-          </span>
-        </summary>
+      <CollapsibleSection title={title} defaultOpen={defaultOpen}>
         {content}
-      </details>
+      </CollapsibleSection>
     );
   }
 
@@ -448,12 +490,13 @@ export function FormSection({
 }
 
 /**
- * A centered overlay dialog: a fixed, full-viewport backdrop behind a bordered panel,
- * following the same dark `slate` theme as every other component here. First built for the
- * OPC tag-tree browser (`ui-opc-browser`) and the run-detail PID action review flow. Closes
- * on a backdrop click, the header's close button, or Escape unless `dismissible` is false.
- * The backdrop is a native button behind the dialog panel, so it does not interfere with
- * controls inside the panel.
+ * A centered viewport popup: a full-viewport backdrop behind a bordered panel, following the
+ * same dark `slate` theme as every other component here. First built for the OPC tag-tree
+ * browser (`ui-opc-browser`) and the run-detail PID action review flow. Rendering through a
+ * document-body portal keeps the popup independent of the page's scroll position and layout
+ * containers. Closes on a backdrop click, the header's close button, or Escape unless
+ * `dismissible` is false. The backdrop is a native button behind the dialog panel, so it does
+ * not interfere with controls inside the panel.
  */
 export function Modal({
   title,
@@ -478,8 +521,16 @@ export function Modal({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [dismissible, onClose]);
 
-  return (
-    <div className="modal-backdrop relative fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-12">
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  return createPortal(
+    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4">
       <button
         type="button"
         aria-label="Dismiss modal backdrop"
@@ -487,11 +538,11 @@ export function Modal({
         disabled={!dismissible}
         className="absolute inset-0 cursor-default disabled:cursor-not-allowed"
       />
-      <dialog
-        open
+      <div
+        role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`relative z-10 w-full ${widthClassName} rounded-lg border border-slate-700 bg-slate-900 shadow-xl`}
+        className={`relative z-10 max-h-[calc(100vh-2rem)] w-full ${widthClassName} overflow-hidden rounded-lg border border-slate-700 bg-slate-900 shadow-xl`}
       >
         <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
           <h2 id={titleId} className="text-sm font-semibold text-slate-200">
@@ -511,7 +562,8 @@ export function Modal({
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
-      </dialog>
-    </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

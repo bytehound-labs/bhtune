@@ -23,6 +23,7 @@ import {
   Button,
   ErrorBanner,
   Field,
+  CollapsibleSection,
   Section,
   TextAreaField,
 } from "../../components/ui";
@@ -104,22 +105,19 @@ function TrendSection({
   readonly pollIntervalMs: number | null | undefined;
 }) {
   return (
-    <section className="mb-6">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-        Trend
-      </h2>
+    <CollapsibleSection title="Trend">
       {points.length === 0 ? (
         <p className="text-sm text-slate-500">No measurements recorded yet.</p>
       ) : (
         <TrendChart points={points} pollIntervalMs={pollIntervalMs} />
       )}
-    </section>
+    </CollapsibleSection>
   );
 }
 
 function SummarySection({ run }: { readonly run: RunDetailResponse }) {
   return (
-    <Section title="Summary">
+    <Section title="Summary" collapsible defaultOpen>
       <Field label="Tag name" value={run.tag_name} />
       <Field
         label="Outcome"
@@ -199,10 +197,7 @@ function NotesSection({
   readonly onClear: () => void;
 }) {
   return (
-    <section className="mb-6">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-        Notes
-      </h2>
+    <CollapsibleSection title="Notes">
       <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
         <TextAreaField
           label="Run notes"
@@ -231,13 +226,13 @@ function NotesSection({
           </Button>
         </div>
       </div>
-    </section>
+    </CollapsibleSection>
   );
 }
 
 function ConfigurationSection({ run }: { readonly run: RunDetailResponse }) {
   return (
-    <Section title="Test configuration">
+    <Section title="Test configuration" collapsible defaultOpen>
       <Field
         label="Process type"
         value={PROCESS_TYPE_LABELS[run.config.process_type]}
@@ -272,7 +267,7 @@ function InitialReadingsSection({
   readonly readings: NonNullable<RunDetailResponse["initial_readings"]>;
 }) {
   return (
-    <Section title="Initial readings">
+    <Section title="Initial readings" collapsible defaultOpen>
       <Field label="PV initial" value={formatNumber(readings.pv_ini)} />
       <Field label="MV initial" value={formatNumber(readings.mv_ini)} />
       <Field
@@ -306,10 +301,7 @@ function MvActuationSection({
   readonly actuations: readonly MvActuation[];
 }) {
   return (
-    <section className="mb-6">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-        MV actuation verification
-      </h2>
+    <CollapsibleSection title="MV actuation verification" defaultOpen={false}>
       {actuations.length === 0 ? (
         <p className="text-sm text-slate-500">
           No OPC DA MV commands were recorded for this tune.
@@ -338,7 +330,7 @@ function MvActuationSection({
           </table>
         </div>
       )}
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -421,10 +413,7 @@ function WriteHistorySection({
   readonly onRevert: (write: RunWrite) => void;
 }) {
   return (
-    <section className="mb-6">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-        PID change history
-      </h2>
+    <CollapsibleSection title="PID change history">
       {run.writes.length === 0 ? (
         <p className="text-sm text-slate-500">
           No PID settings were applied during this tune.
@@ -439,7 +428,7 @@ function WriteHistorySection({
         />
       )}
       <WriteErrors writes={run.writes} />
-    </section>
+    </CollapsibleSection>
   );
 }
 
@@ -670,9 +659,6 @@ export function RunDetailContent({
       />
       <ConfigurationSection run={run} />
       {initialReadings && <InitialReadingsSection readings={initialReadings} />}
-      {run.driver === "opcda" && (
-        <MvActuationSection actuations={run.mv_actuations ?? []} />
-      )}
       {run.results.length === 0 && (
         <PidResultsPanel
           run={run}
@@ -689,6 +675,9 @@ export function RunDetailContent({
         revertPending={revertPending}
         onRevert={onRevert}
       />
+      {run.driver === "opcda" && (
+        <MvActuationSection actuations={run.mv_actuations ?? []} />
+      )}
       <p className="text-sm text-slate-500">
         {trendSamples.length} measurements{" "}
         {isRunning ? "recorded so far" : "were recorded"} for this tune.

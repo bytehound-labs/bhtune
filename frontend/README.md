@@ -80,12 +80,16 @@ cases identically without fabricating samples.
 
 When calculated results exist, the run detail screen promotes the **Calculated results** panel
 above the trend as the primary post-tune action area. Each response-level row uses **Review &
-write** to open a safety review modal with the exact loop tag, destination tags, parameter
-labels, and values; the modal cannot be dismissed while writing and verifying. The newest
-successful write in the history table offers **Restore previous values** through the same modal,
-using its recorded pre-write values. The panel stays in its lower position when no results
-exist, and the existing eligibility explanation remains visible for simulator or otherwise
-ineligible runs.
+write** to open a centered viewport popup with the exact loop tag, destination tags, parameter
+labels, and values; the popup cannot be dismissed while writing and verifying. The same shared
+popup component is used for OPC server discovery and tag browsing. The newest successful write
+in the history table offers **Restore previous values** through the same popup, using its
+recorded pre-write values. The panel stays in its lower position when no results exist, and the
+existing eligibility explanation remains visible for simulator or otherwise ineligible runs.
+Run-detail sections are independently collapsible. Calculated results, Trend, Summary, Notes,
+Test configuration, Initial readings, and PID change history start expanded; MV actuation
+verification appears after PID change history as the final diagnostic section and starts
+collapsed.
 
 ## Scripts
 

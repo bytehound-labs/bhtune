@@ -83,8 +83,11 @@ labels. It keeps the derivative column for PI runs and displays `0`, because the
 explicitly clears stale derivative action for controllers without a derivative term.
 When results exist, the web GUI promotes this panel above the trend. Each response level has a
 **Review & write** action that shows the exact destination tags and values in a safety review
-modal before writing; the newest successful write can be restored from the same modal using its
-recorded pre-write values.
+popup before writing. The popup is centered over the viewport and shared with the OPC server and
+tag browsers; the newest successful write can be restored from the same popup using its recorded
+pre-write values. The run-detail sections are independently collapsible and start expanded except
+for **MV actuation verification**, which appears below PID change history and starts collapsed so
+the primary results and PID actions remain prominent.
 
 ## Controller type and process type
 

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const RUN_ID = 4242;
 
@@ -159,12 +159,40 @@ async function openRun(page: Page, run = completedRun()) {
 }
 
 function resultsSection(page: Page) {
-  return page.locator("section").filter({
-    has: page.getByRole("heading", {
-      name: "Calculated results",
-      exact: true,
-    }),
+  return detailSection(page, "Calculated results");
+}
+
+function detailSection(page: Page, title: string) {
+  return page.locator("details").filter({
+    has: page.locator("summary", { hasText: title }),
   });
+}
+
+async function expectCenteredInViewport(dialog: Locator) {
+  const placement = await dialog.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      bottom: rect.bottom,
+      height: rect.height,
+      innerHeight: window.innerHeight,
+      innerWidth: window.innerWidth,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      width: rect.width,
+    };
+  });
+
+  expect(placement.top).toBeGreaterThanOrEqual(0);
+  expect(placement.bottom).toBeLessThanOrEqual(placement.innerHeight);
+  expect(placement.left).toBeGreaterThanOrEqual(0);
+  expect(placement.right).toBeLessThanOrEqual(placement.innerWidth);
+  expect(
+    Math.abs(placement.left + placement.width / 2 - placement.innerWidth / 2),
+  ).toBeLessThan(2);
+  expect(
+    Math.abs(placement.top + placement.height / 2 - placement.innerHeight / 2),
+  ).toBeLessThan(2);
 }
 
 test.describe("post-tune PID actions", () => {
@@ -188,6 +216,34 @@ test.describe("post-tune PID actions", () => {
       page.getByText("Ready to review", { exact: true }),
     ).toBeVisible();
 
+    const sectionTitles = await page
+      .locator("details > summary > h2")
+      .allTextContents();
+    expect(sectionTitles).toEqual([
+      "Calculated results",
+      "Trend",
+      "Summary",
+      "Notes",
+      "Test configuration",
+      "Initial readings",
+      "PID change history",
+      "MV actuation verification",
+    ]);
+    for (const title of sectionTitles.slice(0, -1)) {
+      await expect(detailSection(page, title)).toHaveAttribute("open", "");
+    }
+    await expect(
+      detailSection(page, "MV actuation verification"),
+    ).not.toHaveAttribute("open", "");
+
+    await detailSection(page, "Summary").locator("summary").click();
+    await expect(detailSection(page, "Summary")).not.toHaveAttribute(
+      "open",
+      "",
+    );
+    await detailSection(page, "Summary").locator("summary").click();
+    await expect(detailSection(page, "Summary")).toHaveAttribute("open", "");
+
     await resultsSection(page)
       .getByRole("button", { name: "Review & write" })
       .first()
@@ -197,6 +253,7 @@ test.describe("post-tune PID actions", () => {
     await expect(
       modal.getByRole("heading", { name: "Review PID settings" }),
     ).toBeVisible();
+    await expectCenteredInViewport(modal);
     await expect(modal).toContainText("Area.FIC101");
     await expect(modal).toContainText("Aggressive");
     await expect(modal).toContainText("Area.FIC101.PB");

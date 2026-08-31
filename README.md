@@ -152,9 +152,10 @@ editable because the simulator has no live tags from which to read them.
 When a run has calculated results, its **Calculated results** panel moves directly below the
 run heading and becomes the first major action area, before the trend and diagnostic details.
 Each Aggressive/Moderate/Sluggish row has a **Review & write** action that opens a safety review
-dialog showing the selected response level, the loop tag, the exact destination tags, and the
-values that will be written. The dialog stays open while BHTune writes and verifies the values,
-keeps request errors visible, and closes after a successful HTTP response; the write-history
+popup showing the selected response level, the loop tag, the exact destination tags, and the
+values that will be written. The popup is centered over the viewport and uses the same shared
+dialog component as the OPC server and tag browsers. It stays open while BHTune writes and
+verifies the values, keeps request errors visible, and closes after a successful HTTP response; the write-history
 audit remains the source of truth for the physical outcome. The newest successful write in
 **PID change history** has a **Restore previous values** action using the same review dialog.
 Before results exist, the panel remains in its lower diagnostic position. The panel uses the
@@ -162,6 +163,10 @@ constant names and converted values from the run's snapshotted template: for exa
 Yokogawa run shows `P`, `I`, and `D` rather than the engine's intermediate `Kp`, `Ti`, and `Td`
 columns, and the derivative column remains visible for PI runs with `0` to clear stale
 derivative action.
+The run-detail page keeps its major sections independently collapsible: Calculated results,
+Trend, Summary, Notes, Test configuration, Initial readings, and PID change history start
+expanded, while **MV actuation verification** is the final diagnostic section and starts
+collapsed.
 
 ## Installation
 

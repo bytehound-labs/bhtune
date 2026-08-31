@@ -4404,8 +4404,13 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    existing pre-read/verify/rollback/audit path under a new `ActiveRun::reserve`
    exclusive-reservation lock. The follow-on PID action UX promotes calculated results above
    the trend once they exist and routes Write/Revert through one styled, pending-safe review
-   modal that shows exact tags and values. `ui-prefill-last-run` seeds the New Run form from the newest
-   run's stored request server-side as a compatibility fallback, plus a "Reset to defaults"
+   centered viewport popup that is rendered through one shared body-level `Modal` component for
+   PID review, OPC server discovery, and OPC tag browsing, and shows exact tags and values.
+   Run-detail sections are independently collapsible: Calculated results, Trend, Summary, Notes,
+   Test configuration, Initial readings, and PID change history start open, while MV actuation
+   verification follows PID history at the bottom and starts closed.
+   `ui-prefill-last-run` seeds the New Run form from the newest run's stored request server-side
+   as a compatibility fallback, plus a "Reset to defaults"
    action and a "Duplicate this run" action. The follow-on New Tune draft flow stores every
    editable field except Notes in the app-wide `settings` row at `new_run_draft`, autosaves
    with debounced, serialized `PUT /api/runs/draft` requests, preserves inactive-driver
