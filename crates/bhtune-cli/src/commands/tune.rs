@@ -3487,11 +3487,11 @@ async fn restore_mv_with_verification_with_timing(
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     tracker: &mut Option<MvActuationTracker>,
-    restore_deadline: Instant,
+    restore_deadline: &mut Instant,
 ) -> anyhow::Result<RestoreMvOutcome> {
     let Some(tracker) = tracker.as_mut() else {
         let write = tokio::time::timeout_at(
-            restore_deadline,
+            *restore_deadline,
             bounded_driver_call(
                 effective_timing.op_timeout_secs,
                 ctrl_c,
@@ -3536,7 +3536,7 @@ async fn restore_mv_with_verification_with_timing(
         allow_uncertain_quality,
         ctrl_c,
         tracker,
-        restore_deadline,
+        *restore_deadline,
     )
     .await?
     {
@@ -3552,7 +3552,7 @@ async fn restore_mv_with_verification_with_timing(
     let tolerance =
         mv_actuation_uncapped_tolerance(initial_mv, tracker.previous_commanded_mv, tracker.mv_span);
     let write = tokio::time::timeout_at(
-        restore_deadline,
+        *restore_deadline,
         bounded_driver_call(
             effective_timing.op_timeout_secs,
             ctrl_c,
@@ -3598,6 +3598,8 @@ async fn restore_mv_with_verification_with_timing(
     }
     let accepted_instant = Instant::now();
     let accepted_at = Utc::now();
+    *restore_deadline = (*restore_deadline)
+        .max(accepted_instant + Duration::from_secs(MV_ACTUATION_CONFIRMATION_SECS));
     tracker
         .record_restore_accepted_best_effort(
             pool,
@@ -3625,7 +3627,7 @@ async fn restore_mv_with_verification_with_timing(
             allow_uncertain_quality,
             tracker,
             trigger,
-            MvVerificationCallLimit::Restore(restore_deadline),
+            MvVerificationCallLimit::Restore(*restore_deadline),
             ActuationAuditPolicy::BestEffort,
         )
         .await;
@@ -3640,7 +3642,8 @@ async fn restore_mv_with_verification_with_timing(
                     .expect("pending state was checked above");
                 let remaining_confirmation =
                     pending.deadline.saturating_duration_since(Instant::now());
-                let remaining_restore = restore_deadline.saturating_duration_since(Instant::now());
+                let remaining_restore =
+                    (*restore_deadline).saturating_duration_since(Instant::now());
                 tokio::time::sleep(
                     MV_ACTUATION_RETRY_INTERVAL
                         .min(remaining_confirmation)
@@ -3653,7 +3656,7 @@ async fn restore_mv_with_verification_with_timing(
                     "a second Ctrl+C was received while confirming the restored MV".to_string(),
                 ));
             }
-            Ok(Some(_)) if Instant::now() >= restore_deadline => {
+            Ok(Some(_)) if Instant::now() >= *restore_deadline => {
                 return Ok(RestoreMvOutcome::Interrupted(format!(
                     "the restore did not complete within the {}s [tuning].restore_timeout_secs limit",
                     effective_timing.restore_timeout_secs
@@ -3715,6 +3718,7 @@ async fn restore_mv_with_verification(
     tracker: &mut Option<MvActuationTracker>,
     restore_deadline: Instant,
 ) -> anyhow::Result<RestoreMvOutcome> {
+    let mut restore_deadline = restore_deadline;
     restore_mv_with_verification_with_timing(
         pool,
         run_id,
@@ -3726,7 +3730,7 @@ async fn restore_mv_with_verification(
         allow_uncertain_quality,
         ctrl_c,
         tracker,
-        restore_deadline,
+        &mut restore_deadline,
     )
     .await
 }
@@ -3761,7 +3765,7 @@ async fn attempt_restore_with_actuation_with_timing(
     ctrl_c: &mut CtrlC,
     mv_actuations: &mut Option<MvActuationTracker>,
 ) -> RestoreAttempt {
-    let restore_deadline =
+    let mut restore_deadline =
         Instant::now() + Duration::from_secs(effective_timing.restore_timeout_secs);
     let mv = match restore_mv_outcome_or_failed(
         restore_mv_with_verification_with_timing(
@@ -3775,7 +3779,7 @@ async fn attempt_restore_with_actuation_with_timing(
             allow_uncertain_quality,
             ctrl_c,
             mv_actuations,
-            restore_deadline,
+            &mut restore_deadline,
         )
         .await,
     ) {
@@ -6222,6 +6226,11 @@ mod tests {
         read_delays: std::collections::HashMap<String, Duration>,
         /// Tags whose configured finite read delay was cancelled before it completed.
         cancelled_delayed_reads: std::sync::Mutex<std::collections::HashSet<String>>,
+        /// Per-tag finite write latency, used to exercise restore-budget behavior when the
+        /// authoritative MV write is accepted near the initial restore deadline.
+        write_delays: std::collections::HashMap<String, Duration>,
+        /// Tags whose configured finite write delay was cancelled before it completed.
+        cancelled_delayed_writes: std::sync::Mutex<std::collections::HashSet<String>>,
         /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
         /// listed -- matching a healthy real driver and letting most tests ignore quality
         /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
@@ -6315,6 +6324,11 @@ mod tests {
             self
         }
 
+        fn delaying_write(mut self, tag: &str, delay: Duration) -> MockDriver {
+            self.write_delays.insert(tag.to_string(), delay);
+            self
+        }
+
         async fn apply_read_delay(&self, tags: &[String]) {
             if let Some(delay) = tags
                 .iter()
@@ -6334,6 +6348,19 @@ mod tests {
                 tokio::time::sleep(*delay).await;
                 observer.completed = true;
             }
+        }
+
+        async fn apply_write_delay(&self, tag: &str) {
+            let Some(delay) = self.write_delays.get(tag).copied() else {
+                return;
+            };
+            let mut observer = DelayedWriteObserver {
+                driver: self,
+                tag: tag.to_string(),
+                completed: false,
+            };
+            tokio::time::sleep(delay).await;
+            observer.completed = true;
         }
 
         /// Overrides a single tag's fixture value -- e.g. to make an otherwise-valid
@@ -6427,6 +6454,10 @@ mod tests {
         fn delayed_read_was_cancelled(&self, tag: &str) -> bool {
             self.cancelled_delayed_reads.lock().unwrap().contains(tag)
         }
+
+        fn delayed_write_was_cancelled(&self, tag: &str) -> bool {
+            self.cancelled_delayed_writes.lock().unwrap().contains(tag)
+        }
     }
 
     struct DelayedReadObserver<'a> {
@@ -6443,6 +6474,24 @@ mod tests {
                     .lock()
                     .unwrap()
                     .extend(self.tags.iter().cloned());
+            }
+        }
+    }
+
+    struct DelayedWriteObserver<'a> {
+        driver: &'a MockDriver,
+        tag: String,
+        completed: bool,
+    }
+
+    impl Drop for DelayedWriteObserver<'_> {
+        fn drop(&mut self) {
+            if !self.completed {
+                self.driver
+                    .cancelled_delayed_writes
+                    .lock()
+                    .unwrap()
+                    .insert(self.tag.clone());
             }
         }
     }
@@ -6525,6 +6574,7 @@ mod tests {
             if self.hang_writes.contains(tag) {
                 std::future::pending::<()>().await;
             }
+            self.apply_write_delay(tag).await;
             if self.error_writes.contains(tag) {
                 return Err(bhtune_driver::DriverError::Operation(Box::new(
                     std::io::Error::other("mock write error"),
@@ -12434,6 +12484,59 @@ mod tests {
             driver.value_of(&tags.manipulated_variable).as_deref(),
             Some("45")
         );
+    }
+
+    #[tokio::test]
+    async fn accepted_mv_restore_gets_a_full_confirmation_window_before_remaining_restore_steps() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, template, tags) =
+            start_opc_test_run(&pool, "actuation-restore-deadline-extension").await;
+        let driver = honeywell_driver_auto()
+            .delaying_write(&tags.manipulated_variable, Duration::from_millis(2_300))
+            .delaying_read(&tags.manipulated_variable, Duration::from_millis(900))
+            .delaying_write(
+                tags.controller_mode.as_ref().unwrap(),
+                Duration::from_millis(500),
+            );
+        let initial = sample_initial_state();
+        let guard = MutationGuard {
+            mode_written: true,
+            ..MutationGuard::default()
+        };
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.restore_timeout_secs = MV_ACTUATION_CONFIRMATION_SECS;
+        args.op_timeout_secs = 30;
+        let mut mv_actuations = Some(MvActuationTracker::for_run(&args, &initial).unwrap());
+
+        let outcome = attempt_restore_with_actuation(
+            &pool,
+            run_id,
+            &args,
+            &driver,
+            &tags,
+            &template,
+            &initial,
+            &guard,
+            false,
+            &mut CtrlC::never(),
+            &mut mv_actuations,
+        )
+        .await;
+
+        assert!(matches!(outcome, RestoreAttempt::Confirmed));
+        assert_eq!(
+            driver.value_of(&tags.manipulated_variable).as_deref(),
+            Some("45")
+        );
+        assert_eq!(
+            driver
+                .value_of(tags.controller_mode.as_ref().unwrap())
+                .as_deref(),
+            Some("1")
+        );
+        assert!(!driver.delayed_write_was_cancelled(&tags.manipulated_variable));
+        assert!(!driver.delayed_read_was_cancelled(&tags.manipulated_variable));
     }
 
     #[tokio::test]

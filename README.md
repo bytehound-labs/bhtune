@@ -384,13 +384,13 @@ JSON Schema (also covers one DCS/PLC template catalog entry — see below).
 The five operational tune timing and safety values are global TOML settings under `[tuning]`;
 they have no per-run CLI or HTTP override. Missing keys use these built-in defaults:
 
-| Setting                  | TOML key                      |  Default | Validation                                   |
-| ------------------------ | ----------------------------- | -------: | -------------------------------------------- |
-| MRFT delay padding       | `tuning.mrft_delay_secs`      |    `0` s | `0..=3600`                                   |
-| Poll interval            | `tuning.poll_interval_ms`     | `800` ms | at least `1`                                 |
-| Whole-run timeout        | `tuning.timeout_secs`         | `3600` s | at least `1`                                 |
-| Driver-operation timeout | `tuning.op_timeout_secs`      |   `30` s | at least `1`                                 |
-| Restore timeout          | `tuning.restore_timeout_secs` |   `30` s | at least `1`; OPC DA requires at least `4` s |
+| Setting                  | TOML key                      |  Default | Validation                                                                                               |
+| ------------------------ | ----------------------------- | -------: | -------------------------------------------------------------------------------------------------------- |
+| MRFT delay padding       | `tuning.mrft_delay_secs`      |    `0` s | `0..=3600`                                                                                               |
+| Poll interval            | `tuning.poll_interval_ms`     | `800` ms | at least `1`                                                                                             |
+| Whole-run timeout        | `tuning.timeout_secs`         | `3600` s | at least `1`                                                                                             |
+| Driver-operation timeout | `tuning.op_timeout_secs`      |   `30` s | at least `1`                                                                                             |
+| Restore timeout          | `tuning.restore_timeout_secs` |   `30` s | initial budget must be at least `1`; OPC DA requires at least `4` s, then may extend for MV confirmation |
 
 The web GUI's **Config** page reads and updates the global quality, retention, and tuning
 settings in the selected TOML file. It reports whether each tuning value comes from the file or
@@ -497,11 +497,14 @@ language, including exactly what happens on the first and second Ctrl+C:
   does not count, even if the read started before the deadline.
   The fresh read started at that deadline has its own one-second bound, so a stalled MV read
   cannot consume the full per-operation timeout and leave the run waiting indefinitely.
-- **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) bounds putting the loop
-  back afterwards, independently of `[tuning].timeout_secs`. If the restore can't be confirmed
-  within that time, or a _second_ Ctrl+C arrives while it's in progress, the process prints which
-  tag and value to check by hand and exits `6` — distinct from `2`, since "aborted and restored"
-  and "aborted, restore abandoned" call for very different responses.
+- **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) is the initial budget for
+  putting the loop back afterwards, independently of `[tuning].timeout_secs`. When the
+  authoritative MV restore write is accepted near the end of that budget, BHTune extends the
+  effective deadline as needed to preserve the complete four-second MV confirmation window; the
+  remaining restore steps use that same effective deadline. If the restore still can't be
+  confirmed, or a _second_ Ctrl+C arrives while it's in progress, the process prints which tag
+  and value to check by hand and exits `6` — distinct from `2`, since "aborted and restored" and
+  "aborted, restore abandoned" call for very different responses.
 - **Restoration is guaranteed on every exit path and never gives up early** — a run only ever
   mutates a loop after switching it to manual, and _any_ way that run can end (a clean
   completion, an abort, or an error partway through setup) always attempts to put back exactly

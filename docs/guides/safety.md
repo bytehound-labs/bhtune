@@ -28,9 +28,11 @@ GUI's run detail screen, which triggers the same code path) is always safe:
   It fires the same restore path as Ctrl+C — including working correctly mid-hung-read — and is
   meant as the backstop for scheduled/unattended runs where nobody is present to press Ctrl+C at
   all.
-- **`[tuning].restore_timeout_secs`** (default 30) bounds the restore step itself, independent
-  of `[tuning].timeout_secs` — a restore triggered by a timeout doesn't inherit an already-expired
-  budget.
+- **`[tuning].restore_timeout_secs`** (default 30) is the initial budget for the restore step,
+  independent of `[tuning].timeout_secs` — a restore triggered by a timeout doesn't inherit an
+  already-expired budget. If the authoritative MV restore write is accepted near that deadline,
+  BHTune extends the effective deadline as needed to preserve the complete four-second MV
+  confirmation window; the remaining restore steps use that same effective deadline.
 
 These five values are global installation settings in the browser's **Configuration** page or
 the `[tuning]` section of `bhtune.toml`; they apply to future runs only. Try it yourself: set a
@@ -42,13 +44,13 @@ should abort and report within `[tuning].op_timeout_secs`, not hang.
 
 The `[tuning]` section controls the operational timing and safety limits shared by all new tunes:
 
-| Setting                |  Default | Purpose                                  |
-| ---------------------- | -------: | ---------------------------------------- |
-| `mrft_delay_secs`      |    `0` s | Pre/post-test recording padding          |
-| `poll_interval_ms`     | `800` ms | Delay between driver polls               |
-| `timeout_secs`         | `3600` s | Whole-run wall-clock limit               |
-| `op_timeout_secs`      |   `30` s | Limit for one driver read or write       |
-| `restore_timeout_secs` |   `30` s | Limit for restoring the loop after a run |
+| Setting                |  Default | Purpose                                                                       |
+| ---------------------- | -------: | ----------------------------------------------------------------------------- |
+| `mrft_delay_secs`      |    `0` s | Pre/post-test recording padding                                               |
+| `poll_interval_ms`     | `800` ms | Delay between driver polls                                                    |
+| `timeout_secs`         | `3600` s | Whole-run wall-clock limit                                                    |
+| `op_timeout_secs`      |   `30` s | Limit for one driver read or write                                            |
+| `restore_timeout_secs` |   `30` s | Initial restore budget; an accepted MV restore may extend it for confirmation |
 
 Values must be valid before a tune can touch the loop. `mrft_delay_secs` accepts `0` through
 `3600`; the other settings must be positive whole numbers. OPC DA preparation additionally
@@ -111,7 +113,10 @@ tolerance without the relay cap. The final MRFT snapback hands responsibility to
 authoritative restore write, so BHTune does not wait twice for the same original-MV target.
 The restore readback is attempted immediately; only a mismatch is retried.
 A `restore_timeout_secs` value below four seconds is rejected during OPC DA preparation, before
-a live loop is mutated.
+a live loop is mutated. This is the initial budget: when an authoritative MV restore write is
+accepted close to its end, the effective deadline extends to at least four seconds after that
+acceptance so the required confirmation window cannot be cut short. Remaining mode and setpoint
+restore steps share the extended deadline.
 An MV read that starts before the deadline but returns after it is still treated as late and does
 not confirm the command. The fresh read started at the deadline is independently capped at one
 second, rather than inheriting the full per-operation timeout, so a stalled read cannot hold the

@@ -2165,7 +2165,12 @@ CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is 
     `[tuning].timeout_secs`, since a restore triggered _by_ a timeout would otherwise inherit an
     already-expired budget) and `ctrl_c.signalled()` again — a _second_ Ctrl+C during the
     restore is what "forces a hard stop" means in practice, since the restore is the one
-    thing that keeps running after the first signal aborts polling.
+    thing that keeps running after the first signal aborts polling. The configured timeout is
+    the restore's initial absolute budget: once the authoritative MV restore write is accepted,
+    the effective deadline is extended to at least `accepted_at + MV_ACTUATION_CONFIRMATION_SECS`
+    so the mandatory four-second confirmation window cannot be truncated by the initial budget.
+    The inner MV verification race and the outer remaining-restore race both use that mutable
+    effective deadline.
     `RestoreAttempt::Incomplete { reason }` (timeout or second-Ctrl+C, distinguished only by
     `reason`'s text) prints an operator-facing `eprintln!` naming the MV tag and its
     pre-test value plus a structured `tracing::error!`, and becomes a new
@@ -2186,7 +2191,9 @@ CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is 
   genuine error propagating; confirmed/incomplete-via-timeout/incomplete-via-second-Ctrl+C),
   and one `run_with_ctrl_c` test exercises the real (non-test-only) entry point end-to-end
   with a simulated signal, rather than only through the `CtrlC::never()`-backed `run` every
-  other test in the module uses.
+  other test in the module uses. A real-time delayed-write/delayed-read regression test also
+  proves that an MV restore accepted near the initial deadline still receives its complete
+  confirmation window and that the remaining restore steps are allowed to finish.
 
 - **Every exit path now funnels through one best-effort, all-steps-attempted restore** — done
   (`commands::tune::{MutationGuard, RestoreReport, RestoreStepOutcome, restore, execute}`,
@@ -3977,8 +3984,11 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     clamps it, updates it late, or returns a stale value. OPC DA relay and restore commands are
     therefore tracked in `tune_mv_actuations` and read back against their exact targets within a
     fixed four-second confirmation window; a matching read that completes after the deadline is
-    still invalid, and a due verification runs before a due PV poll. A mismatch aborts before a
-    replacement relay is issued and restores the loop, with confirmed restoration reported as
+    still invalid, and a due verification runs before a due PV poll. The restore timeout is only
+    its initial budget: an authoritative MV restore write accepted near that boundary extends the
+    effective restore deadline to at least four seconds after acceptance, and both MV verification
+    and the remaining restore steps share that extension. A mismatch aborts before a replacement
+    relay is issued and restores the loop, with confirmed restoration reported as
     `TuneOutcome::ActuationFailed`/exit code `7` and incomplete restoration retaining the higher
     priority `RestoreIncomplete`/exit code `6`. Verification reads never become PV samples and
     never alter MRFT timing: trends and exports remain commanded MV, while measured MV evidence
