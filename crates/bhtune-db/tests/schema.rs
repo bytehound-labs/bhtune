@@ -598,6 +598,40 @@ async fn tune_runs_timing_metrics_are_nullable_validated_json_with_a_typed_shape
     assert!(invalid_json.is_err());
 }
 
+#[tokio::test]
+async fn tune_runs_effective_tuning_snapshot_is_nullable_and_validated_json() {
+    let pool = connect_in_memory().await.unwrap();
+    let run_id = seed_failed_run(&pool, None).await;
+
+    let effective_tuning_json: Option<String> =
+        sqlx::query_scalar("SELECT effective_tuning_json FROM tune_runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        effective_tuning_json.is_none(),
+        "rows inserted without the new snapshot remain compatible"
+    );
+
+    let invalid_json =
+        sqlx::query("UPDATE tune_runs SET effective_tuning_json = 'not json' WHERE id = ?")
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+    assert!(invalid_json.is_err());
+
+    sqlx::query(
+        r#"UPDATE tune_runs
+           SET effective_tuning_json = '{"mrft_delay_secs":0,"poll_interval_ms":800,"timeout_secs":3600,"op_timeout_secs":30,"restore_timeout_secs":30}'
+           WHERE id = ?"#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+}
+
 /// Covers the `CHECK` constraints `safety-quality` added: `tune_runs.allow_uncertain_quality`
 /// must be `0` or `1`, and `tune_samples.pv_quality` must be one of `good`/`uncertain`/`bad`.
 #[tokio::test]
@@ -782,6 +816,135 @@ async fn tune_results_enforce_unique_response_level_and_cascade_delete_with_the_
         .await
         .unwrap();
     assert_eq!(remaining, 0, "results must cascade-delete with their run");
+}
+
+#[tokio::test]
+async fn tune_mv_actuations_enforce_audit_constraints_and_cascade_with_the_run() {
+    let pool = connect_in_memory().await.unwrap();
+    let run_id = seed_failed_run(&pool, None).await;
+    let commanded_at = Utc::now();
+    let confirmation_due_at = commanded_at + chrono::Duration::seconds(4);
+
+    sqlx::query(
+        r#"
+        INSERT INTO tune_mv_actuations (
+            run_id, sequence, kind, commanded_at, target_mv, previous_commanded_mv,
+            tolerance, confirmation_due_at, last_checked_at, readback_mv,
+            readback_quality, attempt_count, status, detail
+        ) VALUES (?, 0, 'relay', ?, 55.0, 45.0, 0.1, ?, ?, 55.02, 'good', 1,
+                  'confirmed', NULL)
+        "#,
+    )
+    .bind(run_id)
+    .bind(commanded_at)
+    .bind(confirmation_due_at)
+    .bind(confirmation_due_at)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let duplicate_sequence = sqlx::query(
+        r#"
+        INSERT INTO tune_mv_actuations (
+            run_id, sequence, kind, commanded_at, target_mv, tolerance, confirmation_due_at
+        ) VALUES (?, 0, 'restore', ?, 45.0, 0.1, ?)
+        "#,
+    )
+    .bind(run_id)
+    .bind(commanded_at)
+    .bind(confirmation_due_at)
+    .execute(&pool)
+    .await;
+    assert!(
+        duplicate_sequence.is_err(),
+        "command sequence must be unique within a run"
+    );
+
+    for (sql, column, invalid) in [
+        (
+            "UPDATE tune_mv_actuations SET kind = ? WHERE run_id = ?",
+            "kind",
+            "step",
+        ),
+        (
+            "UPDATE tune_mv_actuations SET readback_quality = ? WHERE run_id = ?",
+            "readback_quality",
+            "unknown",
+        ),
+        (
+            "UPDATE tune_mv_actuations SET status = ? WHERE run_id = ?",
+            "status",
+            "cancelled",
+        ),
+    ] {
+        let result = sqlx::query(sql)
+            .bind(invalid)
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+        assert!(
+            result.is_err(),
+            "{column} must reject values outside its declared enum"
+        );
+    }
+
+    for (sql, column, invalid) in [
+        (
+            "UPDATE tune_mv_actuations SET sequence = ? WHERE run_id = ?",
+            "sequence",
+            -1_i64,
+        ),
+        (
+            "UPDATE tune_mv_actuations SET attempt_count = ? WHERE run_id = ?",
+            "attempt_count",
+            -1,
+        ),
+    ] {
+        let result = sqlx::query(sql)
+            .bind(invalid)
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+        assert!(result.is_err(), "{column} must be non-negative");
+    }
+    let negative_tolerance =
+        sqlx::query("UPDATE tune_mv_actuations SET tolerance = -0.1 WHERE run_id = ?")
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+    assert!(
+        negative_tolerance.is_err(),
+        "actuation tolerance must be non-negative"
+    );
+
+    let indexes = sqlx::query("SELECT name, \"unique\", origin FROM pragma_index_list(?)")
+        .bind("tune_mv_actuations")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        indexes.len(),
+        1,
+        "UNIQUE (run_id, sequence) must be the only query index"
+    );
+    assert_eq!(indexes[0].try_get::<i64, _>("unique").unwrap(), 1);
+    assert_eq!(indexes[0].try_get::<String, _>("origin").unwrap(), "u");
+
+    sqlx::query("DELETE FROM tune_runs WHERE id = ?")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM tune_mv_actuations WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "MV actuation rows must cascade-delete with their run"
+    );
 }
 
 #[tokio::test]

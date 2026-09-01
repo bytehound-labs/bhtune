@@ -45,23 +45,14 @@ fn default_sim_dead_time() -> f32 {
 fn default_sim_initial_value() -> f32 {
     50.0
 }
-fn default_poll_interval_ms() -> u64 {
-    800
-}
-fn default_timeout_secs() -> u64 {
-    3600
-}
-fn default_op_or_restore_timeout_secs() -> u64 {
-    30
-}
 
-/// The body of `POST /api/runs` -- full field parity with [`TuneArgs`], since starting a run
-/// over HTTP must be able to express everything `bhtune tune` can. Every field that has a
-/// CLI default (`--sim-gain`, `--poll-interval-ms`, etc.) repeats that exact default here via
-/// `#[serde(default = "...")]`, so an HTTP caller that omits a field gets identical behavior
-/// to a CLI invocation that omits the matching flag. `Option<T>` fields need no
-/// `#[serde(default)]` of their own -- serde already treats a missing key as `None` for an
-/// `Option` field.
+/// The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values
+/// are intentionally absent: they are resolved from the global `[tuning]` configuration by
+/// `prepare()`, just as they are for a CLI invocation. Every field that has a CLI default
+/// (`--sim-gain`, etc.) repeats that exact default here via `#[serde(default = "...")]`, so an
+/// HTTP caller that omits a field gets identical behavior to a CLI invocation that omits the
+/// matching flag. `Option<T>` fields need no `#[serde(default)]` of their own -- serde already
+/// treats a missing key as `None` for an `Option` field.
 ///
 /// Also derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s
 /// response (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses
@@ -89,9 +80,6 @@ pub struct StartRunRequest {
     /// Seconds a switch must persist before it's accepted (default: looked up per
     /// `process_type`).
     pub noise_protection_secs: Option<u32>,
-    /// Pre/post-test recording padding, in seconds.
-    #[serde(default)]
-    pub mrft_delay: u32,
     /// Which driver drives this tune. `"replay"` is rejected -- that driver exists only
     /// for offline golden-trace validation, not for starting a live/simulated run.
     pub driver: TuneDriver,
@@ -136,13 +124,6 @@ pub struct StartRunRequest {
     /// Per-tune replacements for template-derived OPC tag names. Blank or missing fields use
     /// the template-derived tag.
     pub tag_overrides: Option<TagOverrides>,
-    /// How often to poll the driver, in milliseconds.
-    #[serde(default = "default_poll_interval_ms")]
-    pub poll_interval_ms: u64,
-    /// Hard wall-clock cap on this run's total duration, in seconds. See
-    /// [`TuneArgs::timeout_secs`] -- always enforced, exactly as for a CLI-driven run.
-    #[serde(default = "default_timeout_secs")]
-    pub timeout_secs: u64,
     /// Operator notes to attach to this run. Notes can be edited or cleared later through
     /// the run-history endpoints.
     #[serde(default)]
@@ -154,12 +135,6 @@ pub struct StartRunRequest {
     /// Non-interactively write this response level's calculated PID parameters back to the
     /// DCS. Requires `yes: true`.
     pub write_pid: Option<ResponseLevel>,
-    /// Cap on any single driver read/write during the run, in seconds.
-    #[serde(default = "default_op_or_restore_timeout_secs")]
-    pub op_timeout_secs: u64,
-    /// Cap on restoring the loop to its pre-test state after the run ends, in seconds.
-    #[serde(default = "default_op_or_restore_timeout_secs")]
-    pub restore_timeout_secs: u64,
 }
 
 /// `value.is_finite()`, as an [`ApiError::BadRequest`] on failure -- the HTTP-path
@@ -186,30 +161,14 @@ fn require_finite_if_some(field: &str, value: Option<f32>) -> Result<(), ApiErro
     }
 }
 
-/// `value >= 1`, as an [`ApiError::BadRequest`] on failure -- the HTTP-path equivalent of
-/// `bhtune-cli`'s `positive_u64` clap `value_parser`, for the same reason [`require_finite`]
-/// exists: a [`TuneArgs`] built directly in Rust code bypasses clap's parsers entirely.
-fn require_positive(field: &str, value: u64) -> Result<(), ApiError> {
-    if value >= 1 {
-        Ok(())
-    } else {
-        Err(ApiError::BadRequest(format!(
-            "'{field}' must be at least 1, got {value}"
-        )))
-    }
-}
-
 impl StartRunRequest {
     /// Validates and converts this request into a [`TuneArgs`], ready for
     /// [`bhtune_cli::commands::tune::prepare`].
     ///
-    /// Only validates the specific fields that have **no** downstream safety net regardless
-    /// of transport: `relay_amp`, `cycles_count` (after `process_type`-defaulting), and
-    /// `mrft_delay` are already checked by [`bhtune_core::LoopConfig::validate`], called
-    /// from inside `prepare()` itself, so re-checking them here would be redundant. Every
-    /// other numeric field bypasses clap's `value_parser`s entirely when constructed this
-    /// way (see AGENTS.md's `server-start-tune-api` notes) and has no other guard, so this
-    /// function is where that gap is closed.
+    /// Only validates numeric fields whose clap `value_parser`s are bypassed when a
+    /// [`TuneArgs`] is built directly in Rust code. Operational timing values are not
+    /// request fields; `prepare()` resolves and validates the global configuration before
+    /// connecting to a driver or mutating the database/live loop.
     pub(crate) fn into_tune_args(self) -> Result<TuneArgs, ApiError> {
         require_finite("relay_amp", self.relay_amp)?;
         require_finite("sim_gain", self.sim_gain)?;
@@ -222,10 +181,6 @@ impl StartRunRequest {
         require_finite_if_some("pv_range_low", self.pv_range_low)?;
         require_finite_if_some("mv_range_high", self.mv_range_high)?;
         require_finite_if_some("mv_range_low", self.mv_range_low)?;
-        require_positive("poll_interval_ms", self.poll_interval_ms)?;
-        require_positive("timeout_secs", self.timeout_secs)?;
-        require_positive("op_timeout_secs", self.op_timeout_secs)?;
-        require_positive("restore_timeout_secs", self.restore_timeout_secs)?;
         if let Some(tag_overrides) = &self.tag_overrides {
             tag_overrides
                 .validate()
@@ -244,7 +199,6 @@ impl StartRunRequest {
             cycles_skip: self.cycles_skip,
             cycles_count: self.cycles_count,
             noise_protection_secs: self.noise_protection_secs,
-            mrft_delay: self.mrft_delay,
             driver,
             bridge_host: self.bridge_host,
             server: self.server,
@@ -261,13 +215,9 @@ impl StartRunRequest {
             mv_range_low: self.mv_range_low,
             direction: self.direction.map(Into::into),
             tag_overrides: self.tag_overrides,
-            poll_interval_ms: self.poll_interval_ms,
-            timeout_secs: self.timeout_secs,
             notes: self.notes,
             yes: self.yes,
             write_pid: self.write_pid.map(Into::into),
-            op_timeout_secs: self.op_timeout_secs,
-            restore_timeout_secs: self.restore_timeout_secs,
             // `drive()`'s doc comment requires `Json` for every HTTP-started run: `execute`'s
             // interactive write-back prompt (`maybe_write_back`) only skips reading stdin
             // when `output == OutputFormat::Json`, and this background task has no stdin to
@@ -303,6 +253,18 @@ pub(crate) async fn start_run(
     State(state): State<AppState>,
     Json(request): Json<StartRunRequest>,
 ) -> Result<(StatusCode, Json<RunDetailResponse>), ApiError> {
+    start_run_with_hook(state, request, |_| async {}).await
+}
+
+async fn start_run_with_hook<F, Fut>(
+    state: AppState,
+    request: StartRunRequest,
+    after_prepare: F,
+) -> Result<(StatusCode, Json<RunDetailResponse>), ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     // Optimistic pre-check: avoids a wasted `prepare()` call while a post-hoc PID write/revert
     // is holding the exclusive live-loop reservation. It deliberately does not reject an
     // already-running tune: independent tunes are allowed to execute concurrently.
@@ -323,6 +285,7 @@ pub(crate) async fn start_run(
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let run_id = prepared.run_id();
+    after_prepare(&state).await;
 
     let (ctrl_c, cancel_handle) = CtrlC::manual();
     let pool_for_task = state.pool.clone();
@@ -421,15 +384,36 @@ pub(crate) async fn update_notes(
     Path(run_id): Path<i64>,
     Json(request): Json<UpdateNotesRequest>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {
+    update_notes_with_hook(state, run_id, request, |_| async {}).await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NotesHookStage {
+    AfterLookup,
+    AfterUpdate,
+}
+
+async fn update_notes_with_hook<F, Fut>(
+    state: AppState,
+    run_id: i64,
+    request: UpdateNotesRequest,
+    mut hook: F,
+) -> Result<Json<RunDetailResponse>, ApiError>
+where
+    F: FnMut(NotesHookStage) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
+    hook(NotesHookStage::AfterLookup).await;
     TuneRunRow::update_notes(
         &state.pool,
         run_id,
         normalized_notes(request.notes).as_deref(),
     )
     .await?;
+    hook(NotesHookStage::AfterUpdate).await;
     build_run_detail(&state.pool, run_id)
         .await?
         .map(Json)
@@ -456,10 +440,23 @@ pub(crate) async fn delete_notes(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {
+    delete_notes_with_hook(state, run_id, |_| async {}).await
+}
+
+async fn delete_notes_with_hook<F, Fut>(
+    state: AppState,
+    run_id: i64,
+    after_update: F,
+) -> Result<Json<RunDetailResponse>, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
     TuneRunRow::update_notes(&state.pool, run_id, None).await?;
+    after_update(&state).await;
     build_run_detail(&state.pool, run_id)
         .await?
         .map(Json)
@@ -561,6 +558,78 @@ async fn reserve_connect_and_write(
     kind: WriteKind,
     allow_uncertain_quality: bool,
 ) -> Result<RunDetailResponse, ApiError> {
+    reserve_connect_and_write_with_hook(
+        state,
+        run_id,
+        run,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        kind,
+        allow_uncertain_quality,
+        |_| async {},
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reserve_connect_and_write_with_hook<F, Fut>(
+    state: &AppState,
+    run_id: i64,
+    run: &TuneRunRow,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain_quality: bool,
+    after_release: F,
+) -> Result<RunDetailResponse, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    reserve_connect_and_write_with_hooks(
+        state,
+        run_id,
+        run,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        kind,
+        allow_uncertain_quality,
+        |_| async {},
+        after_release,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reserve_connect_and_write_with_hooks<F, Fut, G, Gut>(
+    state: &AppState,
+    run_id: i64,
+    run: &TuneRunRow,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain_quality: bool,
+    before_write: F,
+    after_release: G,
+) -> Result<RunDetailResponse, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+    G: FnOnce(&AppState) -> Gut,
+    Gut: std::future::Future<Output = ()>,
+{
     state
         .active_run
         .reserve(run_id)
@@ -573,6 +642,7 @@ async fn reserve_connect_and_write(
 
     let result: Result<PidWriteOutcome, ApiError> = async {
         let driver = connect_to_runs_recorded_driver(run).await?;
+        before_write(state).await;
         let outcome = write_pid_values(
             &state.pool,
             run_id,
@@ -591,6 +661,7 @@ async fn reserve_connect_and_write(
     .await;
 
     state.active_run.release(run_id).await;
+    after_release(state).await;
     result?;
 
     build_run_detail(&state.pool, run_id).await?.ok_or_else(|| {
@@ -778,12 +849,12 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use bhtune_core::LoopConfig;
+    use bhtune_db::models::{Pagination, TuneRunFilter};
     use tower::ServiceExt;
 
     /// A fast-converging simulator-backed request body, mirroring `bhtune-cli`'s own
-    /// `fast_simulator_args()` test fixture (`commands::tune`'s test module) field-for-field
-    /// -- that fixture's doc comment explains why these exact values converge in well under
-    /// a second of real wall-clock time.
+    /// `fast_simulator_args()` test fixture for the per-run inputs. Global timing is supplied
+    /// by `in_memory_state()`'s fast test configuration.
     fn fast_simulator_request_json() -> serde_json::Value {
         serde_json::json!({
             "tagname": "ignored-for-simulator",
@@ -803,7 +874,6 @@ mod tests {
             "mv_range_high": 100.0,
             "mv_range_low": 0.0,
             "direction": "reverse",
-            "poll_interval_ms": 5,
             "notes": "http test note",
         })
     }
@@ -831,7 +901,15 @@ mod tests {
     /// Polls `GET /api/runs/{id}` (via the merged `history` router) until `outcome` is no
     /// longer `"running"`, bounded so a real bug can't hang the test suite forever.
     async fn wait_for_outcome(state: &AppState, run_id: i64) -> serde_json::Value {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        wait_for_outcome_with_timeout(state, run_id, std::time::Duration::from_secs(10)).await
+    }
+
+    async fn wait_for_outcome_with_timeout(
+        state: &AppState,
+        run_id: i64,
+        timeout: std::time::Duration,
+    ) -> serde_json::Value {
+        let deadline = tokio::time::Instant::now() + timeout;
         loop {
             let app = crate::build_router(state.clone());
             let response = app
@@ -847,10 +925,23 @@ mod tests {
                 return detail;
             }
             if tokio::time::Instant::now() >= deadline {
-                panic!("run {run_id} did not leave 'running' within 10s: {detail:?}");
+                panic!("run {run_id} did not leave 'running' within {timeout:?}: {detail:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn wait_for_outcome_panics_after_an_injected_deadline() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = start_opcda_run(&state).await;
+        let state_for_task = state.clone();
+        let join = tokio::spawn(async move {
+            wait_for_outcome_with_timeout(&state_for_task, run_id, std::time::Duration::ZERO).await
+        });
+
+        let panic = join.await.expect_err("a zero deadline should panic");
+        assert!(panic.is_panic());
     }
 
     #[tokio::test]
@@ -873,7 +964,6 @@ mod tests {
     async fn notes_can_be_edited_while_running_and_after_completion_then_deleted() {
         let state = crate::test_support::in_memory_state().await;
         let mut request = fast_simulator_request_json();
-        request["poll_interval_ms"] = serde_json::json!(1000);
         request["cycles_count"] = serde_json::json!(50);
 
         let response = post_json(crate::build_router(state.clone()), "/api/runs", request).await;
@@ -934,14 +1024,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_route_lookups_propagate_database_failures_as_500() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = crate::build_router(state.clone());
+        state.pool.close().await;
+
+        let update = app
+            .clone()
+            .oneshot(
+                Request::put("/api/runs/1/notes")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"notes":"updated"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let delete = app
+            .clone()
+            .oneshot(
+                Request::delete("/api/runs/1/notes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let write = post_json(
+            app.clone(),
+            "/api/runs/1/write",
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(write.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let revert = post_empty(app, "/api/runs/1/revert").await;
+        assert_eq!(revert.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn note_routes_propagate_failures_after_each_successful_database_step() {
+        let update_state = crate::test_support::in_memory_state().await;
+        let update_run_id = start_opcda_run(&update_state).await;
+        let update_pool = update_state.pool.clone();
+        let update_result = update_notes_with_hook(
+            update_state.clone(),
+            update_run_id,
+            UpdateNotesRequest {
+                notes: "updated".to_string(),
+            },
+            move |_| {
+                let pool = update_pool.clone();
+                async move { pool.close().await }
+            },
+        )
+        .await;
+        assert!(matches!(update_result, Err(ApiError::Internal(_))));
+
+        let detail_state = crate::test_support::in_memory_state().await;
+        let detail_run_id = start_opcda_run(&detail_state).await;
+        let detail_pool = detail_state.pool.clone();
+        let detail_result = update_notes_with_hook(
+            detail_state.clone(),
+            detail_run_id,
+            UpdateNotesRequest {
+                notes: "updated".to_string(),
+            },
+            move |stage| {
+                let pool = detail_pool.clone();
+                async move {
+                    if stage == NotesHookStage::AfterUpdate {
+                        pool.close().await;
+                    }
+                }
+            },
+        )
+        .await;
+        assert!(matches!(detail_result, Err(ApiError::Internal(_))));
+
+        let delete_state = crate::test_support::in_memory_state().await;
+        let delete_run_id = start_opcda_run(&delete_state).await;
+        let delete_result = delete_notes_with_hook(delete_state.clone(), delete_run_id, |state| {
+            let pool = state.pool.clone();
+            async move { pool.close().await }
+        })
+        .await;
+        assert!(matches!(delete_result, Err(ApiError::Internal(_))));
+    }
+
+    #[tokio::test]
     async fn starting_a_second_run_while_one_is_active_succeeds() {
         let state = crate::test_support::in_memory_state().await;
 
-        // Slow enough (1s/tick, many cycles) that it is still active by the time the second
-        // request below is issued, mirroring `bhtune-cli`'s own
-        // `ctrl_c_aborts_a_running_tune_and_restores_the_loop` timing rationale.
+        // Many cycles keep the first run active by the time the second request below is issued.
         let mut slow_request = fast_simulator_request_json();
-        slow_request["poll_interval_ms"] = serde_json::json!(1000);
         slow_request["cycles_count"] = serde_json::json!(50);
 
         let first = post_json(
@@ -1008,6 +1186,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reservation_starting_after_prepare_marks_the_new_run_failed() {
+        let state = crate::test_support::in_memory_state().await;
+        let reservation_id = 9_999;
+        let result = start_run_with_hook(
+            state.clone(),
+            serde_json::from_value(fast_simulator_request_json()).unwrap(),
+            |state| {
+                let active_run = state.active_run.clone();
+                async move {
+                    active_run.reserve(reservation_id).await.unwrap();
+                }
+            },
+        )
+        .await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(error, ApiError::Conflict(_)));
+        let filter = TuneRunFilter::default();
+        let runs = TuneRunRow::list(&state.pool, &filter, Pagination::default())
+            .await
+            .unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].outcome, TuneOutcome::Failed);
+        assert!(
+            runs[0]
+                .failure_reason
+                .as_deref()
+                .unwrap()
+                .contains("no tune task was started")
+        );
+        state.active_run.release(reservation_id).await;
+    }
+
+    #[tokio::test]
+    async fn starting_a_run_while_a_write_reservation_is_active_returns_409() {
+        let state = crate::test_support::in_memory_state().await;
+        let reservation_id = 9_998;
+        state.active_run.reserve(reservation_id).await.unwrap();
+
+        let response = post_json(
+            crate::build_router(state.clone()),
+            "/api/runs",
+            fast_simulator_request_json(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("exclusive PID write/revert")
+        );
+        state.active_run.release(reservation_id).await;
+    }
+
+    #[tokio::test]
     async fn unknown_template_name_returns_400() {
         let app = crate::build_router(crate::test_support::in_memory_state().await);
         let mut request = fast_simulator_request_json();
@@ -1035,6 +1269,52 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let error = body_json(response).await;
         assert!(error["error"].as_str().unwrap().contains("--yes"));
+    }
+
+    #[test]
+    fn legacy_http_timing_fields_are_ignored() {
+        let mut request = fast_simulator_request_json();
+        request["mrft_delay"] = serde_json::json!(123);
+        request["poll_interval_ms"] = serde_json::json!(1);
+        request["timeout_secs"] = serde_json::json!(1);
+        request["op_timeout_secs"] = serde_json::json!(1);
+        request["restore_timeout_secs"] = serde_json::json!(1);
+
+        let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
+        let args = parsed
+            .into_tune_args()
+            .expect("legacy fields must not affect request parsing");
+        assert_eq!(args.template, "Yokogawa CentumVP");
+        assert_eq!(args.relay_amp, 10.0);
+    }
+
+    #[tokio::test]
+    async fn invalid_tag_override_returns_400_before_starting_a_run() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = crate::build_router(state.clone());
+        let mut request = fast_simulator_request_json();
+        request["tag_overrides"] = serde_json::json!({
+            "process_variable": "Loop\u{0000}PV"
+        });
+
+        let response = post_json(app, "/api/runs", request).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("process_variable")
+        );
+        assert!(
+            TuneRunRow::list(
+                &state.pool,
+                &TuneRunFilter::default(),
+                Pagination::default(),
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1092,10 +1372,8 @@ mod tests {
     }
 
     /// Omits every field with a `#[serde(default = "...")]` custom default function. Every
-    /// other test in this module sets these explicitly (for fast, deterministic convergence),
-    /// which left the default-value functions themselves untested. Cancels immediately after
-    /// starting rather than waiting for completion, since `poll_interval_ms` here really is
-    /// the slow, real CLI default (800ms/tick).
+    /// other test in this module sets these explicitly, which left the simulator defaults
+    /// themselves untested. The timing values are global configuration, not request defaults.
     #[tokio::test]
     async fn omitted_fields_with_custom_defaults_fall_back_to_the_cli_defaults() {
         let state = crate::test_support::in_memory_state().await;
@@ -1106,10 +1384,6 @@ mod tests {
         object.remove("sim_dead_time");
         object.remove("sim_initial_pv");
         object.remove("sim_initial_mv");
-        object.remove("poll_interval_ms");
-        object.remove("timeout_secs");
-        object.remove("op_timeout_secs");
-        object.remove("restore_timeout_secs");
 
         let parsed: StartRunRequest = serde_json::from_value(request.clone()).unwrap();
         assert_eq!(parsed.sim_gain, 1.0);
@@ -1117,10 +1391,6 @@ mod tests {
         assert_eq!(parsed.sim_dead_time, 5.0);
         assert_eq!(parsed.sim_initial_pv, 50.0);
         assert_eq!(parsed.sim_initial_mv, 50.0);
-        assert_eq!(parsed.poll_interval_ms, 800);
-        assert_eq!(parsed.timeout_secs, 3600);
-        assert_eq!(parsed.op_timeout_secs, 30);
-        assert_eq!(parsed.restore_timeout_secs, 30);
 
         let response = post_json(crate::build_router(state.clone()), "/api/runs", request).await;
         assert_eq!(response.status(), StatusCode::CREATED);
@@ -1128,23 +1398,6 @@ mod tests {
 
         state.active_run.cancel(run_id).await;
         wait_for_outcome(&state, run_id).await;
-    }
-
-    #[tokio::test]
-    async fn zero_poll_interval_ms_is_rejected() {
-        let app = crate::build_router(crate::test_support::in_memory_state().await);
-        let mut request = fast_simulator_request_json();
-        request["poll_interval_ms"] = serde_json::json!(0);
-
-        let response = post_json(app, "/api/runs", request).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let error = body_json(response).await;
-        assert!(
-            error["error"]
-                .as_str()
-                .unwrap()
-                .contains("poll_interval_ms")
-        );
     }
 
     #[tokio::test]
@@ -1400,6 +1653,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_reports_an_internal_error_when_the_run_vanishes_after_the_write() {
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+        let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+        let p_tag = run.tags.proportional_constant.clone().unwrap();
+        let i_tag = run.tags.integral_constant.clone().unwrap();
+        let d_tag = run.tags.derivative_constant.clone().unwrap();
+        let pool = state.pool.clone();
+
+        let error = reserve_connect_and_write_with_hook(
+            &state,
+            run_id,
+            &run,
+            &p_tag,
+            &i_tag,
+            &d_tag,
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 10.0,
+                integral: 10.0,
+                derivative: 10.0,
+            },
+            WriteKind::Write,
+            true,
+            move |_| async move {
+                assert!(TuneRunRow::delete(&pool, run_id).await.unwrap());
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, ApiError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn write_propagates_an_unexpected_database_failure_and_releases_its_reservation() {
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+        let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+        let p_tag = run.tags.proportional_constant.clone().unwrap();
+        let i_tag = run.tags.integral_constant.clone().unwrap();
+        let d_tag = run.tags.derivative_constant.clone().unwrap();
+
+        let error = reserve_connect_and_write_with_hooks(
+            &state,
+            run_id,
+            &run,
+            &p_tag,
+            &i_tag,
+            &d_tag,
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 10.0,
+                integral: 10.0,
+                derivative: 10.0,
+            },
+            WriteKind::Write,
+            true,
+            |state| {
+                let pool = state.pool.clone();
+                async move { pool.close().await }
+            },
+            |_| async {},
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, ApiError::Internal(_)));
+        assert!(state.active_run.reserve(999).await.is_ok());
+        state.active_run.release(999).await;
+    }
+
+    #[tokio::test]
     async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
         use crate::test_support::mock_bridge::{
             MockBridgeService, good_reading, start_mock_server,
@@ -1592,21 +1946,26 @@ mod tests {
         let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
         let base = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
 
-        for missing_tag in ["proportional", "integral", "derivative"] {
-            let mut run = base.clone();
-            match missing_tag {
-                "proportional" => run.tags.proportional_constant = None,
-                "integral" => run.tags.integral_constant = None,
-                "derivative" => run.tags.derivative_constant = None,
-                _ => unreachable!(),
-            }
+        let mut missing_proportional = base.clone();
+        missing_proportional.tags.proportional_constant = None;
+        let mut missing_integral = base.clone();
+        missing_integral.tags.integral_constant = None;
+        let mut missing_derivative = base;
+        missing_derivative.tags.derivative_constant = None;
 
-            let Err(ApiError::BadRequest(error)) = require_writable_run(&run) else {
-                panic!("missing {missing_tag} tag should produce a bad-request error");
-            };
+        for (missing_tag, run) in [
+            ("proportional", missing_proportional),
+            ("integral", missing_integral),
+            ("derivative", missing_derivative),
+        ] {
+            let error = require_writable_run(&run).unwrap_err();
             assert!(
-                error.contains("no PID constant tags configured"),
-                "missing {missing_tag} tag should be rejected: {error}"
+                matches!(
+                    error,
+                    ApiError::BadRequest(ref message)
+                        if message.contains("no PID constant tags configured")
+                ),
+                "missing {missing_tag} tag should be rejected: {error:?}"
             );
         }
     }
@@ -1617,20 +1976,23 @@ mod tests {
         let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
         let base = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
 
-        for missing_field in ["opc_server", "bridge_host"] {
-            let mut run = base.clone();
-            match missing_field {
-                "opc_server" => run.opc_server = None,
-                "bridge_host" => run.bridge_host = None,
-                _ => unreachable!(),
-            }
+        let mut missing_server = base.clone();
+        missing_server.opc_server = None;
+        let mut missing_bridge = base;
+        missing_bridge.bridge_host = None;
 
-            let Err(ApiError::BadRequest(error)) = require_writable_run(&run) else {
-                panic!("missing {missing_field} should produce a bad-request error");
-            };
+        for (missing_field, run) in [
+            ("opc_server", missing_server),
+            ("bridge_host", missing_bridge),
+        ] {
+            let error = require_writable_run(&run).unwrap_err();
             assert!(
-                error.contains("no recorded OPC server"),
-                "missing {missing_field} should be rejected: {error}"
+                matches!(
+                    error,
+                    ApiError::BadRequest(ref message)
+                        if message.contains("no recorded OPC server")
+                ),
+                "missing {missing_field} should be rejected: {error:?}"
             );
         }
     }
@@ -1845,6 +2207,36 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("never recorded pre-write values")
+        );
+    }
+
+    #[tokio::test]
+    async fn revert_run_returns_400_when_the_driver_connection_fails() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+        let mut previous_write =
+            bhtune_db::models::NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());
+        previous_write.previous = Some(WriteReadback {
+            proportional: 10.0,
+            integral: 20.0,
+            derivative: 30.0,
+        });
+        previous_write.success = true;
+        TuneWriteRow::insert(&state.pool, run_id, previous_write)
+            .await
+            .unwrap();
+
+        let response = post_empty(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/revert"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("failed to connect")
         );
     }
 

@@ -82,9 +82,6 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
 * `--cycles-skip <CYCLES_SKIP>` — Relay cycles to skip before counting begins (default: looked up per `--process-type`)
 * `--cycles-count <CYCLES_COUNT>` — Relay cycles to count once the skip period ends (default: looked up per `--process-type`)
 * `--noise-protection-secs <NOISE_PROTECTION_SECS>` — Seconds a switch must persist before it's accepted (default: looked up per `--process-type`)
-* `--mrft-delay <MRFT_DELAY>` — Pre/post-test recording padding, in seconds (legacy: `--mrftDelayTime`)
-
-  Default value: `0`
 * `--driver <DRIVER>` — Which driver drives this tune
 
   Possible values:
@@ -124,24 +121,12 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
 
   Possible values: `direct`, `reverse`
 
-* `--poll-interval-ms <POLL_INTERVAL_MS>` — How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer)
-
-  Default value: `800`
-* `--timeout-secs <TIMEOUT_SECS>` — Hard wall-clock cap on this run's total duration (including any `--mrft-delay` padding), in seconds. If the engine hasn't reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop's expected test duration -- temperature loops in particular can need much longer than the default
-
-  Default value: `3600`
 * `--notes <NOTES>` — Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes
 * `--yes` — Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without `--write-pid`
 * `--write-pid <WRITE_PID>` — Non-interactively write this response level's calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires `--yes`
 
   Possible values: `aggressive`, `moderate`, `sluggish`
 
-* `--op-timeout-secs <OP_TIMEOUT_SECS>` — Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even mid-hung-read/write -- see AGENTS.md's `safety-cancellation` section. Distinct from `--timeout-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration
-
-  Default value: `30`
-* `--restore-timeout-secs <RESTORE_TIMEOUT_SECS>` — Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of `--timeout-secs`, since a restore triggered *by* a timeout would otherwise inherit an already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits `EXIT_RESTORE_INCOMPLETE` with a warning naming the loop and its last-written value, instead of hanging indefinitely
-
-  Default value: `30`
 * `--output <OUTPUT>` — How to print this run's final outcome line
 
   Default value: `table`
@@ -187,9 +172,6 @@ Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator
 * `--cycles-skip <CYCLES_SKIP>`
 * `--cycles-count <CYCLES_COUNT>`
 * `--noise-protection-secs <NOISE_PROTECTION_SECS>`
-* `--mrft-delay <MRFT_DELAY>`
-
-  Default value: `0`
 * `--sim-gain <SIM_GAIN>`
 
   Default value: `1`
@@ -211,24 +193,12 @@ Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator
 * `--sim-initial-mv <SIM_INITIAL_MV>`
 
   Default value: `50`
-* `--poll-interval-ms <POLL_INTERVAL_MS>`
-
-  Default value: `800`
-* `--timeout-secs <TIMEOUT_SECS>` — See `TuneArgs::timeout_secs`
-
-  Default value: `3600`
 * `--notes <NOTES>` — Operator notes to attach to this run. See [`TuneArgs::notes`]
 * `--yes` — See `TuneArgs::yes`
 * `--write-pid <WRITE_PID>` — See `TuneArgs::write_pid`. Note the built-in FOPDT simulator has no PID constant tags at all (see `build_loop_tags`), so write-back is always skipped for `simulate` regardless of this flag -- it's accepted here purely so `simulate`'s flag surface stays a strict defaulted subset of `tune`'s, matching every other field
 
   Possible values: `aggressive`, `moderate`, `sluggish`
 
-* `--op-timeout-secs <OP_TIMEOUT_SECS>` — See `TuneArgs::op_timeout_secs`
-
-  Default value: `30`
-* `--restore-timeout-secs <RESTORE_TIMEOUT_SECS>` — See `TuneArgs::restore_timeout_secs`
-
-  Default value: `30`
 * `--output <OUTPUT>` — See `TuneArgs::output`
 
   Default value: `table`

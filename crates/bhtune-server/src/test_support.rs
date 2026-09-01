@@ -22,8 +22,21 @@ pub(crate) async fn in_memory_state() -> AppState {
     bhtune_db::seed_builtin_templates(&pool, Utc::now())
         .await
         .expect("seeding the built-in templates into a fresh in-memory db should never fail");
-    let config_store = bhtune_cli::config::load_config_store_from(None, None, None, None, false)
-        .expect("default test config store should load");
+    let mut config_store =
+        bhtune_cli::config::load_config_store_from(None, None, None, None, false)
+            .expect("default test config store should load");
+    // Keep route tests fast now that HTTP requests correctly inherit global timing settings
+    // instead of carrying obsolete per-run timing fields.
+    config_store.config.tuning = bhtune_cli::config::TuningConfig {
+        mrft_delay_secs: Some(0),
+        poll_interval_ms: Some(5),
+        timeout_secs: Some(5),
+        op_timeout_secs: Some(5),
+        restore_timeout_secs: Some(5),
+    };
+    config_store.toml_tuning = config_store.config.tuning;
+    config_store.tuning_sources =
+        bhtune_cli::config::tuning_config_sources(&config_store.toml_tuning);
     AppState {
         pool,
         active_run: ActiveRun::default(),
@@ -48,6 +61,8 @@ pub(crate) mod mock_bridge {
     };
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
+    use tokio::task::JoinHandle;
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
     use tonic::transport::Server;
     use tonic::{Request, Response, Status};
@@ -258,21 +273,49 @@ pub(crate) mod mock_bridge {
     }
 
     /// Starts `service` on an ephemeral localhost port and returns its `host:port`
-    /// address, ready to be recorded as a run's `bridge_host`. No graceful shutdown --
-    /// each test's server simply runs for the rest of the test process on its own
-    /// ephemeral port, matching the upstream pattern this mirrors.
+    /// address, ready to be recorded as a run's `bridge_host`. Tests that need explicit
+    /// cleanup should use [`start_mock_server_with_handle`] instead.
     pub(crate) async fn start_mock_server(service: MockBridgeService) -> String {
+        let (host, handle) = start_mock_server_with_handle(service).await;
+        std::mem::forget(handle);
+        host
+    }
+
+    pub(crate) struct MockServerHandle {
+        shutdown: Option<oneshot::Sender<()>>,
+        task: JoinHandle<()>,
+    }
+
+    impl MockServerHandle {
+        pub(crate) async fn shutdown(mut self) {
+            let _ = self.shutdown.take().unwrap().send(());
+            self.task.await.unwrap();
+        }
+    }
+
+    pub(crate) async fn start_mock_server_with_handle(
+        service: MockBridgeService,
+    ) -> (String, MockServerHandle) {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
+        let (shutdown, shutdown_signal) = oneshot::channel();
+        let task = tokio::spawn(async move {
             Server::builder()
                 .add_service(BridgeServer::new(service))
-                .serve_with_incoming(TcpListenerStream::new(listener))
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                    let _ = shutdown_signal.await;
+                })
                 .await
                 .unwrap();
         });
-        format!("127.0.0.1:{port}")
+        (
+            format!("127.0.0.1:{port}"),
+            MockServerHandle {
+                shutdown: Some(shutdown),
+                task,
+            },
+        )
     }
 
     /// A "Good"-quality `"10.0"` reading, regardless of which tag was requested --
@@ -288,6 +331,35 @@ pub(crate) mod mock_bridge {
                 quality: "Good".to_string(),
                 timestamp: "2024-01-15 10:23:45".to_string(),
             }],
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use opcda_bridge_proto::bridge::BrowseRequest;
+
+        #[tokio::test]
+        async fn browse_returns_the_configured_page() {
+            let service = MockBridgeService {
+                browse_response: BrowsePage {
+                    complete: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let response = service
+                .browse(Request::new(BrowseRequest::default()))
+                .await
+                .unwrap();
+
+            assert!(!response.into_inner().complete);
+        }
+
+        #[tokio::test]
+        async fn mock_server_can_be_shutdown_and_joined() {
+            let (_host, handle) = start_mock_server_with_handle(MockBridgeService::default()).await;
+            handle.shutdown().await;
         }
     }
 }

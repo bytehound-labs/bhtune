@@ -34,10 +34,12 @@
 //! suite -- see `logging`'s test module doc comment.
 //!
 //! Non-interactive/scheduled use (cron, CI, batch campaigns) is `tune`/`simulate`'s
-//! `--yes`/`--write-pid <level>`/`--timeout-secs` flags (bypassing the interactive
-//! write-back prompt and mandatorily bounding an unattended run's wall-clock duration) plus
-//! this module's distinguished exit codes ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`],
-//! [`EXIT_POOR_QUALITY`], [`EXIT_WRITE_BACK_FAILED`], [`EXIT_RESTORE_INCOMPLETE`]), so a
+//! `--yes`/`--write-pid <level>` flags (bypassing the interactive write-back prompt) plus
+//! the global `[tuning]` timing configuration, which mandatorily bounds unattended runs and
+//! caps individual driver operations, and this module's distinguished exit codes
+//! ([`EXIT_ABORTED`], [`EXIT_TIMED_OUT`],
+//! [`EXIT_POOR_QUALITY`], [`EXIT_ACTUATION_FAILED`], [`EXIT_WRITE_BACK_FAILED`],
+//! [`EXIT_RESTORE_INCOMPLETE`]), so a
 //! scheduler can tell "aborted", "timed out", "the plant data couldn't be trusted", "test ran
 //! but the write-back failed", "the loop may not have been fully restored", and "never ran at
 //! all" apart without parsing stdout. See AGENTS.md's `cli-automation`/`cli-safety` sections.
@@ -81,8 +83,8 @@ pub const EXIT_ABORTED: u8 = 2;
 /// from either of those. See `commands::tune::TuneOutcome` and AGENTS.md's `cli-automation`
 /// section.
 pub const EXIT_WRITE_BACK_FAILED: u8 = 3;
-/// A `tune`/`simulate` run was aborted because `--timeout-secs` elapsed before the engine
-/// reported completion; the loop was restored to its pre-test mode, exactly like
+/// A `tune`/`simulate` run was aborted because `[tuning].timeout_secs` elapsed before the
+/// engine reported completion; the loop was restored to its pre-test mode, exactly like
 /// [`EXIT_ABORTED`]. Distinct from it so a scheduler's alerting can tell "this run had to be
 /// killed for running too long" (possibly a stuck relay, a misconfigured tag mapping, or a
 /// stalled driver read -- worth investigating) apart from "an operator stopped it on
@@ -101,13 +103,19 @@ pub const EXIT_TIMED_OUT: u8 = 4;
 pub const EXIT_POOR_QUALITY: u8 = 5;
 /// A `tune`/`simulate` run ended (via normal completion, Ctrl+C, or a timeout) without being
 /// able to confirm the loop was fully restored to its pre-test mode/MV/setpoint -- either a
-/// second Ctrl+C was received while the restore was in flight, or `--restore-timeout-secs`
-/// elapsed first. Distinct from every other exit code because it means the loop may have
+/// second Ctrl+C was received while the restore was in flight, or
+/// `[tuning].restore_timeout_secs` elapsed first. Distinct from every other exit code because
+/// it means the loop may have
 /// been left mutated with no further attempt made to fix it: an operator must check it by
 /// hand, using the tag/value named in the warning printed to stderr. See
 /// `commands::tune::TuneOutcome::RestoreIncomplete` and AGENTS.md's `safety-cancellation`
 /// section.
 pub const EXIT_RESTORE_INCOMPLETE: u8 = 6;
+/// A live OPC DA tune was aborted because an accepted MV command could not be confirmed at
+/// the controller before its deadline or before a replacement relay command was required.
+/// The ordinary restore path still ran; [`EXIT_RESTORE_INCOMPLETE`] takes precedence if that
+/// restore could not itself be confirmed.
+pub const EXIT_ACTUATION_FAILED: u8 = 7;
 
 /// Parses real CLI arguments, initializes structured logging, and runs, returning a process
 /// exit code.
@@ -133,9 +141,9 @@ pub async fn run() -> ExitCode {
     let cli = Cli::parse();
 
     let output_format = cli.command.output_format();
-    let config = match config::load_config(cli.config.as_deref()) {
+    let config = match load_startup_config(cli.config.as_deref(), output_format) {
         Ok(config) => config,
-        Err(error) => return fail(&error, output_format),
+        Err(code) => return code,
     };
     let default_log_dir = config::default_log_dir_from(
         std::env::var("XDG_DATA_HOME").ok().as_deref(),
@@ -157,6 +165,13 @@ pub async fn run() -> ExitCode {
     let _log_guard = logging::init_tracing(&log_settings);
 
     run_with_cli_and_ctrl_c(cli, ctrl_c).await
+}
+
+fn load_startup_config(
+    path: Option<&std::path::Path>,
+    output: OutputFormat,
+) -> Result<config::BhtuneConfig, ExitCode> {
+    config::load_config(path).map_err(|error| fail(&error, output))
 }
 
 /// Test-facing entry point: exercises [`run_with_cli_and_ctrl_c`] against an already-parsed
@@ -259,6 +274,7 @@ fn tune_outcome_exit_code(outcome: commands::tune::TuneOutcome) -> ExitCode {
         commands::tune::TuneOutcome::TimedOut => ExitCode::from(EXIT_TIMED_OUT),
         commands::tune::TuneOutcome::WriteBackFailed => ExitCode::from(EXIT_WRITE_BACK_FAILED),
         commands::tune::TuneOutcome::PoorQuality => ExitCode::from(EXIT_POOR_QUALITY),
+        commands::tune::TuneOutcome::ActuationFailed => ExitCode::from(EXIT_ACTUATION_FAILED),
         commands::tune::TuneOutcome::RestoreIncomplete => ExitCode::from(EXIT_RESTORE_INCOMPLETE),
     }
 }
@@ -466,6 +482,10 @@ mod tests {
             ExitCode::from(EXIT_POOR_QUALITY)
         );
         assert_eq!(
+            tune_outcome_exit_code(commands::tune::TuneOutcome::ActuationFailed),
+            ExitCode::from(EXIT_ACTUATION_FAILED)
+        );
+        assert_eq!(
             tune_outcome_exit_code(commands::tune::TuneOutcome::RestoreIncomplete),
             ExitCode::from(EXIT_RESTORE_INCOMPLETE)
         );
@@ -628,5 +648,14 @@ mod tests {
         };
         assert_eq!(run_with_cli(cli).await, ExitCode::SUCCESS);
         assert!(db.exists());
+    }
+
+    #[test]
+    fn startup_config_errors_use_the_requested_failure_format() {
+        let missing = std::path::Path::new("config-that-does-not-exist.toml");
+        assert_eq!(
+            load_startup_config(Some(missing), OutputFormat::Table),
+            Err(ExitCode::FAILURE)
+        );
     }
 }

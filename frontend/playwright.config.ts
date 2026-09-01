@@ -26,7 +26,11 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
  */
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
+  // The suite shares one isolated server, including mutable global tuning configuration and
+  // the app-wide New Tune draft. Keep workers serialized so one browser test cannot change
+  // those shared values while another test is preparing a run.
+  fullyParallel: false,
+  workers: 1,
   forbidOnly: !!process.env.CI,
   // A run against a live relay-switching simulation is not inherently flaky, but CI
   // runners are noisier than a dev machine -- one retry absorbs an occasional slow-CI

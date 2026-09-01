@@ -155,6 +155,20 @@ every row.
 The selected source and values are retained in the saved draft. Simulator direction and ranges
 are stored separately from OPC fixed overrides, so changing drivers cannot turn simulator
 settings into live OPC overrides.
+Changing the base Tag name — whether it is typed manually, selected in the OPC tag browser, or
+changed by switching templates — resets every **Custom tag** selector to **Template tag** and
+clears its custom value, including custom direction/range read tags. **Fixed value** direction
+and range mappings, including their values, are preserved. **Duplicate this run** preserves
+the original Template tag, Custom tag, and Fixed value source selections instead of inferring
+null or omitted template values as Fixed value mappings.
+The New tune page keeps Connection, Test parameters, Loop mapping, Simulator parameters, and
+Automatic PID settings in independently collapsible sections; controls that do not apply to
+the selected driver are disabled with an explanation.
+Test parameters show the selected process type's default cycles-to-skip, cycles-to-count, and
+noise-protection values in a **Process defaults** subgroup. Changing the process type replaces
+all three values, and **Reset process defaults** restores them without changing the other tune
+settings. These are process-type defaults, not DCS/PLC template settings; CLI and HTTP callers
+may omit them to use the same server-side defaults.
 
 In **Simulator** mode, the form disables the OPC DA connection, tag, quality, operation/restore
 timeout, and automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
@@ -162,6 +176,29 @@ template remains selectable: the simulator ignores its tag mappings, but its PID
 conventions still format the calculated results (for example, Yokogawa uses proportional band
 while the other built-in templates use gain). PV/MV ranges and controller direction remain
 editable because the simulator has no live tags from which to read them.
+
+When a run has calculated results, its **Calculated results** panel moves directly below the
+run heading and becomes the first major action area, before the trend and diagnostic details.
+Each Aggressive/Moderate/Sluggish row has a **Review & write** action that opens a safety review
+popup showing the selected response level, the loop tag, the exact destination tags, and the
+values that will be written. The popup is centered over the viewport and uses the same shared
+dialog component as the OPC server and tag browsers. Confirming an Apply closes it immediately
+while BHTune writes and verifies the values in the background. Successful writes stay silent;
+transport failures and failed physical writes/readbacks appear in a page-level alert, and the
+write-history audit remains the source of truth for the physical outcome. The newest successful write in
+**PID change history** has a **Restore previous values** action using the same review dialog.
+Confirming a restore also closes the popup immediately and runs in the background; successful
+restores stay silent, while transport failures and failed physical restores/readbacks appear in a
+page-level alert.
+Before results exist, the panel remains in its lower diagnostic position. The panel uses the
+constant names and converted values from the run's snapshotted template: for example, a
+Yokogawa run shows `P`, `I`, and `D` rather than the engine's intermediate `Kp`, `Ti`, and `Td`
+columns, and the derivative column remains visible for PI runs with `0` to clear stale
+derivative action.
+The run-detail page keeps its major sections independently collapsible: Calculated results,
+Trend, Summary, Notes, Test configuration, Initial readings, and PID change history start
+expanded, while **MV actuation verification** is the final diagnostic section and starts
+collapsed.
 
 ## Installation
 
@@ -268,7 +305,7 @@ pnpm --filter bhtune-frontend run build
 cargo run --bin bhtune-server    # now also serves the built UI at http://127.0.0.1:8787/
 ```
 
-The web GUI header includes a light/dark theme toggle and shows the server version beside a
+The web GUI header includes a Catppuccin light/dark theme toggle and shows the server version beside a
 vertically centered colored status dot based on that liveness endpoint. The selected theme is
 remembered by the browser. Green means the BHTune HTTP service is reachable; it does not verify
 OPC DA connectivity. Hover the dot for the full status detail.
@@ -278,8 +315,13 @@ gives hot-reload:
 
 ```sh
 cd frontend
-pnpm dev             # http://localhost:5173, proxies /api/* to the server above
+pnpm dev             # http://localhost:5173 or http://asus:5173 on the local network
 ```
+
+The Vite development server binds to all local interfaces, allows the `asus` hostname, and
+proxies `/api/*` to the loopback `bhtune-server` on port `8787`. Frontend edits appear through
+hot module reload; restart `bhtune-server` after Rust or API changes. This development server
+has no authentication and should only be exposed on a trusted network.
 
 See [`frontend/README.md`](frontend/README.md) for details. The
 server shuts down gracefully on Ctrl+C (and on Unix, `SIGTERM`), draining in-flight requests
@@ -305,7 +347,8 @@ before installing the Windows service — are in
 
 ## Configuration
 
-Every setting resolves with the same precedence, highest first:
+Settings with command-line or environment overrides resolve with the same precedence, highest
+first:
 
 **CLI flag > environment variable > config file > built-in default**
 
@@ -338,11 +381,24 @@ JSON Schema (also covers one DCS/PLC template catalog entry — see below).
 | Allow Uncertain OPC quality              | —                  | —                       | `allow_uncertain_quality` | `true`                                                                                                                                                                      |
 | History retention                        | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days`          | unset — retain forever; a configured value must be a positive whole number                                                                                                  |
 
-The web GUI's **Config** page reads and updates the two global policy keys in the selected
-TOML file. Updates preserve unrelated comments and keys, create a timestamped sibling backup
-for an existing file, and take effect for new server operations without a restart. A revision
-token prevents overwriting a file changed by another process; command-line and environment
-overrides remain higher precedence than TOML values.
+The five operational tune timing and safety values are global TOML settings under `[tuning]`;
+they have no per-run CLI or HTTP override. Missing keys use these built-in defaults:
+
+| Setting                  | TOML key                      |  Default | Validation                                   |
+| ------------------------ | ----------------------------- | -------: | -------------------------------------------- |
+| MRFT delay padding       | `tuning.mrft_delay_secs`      |    `0` s | `0..=3600`                                   |
+| Poll interval            | `tuning.poll_interval_ms`     | `800` ms | at least `1`                                 |
+| Whole-run timeout        | `tuning.timeout_secs`         | `3600` s | at least `1`                                 |
+| Driver-operation timeout | `tuning.op_timeout_secs`      |   `30` s | at least `1`                                 |
+| Restore timeout          | `tuning.restore_timeout_secs` |   `30` s | at least `1`; OPC DA requires at least `4` s |
+
+The web GUI's **Config** page reads and updates the global quality, retention, and tuning
+settings in the selected TOML file. It reports whether each tuning value comes from the file or
+the built-in default, and **Reset tuning to built-in defaults** removes the `[tuning]` overrides.
+Updates preserve unrelated comments and keys, create a timestamped sibling backup for an existing
+file, and take effect for future tune preparations without a restart. Already-prepared or
+running tunes keep the effective values captured at start. A revision token prevents overwriting
+a file changed by another process.
 
 ## DCS/PLC templates
 
@@ -385,13 +441,15 @@ Windows Task Scheduler, CI):
   the interactive write-back prompt entirely when `--write-pid` wasn't also given, since
   there's no human present in a scripted run to answer it.
 - **Exit codes** distinguish outcomes for automated callers: `0` success, `1` a setup error
-  (bad flags, unreachable driver/database), `2` aborted (Ctrl+C or `--timeout-secs` elapsing),
-  `3` the test completed but the requested PID write-back failed, `4` the test was forcibly
-  stopped for running past `--timeout-secs`, `5` a poor-quality OPC reading aborted the run, and
-  `6` the post-run restore could not be confirmed (a second Ctrl+C, or `--restore-timeout-secs`
-  elapsing) — distinct from `2` since "aborted and restored" and "aborted, restore abandoned"
-  call for very different alerting. A caller never has to parse stdout just to find out whether
-  a scheduled tune actually wrote anything, or why it stopped early.
+  (bad flags, unreachable driver/database), `2` aborted by Ctrl+C, `3` the test completed but
+  the requested PID write-back failed, `4` the test was forcibly stopped for running past
+  `[tuning].timeout_secs`, `5` a poor-quality OPC reading aborted the run, and
+  `6` the post-run restore could not be confirmed (a second Ctrl+C, or
+  `[tuning].restore_timeout_secs`
+  elapsing), and `7` an accepted OPC DA MV command could not be confirmed before its deadline
+  or before the next relay command was required. Restore-incomplete exit code `6` takes
+  precedence over `7` when both occur. A caller never has to parse stdout just to find out
+  whether a scheduled tune actually wrote anything, or why it stopped early.
 
 ## Safety
 
@@ -405,21 +463,45 @@ language, including exactly what happens on the first and second Ctrl+C:
   is rejected before any driver connection or database write.
 - **Every numeric input is validated before it can reach a live loop** — CLI flags reject
   non-finite (`NaN`/infinite), zero, or negative values at parse time with a clear error; loop
-  configuration rejects an out-of-range cycle count or MRFT delay; and the PV/MV ranges plus the
+  configuration rejects an out-of-range cycle count or `[tuning].mrft_delay_secs`; and the PV/MV ranges plus the
   initial MV, whether they came from a flag or a driver tag read, are checked for finiteness and
   correct ordering immediately after the initial read and before the loop is switched to manual.
-- **`--timeout-secs <seconds>`** (default `3600`) is a mandatory wall-clock limit on the whole
-  test — there is no way to disable it. If it elapses, the loop is automatically restored to its
+- **`[tuning].timeout_secs`** (default `3600`) is a mandatory wall-clock limit on the whole test
+  — there is no way to disable it. If it elapses, the loop is automatically restored to its
   pre-test mode and the process exits `4`, distinct from a deliberate Ctrl+C (`2`). Both Ctrl+C
   and the timeout stay effective even if a single driver read or write stalls mid-tick (a
   wedged gateway, a black-holed network): every driver call is separately capped by
-  **`--op-timeout-secs`** (default `30`), so a hung call is abandoned rather than blocking the
-  whole run indefinitely.
-- **`--restore-timeout-secs <seconds>`** (default `30`) bounds putting the loop back afterwards,
-  independently of `--timeout-secs`. If the restore can't be confirmed within that time, or a
-  _second_ Ctrl+C arrives while it's in progress, the process prints which tag and value to
-  check by hand and exits `6` — distinct from `2`, since "aborted and restored" and "aborted,
-  restore abandoned" call for very different responses.
+  **`[tuning].op_timeout_secs`** (default `30`), so a hung call is abandoned rather than blocking
+  the whole run indefinitely.
+- **Live OPC DA sample time is monotonic.** BHTune pairs the run's UTC start timestamp with a
+  monotonic clock and derives every live MRFT/sample timestamp from actual elapsed time. NTP or
+  manual system-clock changes therefore cannot move the tuning algorithm backward or forward,
+  while real scheduling, gateway, read, and write delays remain visible. BHTune is not a
+  hard-real-time controller: keep the host and gateway responsive, and choose a poll interval
+  comfortably shorter than the expected oscillation period.
+- **Every polled run records timing diagnostics.** `bhtune history show <run>`, the run-detail API,
+  and structured logs retain the requested interval, observed mean/maximum sample gap, measured
+  oscillation period, and approximate samples per period. The normal web run-detail page focuses
+  on actionable run and safety information instead of displaying these low-level diagnostics.
+  A live run logs a warning when any adjacent sample gap reaches at least twice the requested
+  interval, proving that at least one complete polling opportunity was missed. The warning is
+  diagnostic only: it does not abort the run or block PID write-back.
+- **Accepted OPC DA MV commands are physically verified.** Relay writes are read back before a
+  later relay step can replace them and no later than four seconds after acceptance. An early
+  mismatch remains pending and is retried; a mismatch at the deadline, or when the next relay
+  step is required, aborts the tune without writing that replacement. Verification tolerance
+  combines the `f32` precision floor with 0.1% of the MV span and caps relay tolerance at 25% of
+  the actual step. The final snapback hands confirmation responsibility to the authoritative
+  restore write, avoiding duplicate waits. These checks are audited in run history and do not
+  create PV samples or advance MRFT timing. A readback that returns after the confirmation deadline
+  does not count, even if the read started before the deadline.
+  The fresh read started at that deadline has its own one-second bound, so a stalled MV read
+  cannot consume the full per-operation timeout and leave the run waiting indefinitely.
+- **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) bounds putting the loop
+  back afterwards, independently of `[tuning].timeout_secs`. If the restore can't be confirmed
+  within that time, or a _second_ Ctrl+C arrives while it's in progress, the process prints which
+  tag and value to check by hand and exits `6` — distinct from `2`, since "aborted and restored"
+  and "aborted, restore abandoned" call for very different responses.
 - **Restoration is guaranteed on every exit path and never gives up early** — a run only ever
   mutates a loop after switching it to manual, and _any_ way that run can end (a clean
   completion, an abort, or an error partway through setup) always attempts to put back exactly
@@ -479,7 +561,14 @@ The repository also validates high-risk boundaries and delivery artifacts automa
 - `proptest` covers configuration, template catalogs, bridge payload mappings, and template
   imports; standalone `cargo-fuzz` targets cover the same parsers with arbitrary byte streams.
 - Pull requests compare the generated `openapi.json` with the base branch and reject removed
-  operations, response shapes, enum values, or newly required request fields.
+  operations, response shapes, enum values, or newly required request fields. Only explicitly
+  allowlisted pre-v1 request-property removals are treated as compatible; the allowlist includes
+  the per-tune quality and timing settings that are owned by global configuration.
+- Rust workspace source-line coverage is a strict 100% gate: the coverage workflow rejects any
+  zero-hit canonical LCOV source-line record, and Codecov uses zero tolerance for both project
+  and patch coverage.
+- SonarCloud analyzes each applicable pull request and requires its Open/Confirmed issue count to
+  be zero before merge.
 - Databases created before the current migration set are upgraded in a compatibility test that
   verifies representative settings survive the forward migration.
 - CodeQL, Semgrep, Gitleaks, actionlint, and zizmor run in GitHub Actions with immutable action
@@ -511,16 +600,25 @@ cargo fuzz run config
 - Cross-run comparison and overlay in the history explorer — charting several past runs of
   the same loop together (e.g. "has this valve degraded since last year?"). Everything else
   in the history explorer is already shipped: age-based retention, headless `history list`/
-  `show`/`prune`, and a GUI run list/detail screen with a PV/MV trend chart, export
-  (CSV/JSON), and delete — see [`docs/roadmap.md`](docs/roadmap.md#history-explorer).
+  `show`/`prune`, and a GUI run list/detail screen with a line-only PV/MV trend chart that includes the
+  initial readings and terminal restored-MV boundary, keeps short runs left-anchored for
+  12 configured poll intervals without synthetic points, and supports export (CSV/JSON) and
+  delete — the boundary markers are presentation-only and do not change persisted samples or
+  exports. See [`docs/roadmap.md`](docs/roadmap.md#history-explorer).
 
 See the [full roadmap](docs/roadmap.md) for the reasoning behind each item and its current
 status.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). Contributions require signing the
-[Contributor License Agreement](CLA.md).
+All changes use a short-lived feature branch and pull request, including documentation and
+one-line fixes. Keep each pull request focused, run the applicable Rust/frontend/website checks,
+and update the branch if `main` advances before merging. After every required check and the
+applicable SonarQube analysis pass, a maintainer or coding agent queues the built-in GitHub
+auto-merge as a squash merge; a PR analysis must report zero `OPEN`/`CONFIRMED` issues, while any
+intentional Accepted or False Positive finding needs a documented rationale and related link.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the complete workflow. Contributions require signing
+the [Contributor License Agreement](CLA.md).
 
 ## License
 

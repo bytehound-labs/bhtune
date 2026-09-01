@@ -71,14 +71,6 @@ export const OUTCOME_LABELS: Record<
   aborted: "Aborted",
 };
 
-export const TIMING_BASIS_LABELS: Record<
-  components["schemas"]["TimingBasis"],
-  string
-> = {
-  simulated_fixed_step: "Simulator fixed step",
-  live_monotonic: "Live monotonic",
-};
-
 export const SAMPLE_QUALITY_LABELS: Record<
   components["schemas"]["SampleQuality"],
   string
@@ -98,4 +90,23 @@ export const SAMPLE_QUALITY_TONE: Record<
   good: "success",
   uncertain: "warning",
   bad: "error",
+};
+
+export const MV_ACTUATION_KIND_LABELS: Record<
+  components["schemas"]["MvActuationKind"],
+  string
+> = {
+  relay: "Relay",
+  restore: "Restore",
+};
+
+export const MV_ACTUATION_STATUS_LABELS: Record<
+  components["schemas"]["MvActuationStatus"],
+  string
+> = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  failed: "Failed",
+  unverified: "Unverified",
+  superseded: "Superseded",
 };

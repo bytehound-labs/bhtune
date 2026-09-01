@@ -26,7 +26,7 @@ its API — every `/api/*` route works — but any other path returns a clear
 `503 the web UI has not been built yet` instead of a blank page, naming the exact command to
 run.
 
-The header's theme button switches between light and dark palettes. The selected palette is
+The header's theme button switches between Catppuccin light and dark palettes. The selected palette is
 remembered by the browser.
 
 The header also shows whether the BHTune HTTP service is reachable. Its status includes
@@ -56,10 +56,16 @@ cargo run --bin bhtune-server &     # first, in one terminal
 pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on save
 ```
 
+The Vite development server binds all local interfaces and allows the `asus` hostname, so a
+second host on the trusted local network can open `http://asus:5173`. Frontend edits are
+deployed through hot module reload after each save; restart `bhtune-server` after Rust or API
+changes. The development server and API have no authentication, so do not expose them beyond
+a trusted network.
+
 ## Run a tune
 
 1. **Tune** (`/runs/new`) — the app's default landing page, and the first item in the header
-   nav. One form covering everything `bhtune tune` takes as flags: connection (which driver —
+   nav. One form covering the per-tune settings for `bhtune tune`: connection (which driver —
    OPC DA or the simulator), tag mapping, test parameters (process type, controller type,
    relay amplitude, cycles), simulator parameters (gain/time constant/dead time/noise, when
    the simulator driver is selected), and automatic PID settings. Submitting POSTs to the same
@@ -71,13 +77,17 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    the tune.
 
    - Switching the driver to **Simulator** greys out every field the simulator genuinely
-     ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, quality/timeout
+     ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, and quality
      options) rather than hiding them, so the form doesn't reflow and the greyed field itself
      explains what the simulator doesn't use. The template stays enabled intentionally: the
      simulator ignores its DCS tag mappings, but its PID type and unit conventions still format
      calculated results (for example, Yokogawa uses proportional band while the other built-in
      templates use gain). PV/MV ranges, controller direction, and every engine parameter also
      stay enabled because the simulator needs them.
+   - Test parameters show concrete **Process defaults** for cycles to skip, cycles to count, and
+     noise protection based on the selected Process type. Changing Process type replaces all
+     three values; **Reset process defaults** restores those values without resetting the rest
+     of the form. These are process-type defaults rather than DCS/PLC template settings.
    - Switching to **OPC DA** reveals a **Browse servers** button next to the ProgID field.
      It opens an on-demand picker populated by the bridge gateway, listing every OPC DA server
      registered on it as clickable buttons — no need to already know (or spell correctly) a
@@ -108,6 +118,10 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      replacement) and proceeds immediately only for `Good` OPC quality; `Uncertain` or `Bad`
      quality opens a warning with choices to select a different tag or proceed anyway. Proceeding
      only selects the item; tune execution still applies its live-reading quality safeguards.
+     Changing the base Tag name — by editing it, selecting a browser tag, or switching templates
+     — resets every **Custom tag** selector to **Template tag** and clears custom tag values,
+     including custom direction/range read tags. **Fixed value** direction and range selections
+     and values remain unchanged.
      The **Config** page controls whether `Uncertain` readings are accepted during tuning;
      they are accepted by default, while `Bad` quality is always rejected.
      Reopening the browser expands the available path to the current Tag name, selects that node,
@@ -140,9 +154,15 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      parameters, Loop mapping, Simulator parameters, and Automatic PID settings are independently
      collapsible and open by default. Controls that do not apply to the selected driver stay
      visible but disabled with an explanation.
+   - Installation-wide MRFT timing and safety values are managed on the **Config** page, not on
+     this form: MRFT delay, poll interval, whole-run timeout, driver-operation timeout, and
+     restore timeout. They are stored under `[tuning]` in `bhtune.toml`, apply to future tune
+     preparations, and are frozen into each run when it starts. The three process-dependent
+     defaults in **Test parameters** remain per-tune values.
 
 2. **Run detail** (`/runs/:id`) — while a run is in progress, a live PV/MV trend chart updates
-   in real time over Server-Sent Events (`GET /api/runs/:id/stream`), alongside the current
+   in real time over Server-Sent Events (`GET /api/runs/:id/stream`), with line-only PV/MV series
+   alongside the current
    relay switch count and cycles remaining. The initial PV/MV snapshot appears as soon as the
    server records it, before the first MRFT sample, so the chart does not wait for a complete
    relay tick to become visible. Independent OPC DA startup values are collected in one
@@ -159,22 +179,27 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
    initial-reading and restored-MV boundary markers are presentation-only and do not alter
    persisted samples or CSV/JSON exports. A **Cancel** button stops the run early (the same
    Ctrl+C-triggered abort-and-restore path the CLI uses — see
-   [Safety](../guides/safety.md#cancellation)). Once complete, the same page shows:
-   - A **Timing** section with the run's time basis, requested interval, observed mean/maximum
-     sample gap, measured oscillation period, and approximate samples per period. Live runs show
-     an amber warning when any sample gap reaches at least twice the requested interval, proving
-     that at least one complete polling opportunity was missed. The warning is informational and
-     does not disable the PID controls.
-   - The calculated Aggressive/Moderate/Sluggish PID constants, each row with its own
-     **Apply** button to send that response level's constants to the loop after the fact —
-     independently of any `--write-pid` choice made before the run started. A confirmation
-     dialog names the tag and the exact tag/value pairs before anything is sent.
+   [Safety](../guides/safety.md#cancellation)). Once calculated results exist, the same page
+   promotes them directly below the heading and before the trend:
+   - The **Calculated results** panel is the primary post-tune action area. Each
+     Aggressive/Moderate/Sluggish row has a **Review & write** button that works independently
+     of any `--write-pid` choice made before the run started. The safety review modal names the
+     loop tag, response level, snapshotted parameter labels, exact destination tags, and exact
+     values before anything is sent. It opens as a centered viewport popup. Confirming an Apply
+     closes the popup immediately while BHTune writes and verifies the values in the background;
+     successful writes stay silent, while transport failures or failed physical writes/readbacks
+     appear in a page-level alert. The same popup component is used by the OPC server and tag
+     browsers.
+     When no results exist, the panel stays in its lower diagnostic position and explains that
+     no results were calculated.
    - A mutable **Notes** field with **Save notes** and **Clear notes** actions. Notes are
      metadata, so editing them does not interrupt an active tune.
    - A **PID change history** table of every PID change this tune has made, each with a pre-write
      readback, a post-write readback, and a rollback status. The newest successful write
-     shows a **Restore previous values** button that writes the pre-write values back, also behind a
-     confirmation dialog.
+     shows a **Restore previous values** button that opens the same safety review modal and
+     lists the recorded pre-write values before restoring them. Confirming a restore closes the
+     popup immediately while BHTune works in the background; successful restores stay silent,
+     while transport failures or failed physical restores/readbacks appear in a page-level alert.
 
      Both buttons are disabled — with the reason shown as text, never a silent, unexplained
      grey button — unless the run is finished, used the OPC DA driver, has PID constant tags
@@ -184,7 +209,23 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
      confirmation prompt — deleting a tune also removes its recorded measurements and
      results, and cannot be undone).
    - A **Duplicate this run** button, returning to the New tune form prefilled from this run's
-     tune settings instead of the newest run's; Notes starts blank.
+     tune settings instead of the newest run's; Notes starts blank. It preserves the original
+     Template tag, Custom tag, and Fixed value mapping sources, including template-derived
+     direction and range values that were stored as null or omitted fields.
+
+   - The **Calculated results** table uses the constant names and converted values from the
+     run's snapshotted template. A Yokogawa run therefore shows `P`, `I`, and `D` instead of
+     the engine's intermediate `Kp`, `Ti`, and `Td` columns. The derivative column remains
+     visible for PI runs and shows `0`, the explicit value used to clear stale derivative action.
+   - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
+     Notes, Test configuration, Initial readings, and PID change history start expanded so the
+     main result and audit information is immediately visible. **MV actuation verification**
+     follows PID change history at the bottom and starts collapsed; open it when the detailed
+     command/readback audit is needed.
+
+   Detailed polling timing diagnostics remain available through `bhtune history show`, the
+   run-detail API, and structured logs, but are not part of the normal web run-detail view.
+
 3. **History** (`/runs`) — every past tune, shown by **Tag name** and filterable by outcome and
    process type, with the same detail view available for any completed run — not just the one
    you just started.
@@ -205,10 +246,11 @@ curl http://127.0.0.1:8787/api/health
 
 The web GUI displays this application version beside its connection status in the header.
 
-Starting a tune over HTTP directly (no browser) needs the same fields the CLI's `tune`/
-`simulate` commands take — see `/api/docs` for the full request schema, including the extra
+Starting a tune over HTTP directly (no browser) needs the same per-tune fields as the CLI's
+`tune`/`simulate` commands — see `/api/docs` for the full request schema, including the extra
 range/direction fields the simulator driver requires that a real OPC DA driver would instead
-read live from the DCS.
+read live from the DCS. The global `[tuning]` settings are read from the server's configuration
+when the run is prepared.
 
 ## Next steps
 
@@ -216,5 +258,5 @@ read live from the DCS.
   unattended runs.
 - [Safety](../guides/safety.md) — cancellation, quality enforcement, and write-back rollback,
   all shared between the CLI and the server.
-- [Configuration](../reference/config.md) — TOML-backed global quality and retention policies.
+- [Configuration](../reference/config.md) — TOML-backed global tuning, quality, and retention policies.
 - [DCS/PLC templates](../dcs-templates.md) — the tag-mapping system behind the Templates screen.

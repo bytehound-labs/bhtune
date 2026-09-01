@@ -42,19 +42,6 @@ fn positive_u32(s: &str) -> Result<u32, String> {
     Ok(value)
 }
 
-/// `value_parser` for a `u64` CLI flag where `0` parses fine but is nonsensical for the
-/// flag's unit -- `--poll-interval-ms 0` was previously silently clamped to `1` rather than
-/// rejected, and `--timeout-secs 0` "succeeded" by aborting the run almost instantly.
-fn positive_u64(s: &str) -> Result<u64, String> {
-    let value: u64 = s
-        .parse()
-        .map_err(|_| format!("'{s}' is not a valid non-negative integer"))?;
-    if value == 0 {
-        return Err("must be at least 1".to_string());
-    }
-    Ok(value)
-}
-
 /// The `bhtune` CLI: a scriptable, no-GUI way to run an MRFT tune and inspect its history.
 #[derive(Parser, Debug)]
 #[command(name = "bhtune", version, about = "Headless MRFT auto-tuner")]
@@ -377,8 +364,10 @@ pub struct TuneArgs {
     #[arg(long)]
     pub noise_protection_secs: Option<u32>,
 
-    /// Pre/post-test recording padding, in seconds (legacy: `--mrftDelayTime`).
-    #[arg(long, default_value_t = 0)]
+    /// Test-only override used to keep unit fixtures fast without exposing a supported CLI
+    /// timing flag.
+    #[cfg(test)]
+    #[arg(skip)]
     pub mrft_delay: u32,
 
     /// Which driver drives this tune.
@@ -441,18 +430,16 @@ pub struct TuneArgs {
     #[arg(skip)]
     pub tag_overrides: Option<TagOverrides>,
 
-    /// How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer).
-    #[arg(long, default_value_t = 800, value_parser = positive_u64)]
+    /// Test-only override used to keep unit fixtures fast without exposing a supported CLI
+    /// timing flag.
+    #[cfg(test)]
+    #[arg(skip)]
     pub poll_interval_ms: u64,
 
-    /// Hard wall-clock cap on this run's total duration (including any `--mrft-delay`
-    /// padding), in seconds. If the engine hasn't reported completion by the deadline, the
-    /// run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but
-    /// with no one present to press it. Always enforced; there is no way to disable it,
-    /// since an unattended run must never be able to perturb a live process indefinitely.
-    /// Size this to comfortably exceed your slowest loop's expected test duration --
-    /// temperature loops in particular can need much longer than the default.
-    #[arg(long, default_value_t = 3600, value_parser = positive_u64)]
+    /// Test-only override used to keep unit fixtures bounded without exposing a supported CLI
+    /// timing flag.
+    #[cfg(test)]
+    #[arg(skip)]
     pub timeout_secs: u64,
 
     /// Operator notes to attach to this run. Notes can be edited or cleared from the web GUI
@@ -472,23 +459,16 @@ pub struct TuneArgs {
     #[arg(long, value_enum)]
     pub write_pid: Option<ResponseLevelArg>,
 
-    /// Cap on any single driver read/write during the run, in seconds. A stalled call
-    /// (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited
-    /// forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even
-    /// mid-hung-read/write -- see AGENTS.md's `safety-cancellation` section. Distinct from
-    /// `--timeout-secs`, which bounds the whole run rather than one operation; size this
-    /// well above a healthy round trip to your OPC DA gateway, not to the expected test
-    /// duration.
-    #[arg(long, default_value_t = 30, value_parser = positive_u64)]
+    /// Test-only override used to exercise operation timeouts without exposing a supported CLI
+    /// timing flag.
+    #[cfg(test)]
+    #[arg(skip)]
     pub op_timeout_secs: u64,
 
-    /// Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by
-    /// completion, Ctrl+C, or a timeout), in seconds. Bounded independently of
-    /// `--timeout-secs`, since a restore triggered *by* a timeout would otherwise inherit an
-    /// already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run
-    /// exits `EXIT_RESTORE_INCOMPLETE` with a warning naming the loop and its last-written
-    /// value, instead of hanging indefinitely.
-    #[arg(long, default_value_t = 30, value_parser = positive_u64)]
+    /// Test-only override used to exercise restore timeouts without exposing a supported CLI
+    /// timing flag.
+    #[cfg(test)]
+    #[arg(skip)]
     pub restore_timeout_secs: u64,
 
     /// How to print this run's final outcome line.
@@ -520,7 +500,8 @@ pub struct SimulateArgs {
     pub cycles_count: Option<u32>,
     #[arg(long)]
     pub noise_protection_secs: Option<u32>,
-    #[arg(long, default_value_t = 0)]
+    #[cfg(test)]
+    #[arg(skip)]
     pub mrft_delay: u32,
 
     #[arg(long, default_value_t = 1.0, value_parser = finite_f32)]
@@ -538,11 +519,14 @@ pub struct SimulateArgs {
     #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
     pub sim_initial_mv: f32,
 
-    #[arg(long, default_value_t = 800, value_parser = positive_u64)]
+    #[cfg(test)]
+    #[arg(skip)]
     pub poll_interval_ms: u64,
 
-    /// See `TuneArgs::timeout_secs`.
-    #[arg(long, default_value_t = 3600, value_parser = positive_u64)]
+    /// Test-only override used to keep unit fixtures bounded without exposing a supported CLI
+    /// timing flag.
+    #[cfg(test)]
+    #[arg(skip)]
     pub timeout_secs: u64,
 
     /// Operator notes to attach to this run. See [`TuneArgs::notes`].
@@ -560,12 +544,16 @@ pub struct SimulateArgs {
     #[arg(long, value_enum)]
     pub write_pid: Option<ResponseLevelArg>,
 
-    /// See `TuneArgs::op_timeout_secs`.
-    #[arg(long, default_value_t = 30, value_parser = positive_u64)]
+    /// Test-only override used to exercise operation timeouts without exposing a supported CLI
+    /// timing flag.
+    #[cfg(test)]
+    #[arg(skip)]
     pub op_timeout_secs: u64,
 
-    /// See `TuneArgs::restore_timeout_secs`.
-    #[arg(long, default_value_t = 30, value_parser = positive_u64)]
+    /// Test-only override used to exercise restore timeouts without exposing a supported CLI
+    /// timing flag.
+    #[cfg(test)]
+    #[arg(skip)]
     pub restore_timeout_secs: u64,
 
     /// See `TuneArgs::output`.
@@ -586,7 +574,6 @@ impl SimulateArgs {
             cycles_skip: self.cycles_skip,
             cycles_count: self.cycles_count,
             noise_protection_secs: self.noise_protection_secs,
-            mrft_delay: self.mrft_delay,
             driver: DriverKindArg::Simulator,
             bridge_host: None,
             server: None,
@@ -607,14 +594,20 @@ impl SimulateArgs {
             mv_range_low: Some(0.0),
             direction: Some(DirectionArg::Reverse),
             tag_overrides: None,
-            poll_interval_ms: self.poll_interval_ms,
-            timeout_secs: self.timeout_secs,
             notes: self.notes,
             yes: self.yes,
             write_pid: self.write_pid,
-            op_timeout_secs: self.op_timeout_secs,
-            restore_timeout_secs: self.restore_timeout_secs,
             output: self.output,
+            #[cfg(test)]
+            mrft_delay: self.mrft_delay,
+            #[cfg(test)]
+            poll_interval_ms: self.poll_interval_ms,
+            #[cfg(test)]
+            timeout_secs: self.timeout_secs,
+            #[cfg(test)]
+            op_timeout_secs: self.op_timeout_secs,
+            #[cfg(test)]
+            restore_timeout_secs: self.restore_timeout_secs,
         }
     }
 }
@@ -982,11 +975,70 @@ mod tests {
     }
 
     #[test]
+    fn history_command_output_format_covers_every_variant() {
+        assert_eq!(
+            HistoryCommand::List {
+                outcome: None,
+                limit: 50,
+                offset: 0,
+                output: crate::output::OutputFormat::Json,
+            }
+            .output_format(),
+            crate::output::OutputFormat::Json
+        );
+        assert_eq!(
+            HistoryCommand::Show {
+                run_id: 1,
+                output: crate::output::OutputFormat::Json,
+            }
+            .output_format(),
+            crate::output::OutputFormat::Json
+        );
+        assert_eq!(
+            HistoryCommand::Revert {
+                run_id: 1,
+                bridge_host: None,
+                server: None,
+                yes: false,
+                output: crate::output::OutputFormat::Json,
+            }
+            .output_format(),
+            crate::output::OutputFormat::Json
+        );
+        assert_eq!(
+            HistoryCommand::Prune {
+                older_than_days: None,
+                dry_run: false,
+                output: crate::output::OutputFormat::Json,
+            }
+            .output_format(),
+            crate::output::OutputFormat::Json
+        );
+    }
+
+    #[test]
+    fn command_output_format_forwards_simulate_and_history_formats() {
+        let simulate = Cli::parse_from(["bhtune", "simulate", "--output", "json"]).command;
+        assert_eq!(simulate.output_format(), crate::output::OutputFormat::Json);
+
+        let history = Cli::parse_from(["bhtune", "history", "list", "--output", "json"]).command;
+        assert_eq!(history.output_format(), crate::output::OutputFormat::Json);
+    }
+
+    #[test]
     fn finite_f32_accepts_finite_values_and_rejects_invalid_values() {
         assert_eq!(finite_f32("2.5").unwrap(), 2.5);
         assert!(finite_f32("not-a-number").is_err());
         assert!(finite_f32("nan").is_err());
         assert!(finite_f32("inf").is_err());
+    }
+
+    #[test]
+    fn positive_integer_parsers_reject_non_numeric_input() {
+        assert_eq!(
+            positive_u32("not-a-number").unwrap_err(),
+            "'not-a-number' is not a valid non-negative integer"
+        );
     }
 
     #[test]
@@ -1154,8 +1206,6 @@ mod tests {
         assert!(matches!(tune.direction, Some(DirectionArg::Reverse)));
         assert!(!tune.yes);
         assert!(tune.write_pid.is_none());
-        assert_eq!(tune.op_timeout_secs, 30);
-        assert_eq!(tune.restore_timeout_secs, 30);
         assert_eq!(tune.output, crate::output::OutputFormat::Table);
     }
 
@@ -1232,85 +1282,9 @@ mod tests {
         assert!(matches!(args.process_type, ProcessTypeArg::Flow));
         assert!(matches!(args.controller_type, ControllerTypeArg::Pi));
         assert!(matches!(args.driver, DriverKindArg::Simulator));
-        assert_eq!(args.poll_interval_ms, 800);
         assert!(!args.yes);
         assert!(args.write_pid.is_none());
-        assert_eq!(args.op_timeout_secs, 30);
-        assert_eq!(args.restore_timeout_secs, 30);
         assert_eq!(args.output, crate::output::OutputFormat::Table);
-    }
-
-    #[test]
-    fn cli_parses_tune_op_and_restore_timeout_flags() {
-        let cli = Cli::parse_from([
-            "bhtune",
-            "tune",
-            "-t",
-            "Unit1.LIC101.PV",
-            "--template",
-            "Yokogawa CentumVP",
-            "--process-type",
-            "flow",
-            "--controller-type",
-            "pi",
-            "--relay-amp",
-            "5.0",
-            "--driver",
-            "simulator",
-            "--op-timeout-secs",
-            "15",
-            "--restore-timeout-secs",
-            "45",
-        ]);
-        let args = expect_variant!(cli.command, Command::Tune(a) => a, "Tune");
-        assert_eq!(args.op_timeout_secs, 15);
-        assert_eq!(args.restore_timeout_secs, 45);
-    }
-
-    #[test]
-    fn cli_rejects_zero_op_timeout_secs() {
-        let result = Cli::try_parse_from([
-            "bhtune",
-            "tune",
-            "-t",
-            "Unit1.LIC101.PV",
-            "--template",
-            "Yokogawa CentumVP",
-            "--process-type",
-            "flow",
-            "--controller-type",
-            "pi",
-            "--relay-amp",
-            "5.0",
-            "--driver",
-            "simulator",
-            "--op-timeout-secs",
-            "0",
-        ]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn cli_rejects_zero_restore_timeout_secs() {
-        let result = Cli::try_parse_from([
-            "bhtune",
-            "tune",
-            "-t",
-            "Unit1.LIC101.PV",
-            "--template",
-            "Yokogawa CentumVP",
-            "--process-type",
-            "flow",
-            "--controller-type",
-            "pi",
-            "--relay-amp",
-            "5.0",
-            "--driver",
-            "simulator",
-            "--restore-timeout-secs",
-            "0",
-        ]);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -1340,6 +1314,20 @@ mod tests {
         assert!(args.yes);
         assert!(matches!(args.write_pid, Some(ResponseLevelArg::Moderate)));
         assert_eq!(args.output, crate::output::OutputFormat::Json);
+    }
+
+    #[test]
+    fn cli_rejects_per_run_timing_flags() {
+        for flag in [
+            "--mrft-delay",
+            "--poll-interval-ms",
+            "--timeout-secs",
+            "--op-timeout-secs",
+            "--restore-timeout-secs",
+        ] {
+            let result = Cli::try_parse_from(["bhtune", "simulate", flag, "1"]);
+            assert!(result.is_err(), "{flag} must remain global-config-only");
+        }
     }
 
     #[test]

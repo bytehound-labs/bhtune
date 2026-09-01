@@ -2,8 +2,8 @@
 
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    Pagination, TuneDriver, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
-    WriteKind,
+    MvActuationKind, MvActuationStatus, Pagination, SampleQuality, TuneDriver, TuneMvActuationRow,
+    TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
 };
 use bhtune_driver::OpcDaDriver;
 
@@ -180,6 +180,45 @@ impl From<&TuneWriteRow> for WriteJson {
 }
 
 #[derive(serde::Serialize)]
+struct MvActuationJson {
+    id: i64,
+    sequence: i64,
+    kind: MvActuationKind,
+    commanded_at: chrono::DateTime<chrono::Utc>,
+    target_mv: f32,
+    previous_commanded_mv: Option<f32>,
+    tolerance: f32,
+    confirmation_due_at: chrono::DateTime<chrono::Utc>,
+    last_checked_at: Option<chrono::DateTime<chrono::Utc>>,
+    readback_mv: Option<f32>,
+    readback_quality: Option<SampleQuality>,
+    attempt_count: i64,
+    status: MvActuationStatus,
+    detail: Option<String>,
+}
+
+impl From<&TuneMvActuationRow> for MvActuationJson {
+    fn from(row: &TuneMvActuationRow) -> Self {
+        Self {
+            id: row.id,
+            sequence: row.sequence,
+            kind: row.kind,
+            commanded_at: row.commanded_at,
+            target_mv: row.target_mv,
+            previous_commanded_mv: row.previous_commanded_mv,
+            tolerance: row.tolerance,
+            confirmation_due_at: row.confirmation_due_at,
+            last_checked_at: row.last_checked_at,
+            readback_mv: row.readback_mv,
+            readback_quality: row.readback_quality,
+            attempt_count: row.attempt_count,
+            status: row.status,
+            detail: row.detail.clone(),
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
 struct RunDetailJson {
     id: i64,
     tag_name: String,
@@ -206,6 +245,7 @@ struct RunDetailJson {
     samples_recorded: usize,
     results: Vec<ResultJson>,
     writes: Vec<WriteJson>,
+    mv_actuations: Vec<MvActuationJson>,
     /// Outcome of the best-effort restore attempted after this run ended -- `None` if the
     /// run never mutated the loop, or hasn't ended yet (`safety-restore-guard`).
     restore_status: Option<bhtune_db::models::RestoreStatus>,
@@ -391,6 +431,7 @@ fn print_show_table(
     samples: &[TuneSampleRow],
     results: &[TuneResultRow],
     writes: &[TuneWriteRow],
+    mv_actuations: &[TuneMvActuationRow],
 ) {
     println!("Run #{} — Tag name: {}", run.id, run.loop_name);
     println!("  Notes:           {}", run.notes.as_deref().unwrap_or("—"));
@@ -484,6 +525,7 @@ fn print_show_table(
 
     print_show_results(results);
     print_show_writes(writes);
+    print_show_mv_actuations(mv_actuations);
 }
 
 fn print_show_results(results: &[TuneResultRow]) {
@@ -555,11 +597,49 @@ fn print_show_rollback(write: &TuneWriteRow) {
     );
 }
 
+fn print_show_mv_actuations(actuations: &[TuneMvActuationRow]) {
+    if !has_rows(actuations) {
+        return;
+    }
+    println!("  MV actuation verification:");
+    println!(
+        "    {:<5} {:<8} {:<25} {:<10} {:<10} {:<10} {:<10} {:<12} DETAIL",
+        "SEQ", "KIND", "COMMANDED", "TARGET", "READBACK", "TOLERANCE", "ATTEMPTS", "STATUS"
+    );
+    for actuation in actuations {
+        println!(
+            "    {:<5} {:<8} {:<25} {:<10} {:<10} {:<10} {:<10} {:<12} {}",
+            actuation.sequence,
+            format!("{:?}", actuation.kind),
+            actuation.commanded_at.to_rfc3339(),
+            fmt_opt_f32(Some(actuation.target_mv)),
+            fmt_opt_f32(actuation.readback_mv),
+            fmt_opt_f32(Some(actuation.tolerance)),
+            actuation.attempt_count,
+            format!("{:?}", actuation.status),
+            actuation.detail.as_deref().unwrap_or("-"),
+        );
+        println!(
+            "        confirmation due: {}  last checked: {}  quality: {}",
+            actuation.confirmation_due_at.to_rfc3339(),
+            actuation
+                .last_checked_at
+                .map(|value| value.to_rfc3339())
+                .unwrap_or_else(|| "-".to_string()),
+            actuation
+                .readback_quality
+                .map(|quality| format!("{quality:?}"))
+                .unwrap_or_else(|| "-".to_string()),
+        );
+    }
+}
+
 fn print_show_json(
     run: &TuneRunRow,
     samples: &[TuneSampleRow],
     results: &[TuneResultRow],
     writes: &[TuneWriteRow],
+    mv_actuations: &[TuneMvActuationRow],
 ) -> anyhow::Result<()> {
     let json = RunDetailJson {
         id: run.id,
@@ -583,6 +663,7 @@ fn print_show_json(
         samples_recorded: samples.len(),
         results: results.iter().map(ResultJson::from).collect(),
         writes: writes.iter().map(WriteJson::from).collect(),
+        mv_actuations: mv_actuations.iter().map(MvActuationJson::from).collect(),
         restore_status: run.restore_status,
         restore_detail: run.restore_detail.clone(),
     };
@@ -597,10 +678,11 @@ async fn show(pool: &SqlitePool, run_id: i64, output: OutputFormat) -> anyhow::R
     let samples = TuneSampleRow::list_for_run(pool, run_id).await?;
     let results = TuneResultRow::list_for_run(pool, run_id).await?;
     let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
+    let mv_actuations = TuneMvActuationRow::list_for_run(pool, run_id).await?;
 
     match output {
-        OutputFormat::Table => print_show_table(&run, &samples, &results, &writes),
-        OutputFormat::Json => print_show_json(&run, &samples, &results, &writes)?,
+        OutputFormat::Table => print_show_table(&run, &samples, &results, &writes, &mv_actuations),
+        OutputFormat::Json => print_show_json(&run, &samples, &results, &writes, &mv_actuations)?,
     }
 
     Ok(())
@@ -819,7 +901,9 @@ async fn revert(
 mod tests {
     use super::*;
     use bhtune_core::{ControllerType, DcsTemplate, LoopConfig, LoopTags, ProcessType};
-    use bhtune_db::models::{TemplateOrigin, TuneDriver, TuneRunInitialReadings};
+    use bhtune_db::models::{
+        NewTuneMvActuation, TemplateOrigin, TuneDriver, TuneRunInitialReadings,
+    };
 
     fn sample_config() -> LoopConfig {
         LoopConfig {
@@ -1105,12 +1189,85 @@ mod tests {
         failed.rollback_error = Some("mock rollback failure".to_string());
         TuneWriteRow::insert(&pool, run.id, failed).await.unwrap();
 
+        let confirmed_actuation = TuneMvActuationRow::insert_pending(
+            &pool,
+            run.id,
+            NewTuneMvActuation {
+                sequence: 0,
+                kind: MvActuationKind::Relay,
+                commanded_at: now,
+                target_mv: 55.0,
+                previous_commanded_mv: Some(50.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(4),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::record_final_observation(
+            &pool,
+            confirmed_actuation.id,
+            now + chrono::Duration::seconds(1),
+            Some(55.0),
+            Some(SampleQuality::Good),
+            MvActuationStatus::Confirmed,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let superseded_actuation = TuneMvActuationRow::insert_pending(
+            &pool,
+            run.id,
+            NewTuneMvActuation {
+                sequence: 1,
+                kind: MvActuationKind::Restore,
+                commanded_at: now + chrono::Duration::seconds(5),
+                target_mv: 50.0,
+                previous_commanded_mv: Some(55.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(9),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::finalize(
+            &pool,
+            superseded_actuation.id,
+            MvActuationStatus::Superseded,
+            Some("restore took over confirmation"),
+        )
+        .await
+        .unwrap();
+
         (pool, run.id)
     }
 
     #[tokio::test]
     async fn show_prints_calculated_results_and_write_back_audit_rows() {
         let (pool, run_id) = run_with_results_and_writes().await;
+        show(&pool, run_id, OutputFormat::Table).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn show_prints_timing_metrics_when_present() {
+        let (pool, run_id) = run_with_results_and_writes().await;
+        TuneRunRow::record_timing_metrics(
+            &pool,
+            run_id,
+            bhtune_db::models::TimingMetrics {
+                basis: bhtune_db::models::TimingBasis::LiveMonotonic,
+                requested_interval_ms: 800,
+                sample_gap_count: 2,
+                mean_sample_gap_ms: Some(900.0),
+                max_sample_gap_ms: Some(1_200.0),
+                missed_poll_opportunity_count: 1,
+                measured_oscillation_period_ms: Some(4_800.0),
+                approximate_samples_per_period: Some(5.33),
+            },
+        )
+        .await
+        .unwrap();
         show(&pool, run_id, OutputFormat::Table).await.unwrap();
     }
 
@@ -1183,6 +1340,20 @@ mod tests {
                 output: OutputFormat::Json,
             },
             &config,
+        )
+        .await
+        .unwrap();
+        run(
+            &pool,
+            HistoryCommand::Prune {
+                older_than_days: Some(1),
+                dry_run: true,
+                output: OutputFormat::Table,
+            },
+            &crate::config::BhtuneConfig {
+                retention_days: Some(1),
+                ..crate::config::BhtuneConfig::default()
+            },
         )
         .await
         .unwrap();
@@ -1491,6 +1662,16 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("recorded OPC server is missing"));
+    }
+
+    #[tokio::test]
+    async fn resolve_revert_connection_rejects_a_missing_recorded_bridge_host() {
+        let (pool, run_id) = opcda_run_with_no_writes("bridge:1", "Sim.Server").await;
+        let mut run = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
+        run.bridge_host = None;
+
+        let err = resolve_revert_connection(&run, None, None).unwrap_err();
+        assert!(err.to_string().contains("recorded bridge host is missing"));
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@ import type { components, operations } from "./schema";
 
 export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
 export type SampleResponse = components["schemas"]["SampleResponse"];
+export type MvActuation = RunDetailResponse["mv_actuations"][number];
 type InitialReadingsResponse = components["schemas"]["InitialReadingsResponse"];
 export type StartRunRequest = components["schemas"]["StartRunRequest"];
 export type NewRunDraft = components["schemas"]["NewRunDraft"];

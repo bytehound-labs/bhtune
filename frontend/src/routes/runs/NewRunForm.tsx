@@ -51,9 +51,11 @@ type NewRunFormProps = {
   readonly templatesPending: boolean;
   readonly onSubmit: (event: SubmitEvent<HTMLFormElement>) => void;
   readonly onChange: FormChange;
+  readonly onTagNameChange: (value: string) => void;
   readonly onDriverChange: (value: TuneDriver) => void;
   readonly onTemplateChange: (value: string) => void;
   readonly onProcessTypeChange: (value: ProcessType) => void;
+  readonly onResetProcessDefaults: () => void;
   readonly onTagSourceChange: (
     key: TagOverrideKey,
     source: TagMappingSource,
@@ -110,6 +112,7 @@ function connectionFields({
   templates,
   templatesPending,
   onChange,
+  onTagNameChange,
   onDriverChange,
   onTemplateChange,
   onOpenTagBrowser,
@@ -119,6 +122,7 @@ function connectionFields({
   | "templates"
   | "templatesPending"
   | "onChange"
+  | "onTagNameChange"
   | "onDriverChange"
   | "onTemplateChange"
   | "onOpenTagBrowser"
@@ -180,7 +184,7 @@ function connectionFields({
           required={!isSimulator}
           disabled={isSimulator}
           value={form.tagname}
-          onChange={(value) => onChange("tagname", value)}
+          onChange={onTagNameChange}
           hint={tagNameHint(form.driver)}
         />
         {form.driver === "opcda" && (
@@ -220,7 +224,11 @@ function testParameterFields({
   form,
   onChange,
   onProcessTypeChange,
-}: Pick<NewRunFormProps, "form" | "onChange" | "onProcessTypeChange">) {
+  onResetProcessDefaults,
+}: Pick<
+  NewRunFormProps,
+  "form" | "onChange" | "onProcessTypeChange" | "onResetProcessDefaults"
+>) {
   return (
     <FormSection title="Test parameters" collapsible defaultOpen>
       <SelectField
@@ -248,79 +256,50 @@ function testParameterFields({
         hint="0.1–50% of the MV range."
       />
       <div />
-      <NumberField
-        label="Cycles to skip"
-        value={form.cyclesSkip}
-        onChange={(value) => onChange("cyclesSkip", value)}
-        min={0}
-        step={1}
-        hint="Blank = looked up per process type."
-      />
-      <NumberField
-        label="Cycles to count"
-        value={form.cyclesCount}
-        onChange={(value) => onChange("cyclesCount", value)}
-        min={1}
-        step={1}
-        hint="Blank = looked up per process type."
-      />
-      <NumberField
-        label="Noise protection (s)"
-        value={form.noiseProtectionSecs}
-        onChange={(value) => onChange("noiseProtectionSecs", value)}
-        min={0}
-        step={1}
-        hint="Blank = looked up per process type."
-      />
-      <NumberField
-        label="MRFT delay padding (s)"
-        value={form.mrftDelay}
-        onChange={(value) => onChange("mrftDelay", value)}
-        min={0}
-        step={1}
-        hint="Pre/post-test recording-only ticks."
-      />
-      <NumberField
-        label="Poll interval (ms)"
-        value={form.pollIntervalMs}
-        onChange={(value) => onChange("pollIntervalMs", value)}
-        min={1}
-        step={1}
-      />
-      <NumberField
-        label="Run timeout (s)"
-        value={form.timeoutSecs}
-        onChange={(value) => onChange("timeoutSecs", value)}
-        min={1}
-        step={1}
-        hint="Hard cap on this run's total duration."
-      />
-      <NumberField
-        label="Communication timeout (s)"
-        value={form.opTimeoutSecs}
-        onChange={(value) => onChange("opTimeoutSecs", value)}
-        min={1}
-        step={1}
-        disabled={form.driver === "simulator"}
-        hint={
-          form.driver === "simulator"
-            ? "Disabled — the simulator has no out-of-process I/O to time out."
-            : "Cap on any single driver read/write."
-        }
-      />
-      <NumberField
-        label="Restore timeout (s)"
-        value={form.restoreTimeoutSecs}
-        onChange={(value) => onChange("restoreTimeoutSecs", value)}
-        min={1}
-        step={1}
-        disabled={form.driver === "simulator"}
-        hint={
-          form.driver === "simulator"
-            ? "Disabled — the simulator has no out-of-process I/O to time out."
-            : "Cap on restoring the loop afterward."
-        }
-      />
+      <fieldset className="rounded-md border border-slate-800 p-4 sm:col-span-2">
+        <legend className="px-2 text-sm font-semibold text-slate-300">
+          Process defaults
+        </legend>
+        <p className="mb-4 text-sm text-slate-400">
+          These values follow Process type. Changing Process type or resetting
+          them replaces all three values.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <NumberField
+            label="Cycles to skip"
+            required
+            value={form.cyclesSkip}
+            onChange={(value) => onChange("cyclesSkip", value)}
+            min={0}
+            step={1}
+          />
+          <NumberField
+            label="Cycles to count"
+            required
+            value={form.cyclesCount}
+            onChange={(value) => onChange("cyclesCount", value)}
+            min={1}
+            step={1}
+          />
+          <NumberField
+            label="Noise protection (s)"
+            required
+            value={form.noiseProtectionSecs}
+            onChange={(value) => onChange("noiseProtectionSecs", value)}
+            min={0}
+            step={1}
+          />
+          <div className="flex items-end">
+            <Button onClick={onResetProcessDefaults}>
+              Reset process defaults
+            </Button>
+          </div>
+        </div>
+      </fieldset>
+      <p className="text-sm text-slate-400 sm:col-span-2">
+        MRFT timing and safety limits are managed globally in Configuration and
+        apply to new tunes.
+      </p>
     </FormSection>
   );
 }
@@ -424,9 +403,11 @@ export function NewRunForm({
   templatesPending,
   onSubmit,
   onChange,
+  onTagNameChange,
   onDriverChange,
   onTemplateChange,
   onProcessTypeChange,
+  onResetProcessDefaults,
   onTagSourceChange,
   onTagChange,
   onValueSourceChange,
@@ -444,11 +425,17 @@ export function NewRunForm({
         templates,
         templatesPending,
         onChange,
+        onTagNameChange,
         onDriverChange,
         onTemplateChange,
         onOpenTagBrowser,
       })}
-      {testParameterFields({ form, onChange, onProcessTypeChange })}
+      {testParameterFields({
+        form,
+        onChange,
+        onProcessTypeChange,
+        onResetProcessDefaults,
+      })}
       <FormSection title="Loop mapping" collapsible defaultOpen>
         <LoopMappingEditor
           state={form}

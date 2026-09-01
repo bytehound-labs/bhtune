@@ -32,15 +32,34 @@ unchanged.
    time the PV crosses the switch threshold, in the direction that opposes the process's own
    moves — this is what "closes the loop" around the relay instead of a PID block.
 4. **Every PV sample is polled and logged** (by default every 800 ms, matching the legacy tool's
-   timer), building up a picture of the resulting oscillation: its peaks, its troughs, and the
+   timer) using the global `[tuning].poll_interval_ms` setting, building up a picture of the
+   resulting oscillation: its peaks, its troughs, and the
    exact times each switch happened.
-5. **The first few cycles are skipped** (`--cycles-skip`, defaulted per process type) before any
-   switch is counted, and then a fixed number of cycles are counted (`--cycles-count`) to
-   measure the steady-state oscillation.
+5. **The first few cycles are skipped** (the visible Process defaults are selected per process
+   type) before any switch is counted, and then a fixed number of cycles are counted to measure
+   the steady-state oscillation. Noise-protection delays around relay switches are also shown as
+   process defaults in the New tune form.
 6. **On the final step, the MV snaps back to its starting value** rather than taking one more
    full relay step — so the loop is left close to where it started, not mid-swing.
 7. **The loop is restored** to its original mode (and setpoint, if it was changed) — see
    [Safety](safety.md#restoration) for exactly what "restored" guarantees.
+
+For OPC DA runs, each accepted MV relay command is also read back and checked against its
+commanded target before another relay can replace it. This verification uses a fixed internal
+four-second confirmation window; a command that remains outside tolerance, or whose matching
+readback arrives after the deadline, aborts the test and starts restoration. Simulator and replay
+runs do not add this live-I/O verification step.
+
+The other operational timing and safety limits are installation-wide settings under `[tuning]`:
+MRFT delay padding, the whole-run timeout, driver-operation timeout, and restore timeout. They
+are configured on the web GUI's Config page or in `bhtune.toml`, apply to future tune starts, and
+are frozen into each run when preparation begins. OPC DA requires a restore timeout of at least
+four seconds because MV actuation confirmation can take up to that long.
+
+The MV values shown in the trend, persisted samples, and sample exports are the **commanded**
+values produced by the MRFT engine. The actual MV values returned by OPC DA readbacks are
+separate actuation-audit records shown in run history; keeping these series separate preserves
+the engine's timing and export semantics while making physical actuation evidence available.
 
 Nothing here writes a PID constant. That only happens if you explicitly ask for it
 (`--write-pid <level>` on the CLI, or the Automatic PID settings section of the New tune form) — see
@@ -66,6 +85,21 @@ three, in the units your DCS/PLC template expects (Proportional Band % or Gain, 
 Reset Rate, Derivative Time or Derivative Gain — see
 [DCS/PLC templates](../dcs-templates.md)), so the choice is made after seeing the numbers, not
 before.
+The web run-detail **Calculated results** table uses the constant names from the run's
+snapshotted template, so a Yokogawa run shows `P`, `I`, and `D` rather than generic engine
+labels. It keeps the derivative column for PI runs and displays `0`, because the write path
+explicitly clears stale derivative action for controllers without a derivative term.
+When results exist, the web GUI promotes this panel above the trend. Each response level has a
+**Review & write** action that shows the exact destination tags and values in a safety review
+popup before writing. The popup is centered over the viewport and shared with the OPC server and
+tag browsers. Confirming an Apply closes the popup immediately; successful writes stay silent,
+while transport failures or failed physical writes/readbacks appear in a page-level alert. The
+newest successful write can be restored from the same popup using its recorded pre-write values.
+Confirming a restore closes the popup immediately as well; successful restores stay silent, while
+transport failures or failed physical restores/readbacks appear in a page-level alert.
+The run-detail sections are independently collapsible and start expanded except
+for **MV actuation verification**, which appears below PID change history and starts collapsed so
+the primary results and PID actions remain prominent.
 
 ## Controller type and process type
 
@@ -76,7 +110,11 @@ before.
 - **Process type** (flow, pressure — line or vessel, level, temperature — mixing or heat
   exchange) drives the default cycles-skip/cycles-count/noise-protection values and which row of
   the tuning-constant matrices is used. These defaults come from the same lookup tables the
-  legacy tool used; override them explicitly if your process needs something different.
+  legacy tool used. The web form displays the selected process type's values in its Process
+  defaults subgroup and provides a reset action; changing process type also restores its values.
+  They are not DCS/PLC template properties: templates define tag conventions and PID units.
+  Override the process defaults explicitly if your process needs something different. CLI and
+  HTTP callers may omit them to use the server-side defaults.
 
 ## Next steps
 

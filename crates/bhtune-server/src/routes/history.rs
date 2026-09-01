@@ -19,15 +19,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use bhtune_core::{
-    ControllerDirection, ControllerType, LoopConfig, ProcessType, ResponseLevel, Tick,
+    ControllerDirection, ControllerType, DcsTemplate, LoopConfig, ProcessType, ResponseLevel, Tick,
 };
 use bhtune_db::models::{
-    Pagination, RestoreStatus, RollbackState, SampleQuality, TemplateOrigin, TimingMetrics,
-    TuneDriver, TuneOutcome, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
-    WriteKind,
+    MvActuationKind, MvActuationStatus, Pagination, RestoreStatus, RollbackState, SampleQuality,
+    TemplateOrigin, TimingMetrics, TuneDriver, TuneMvActuationRow, TuneOutcome, TuneResultRow,
+    TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::error::{ApiError, ErrorBody};
@@ -345,6 +346,48 @@ impl From<&TuneWriteRow> for WriteResponse {
     }
 }
 
+/// Local projection of one accepted OPC DA manipulated-variable command and its independent
+/// live readback evidence. Commanded MV samples remain in [`SampleResponse`]; this audit trail
+/// is the only response surface that reports measured MV values.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MvActuationResponse {
+    pub id: i64,
+    pub sequence: i64,
+    pub kind: MvActuationKind,
+    pub commanded_at: DateTime<Utc>,
+    pub target_mv: f32,
+    pub previous_commanded_mv: Option<f32>,
+    pub tolerance: f32,
+    pub confirmation_due_at: DateTime<Utc>,
+    pub last_checked_at: Option<DateTime<Utc>>,
+    pub readback_mv: Option<f32>,
+    pub readback_quality: Option<SampleQuality>,
+    pub attempt_count: i64,
+    pub status: MvActuationStatus,
+    pub detail: Option<String>,
+}
+
+impl From<&TuneMvActuationRow> for MvActuationResponse {
+    fn from(row: &TuneMvActuationRow) -> Self {
+        Self {
+            id: row.id,
+            sequence: row.sequence,
+            kind: row.kind,
+            commanded_at: row.commanded_at,
+            target_mv: row.target_mv,
+            previous_commanded_mv: row.previous_commanded_mv,
+            tolerance: row.tolerance,
+            confirmation_due_at: row.confirmation_due_at,
+            last_checked_at: row.last_checked_at,
+            readback_mv: row.readback_mv,
+            readback_quality: row.readback_quality,
+            attempt_count: row.attempt_count,
+            status: row.status,
+            detail: row.detail.clone(),
+        }
+    }
+}
+
 /// A run's snapshotted PID constant tag names, present only when all three were configured.
 /// Nested under `RunDetailResponse::pid_constant_tags` following the same
 /// "`Option<...>` presence itself is the signal" convention `initial_readings` already uses,
@@ -354,6 +397,33 @@ pub struct PidConstantTagsResponse {
     pub proportional: String,
     pub integral: String,
     pub derivative: String,
+}
+
+/// The operator-facing names for the three calculated PID constants, derived from the
+/// template snapshot stored on the run rather than the mutable template catalog.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PidParameterLabelsResponse {
+    pub proportional: String,
+    pub integral: String,
+    pub derivative: String,
+}
+
+impl From<&DcsTemplate> for PidParameterLabelsResponse {
+    fn from(template: &DcsTemplate) -> Self {
+        Self {
+            proportional: pid_parameter_label(&template.proportional_constant_suffix, "P"),
+            integral: pid_parameter_label(&template.integral_constant_suffix, "I"),
+            derivative: pid_parameter_label(&template.derivative_constant_suffix, "D"),
+        }
+    }
+}
+
+fn pid_parameter_label(suffix: &str, fallback: &str) -> String {
+    if suffix.is_empty() {
+        fallback.to_owned()
+    } else {
+        suffix.to_owned()
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -373,6 +443,9 @@ pub struct RunDetailResponse {
     /// Whether this run accepted `Uncertain` OPC quality, captured when the run started.
     pub allow_uncertain_quality: bool,
     pub config: LoopConfig,
+    /// Concrete global timing and safety values frozen when this run was prepared. `None`
+    /// identifies a run created before effective-tuning snapshots were stored.
+    pub effective_tuning: Option<bhtune_db::models::EffectiveTuning>,
     /// The resolved OPC DA server ProgID this run actually used, or `None` for a
     /// simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
     /// trusts over any `--server` flag -- see `bhtune-cli::commands::history`.
@@ -386,11 +459,15 @@ pub struct RunDetailResponse {
     /// to explain why -- without duplicating `require_writable_run`'s logic client-side or
     /// discovering ineligibility only after a failed request (`api-post-run-write`).
     pub pid_constant_tags: Option<PidConstantTagsResponse>,
+    /// Operator-facing calculated-result column labels from the run's historical template
+    /// snapshot. Empty user-template suffixes use the conventional P/I/D labels.
+    pub pid_parameter_labels: PidParameterLabelsResponse,
     pub initial_readings: Option<InitialReadingsResponse>,
     pub timing_metrics: Option<TimingMetrics>,
     pub samples: Vec<SampleResponse>,
     pub results: Vec<ResultResponse>,
     pub writes: Vec<WriteResponse>,
+    pub mv_actuations: Vec<MvActuationResponse>,
     pub restore_status: Option<RestoreStatus>,
     pub restore_detail: Option<String>,
     /// This run's own `request_json` (`db-run-request-snapshot`), parsed back into a
@@ -417,6 +494,7 @@ pub(crate) async fn build_run_detail(
     let samples = TuneSampleRow::list_for_run(pool, run_id).await?;
     let results = TuneResultRow::list_for_run(pool, run_id).await?;
     let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
+    let mv_actuations = TuneMvActuationRow::list_for_run(pool, run_id).await?;
     let pid_constant_tags = match (
         &run.tags.proportional_constant,
         &run.tags.integral_constant,
@@ -429,6 +507,7 @@ pub(crate) async fn build_run_detail(
         }),
         _ => None,
     };
+    let pid_parameter_labels = PidParameterLabelsResponse::from(&run.template);
 
     Ok(Some(RunDetailResponse {
         id: run.id,
@@ -443,14 +522,20 @@ pub(crate) async fn build_run_detail(
         template_origin: run.template_origin,
         allow_uncertain_quality: run.allow_uncertain_quality,
         config: run.config,
+        effective_tuning: run.effective_tuning,
         opc_server: run.opc_server,
         bridge_host: run.bridge_host,
         pid_constant_tags,
+        pid_parameter_labels,
         initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
         timing_metrics: run.timing_metrics,
         samples: samples.iter().map(SampleResponse::from).collect(),
         results: results.iter().map(ResultResponse::from).collect(),
         writes: writes.iter().map(WriteResponse::from).collect(),
+        mv_actuations: mv_actuations
+            .iter()
+            .map(MvActuationResponse::from)
+            .collect(),
         restore_status: run.restore_status,
         restore_detail: run.restore_detail,
         original_request: parse_stored_request(run.id, &run.request_json),
@@ -593,6 +678,18 @@ pub(crate) async fn delete_run(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    delete_run_with_hook(state, run_id, |_| async {}).await
+}
+
+async fn delete_run_with_hook<F, Fut>(
+    state: AppState,
+    run_id: i64,
+    after_lookup: F,
+) -> Result<StatusCode, ApiError>
+where
+    F: FnOnce(&AppState) -> Fut,
+    Fut: Future<Output = ()>,
+{
     let run = TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
@@ -601,6 +698,7 @@ pub(crate) async fn delete_run(
             "run {run_id} has not finished yet; cancel it before deleting"
         )));
     }
+    after_lookup(&state).await;
     if TuneRunRow::delete(&state.pool, run_id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -624,6 +722,7 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use bhtune_db::models::NewTuneMvActuation;
     use tower::ServiceExt;
 
     async fn body_json(response: axum::response::Response) -> serde_json::Value {
@@ -831,6 +930,57 @@ mod tests {
             .await
             .unwrap();
 
+        let confirmed_actuation = TuneMvActuationRow::insert_pending(
+            &state.pool,
+            run_id,
+            NewTuneMvActuation {
+                sequence: 0,
+                kind: MvActuationKind::Relay,
+                commanded_at: now,
+                target_mv: 55.0,
+                previous_commanded_mv: Some(50.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(4),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::record_final_observation(
+            &state.pool,
+            confirmed_actuation.id,
+            now + chrono::Duration::seconds(1),
+            Some(55.0),
+            Some(SampleQuality::Good),
+            MvActuationStatus::Confirmed,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let superseded_actuation = TuneMvActuationRow::insert_pending(
+            &state.pool,
+            run_id,
+            NewTuneMvActuation {
+                sequence: 1,
+                kind: MvActuationKind::Restore,
+                commanded_at: now + chrono::Duration::seconds(5),
+                target_mv: 50.0,
+                previous_commanded_mv: Some(55.0),
+                tolerance: 0.5,
+                confirmation_due_at: now + chrono::Duration::seconds(9),
+            },
+        )
+        .await
+        .unwrap();
+        TuneMvActuationRow::finalize(
+            &state.pool,
+            superseded_actuation.id,
+            MvActuationStatus::Superseded,
+            Some("restore took over confirmation"),
+        )
+        .await
+        .unwrap();
+
         TuneRunRow::complete(&state.pool, run_id, now)
             .await
             .unwrap();
@@ -914,11 +1064,28 @@ mod tests {
         assert_eq!(body["pid_constant_tags"]["proportional"], "Loop1.P");
         assert_eq!(body["pid_constant_tags"]["integral"], "Loop1.I");
         assert_eq!(body["pid_constant_tags"]["derivative"], "Loop1.D");
+        assert_eq!(body["pid_parameter_labels"]["proportional"], "P");
+        assert_eq!(body["pid_parameter_labels"]["integral"], "I");
+        assert_eq!(body["pid_parameter_labels"]["derivative"], "D");
         // `seed_one_run` never calls `record_connection`, so `request_json` is left at the
         // column default `"{}"` -- not a valid `StartRunRequest`, so `original_request` must
         // gracefully read `null` rather than the request failing (see
         // `parse_stored_request`'s doc comment).
         assert!(body["original_request"].is_null());
+    }
+
+    #[test]
+    fn pid_parameter_labels_fall_back_for_blank_template_suffixes() {
+        let mut template = bhtune_core::built_in_templates().remove(0);
+        template.proportional_constant_suffix.clear();
+        template.integral_constant_suffix.clear();
+        template.derivative_constant_suffix.clear();
+
+        let labels = PidParameterLabelsResponse::from(&template);
+
+        assert_eq!(labels.proportional, "P");
+        assert_eq!(labels.integral, "I");
+        assert_eq!(labels.derivative, "D");
     }
 
     /// `pid_constant_tags` must be `null`, not merely three `null` fields, when the run's
@@ -1057,6 +1224,39 @@ mod tests {
             failed["error_message"],
             "write rejected: value out of range"
         );
+
+        let actuations = body["mv_actuations"].as_array().unwrap();
+        assert_eq!(actuations.len(), 2);
+        let confirmed = actuations
+            .iter()
+            .find(|actuation| actuation["kind"] == "relay")
+            .unwrap();
+        assert_eq!(confirmed["sequence"], 0);
+        assert_eq!(confirmed["target_mv"], 55.0);
+        assert_eq!(confirmed["previous_commanded_mv"], 50.0);
+        assert_eq!(confirmed["tolerance"], 0.5);
+        assert!(confirmed["commanded_at"].is_string());
+        assert!(confirmed["confirmation_due_at"].is_string());
+        assert!(confirmed["last_checked_at"].is_string());
+        assert_eq!(confirmed["readback_mv"], 55.0);
+        assert_eq!(confirmed["readback_quality"], "good");
+        assert_eq!(confirmed["attempt_count"], 1);
+        assert_eq!(confirmed["status"], "confirmed");
+        assert!(confirmed["detail"].is_null());
+
+        let superseded = actuations
+            .iter()
+            .find(|actuation| actuation["kind"] == "restore")
+            .unwrap();
+        assert_eq!(superseded["sequence"], 1);
+        assert_eq!(superseded["target_mv"], 50.0);
+        assert_eq!(superseded["previous_commanded_mv"], 55.0);
+        assert!(superseded["last_checked_at"].is_null());
+        assert!(superseded["readback_mv"].is_null());
+        assert!(superseded["readback_quality"].is_null());
+        assert_eq!(superseded["attempt_count"], 0);
+        assert_eq!(superseded["status"], "superseded");
+        assert_eq!(superseded["detail"], "restore took over confirmation");
     }
 
     #[tokio::test]
@@ -1321,6 +1521,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn show_and_delete_propagate_database_failures_as_500() {
+        let state = crate::test_support::in_memory_state().await;
+        let app = router().with_state(state.clone());
+        state.pool.close().await;
+
+        let show = app
+            .clone()
+            .oneshot(Request::get("/api/runs/1").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(show.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let delete = app
+            .oneshot(Request::delete("/api/runs/1").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
     async fn export_run_defaults_to_csv_with_the_expected_headers_and_body() {
         let state = crate::test_support::in_memory_state().await;
         let (run_id, _loop_id) = seed_full_run(&state).await;
@@ -1519,5 +1739,26 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert!(TuneRunRow::get(&pool, run_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_run_returns_404_when_the_row_vanishes_after_lookup() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+
+        let result = delete_run_with_hook(state.clone(), run_id, |state| {
+            let pool = state.pool.clone();
+            async move {
+                assert!(TuneRunRow::delete(&pool, run_id).await.unwrap());
+            }
+        })
+        .await;
+
+        assert!(
+            matches!(result, Err(ApiError::NotFound(message)) if message.contains(&run_id.to_string()))
+        );
     }
 }

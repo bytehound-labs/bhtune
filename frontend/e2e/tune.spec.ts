@@ -47,13 +47,13 @@ async function startTune(page: Page) {
  * results are sane and correctly ordered, not just that the page didn't crash.
  *
  * Mirrors `crates/bhtune-cli/tests/e2e_simulator.rs`'s own "flow / PI / reverse" matrix
- * case and its millisecond-scale simulator parameters (`sim_tau`/`sim_dead_time`/
- * `poll_interval_ms`), for the same reason that test uses them: the form's human-oriented
- * defaults (`sim_tau=2`, `poll_interval_ms=800`) are realistic for an actual plant loop but
- * would make this test take minutes. `direction=reverse` is likewise required -- confirmed
- * (see that Rust test's own comment) to be the only direction that produces a genuine relay
- * oscillation against this fixed simulator configuration; it's already the form's default
- * whenever `driver=simulator`, so it isn't set explicitly below.
+ * case and its millisecond-scale simulator parameters (`sim_tau`/`sim_dead_time`). The
+ * Playwright server starts with a temporary global `[tuning]` configuration using a 5 ms
+ * poll interval and a 30 s whole-run timeout, since those values are installation-wide
+ * settings rather than New Tune form fields. `direction=reverse` is likewise required --
+ * confirmed (see that Rust test's own comment) to be the only direction that produces a
+ * genuine relay oscillation against this fixed simulator configuration; it's already the
+ * form's default whenever `driver=simulator`, so it isn't set explicitly below.
  */
 test.describe("running a tune", () => {
   test.beforeEach(async ({ page }) => {
@@ -72,6 +72,13 @@ test.describe("running a tune", () => {
         });
       }
     });
+    await page.route("**/api/runs/last-request", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "null",
+      }),
+    );
   });
 
   test("completes a full simulator tune and renders sane, ordered results", async ({
@@ -81,11 +88,12 @@ test.describe("running a tune", () => {
 
     await page.goto("/runs/new");
 
-    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
+    await page
+      .getByRole("combobox", { name: "Template", exact: true })
+      .selectOption("Yokogawa CentumVP");
     await page.getByLabel("Cycles to skip").fill("1");
     await page.getByLabel("Cycles to count").fill("2");
     await page.getByLabel("Noise protection (s)").fill("0");
-    await page.getByLabel("Poll interval (ms)").fill("5");
     await page.getByLabel("Time constant τ (s)").fill("0.01");
     await page.getByLabel("Dead time (s)").fill("0.025");
 
@@ -101,88 +109,81 @@ test.describe("running a tune", () => {
       timeout: 30_000,
     });
 
-    const resultsSection = page.locator("section").filter({
+    const resultsSection = page.locator("details").filter({
       has: page.getByRole("heading", { name: "Calculated results" }),
     });
     const rows = resultsSection.locator("tbody tr");
     await expect(rows).toHaveCount(3);
 
-    async function kp(level: "aggressive" | "moderate" | "sluggish") {
-      const row = rows.filter({ hasText: level });
-      await expect(row).toHaveCount(1);
-      const kpText = await row.locator("td").nth(1).innerText();
-      return Number.parseFloat(kpText);
-    }
-    async function tiMinutes(level: "aggressive" | "moderate" | "sluggish") {
-      const row = rows.filter({ hasText: level });
-      const tiText = await row.locator("td").nth(2).innerText();
-      return Number.parseFloat(tiText);
-    }
-    async function tdMinutes(level: "aggressive" | "moderate" | "sluggish") {
-      const row = rows.filter({ hasText: level });
-      const tdText = await row.locator("td").nth(3).innerText();
-      return Number.parseFloat(tdText);
-    }
-
-    const aggressiveKp = await kp("aggressive");
-    const moderateKp = await kp("moderate");
-    const sluggishKp = await kp("sluggish");
-
-    expect(aggressiveKp).toBeGreaterThan(0);
-    expect(moderateKp).toBeGreaterThan(0);
-    expect(sluggishKp).toBeGreaterThan(0);
-    expect(aggressiveKp).toBeGreaterThan(moderateKp);
-    expect(moderateKp).toBeGreaterThan(sluggishKp);
-
-    // The regression `e2e_simulator.rs` was written to catch (a sub-second relay-period
-    // truncation bug silently zeroing ti_minutes/td_minutes for every controller type):
-    // re-asserted here through the real rendered UI. This run's controller type is "pi"
-    // (the form's own default), so ti_minutes must be genuinely nonzero and td_minutes
-    // must be exactly zero (PI has no derivative term).
-    expect(await tiMinutes("aggressive")).toBeGreaterThan(0);
-    expect(await tdMinutes("aggressive")).toBe(0);
-
-    const timingSection = page.locator("section").filter({
-      has: page.getByRole("heading", { name: "Timing" }),
-    });
-    await expect(timingSection).toBeVisible();
     await expect(
-      timingSection.getByText("Simulator fixed step", { exact: true }),
+      resultsSection.getByRole("columnheader", {
+        name: "Response level",
+        exact: true,
+      }),
     ).toBeVisible();
     await expect(
-      timingSection
-        .getByText("Requested interval", { exact: true })
-        .locator("..")
-        .locator("dd"),
-    ).toHaveText("5 ms");
+      resultsSection.getByRole("columnheader", { name: "P", exact: true }),
+    ).toBeVisible();
     await expect(
-      timingSection
-        .getByText("Mean sample gap", { exact: true })
-        .locator("..")
-        .locator("dd"),
-    ).toHaveText("5 ms");
+      resultsSection.getByRole("columnheader", { name: "I", exact: true }),
+    ).toBeVisible();
     await expect(
-      timingSection
-        .getByText("Maximum sample gap", { exact: true })
-        .locator("..")
-        .locator("dd"),
-    ).toHaveText("5 ms");
+      resultsSection.getByRole("columnheader", { name: "D", exact: true }),
+    ).toBeVisible();
     await expect(
-      timingSection
-        .getByText("Missed poll opportunities", { exact: true })
-        .locator("..")
-        .locator("dd"),
-    ).toHaveText("0");
-    await expect(timingSection.getByText("Timing warning:")).toHaveCount(0);
+      resultsSection.getByRole("columnheader", { name: "Kp", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      resultsSection.getByRole("columnheader", {
+        name: "Ti (min)",
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await expect(
+      resultsSection.getByRole("columnheader", {
+        name: "Td (min)",
+        exact: true,
+      }),
+    ).toHaveCount(0);
 
-    const samplesPerPeriod = Number.parseFloat(
-      await timingSection
-        .getByText("Approx. samples per period", { exact: true })
-        .locator("..")
-        .locator("dd")
-        .innerText(),
-    );
-    expect(samplesPerPeriod).toBeGreaterThan(1);
+    async function proportional(level: "aggressive" | "moderate" | "sluggish") {
+      const row = rows.filter({ hasText: level });
+      await expect(row).toHaveCount(1);
+      const proportionalText = await row.locator("td").nth(1).innerText();
+      return Number.parseFloat(proportionalText);
+    }
+    async function integral(level: "aggressive" | "moderate" | "sluggish") {
+      const row = rows.filter({ hasText: level });
+      const integralText = await row.locator("td").nth(2).innerText();
+      return Number.parseFloat(integralText);
+    }
+    async function derivative(level: "aggressive" | "moderate" | "sluggish") {
+      const row = rows.filter({ hasText: level });
+      const derivativeText = await row.locator("td").nth(3).innerText();
+      return Number.parseFloat(derivativeText);
+    }
+
+    const aggressiveProportional = await proportional("aggressive");
+    const moderateProportional = await proportional("moderate");
+    const sluggishProportional = await proportional("sluggish");
+
+    expect(aggressiveProportional).toBeGreaterThan(0);
+    expect(moderateProportional).toBeGreaterThan(0);
+    expect(sluggishProportional).toBeGreaterThan(0);
+
+    // The regression `e2e_simulator.rs` was written to catch a sub-second relay-period
+    // truncation bug silently zeroing the integral result for every controller type. This
+    // run's controller type is "pi" (the form's own default), so the template-specific I
+    // value must be genuinely nonzero and the always-visible D value must be exactly zero.
+    expect(await integral("aggressive")).toBeGreaterThan(0);
+    expect(await derivative("aggressive")).toBe(0);
+
+    await expect(
+      page.getByRole("heading", { name: "Timing", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("Timing warning:", { exact: false }),
+    ).toHaveCount(0);
 
     await expect(
       page.getByText(/\d+ measurements were recorded/),
@@ -193,30 +194,16 @@ test.describe("running a tune", () => {
     const runResponse = await page.request.get(`/api/runs/${runId}`);
     expect(runResponse.ok()).toBe(true);
     const run = await runResponse.json();
-
-    await page.route(`**/api/runs/${runId}`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          ...run,
-          timing_metrics: {
-            ...run.timing_metrics,
-            basis: "live_monotonic",
-            max_sample_gap_ms: 10,
-            missed_poll_opportunity_count: 1,
-          },
-        }),
-      });
+    expect(run.timing_metrics).toMatchObject({
+      basis: "simulated_fixed_step",
+      requested_interval_ms: 5,
+      mean_sample_gap_ms: 5,
+      max_sample_gap_ms: 5,
+      missed_poll_opportunity_count: 0,
     });
-    await page.reload();
-
-    await expect(
-      page.getByText(
-        "Timing warning: 1 sample gap reached at least twice the requested interval.",
-        { exact: false },
-      ),
-    ).toBeVisible();
+    expect(run.timing_metrics.approximate_samples_per_period).toBeGreaterThan(
+      1,
+    );
   });
 
   test("exports a completed run's samples as CSV and JSON downloads", async ({
@@ -225,11 +212,12 @@ test.describe("running a tune", () => {
     test.setTimeout(45_000);
 
     await page.goto("/runs/new");
-    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
+    await page
+      .getByRole("combobox", { name: "Template", exact: true })
+      .selectOption("Yokogawa CentumVP");
     await page.getByLabel("Cycles to skip").fill("1");
     await page.getByLabel("Cycles to count").fill("2");
     await page.getByLabel("Noise protection (s)").fill("0");
-    await page.getByLabel("Poll interval (ms)").fill("5");
     await page.getByLabel("Time constant τ (s)").fill("0.01");
     await page.getByLabel("Dead time (s)").fill("0.025");
 
@@ -261,11 +249,12 @@ test.describe("running a tune", () => {
     test.setTimeout(45_000);
 
     await page.goto("/runs/new");
-    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
+    await page
+      .getByRole("combobox", { name: "Template", exact: true })
+      .selectOption("Yokogawa CentumVP");
     await page.getByLabel("Cycles to skip").fill("1");
     await page.getByLabel("Cycles to count").fill("2");
     await page.getByLabel("Noise protection (s)").fill("0");
-    await page.getByLabel("Poll interval (ms)").fill("5");
     await page.getByLabel("Time constant τ (s)").fill("0.01");
     await page.getByLabel("Dead time (s)").fill("0.025");
 
@@ -295,12 +284,11 @@ test.describe("running a tune", () => {
 
     await page.goto("/runs/new");
 
-    await page.getByLabel("Template").selectOption("Yokogawa CentumVP");
-    // Deliberately slower than the completion test above (but still far faster than the
-    // form's human-oriented defaults) -- reliably leaves a multi-second window to click
-    // "Cancel tune" before the tune would otherwise finish on its own, without wasting CI
-    // time waiting on the form's real ~minutes-scale defaults.
-    await page.getByLabel("Poll interval (ms)").fill("200");
+    await page
+      .getByRole("combobox", { name: "Template", exact: true })
+      .selectOption("Yokogawa CentumVP");
+    // Deliberately slower than the completion test above -- reliably leaves a multi-second
+    // window to click "Cancel tune" before the tune would otherwise finish on its own.
     await page.getByLabel("Time constant τ (s)").fill("1");
     await page.getByLabel("Dead time (s)").fill("1");
 

@@ -300,6 +300,14 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn sse_parser_ignores_unrecognized_lines_between_event_and_data() {
+        assert_eq!(
+            parse_sse("event: ping\nid: 42\ndata: payload\n\n"),
+            vec![("ping".to_string(), "payload".to_string())]
+        );
+    }
+
     #[tokio::test]
     async fn streaming_an_unknown_run_returns_404() {
         let state = crate::test_support::in_memory_state().await;

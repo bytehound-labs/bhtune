@@ -26,6 +26,12 @@ use std::time::Duration;
 fn run_fast_simulator_tune(extra_args: &[&str]) -> (Option<i32>, String, String) {
     let db_dir = tempfile::tempdir().unwrap();
     let db_path = db_dir.path().join("bhtune.db");
+    let config_path = db_dir.path().join("bhtune.toml");
+    std::fs::write(
+        &config_path,
+        "[tuning]\npoll_interval_ms = 5\ntimeout_secs = 10\n",
+    )
+    .expect("failed to write test configuration");
     // See `ctrlc_abort.rs`'s identical comment: without this, logging setup would resolve
     // the real platform default log directory using this test process's inherited
     // environment, writing real files under the developer/CI machine's actual home
@@ -35,6 +41,8 @@ fn run_fast_simulator_tune(extra_args: &[&str]) -> (Option<i32>, String, String)
     let output = Command::new(env!("CARGO_BIN_EXE_bhtune"))
         .arg("--db")
         .arg(&db_path)
+        .arg("--config")
+        .arg(&config_path)
         .arg("--log-dir")
         .arg(log_dir.path())
         .args([
@@ -73,10 +81,6 @@ fn run_fast_simulator_tune(extra_args: &[&str]) -> (Option<i32>, String, String)
             "0",
             "--direction",
             "reverse",
-            "--poll-interval-ms",
-            "5",
-            "--timeout-secs",
-            "10",
             "--notes",
             "json-contract-test",
         ])
@@ -174,4 +178,22 @@ async fn tune_output_table_is_plain_text_not_json() {
         serde_json::from_str::<serde_json::Value>(stdout.trim()).is_err(),
         "Table-mode stdout should not itself parse as a single JSON value: {stdout:?}"
     );
+}
+
+#[test]
+fn an_invalid_explicit_config_path_fails_during_real_startup() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let missing_config = temp_dir.path().join("missing-bhtune.toml");
+    let output = Command::new(env!("CARGO_BIN_EXE_bhtune"))
+        .args(["--config"])
+        .arg(&missing_config)
+        .arg("template")
+        .arg("list")
+        .output()
+        .expect("failed to spawn/run the bhtune binary");
+
+    assert_eq!(output.status.code(), Some(bhtune_cli::EXIT_FAILURE as i32));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("stderr is not valid utf-8");
+    assert!(stderr.contains("missing-bhtune.toml"));
 }

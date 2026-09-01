@@ -22,14 +22,18 @@ The workspace uses the latest TypeScript 6 release supported by the OpenAPI gene
 the `typescript` pins in `frontend/package.json` and `website/package.json` on the same
 compatible major until `openapi-typescript` supports TypeScript 7's compiler API.
 
-`vite.config.ts` proxies `/api/*` requests to `http://127.0.0.1:8787`, so run
+The Vite dev server binds `0.0.0.0` and allows the local `asus` hostname, so the UI is
+available at `http://asus:5173` from another host on the same network. Vite's hot module
+reload updates the running UI after each frontend save; restart the API process after Rust
+changes. `vite.config.ts` proxies `/api/*` requests to `http://127.0.0.1:8787`, so run
 `cargo run -p bhtune-server` alongside `pnpm dev` to exercise the real HTTP API while
-developing. In production, `bhtune-server` embeds the built SPA (`rust-embed`, see
+developing. The dev server has no authentication; use it only on a trusted network.
+In production, `bhtune-server` embeds the built SPA (`rust-embed`, see
 `crates/bhtune-server/src/spa.rs`) and serves it directly from the same origin — build with
 `pnpm run build`, then `cargo run -p bhtune-server` serves both the API and the UI from one
 process with no proxy involved.
 
-The header includes a light/dark theme toggle whose selection is remembered by the browser. Its
+The header includes a Catppuccin light/dark theme toggle whose selection is remembered by the browser. Its
 colored status dot and server version label are vertically centered together. The dot polls
 `GET /api/health` every five seconds. Green means the BHTune HTTP service is reachable; it does
 not verify OPC DA or another process-driver connection. Hover the dot for the full status detail.
@@ -73,6 +77,24 @@ with a terminal point at the original MV after restoration; short trends reserve
 poll intervals on the x-axis and leave unused future space blank, then fit the full elapsed
 run once that horizon is reached. The same `TrendChart` component renders live and historical
 cases identically without fabricating samples.
+
+When calculated results exist, the run detail screen promotes the **Calculated results** panel
+above the trend as the primary post-tune action area. Each response-level row uses **Review &
+write** to open a centered viewport popup with the exact loop tag, destination tags, parameter
+labels, and values. Confirming an Apply closes the popup immediately while the request continues
+in the background; successful writes stay silent, while transport failures or a failed physical
+write/readback appear as a page-level alert and remain in the audit history. The same shared
+popup component is used for OPC server discovery and tag browsing. The newest successful write
+in the history table offers **Restore previous values** through the same popup, using its
+recorded pre-write values. Confirming a restore closes the popup immediately while the request
+continues in the background; successful restores stay silent, while transport failures or failed
+physical restores/readbacks appear as a page-level alert. The panel stays in its lower position
+when no results exist, and the
+existing eligibility explanation remains visible for simulator or otherwise ineligible runs.
+Run-detail sections are independently collapsible. Calculated results, Trend, Summary, Notes,
+Test configuration, Initial readings, and PID change history start expanded; MV actuation
+verification appears after PID change history as the final diagnostic section and starts
+collapsed.
 
 ## Scripts
 

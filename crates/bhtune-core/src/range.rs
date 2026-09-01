@@ -243,6 +243,26 @@ mod tests {
     }
 
     #[test]
+    fn range_error_display_describes_every_invalid_range_shape() {
+        assert!(
+            RangeError::ZeroSpan {
+                high: 50.0,
+                low: 50.0,
+            }
+            .to_string()
+            .contains("zero span")
+        );
+        assert!(
+            RangeError::LowNotBelowHigh {
+                low: 100.0,
+                high: 0.0,
+            }
+            .to_string()
+            .contains("strictly less")
+        );
+    }
+
+    #[test]
     fn serde_round_trip() {
         let range = PvRange {
             high: 100.0,

@@ -356,11 +356,9 @@ mod tests {
     }
 
     fn assert_approx(actual: f32, expected: f32, epsilon: f32) {
-        assert!(
-            (actual - expected).abs() <= epsilon,
-            "expected {expected}, got {actual} (diff {})",
-            (actual - expected).abs()
-        );
+        let diff = (actual - expected).abs();
+        let message = format!("expected {expected}, got {actual} (diff {diff})");
+        assert!(diff <= epsilon, "{message}");
     }
 
     // --- measure_oscillation ---------------------------------------------------------------

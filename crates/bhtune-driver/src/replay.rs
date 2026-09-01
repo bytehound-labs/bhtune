@@ -328,6 +328,13 @@ mod tests {
         ]
     }
 
+    fn expect_trace_exhaustion(error: DriverError) -> Box<ReplayTraceExhausted> {
+        match error {
+            DriverError::Operation(source) => source.downcast::<ReplayTraceExhausted>().unwrap(),
+            other => panic!("expected DriverError::Operation, got {other:?}"),
+        }
+    }
+
     // --- construction / basic read-back ---------------------------------------------------
 
     #[tokio::test]
@@ -495,31 +502,34 @@ mod tests {
         }
         assert_eq!(driver.remaining(), 0);
         let err = driver.read(&["PV".to_string()]).await.unwrap_err();
-        match err {
-            DriverError::Operation(source) => {
-                let exhausted = source
-                    .downcast_ref::<ReplayTraceExhausted>()
-                    .expect("source should be ReplayTraceExhausted");
-                assert_eq!(exhausted.recorded, 3);
-                assert_eq!(exhausted.attempted, 4);
-                assert!(exhausted.to_string().contains("exhausted"));
-            }
-            other => panic!("expected DriverError::Operation, got {other:?}"),
-        }
+        let exhausted = expect_trace_exhaustion(err);
+        assert_eq!(exhausted.recorded, 3);
+        assert_eq!(exhausted.attempted, 4);
+        assert!(exhausted.to_string().contains("exhausted"));
     }
 
     #[tokio::test]
     async fn an_empty_trace_reports_exhaustion_on_the_very_first_read() {
         let driver = ReplayDriver::new("PV", "MV", Vec::new(), 0.0);
         let err = driver.read(&["PV".to_string()]).await.unwrap_err();
-        match err {
-            DriverError::Operation(source) => {
-                let exhausted = source.downcast_ref::<ReplayTraceExhausted>().unwrap();
-                assert_eq!(exhausted.recorded, 0);
-                assert_eq!(exhausted.attempted, 1);
-            }
-            other => panic!("expected DriverError::Operation, got {other:?}"),
-        }
+        let exhausted = expect_trace_exhaustion(err);
+        assert_eq!(exhausted.recorded, 0);
+        assert_eq!(exhausted.attempted, 1);
+    }
+
+    #[test]
+    fn trace_exhaustion_assertion_fails_clearly_for_a_non_operation_error() {
+        let panic = std::panic::catch_unwind(|| {
+            expect_trace_exhaustion(DriverError::Unsupported {
+                operation: "browse",
+            })
+        })
+        .unwrap_err();
+        assert!(
+            panic
+                .downcast_ref::<String>()
+                .is_some_and(|message| message.contains("DriverError::Operation"))
+        );
     }
 
     // --- from_fixture_json -------------------------------------------------------------------
@@ -555,6 +565,17 @@ mod tests {
     fn from_fixture_json_rejects_a_document_with_no_ticks_field() {
         let err = ReplayDriver::from_fixture_json("PV", "MV", "{}", 0.0).unwrap_err();
         assert!(matches!(err, DriverError::Operation(_)));
+    }
+
+    #[test]
+    fn trace_exhaustion_error_reports_the_recorded_and_attempted_counts() {
+        let error = ReplayTraceExhausted {
+            recorded: 3,
+            attempted: 4,
+        };
+        assert!(error.to_string().contains("3 sample(s)"));
+        assert!(error.to_string().contains("#4"));
+        let _: Box<dyn std::error::Error> = Box::new(error);
     }
 
     // --- object safety -----------------------------------------------------------------------

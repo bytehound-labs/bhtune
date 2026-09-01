@@ -902,13 +902,11 @@ mod smoke_tests {
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
+        tokio::spawn(
             Server::builder()
                 .add_service(BridgeServer::new(service))
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .await
-                .unwrap();
-        });
+                .serve_with_incoming(TcpListenerStream::new(listener)),
+        );
         format!("127.0.0.1:{port}")
     }
 

@@ -23,7 +23,18 @@ use crate::error::{DbError, DbResult};
 /// `bhtune-core` enum stored in the database satisfies this; a panic here means a new enum
 /// was wired into a TEXT column without checking that assumption first.
 pub fn enum_to_text<T: Serialize>(value: &T) -> String {
-    match serde_json::to_value(value).expect("enum serialization is infallible") {
+    enum_to_text_with(value, |value| serde_json::to_value(value))
+}
+
+fn enum_to_text_with<T, E>(
+    value: &T,
+    serialize: impl FnOnce(&T) -> Result<serde_json::Value, E>,
+) -> String
+where
+    T: Serialize,
+    E: std::fmt::Debug,
+{
+    match serialize(value).expect("enum serialization is infallible") {
         serde_json::Value::String(s) => s,
         other => panic!(
             "enum_to_text called on a type that doesn't serialize to a bare string, got: {other}"
@@ -38,17 +49,27 @@ pub fn enum_to_text<T: Serialize>(value: &T) -> String {
 /// database file is plain and open (see AGENTS.md), so nothing stops something else from
 /// writing a row that bypasses it.
 pub fn text_to_enum<T: DeserializeOwned>(column: &'static str, value: &str) -> DbResult<T> {
-    serde_json::from_value(serde_json::Value::String(value.to_string())).map_err(|_| {
-        DbError::InvalidEnumValue {
-            column,
-            value: value.to_string(),
-        }
-    })
+    serde_json::from_value(enum_text_value(value)).map_err(|_| invalid_enum_value(column, value))
+}
+
+fn enum_text_value(value: &str) -> serde_json::Value {
+    serde_json::Value::String(value.to_string())
+}
+
+fn invalid_enum_value(column: &'static str, value: &str) -> DbError {
+    DbError::InvalidEnumValue {
+        column,
+        value: value.to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{
+        MvActuationKind, MvActuationStatus, RestoreStatus, RollbackState, SampleQuality,
+        TemplateOrigin, TuneDriver, TuneOutcome, WriteKind,
+    };
     use bhtune_core::{
         ControllerDirection, ControllerType, DerivativeType, IntegralType, ProcessType,
         ProportionalType, ResponseLevel, TimeUnit,
@@ -79,6 +100,20 @@ mod tests {
                 variant
             );
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "doesn't serialize to a bare string")]
+    fn enum_to_text_rejects_non_string_serialization() {
+        enum_to_text(&42u8);
+    }
+
+    #[test]
+    #[should_panic(expected = "enum serialization is infallible")]
+    fn enum_to_text_rejects_a_serialization_failure() {
+        enum_to_text_with(&ProcessType::Flow, |_| {
+            Err::<serde_json::Value, _>("injected serialization failure")
+        });
     }
 
     #[test]
@@ -192,12 +227,52 @@ mod tests {
     #[test]
     fn unrecognized_value_is_a_typed_error_not_a_panic() {
         let err = text_to_enum::<ProcessType>("process_type", "not_a_real_variant").unwrap_err();
-        match err {
-            DbError::InvalidEnumValue { column, value } => {
-                assert_eq!(column, "process_type");
-                assert_eq!(value, "not_a_real_variant");
-            }
-            other => panic!("expected InvalidEnumValue, got {other:?}"),
-        }
+        assert!(matches!(
+            err,
+            DbError::InvalidEnumValue {
+                column: "process_type",
+                value,
+            } if value == "not_a_real_variant"
+        ));
+    }
+
+    #[test]
+    fn database_enum_types_round_trip_through_the_shared_text_codec() {
+        assert_eq!(
+            text_to_enum::<TuneDriver>("driver", "opcda").unwrap(),
+            TuneDriver::Opcda
+        );
+        assert_eq!(
+            text_to_enum::<TuneOutcome>("outcome", "completed").unwrap(),
+            TuneOutcome::Completed
+        );
+        assert_eq!(
+            text_to_enum::<TemplateOrigin>("origin", "builtin").unwrap(),
+            TemplateOrigin::Builtin
+        );
+        assert_eq!(
+            text_to_enum::<RestoreStatus>("restore_status", "confirmed").unwrap(),
+            RestoreStatus::Confirmed
+        );
+        assert_eq!(
+            text_to_enum::<RollbackState>("rollback_state", "succeeded").unwrap(),
+            RollbackState::Succeeded
+        );
+        assert_eq!(
+            text_to_enum::<SampleQuality>("pv_quality", "good").unwrap(),
+            SampleQuality::Good
+        );
+        assert_eq!(
+            text_to_enum::<MvActuationKind>("kind", "relay").unwrap(),
+            MvActuationKind::Relay
+        );
+        assert_eq!(
+            text_to_enum::<MvActuationStatus>("status", "confirmed").unwrap(),
+            MvActuationStatus::Confirmed
+        );
+        assert_eq!(
+            text_to_enum::<WriteKind>("kind", "write").unwrap(),
+            WriteKind::Write
+        );
     }
 }

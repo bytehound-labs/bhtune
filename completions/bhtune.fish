@@ -56,7 +56,6 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l relay-amp -d 'Rel
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l cycles-skip -d 'Relay cycles to skip before counting begins (default: looked up per `--process-type`)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l cycles-count -d 'Relay cycles to count once the skip period ends (default: looked up per `--process-type`)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l noise-protection-secs -d 'Seconds a switch must persist before it\'s accepted (default: looked up per `--process-type`)' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l mrft-delay -d 'Pre/post-test recording padding, in seconds (legacy: `--mrftDelayTime`)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l driver -d 'Which driver drives this tune' -r -f -a "opcda\t'A real OPC DA server, reached through an opcda-bridge gateway'
 simulator\t'The in-process FOPDT simulator — no external dependency at all'"
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l bridge-host -d 'opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md\'s OPC DA integration notes. Only meaningful with `--driver opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file\'s `bridge_host` key)' -r
@@ -74,14 +73,10 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l mv-range-high -d 
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l mv-range-low -d 'Fixed MV range low, overriding a live tag read' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l direction -d 'Fixed controller direction, overriding a live tag read' -r -f -a "direct\t''
 reverse\t''"
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l poll-interval-ms -d 'How often to poll the driver, in milliseconds (legacy: the 800 ms WinForms timer)' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l timeout-secs -d 'Hard wall-clock cap on this run\'s total duration (including any `--mrft-delay` padding), in seconds. If the engine hasn\'t reported completion by the deadline, the run is aborted and the loop is automatically restored, exactly like Ctrl+C -- but with no one present to press it. Always enforced; there is no way to disable it, since an unattended run must never be able to perturb a live process indefinitely. Size this to comfortably exceed your slowest loop\'s expected test duration -- temperature loops in particular can need much longer than the default' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l notes -d 'Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l write-pid -d 'Non-interactively write this response level\'s calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires `--yes`' -r -f -a "aggressive\t''
 moderate\t''
 sluggish\t''"
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l op-timeout-secs -d 'Cap on any single driver read/write during the run, in seconds. A stalled call (gateway down, DCOM wedged, network black-holed) is abandoned rather than awaited forever once this elapses, so Ctrl+C and `--timeout-secs` both stay effective even mid-hung-read/write -- see AGENTS.md\'s `safety-cancellation` section. Distinct from `--timeout-secs`, which bounds the whole run rather than one operation; size this well above a healthy round trip to your OPC DA gateway, not to the expected test duration' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l restore-timeout-secs -d 'Cap on restoring the loop to its pre-test mode/MV/setpoint after the run ends (by completion, Ctrl+C, or a timeout), in seconds. Bounded independently of `--timeout-secs`, since a restore triggered *by* a timeout would otherwise inherit an already-expired budget. If this elapses (or a second Ctrl+C arrives first), the run exits `EXIT_RESTORE_INCOMPLETE` with a warning naming the loop and its last-written value, instead of hanging indefinitely' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l output -d 'How to print this run\'s final outcome line' -r -f -a "table\t'Human-readable text (default)'
 json\t'Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped'"
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l config -d 'Path to a TOML config file (default: platform-specific, see `crate::config`)' -r -F
@@ -109,7 +104,6 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l relay-amp -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l cycles-skip -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l cycles-count -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l noise-protection-secs -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l mrft-delay -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-gain -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-tau -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-dead-time -r
@@ -117,14 +111,10 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-noise -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-seed -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-initial-pv -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l sim-initial-mv -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l poll-interval-ms -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l timeout-secs -d 'See `TuneArgs::timeout_secs`' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l notes -d 'Operator notes to attach to this run. See [`TuneArgs::notes`]' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l write-pid -d 'See `TuneArgs::write_pid`. Note the built-in FOPDT simulator has no PID constant tags at all (see `build_loop_tags`), so write-back is always skipped for `simulate` regardless of this flag -- it\'s accepted here purely so `simulate`\'s flag surface stays a strict defaulted subset of `tune`\'s, matching every other field' -r -f -a "aggressive\t''
 moderate\t''
 sluggish\t''"
-complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l op-timeout-secs -d 'See `TuneArgs::op_timeout_secs`' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l restore-timeout-secs -d 'See `TuneArgs::restore_timeout_secs`' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l output -d 'See `TuneArgs::output`' -r -f -a "table\t'Human-readable text (default)'
 json\t'Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped'"
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l config -d 'Path to a TOML config file (default: platform-specific, see `crate::config`)' -r -F

@@ -30,7 +30,9 @@ import {
   draftFromForm,
   formFromDraft,
   formFromRequest,
+  applyTagNameChange,
   initialForm,
+  processDefaultsFor,
   templateTagFor,
   templateValueTagFor,
   type FormState,
@@ -209,8 +211,19 @@ export function NewRunPage() {
     setForm(initialForm);
   }
 
+  function resetProcessDefaults() {
+    setForm((previous) => ({
+      ...previous,
+      ...processDefaultsFor(previous.processType),
+    }));
+  }
+
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((previous) => ({ ...previous, [key]: value }));
+  }
+
+  function setTagName(value: string) {
+    setForm((previous) => applyTagNameChange(previous, value));
   }
 
   function setTagSource(key: TagOverrideKey, source: TagMappingSource) {
@@ -334,13 +347,14 @@ export function NewRunPage() {
       const tagname = template
         ? replaceTagSuffix(previous.tagname, template.process_variable_suffix)
         : previous.tagname;
-      return { ...previous, template: value, tagname };
+      return { ...applyTagNameChange(previous, tagname), template: value };
     });
   }
 
   function setProcessType(value: ProcessType) {
     setForm((previous) => ({
       ...previous,
+      ...processDefaultsFor(value),
       processType: value,
       controllerType:
         previous.controllerType === "pid" &&
@@ -436,9 +450,11 @@ export function NewRunPage() {
         templatesPending={templates.isPending}
         onSubmit={handleSubmit}
         onChange={set}
+        onTagNameChange={setTagName}
         onDriverChange={setDriver}
         onTemplateChange={setTemplate}
         onProcessTypeChange={setProcessType}
+        onResetProcessDefaults={resetProcessDefaults}
         onTagSourceChange={setTagSource}
         onTagChange={setTagValue}
         onValueSourceChange={setValueSource}
@@ -457,7 +473,7 @@ export function NewRunPage() {
           template={activeTemplate}
           initialTag={form.tagname}
           onClose={() => setTagBrowserOpen(false)}
-          onSelect={(tag) => set("tagname", tag)}
+          onSelect={setTagName}
         />
       )}
     </div>

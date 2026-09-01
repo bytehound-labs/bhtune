@@ -154,10 +154,18 @@ pub async fn serve(
         log_guard: _log_guard,
     } = server;
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await?;
+    serve_http(
+        axum::serve(listener, app).with_graceful_shutdown(shutdown),
+        active_run,
+    )
+    .await
+}
 
+async fn serve_http(
+    server: impl std::future::IntoFuture<Output = std::io::Result<()>>,
+    active_run: ActiveRun,
+) -> anyhow::Result<()> {
+    server.into_future().await?;
     // Runs *after* axum has finished draining in-flight HTTP connections, not folded into
     // the shutdown future itself -- so a client mid-`GET /api/runs/:id` during shutdown still
     // gets its response before this starts cancelling the run it might have been asking
@@ -369,6 +377,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn serve_propagates_an_http_server_error() {
+        let error = serve_http(
+            async {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected accept failure",
+                ))
+            },
+            ActiveRun::default(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected accept failure"));
+    }
+
+    #[tokio::test]
     async fn retention_tick_live_runs_when_retention_is_configured() {
         let pool = connect_in_memory().await.unwrap();
         let old_run_id = insert_old_run(&pool).await;
@@ -382,6 +407,10 @@ mod tests {
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
 
         retention_tick_live(&pool, &store).await;
@@ -404,6 +433,10 @@ mod tests {
             config: Default::default(),
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
 
         retention_tick_live(&pool, &store).await;
@@ -419,6 +452,10 @@ mod tests {
             config: Default::default(),
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
         let poisoned = Arc::clone(&store);
         std::thread::spawn(move || {
@@ -445,6 +482,10 @@ mod tests {
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
 
         retention_tick_live(&pool, &store).await;
@@ -466,6 +507,10 @@ mod tests {
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
+            toml_tuning: Default::default(),
+            tuning_sources: bhtune_cli::config::tuning_config_sources(
+                &bhtune_cli::config::TuningConfig::default(),
+            ),
         }));
 
         spawn_retention_sweeper(pool.clone(), store);

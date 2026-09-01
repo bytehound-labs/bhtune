@@ -96,11 +96,6 @@ test.describe("app shell", () => {
         page.getByRole("textbox", { name: startsWithLabel(label) }),
       ).toBeDisabled();
     }
-    for (const label of ["Communication timeout (s)", "Restore timeout (s)"]) {
-      await expect(
-        page.getByRole("spinbutton", { name: startsWithLabel(label) }),
-      ).toBeDisabled();
-    }
     for (const label of ["Allow automatic PID write"]) {
       await expect(
         page.getByRole("checkbox", { name: startsWithLabel(label) }),
@@ -131,9 +126,9 @@ test.describe("app shell", () => {
     ).toBeEnabled();
     for (const label of [
       "Relay amplitude (%)",
+      "Cycles to skip",
       "Cycles to count",
-      "Poll interval (ms)",
-      "Run timeout (s)",
+      "Noise protection (s)",
       "PV range high",
       "MV range high",
       "Process gain",
@@ -181,8 +176,10 @@ test.describe("app shell", () => {
               .backgroundColor,
         ),
       )
-      .toBe("rgb(2, 6, 23)");
-    await page.getByRole("button", { name: "Switch to light theme" }).click();
+      .toBe("rgb(30, 30, 46)");
+    await page
+      .getByRole("button", { name: "Switch to Catppuccin light theme" })
+      .click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await expect
       .poll(() =>
@@ -192,15 +189,15 @@ test.describe("app shell", () => {
               .backgroundColor,
         ),
       )
-      .toBe("rgb(248, 250, 252)");
+      .toBe("rgb(239, 241, 245)");
     await expect(
-      page.getByRole("button", { name: "Switch to dark theme" }),
+      page.getByRole("button", { name: "Switch to Catppuccin dark theme" }),
     ).toBeVisible();
 
     await page.reload();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await expect(
-      page.getByRole("button", { name: "Switch to dark theme" }),
+      page.getByRole("button", { name: "Switch to Catppuccin dark theme" }),
     ).toBeVisible();
   });
 
@@ -232,6 +229,7 @@ test.describe("app shell", () => {
           relay_amp: 10,
           driver: "simulator",
           notes: "Do not copy this note",
+          // Legacy global timing data is intentionally ignored by NewRunPage.
           poll_interval_ms: 5,
           direction: "reverse",
           pv_range_high: 100,
@@ -246,7 +244,7 @@ test.describe("app shell", () => {
     await expect(
       page.getByText("Loaded settings from the most recent tune."),
     ).toBeVisible();
-    await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("5");
+    await expect(page.getByLabel("Poll interval")).toHaveCount(0);
     await expect(page.getByLabel("Notes")).toHaveValue("");
   });
 

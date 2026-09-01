@@ -69,9 +69,17 @@ fn run_simulator_tune(
     process_type_arg: &str,
     controller_type_arg: &str,
 ) -> (Option<i32>, String, String) {
+    let config_path = db_path.with_file_name("bhtune.toml");
+    std::fs::write(
+        &config_path,
+        "[tuning]\npoll_interval_ms = 5\ntimeout_secs = 30\n",
+    )
+    .expect("failed to write test configuration");
     let output = Command::new(env!("CARGO_BIN_EXE_bhtune"))
         .arg("--db")
         .arg(db_path)
+        .arg("--config")
+        .arg(&config_path)
         .arg("--log-dir")
         .arg(log_dir)
         .args([
@@ -110,10 +118,6 @@ fn run_simulator_tune(
             "0",
             "--direction",
             "reverse",
-            "--poll-interval-ms",
-            "5",
-            "--timeout-secs",
-            "30",
             "--notes",
             "e2e-simulator-test",
             "--output",

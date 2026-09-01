@@ -4,7 +4,7 @@
 .SH NAME
 bhtune\-simulate \- Run a zero\-configuration demo MRFT tune against the built\-in FOPDT simulator
 .SH SYNOPSIS
-\fBbhtune\-simulate\fR [\fB\-t\fR|\fB\-\-tagname\fR] [\fB\-\-template\fR] [\fB\-\-process\-type\fR] [\fB\-\-controller\-type\fR] [\fB\-\-relay\-amp\fR] [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-mrft\-delay\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-poll\-interval\-ms\fR] [\fB\-\-timeout\-secs\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-op\-timeout\-secs\fR] [\fB\-\-restore\-timeout\-secs\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBbhtune\-simulate\fR [\fB\-t\fR|\fB\-\-tagname\fR] [\fB\-\-template\fR] [\fB\-\-process\-type\fR] [\fB\-\-controller\-type\fR] [\fB\-\-relay\-amp\fR] [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .SH DESCRIPTION
 Run a zero\-configuration demo MRFT tune against the built\-in FOPDT simulator
 .SH OPTIONS
@@ -59,9 +59,6 @@ pid
 \fB\-\-noise\-protection\-secs\fR \fI<NOISE_PROTECTION_SECS>\fR
 
 .TP
-\fB\-\-mrft\-delay\fR \fI<MRFT_DELAY>\fR [default: 0]
-
-.TP
 \fB\-\-sim\-gain\fR \fI<SIM_GAIN>\fR [default: 1]
 
 .TP
@@ -83,12 +80,6 @@ pid
 \fB\-\-sim\-initial\-mv\fR \fI<SIM_INITIAL_MV>\fR [default: 50]
 
 .TP
-\fB\-\-poll\-interval\-ms\fR \fI<POLL_INTERVAL_MS>\fR [default: 800]
-
-.TP
-\fB\-\-timeout\-secs\fR \fI<TIMEOUT_SECS>\fR [default: 3600]
-See `TuneArgs::timeout_secs`
-.TP
 \fB\-\-notes\fR \fI<NOTES>\fR
 Operator notes to attach to this run. See [`TuneArgs::notes`]
 .TP
@@ -109,12 +100,6 @@ moderate
 .IP \(bu 2
 sluggish
 .RE
-.TP
-\fB\-\-op\-timeout\-secs\fR \fI<OP_TIMEOUT_SECS>\fR [default: 30]
-See `TuneArgs::op_timeout_secs`
-.TP
-\fB\-\-restore\-timeout\-secs\fR \fI<RESTORE_TIMEOUT_SECS>\fR [default: 30]
-See `TuneArgs::restore_timeout_secs`
 .TP
 \fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
 See `TuneArgs::output`

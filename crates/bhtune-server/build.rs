@@ -25,6 +25,8 @@
 //! anything yet -- `spa.rs`'s own `#[allow_missing = true]` and its `Assets::iter().next()`
 //! check already handle "exists but empty" with a clear 503 rather than a confusing 404.
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(coverage)");
+
     let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../frontend/dist");
     // Best-effort: on the rare filesystem where this fails (read-only checkout, a race with
     // another concurrent build), `rust-embed`'s existing `allow_missing` handling is the

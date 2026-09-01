@@ -40,6 +40,53 @@ export const RESPONSE_LEVELS: readonly ResponseLevel[] = [
   "sluggish",
 ];
 
+export type ProcessDefaults = {
+  readonly cyclesSkip: number;
+  readonly cyclesCount: number;
+  readonly noiseProtectionSecs: number;
+};
+
+/** Mirrors the authoritative defaults from `bhtune_core::ProcessType`. */
+const PROCESS_DEFAULTS = {
+  flow: { cyclesSkip: 1, cyclesCount: 2, noiseProtectionSecs: 3 },
+  pressure_line: { cyclesSkip: 1, cyclesCount: 2, noiseProtectionSecs: 3 },
+  pressure_vessel: { cyclesSkip: 1, cyclesCount: 1, noiseProtectionSecs: 10 },
+  level: { cyclesSkip: 1, cyclesCount: 1, noiseProtectionSecs: 10 },
+  temperature_mixing: {
+    cyclesSkip: 1,
+    cyclesCount: 1,
+    noiseProtectionSecs: 20,
+  },
+  temperature_heat_exchange: {
+    cyclesSkip: 1,
+    cyclesCount: 1,
+    noiseProtectionSecs: 20,
+  },
+} satisfies Record<ProcessType, ProcessDefaults>;
+
+export function processDefaultsFor(processType: ProcessType): ProcessDefaults {
+  return PROCESS_DEFAULTS[processType];
+}
+
+const TAG_OVERRIDE_KEYS: readonly TagOverrideKey[] = [
+  "processVariable",
+  "manipulatedVariable",
+  "setpointVariable",
+  "controllerMode",
+  "modeAttribute",
+  "proportionalConstant",
+  "integralConstant",
+  "derivativeConstant",
+];
+
+const VALUE_MAPPING_KEYS: readonly ValueMappingKey[] = [
+  "direction",
+  "pvRangeHigh",
+  "pvRangeLow",
+  "mvRangeHigh",
+  "mvRangeLow",
+];
+
 /** Mirrors `bhtune_core::ProcessType::allows_pid`. */
 export const TEMPERATURE_PROCESS_TYPES = new Set<ProcessType>([
   "temperature_mixing",
@@ -106,11 +153,6 @@ export type FormState = {
   cyclesSkip: NumOrBlank;
   cyclesCount: NumOrBlank;
   noiseProtectionSecs: NumOrBlank;
-  mrftDelay: NumOrBlank;
-  pollIntervalMs: NumOrBlank;
-  timeoutSecs: NumOrBlank;
-  opTimeoutSecs: NumOrBlank;
-  restoreTimeoutSecs: NumOrBlank;
   tagSources: TagMappingSources;
   valueSources: ValueMappingSources;
   valueTagOverrides: ValueTagOverrideFormState;
@@ -150,14 +192,7 @@ export const initialForm: FormState = {
   processType: "flow",
   controllerType: "pi",
   relayAmp: 10,
-  cyclesSkip: "",
-  cyclesCount: "",
-  noiseProtectionSecs: "",
-  mrftDelay: 0,
-  pollIntervalMs: 800,
-  timeoutSecs: 3600,
-  opTimeoutSecs: 30,
-  restoreTimeoutSecs: 30,
+  ...processDefaultsFor("flow"),
   tagSources: { ...DEFAULT_TAG_MAPPING_SOURCES },
   valueSources: { ...DEFAULT_VALUE_MAPPING_SOURCES },
   opcDirection: "",
@@ -193,6 +228,30 @@ function toNumOrBlank(value: number | null | undefined): NumOrBlank {
 
 function toNullable(value: NumOrBlank): number | null {
   return value === "" ? null : value;
+}
+
+type ProcessDefaultInputs = {
+  readonly cyclesSkip: number | null | undefined;
+  readonly cyclesCount: number | null | undefined;
+  readonly noiseProtectionSecs: number | null | undefined;
+};
+
+type ProcessDefaultFormFields = Pick<
+  FormState,
+  "cyclesSkip" | "cyclesCount" | "noiseProtectionSecs"
+>;
+
+function processDefaultFields(
+  processType: ProcessType,
+  values: ProcessDefaultInputs,
+): ProcessDefaultFormFields {
+  const defaults = processDefaultsFor(processType);
+  return {
+    cyclesSkip: values.cyclesSkip ?? defaults.cyclesSkip,
+    cyclesCount: values.cyclesCount ?? defaults.cyclesCount,
+    noiseProtectionSecs:
+      values.noiseProtectionSecs ?? defaults.noiseProtectionSecs,
+  };
 }
 
 function formTagOverrides(
@@ -293,6 +352,36 @@ const TAG_SOURCE_FIELDS: readonly [TagOverrideKey, keyof TagOverrides][] = [
   ["derivativeConstant", "derivative_constant"],
 ];
 
+/**
+ * Applies a new base tag and invalidates every custom mapping that could still point at the
+ * previous loop. Fixed direction/range values are independent of the base tag and remain intact.
+ */
+export function applyTagNameChange(
+  form: FormState,
+  tagname: string,
+): FormState {
+  if (form.tagname === tagname) return form;
+
+  const tagSources = { ...form.tagSources };
+  for (const key of TAG_OVERRIDE_KEYS) {
+    if (tagSources[key] === "custom") tagSources[key] = "template";
+  }
+
+  const valueSources = { ...form.valueSources };
+  for (const key of VALUE_MAPPING_KEYS) {
+    if (valueSources[key] === "custom") valueSources[key] = "tag";
+  }
+
+  return {
+    ...form,
+    tagname,
+    tagSources,
+    valueSources,
+    tagOverrides: { ...EMPTY_TAG_OVERRIDES },
+    valueTagOverrides: { ...EMPTY_VALUE_TAG_OVERRIDES },
+  };
+}
+
 function inferTagSources(
   overrides: TagOverrides | null | undefined,
 ): TagMappingSources {
@@ -323,23 +412,23 @@ function inferRequestValueSources(
   const overrides = request.tag_overrides;
   return {
     direction: valueSource(
-      request.direction !== undefined,
+      request.direction !== null && request.direction !== undefined,
       overrides?.controller_direction,
     ),
     pvRangeHigh: valueSource(
-      request.pv_range_high !== undefined,
+      request.pv_range_high !== null && request.pv_range_high !== undefined,
       overrides?.upper_pv_range,
     ),
     pvRangeLow: valueSource(
-      request.pv_range_low !== undefined,
+      request.pv_range_low !== null && request.pv_range_low !== undefined,
       overrides?.lower_pv_range,
     ),
     mvRangeHigh: valueSource(
-      request.mv_range_high !== undefined,
+      request.mv_range_high !== null && request.mv_range_high !== undefined,
       overrides?.upper_mv_range,
     ),
     mvRangeLow: valueSource(
-      request.mv_range_low !== undefined,
+      request.mv_range_low !== null && request.mv_range_low !== undefined,
       overrides?.lower_mv_range,
     ),
   };
@@ -441,9 +530,16 @@ function requestSimulatorNumber(
 
 /**
  * Converts a stored [`StartRunRequest`] into form state. Optional ranges and direction remain
- * blank when the original request omitted them; resolved server defaults are copied through.
+ * blank when the original request omitted them; process defaults are shown when their values
+ * were omitted.
  */
 export function formFromRequest(request: StartRunRequest): FormState {
+  const processDefaults = processDefaultFields(request.process_type, {
+    cyclesSkip: request.cycles_skip,
+    cyclesCount: request.cycles_count,
+    noiseProtectionSecs: request.noise_protection_secs,
+  });
+
   return {
     driver: request.driver,
     template: request.template,
@@ -454,15 +550,7 @@ export function formFromRequest(request: StartRunRequest): FormState {
     processType: request.process_type,
     controllerType: request.controller_type,
     relayAmp: request.relay_amp,
-    cyclesSkip: toNumOrBlank(request.cycles_skip),
-    cyclesCount: toNumOrBlank(request.cycles_count),
-    noiseProtectionSecs: toNumOrBlank(request.noise_protection_secs),
-    mrftDelay: request.mrft_delay ?? initialForm.mrftDelay,
-    pollIntervalMs: request.poll_interval_ms ?? initialForm.pollIntervalMs,
-    timeoutSecs: request.timeout_secs ?? initialForm.timeoutSecs,
-    opTimeoutSecs: request.op_timeout_secs ?? initialForm.opTimeoutSecs,
-    restoreTimeoutSecs:
-      request.restore_timeout_secs ?? initialForm.restoreTimeoutSecs,
+    ...processDefaults,
     tagSources: inferTagSources(request.tag_overrides),
     valueSources: inferRequestValueSources(request),
     valueTagOverrides: formValueTagOverrides(request.tag_overrides),
@@ -542,10 +630,12 @@ function draftSimulatorNumber(
 
 /**
  * Converts the mutable saved draft into form state. `undefined` means an older or partial
- * draft omitted a field and should use the built-in default; `null` means it was cleared.
+ * draft omitted a field and should use the built-in default; `null` means it was cleared,
+ * except for process defaults, where it resolves to the selected process type's value.
  */
 export function formFromDraft(draft: NewRunDraft): FormState {
   const driver = draft.driver ?? initialForm.driver;
+  const processType = draft.process_type ?? initialForm.processType;
   const valueSources = inferDraftValueSources(draft);
   const legacyOpc =
     draft.source_driver === "opcda" ||
@@ -563,6 +653,11 @@ export function formFromDraft(draft: NewRunDraft): FormState {
     draft.value_sources !== undefined;
   const restoreOpcValues =
     separatedMappingState || legacyOpc || driver === "opcda";
+  const processDefaults = processDefaultFields(processType, {
+    cyclesSkip: draft.cycles_skip,
+    cyclesCount: draft.cycles_count,
+    noiseProtectionSecs: draft.noise_protection_secs,
+  });
 
   return {
     driver,
@@ -571,26 +666,10 @@ export function formFromDraft(draft: NewRunDraft): FormState {
     tagname: draftText(draft.tagname, initialForm.tagname),
     server: draft.server ?? "",
     bridgeHost: draft.bridge_host ?? "",
-    processType: draft.process_type ?? initialForm.processType,
+    processType,
     controllerType: draft.controller_type ?? initialForm.controllerType,
     relayAmp: toNumOrBlank(draft.relay_amp),
-    cyclesSkip: toNumOrBlank(draft.cycles_skip),
-    cyclesCount: toNumOrBlank(draft.cycles_count),
-    noiseProtectionSecs: toNumOrBlank(draft.noise_protection_secs),
-    mrftDelay: draftNumber(draft.mrft_delay, initialForm.mrftDelay),
-    pollIntervalMs: draftNumber(
-      draft.poll_interval_ms,
-      initialForm.pollIntervalMs,
-    ),
-    timeoutSecs: draftNumber(draft.timeout_secs, initialForm.timeoutSecs),
-    opTimeoutSecs: draftNumber(
-      draft.op_timeout_secs,
-      initialForm.opTimeoutSecs,
-    ),
-    restoreTimeoutSecs: draftNumber(
-      draft.restore_timeout_secs,
-      initialForm.restoreTimeoutSecs,
-    ),
+    ...processDefaults,
     tagSources: draftTagSources(draft),
     valueSources,
     valueTagOverrides: formValueTagOverrides(draft.tag_overrides),
@@ -656,11 +735,6 @@ export function draftFromForm(form: FormState): NewRunDraft {
     cycles_skip: toNullable(form.cyclesSkip),
     cycles_count: toNullable(form.cyclesCount),
     noise_protection_secs: toNullable(form.noiseProtectionSecs),
-    mrft_delay: toNullable(form.mrftDelay),
-    poll_interval_ms: toNullable(form.pollIntervalMs),
-    timeout_secs: toNullable(form.timeoutSecs),
-    op_timeout_secs: toNullable(form.opTimeoutSecs),
-    restore_timeout_secs: toNullable(form.restoreTimeoutSecs),
     direction: form.opcDirection || null,
     pv_range_high: toNullable(form.opcPvRangeHigh),
     pv_range_low: toNullable(form.opcPvRangeLow),
@@ -810,6 +884,8 @@ function validateForm(form: FormState): string | undefined {
     return "OPC DA server ProgID is required for the opcda driver.";
   }
   if (form.relayAmp === "") return "Relay amplitude is required.";
+  const processDefaults = requiredProcessDefaults(form);
+  if (typeof processDefaults === "string") return processDefaults;
   const mappingError =
     form.driver === "simulator"
       ? validateSimulatorMappings(form)
@@ -819,6 +895,19 @@ function validateForm(form: FormState): string | undefined {
     return "Enable Allow automatic PID write to apply PID settings without a prompt, or clear the automatic PID setting.";
   }
   return undefined;
+}
+
+function requiredProcessDefaults(form: FormState): ProcessDefaults | string {
+  if (form.cyclesSkip === "") return "Cycles to skip is required.";
+  if (form.cyclesCount === "") return "Cycles to count is required.";
+  if (form.noiseProtectionSecs === "") {
+    return "Noise protection is required.";
+  }
+  return {
+    cyclesSkip: form.cyclesSkip,
+    cyclesCount: form.cyclesCount,
+    noiseProtectionSecs: form.noiseProtectionSecs,
+  };
 }
 
 function mappedRangeValue(
@@ -859,6 +948,8 @@ export function buildRequest(form: FormState): StartRunRequest | string {
   if (validationError) return validationError;
   const relayAmp = form.relayAmp === "" ? undefined : form.relayAmp;
   if (relayAmp === undefined) return "Relay amplitude is required.";
+  const processDefaults = requiredProcessDefaults(form);
+  if (typeof processDefaults === "string") return processDefaults;
 
   return {
     tagname: form.tagname.trim(),
@@ -866,10 +957,9 @@ export function buildRequest(form: FormState): StartRunRequest | string {
     process_type: form.processType,
     controller_type: form.controllerType,
     relay_amp: relayAmp,
-    cycles_skip: toOptional(form.cyclesSkip),
-    cycles_count: toOptional(form.cyclesCount),
-    noise_protection_secs: toOptional(form.noiseProtectionSecs),
-    mrft_delay: toOptional(form.mrftDelay),
+    cycles_skip: processDefaults.cyclesSkip,
+    cycles_count: processDefaults.cyclesCount,
+    noise_protection_secs: processDefaults.noiseProtectionSecs,
     driver: form.driver,
     bridge_host: form.bridgeHost.trim() || undefined,
     server: requestServer(form),
@@ -911,12 +1001,8 @@ export function buildRequest(form: FormState): StartRunRequest | string {
       form.opcDirection,
     ),
     tag_overrides: requestTagOverrides(form),
-    poll_interval_ms: toOptional(form.pollIntervalMs),
-    timeout_secs: toOptional(form.timeoutSecs),
     notes: form.notes.trim() || undefined,
     yes: form.yes,
     write_pid: form.writePid || undefined,
-    op_timeout_secs: toOptional(form.opTimeoutSecs),
-    restore_timeout_secs: toOptional(form.restoreTimeoutSecs),
   };
 }

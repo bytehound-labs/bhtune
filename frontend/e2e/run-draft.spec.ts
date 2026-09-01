@@ -132,6 +132,96 @@ test.describe("New Tune draft persistence", () => {
     ).toHaveCount(0);
   });
 
+  test("shows process-type defaults for legacy null draft values", async ({
+    page,
+  }) => {
+    await page.goto("/runs/new");
+    await waitForDraftHydration(page);
+
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("3");
+    await expect(
+      page.getByRole("group", { name: "Process defaults", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("resets process defaults when the process type changes", async ({
+    page,
+  }) => {
+    await page.goto("/runs/new");
+    await waitForDraftHydration(page);
+
+    await page.getByLabel("Cycles to skip").fill("8");
+    await page.getByLabel("Cycles to count").fill("9");
+    await page.getByLabel("Noise protection (s)").fill("11");
+    await page.getByLabel("Relay amplitude (%)").fill("12");
+    await page
+      .getByRole("combobox", { name: "Process type", exact: true })
+      .selectOption("pressure_vessel");
+
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("1");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("10");
+    await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("12");
+
+    await page.getByLabel("Cycles to skip").fill("8");
+    await page.getByLabel("Cycles to count").fill("9");
+    await page.getByLabel("Noise protection (s)").fill("11");
+    await page
+      .getByRole("button", { name: "Reset process defaults", exact: true })
+      .click();
+
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("1");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("10");
+    await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("12");
+  });
+
+  test("preserves explicit process settings until reset", async ({
+    page,
+    request,
+  }) => {
+    const response = await request.put("/api/runs/draft", {
+      data: {
+        ...defaultDraft,
+        cycles_skip: 7,
+        cycles_count: 8,
+        noise_protection_secs: 0,
+      },
+    });
+    expect(response.ok()).toBeTruthy();
+
+    await page.goto("/runs/new");
+    await waitForDraftHydration(page);
+
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("7");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("8");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
+
+    await page
+      .getByRole("button", { name: "Reset process defaults", exact: true })
+      .click();
+
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("3");
+  });
+
+  test("rejects a cleared process default before starting a tune", async ({
+    page,
+  }) => {
+    await page.goto("/runs/new");
+    await waitForDraftHydration(page);
+    await page.getByLabel("Cycles to count").fill("");
+
+    await page.getByRole("button", { name: "Start tune", exact: true }).click();
+
+    await expect(
+      page.getByText("Cycles to count is required.", { exact: true }),
+    ).toBeVisible();
+  });
+
   test("restores connection values after reload and keeps Notes blank", async ({
     page,
   }) => {
@@ -306,6 +396,9 @@ test.describe("New Tune draft persistence", () => {
     await page.getByRole("button", { name: "Duplicate this run" }).click();
     await expect(page).toHaveURL(/\/runs\/new$/);
     await expect(page.getByLabel("Tag name")).toHaveValue("Duplicate.Loop.PV");
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
     await expect(
       mappingRow(page, "Manipulated variable (MV)").getByLabel(
         "Manipulated variable (MV) custom tag",
@@ -321,6 +414,9 @@ test.describe("New Tune draft persistence", () => {
 
     await waitForDraftHydration(page);
     await expect(page.getByLabel("Tag name")).toHaveValue("Duplicate.Loop.PV");
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
     await expect(
       mappingRow(page, "Manipulated variable (MV)").getByLabel(
         "Manipulated variable (MV) custom tag",
@@ -330,6 +426,145 @@ test.describe("New Tune draft persistence", () => {
     await expect(page.getByText("Loaded your saved Tune draft.")).toBeVisible();
   });
 
+  test("duplicates OPC mapping sources without converting template tags to fixed values", async ({
+    page,
+  }) => {
+    const originalRequest = {
+      driver: "opcda",
+      template: "Yokogawa CentumVP",
+      tagname: "FIC101.PV",
+      server: "Yokogawa.CSHIS_OPC.1",
+      bridge_host: "gateway.example:7600",
+      process_type: "flow",
+      controller_type: "pi",
+      relay_amp: 10,
+      cycles_skip: 1,
+      cycles_count: 2,
+      noise_protection_secs: 0,
+      mrft_delay: 0,
+      poll_interval_ms: 800,
+      timeout_secs: 3600,
+      op_timeout_secs: 30,
+      restore_timeout_secs: 30,
+      // Null and omitted values mean "read from the template", not "fixed value".
+      direction: null,
+      pv_range_high: 90,
+      mv_range_low: 0,
+      tag_overrides: {
+        manipulated_variable: "FIC101.PY",
+        lower_pv_range: "FIC101.PVLOW",
+      },
+      yes: false,
+    };
+
+    await page.route("**/api/runs/7", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: 7,
+          driver: "opcda",
+          outcome: "completed",
+          tag_name: "FIC101.PV",
+          template_name: "Yokogawa CentumVP",
+          template_origin: "builtin",
+          started_at: "2025-01-01T12:00:00Z",
+          completed_at: "2025-01-01T12:01:00Z",
+          allow_uncertain_quality: true,
+          bridge_host: "gateway.example:7600",
+          opc_server: "Yokogawa.CSHIS_OPC.1",
+          config: {
+            process_type: "flow",
+            controller_type: "pi",
+            relay_amp_percent: 10,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 0,
+            mrft_delay_secs: 0,
+          },
+          original_request: originalRequest,
+          mv_actuations: [],
+          results: [],
+          samples: [],
+          writes: [],
+          notes: null,
+          failure_reason: null,
+          restore_status: "confirmed",
+          restore_detail: null,
+          pid_constant_tags: null,
+          timing_metrics: null,
+          initial_readings: null,
+        }),
+      });
+    });
+
+    await page.goto("/runs/7");
+    await page.getByRole("button", { name: "Duplicate this run" }).click();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect(page.getByLabel("Tag name")).toHaveValue("FIC101.PV");
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
+    await expect(page.getByLabel("OPC DA server ProgID")).toHaveValue(
+      "Yokogawa.CSHIS_OPC.1",
+    );
+    await expect(page.getByLabel("Bridge host")).toHaveValue(
+      "gateway.example:7600",
+    );
+
+    await expect(
+      mappingRow(page, "Manipulated variable (MV)").getByRole("button", {
+        name: "Custom tag",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      mappingRow(page, "Manipulated variable (MV)").getByLabel(
+        "Manipulated variable (MV) custom tag",
+      ),
+    ).toHaveValue("FIC101.PY");
+
+    await expect(
+      mappingRow(page, "Controller direction").getByRole("button", {
+        name: "Template tag",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      mappingRow(page, "PV range low").getByRole("button", {
+        name: "Custom tag",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      mappingRow(page, "PV range low").getByLabel(
+        "PV range low custom read tag",
+      ),
+    ).toHaveValue("FIC101.PVLOW");
+    await expect(
+      mappingRow(page, "PV range high").getByRole("button", {
+        name: "Fixed value",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      mappingRow(page, "PV range high").getByLabel("PV range high fixed value"),
+    ).toHaveValue("90");
+    await expect(
+      mappingRow(page, "MV range low").getByRole("button", {
+        name: "Fixed value",
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      mappingRow(page, "MV range low").getByLabel("MV range low fixed value"),
+    ).toHaveValue("0");
+  });
+
   test("persists Reset to defaults", async ({ page }) => {
     await page.goto("/runs/new");
     await waitForDraftHydration(page);
@@ -337,10 +572,10 @@ test.describe("New Tune draft persistence", () => {
       .getByRole("combobox", { name: "Driver", exact: true })
       .selectOption("opcda");
     await expect(page.getByLabel("Bridge host")).toBeEnabled();
-    await page.getByLabel("Poll interval (ms)").fill("123");
+    await page.getByLabel("Relay amplitude (%)").fill("12");
     await setCustomTag(page, "Manipulated variable (MV)", "Loop.PY");
     await waitForDraftSave(page);
-    await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("123");
+    await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("12");
 
     await page.getByRole("button", { name: "Reset to defaults" }).click();
     await waitForDraftSave(page);
@@ -349,7 +584,10 @@ test.describe("New Tune draft persistence", () => {
     await expect(
       page.getByRole("combobox", { name: "Driver", exact: true }),
     ).toHaveValue("simulator");
-    await expect(page.getByLabel("Poll interval (ms)")).toHaveValue("800");
+    await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("10");
+    await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
+    await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
+    await expect(page.getByLabel("Noise protection (s)")).toHaveValue("3");
     const mvRow = mappingRow(page, "Manipulated variable (MV)");
     await expect(
       mvRow.getByRole("button", { name: "Template tag", exact: true }),

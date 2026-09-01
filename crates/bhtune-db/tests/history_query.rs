@@ -10,10 +10,11 @@ use bhtune_core::{
     tuning_math::{PidParameters, TuningResult},
 };
 use bhtune_db::{
-    connect_in_memory,
+    DbError, connect_in_memory,
     models::{
-        DcsTemplateRow, NewTuneWrite, Pagination, RollbackState, SampleQuality, TemplateOrigin,
-        TimingBasis, TimingMetrics, TuneDriver, TuneOutcome, TuneResultRow, TuneRunFilter,
+        DcsTemplateRow, EffectiveTuning, MvActuationKind, MvActuationStatus, NewTuneMvActuation,
+        NewTuneWrite, Pagination, RollbackState, SampleQuality, TemplateOrigin, TimingBasis,
+        TimingMetrics, TuneDriver, TuneMvActuationRow, TuneOutcome, TuneResultRow, TuneRunFilter,
         TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
     },
 };
@@ -98,6 +99,18 @@ fn sample_initial_readings() -> TuneRunInitialReadings {
     }
 }
 
+fn sample_mv_actuation(sequence: i64, commanded_at: DateTime<Utc>) -> NewTuneMvActuation {
+    NewTuneMvActuation {
+        sequence,
+        kind: MvActuationKind::Relay,
+        commanded_at,
+        target_mv: 55.0,
+        previous_commanded_mv: Some(45.0),
+        tolerance: 0.1,
+        confirmation_due_at: commanded_at + Duration::seconds(4),
+    }
+}
+
 fn sample_timing_metrics() -> TimingMetrics {
     TimingMetrics {
         basis: TimingBasis::LiveMonotonic,
@@ -108,6 +121,16 @@ fn sample_timing_metrics() -> TimingMetrics {
         missed_poll_opportunity_count: 1,
         measured_oscillation_period_ms: Some(12_345.0),
         approximate_samples_per_period: Some(13.713_69),
+    }
+}
+
+fn sample_effective_tuning() -> EffectiveTuning {
+    EffectiveTuning {
+        mrft_delay_secs: 12,
+        poll_interval_ms: 900,
+        timeout_secs: 4_000,
+        op_timeout_secs: 31,
+        restore_timeout_secs: 32,
     }
 }
 
@@ -197,6 +220,10 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
         started.timing_metrics.is_none(),
         "timing metrics stay absent until polling has produced a diagnostic snapshot"
     );
+    assert!(
+        started.effective_tuning.is_none(),
+        "old/source-compatible start calls have no effective tuning snapshot"
+    );
 
     let readings = sample_initial_readings();
     let with_readings = TuneRunRow::record_initial_readings(&pool, started.id, readings.clone())
@@ -223,6 +250,43 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
 
     let fetched = TuneRunRow::get(&pool, started.id).await.unwrap().unwrap();
     assert_eq!(fetched, completed);
+}
+
+#[tokio::test]
+async fn run_effective_tuning_round_trips_without_changing_lifecycle_state() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC-EFFECTIVE-TUNING",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(run.effective_tuning, None);
+
+    let effective_tuning = sample_effective_tuning();
+    let updated = TuneRunRow::record_effective_tuning(&pool, run.id, effective_tuning)
+        .await
+        .unwrap();
+
+    assert_eq!(updated.effective_tuning, Some(effective_tuning));
+    assert_eq!(updated.outcome, TuneOutcome::Running);
+    assert_eq!(updated.completed_at, None);
+    assert_eq!(
+        TuneRunRow::get(&pool, run.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .effective_tuning,
+        Some(effective_tuning)
+    );
 }
 
 #[tokio::test]
@@ -328,6 +392,36 @@ async fn terminal_transitions_publish_timing_metrics_with_the_outcome() {
     .unwrap();
     assert_eq!(aborted.outcome, TuneOutcome::Aborted);
     assert_eq!(aborted.timing_metrics, Some(metrics));
+    assert!(aborted.failure_reason.is_none());
+
+    let actuation_aborting = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC-TIMING-ACTUATION-ABORT",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        now,
+    )
+    .await
+    .unwrap();
+    let actuation_aborted = TuneRunRow::abort_with_timing_metrics_and_reason(
+        &pool,
+        actuation_aborting.id,
+        now + Duration::seconds(20),
+        Some(metrics),
+        "MV readback 45 missed target 55 ± 0.1",
+    )
+    .await
+    .unwrap();
+    assert_eq!(actuation_aborted.outcome, TuneOutcome::Aborted);
+    assert_eq!(actuation_aborted.timing_metrics, Some(metrics));
+    assert_eq!(
+        actuation_aborted.failure_reason.as_deref(),
+        Some("MV readback 45 missed target 55 ± 0.1")
+    );
 }
 
 #[tokio::test]
@@ -1414,6 +1508,258 @@ async fn tune_result_list_for_run_is_empty_for_an_incomplete_run() {
 }
 // }}}1
 
+// tune_mv_actuations {{{1
+
+#[tokio::test]
+async fn tune_mv_actuation_records_observations_and_atomic_finalization() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC110",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let commanded_at = Utc::now();
+    let row = TuneMvActuationRow::insert_pending(
+        &pool,
+        run.id,
+        NewTuneMvActuation {
+            sequence: 0,
+            kind: MvActuationKind::Relay,
+            commanded_at,
+            target_mv: 55.0,
+            previous_commanded_mv: Some(45.0),
+            tolerance: 0.1,
+            confirmation_due_at: commanded_at + Duration::seconds(4),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(row.run_id, run.id);
+    assert_eq!(row.sequence, 0);
+    assert_eq!(row.kind, MvActuationKind::Relay);
+    assert_eq!(row.commanded_at, commanded_at);
+    assert_eq!(row.target_mv, 55.0);
+    assert_eq!(row.previous_commanded_mv, Some(45.0));
+    assert_eq!(row.tolerance, 0.1);
+    assert_eq!(row.confirmation_due_at, commanded_at + Duration::seconds(4));
+    assert!(row.last_checked_at.is_none());
+    assert!(row.readback_mv.is_none());
+    assert!(row.readback_quality.is_none());
+    assert_eq!(row.attempt_count, 0);
+    assert_eq!(row.status, MvActuationStatus::Pending);
+    assert!(row.detail.is_none());
+
+    let unreadable_check = commanded_at + Duration::seconds(2);
+    let row = TuneMvActuationRow::record_observation(&pool, row.id, unreadable_check, None, None)
+        .await
+        .unwrap();
+    assert_eq!(row.last_checked_at, Some(unreadable_check));
+    assert!(row.readback_mv.is_none());
+    assert!(row.readback_quality.is_none());
+    assert_eq!(row.attempt_count, 1);
+    assert_eq!(row.status, MvActuationStatus::Pending);
+
+    let early_check = commanded_at + Duration::seconds(3);
+    let row = TuneMvActuationRow::record_observation(
+        &pool,
+        row.id,
+        early_check,
+        Some(54.5),
+        Some(SampleQuality::Uncertain),
+    )
+    .await
+    .unwrap();
+    assert_eq!(row.last_checked_at, Some(early_check));
+    assert_eq!(row.readback_mv, Some(54.5));
+    assert_eq!(row.readback_quality, Some(SampleQuality::Uncertain));
+    assert_eq!(row.attempt_count, 2);
+    assert_eq!(row.status, MvActuationStatus::Pending);
+
+    let final_check = commanded_at + Duration::seconds(4);
+    let row = TuneMvActuationRow::record_final_observation(
+        &pool,
+        row.id,
+        final_check,
+        Some(55.02),
+        Some(SampleQuality::Good),
+        MvActuationStatus::Confirmed,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(row.last_checked_at, Some(final_check));
+    assert_eq!(row.readback_mv, Some(55.02));
+    assert_eq!(row.readback_quality, Some(SampleQuality::Good));
+    assert_eq!(row.attempt_count, 3);
+    assert_eq!(row.status, MvActuationStatus::Confirmed);
+    assert!(row.detail.is_none());
+}
+
+#[tokio::test]
+async fn tune_mv_actuation_list_orders_by_sequence_not_insert_or_command_time() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC110A",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let t0 = Utc::now();
+
+    for (sequence, kind, commanded_at) in [
+        (2, MvActuationKind::Restore, t0),
+        (0, MvActuationKind::Relay, t0 + Duration::seconds(5)),
+        (1, MvActuationKind::Relay, t0 + Duration::seconds(2)),
+    ] {
+        TuneMvActuationRow::insert_pending(
+            &pool,
+            run.id,
+            NewTuneMvActuation {
+                sequence,
+                kind,
+                commanded_at,
+                target_mv: 50.0 + sequence as f32,
+                previous_commanded_mv: None,
+                tolerance: 0.1,
+                confirmation_due_at: commanded_at + Duration::seconds(4),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let rows = TuneMvActuationRow::list_for_run(&pool, run.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(rows[2].kind, MvActuationKind::Restore);
+}
+
+#[tokio::test]
+async fn tune_mv_actuation_terminal_finalization_changes_only_pending_rows_for_one_run() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC110B",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let other_run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC110C",
+        TuneDriver::Opcda,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let t0 = Utc::now();
+
+    let already_final =
+        TuneMvActuationRow::insert_pending(&pool, run.id, sample_mv_actuation(0, t0))
+            .await
+            .unwrap();
+    TuneMvActuationRow::finalize(
+        &pool,
+        already_final.id,
+        MvActuationStatus::Failed,
+        Some("readback stayed at 45"),
+    )
+    .await
+    .unwrap();
+    TuneMvActuationRow::insert_pending(
+        &pool,
+        run.id,
+        sample_mv_actuation(1, t0 + Duration::seconds(1)),
+    )
+    .await
+    .unwrap();
+    TuneMvActuationRow::insert_pending(
+        &pool,
+        run.id,
+        sample_mv_actuation(2, t0 + Duration::seconds(2)),
+    )
+    .await
+    .unwrap();
+    TuneMvActuationRow::insert_pending(&pool, other_run.id, sample_mv_actuation(0, t0))
+        .await
+        .unwrap();
+
+    let updated = TuneMvActuationRow::finalize_pending_for_run(
+        &pool,
+        run.id,
+        MvActuationStatus::Unverified,
+        Some("run ended before confirmation"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated, 2);
+
+    let rows = TuneMvActuationRow::list_for_run(&pool, run.id)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].status, MvActuationStatus::Failed);
+    assert_eq!(rows[0].detail.as_deref(), Some("readback stayed at 45"));
+    assert!(rows[1..].iter().all(|row| {
+        row.status == MvActuationStatus::Unverified
+            && row.detail.as_deref() == Some("run ended before confirmation")
+    }));
+    let other_rows = TuneMvActuationRow::list_for_run(&pool, other_run.id)
+        .await
+        .unwrap();
+    assert_eq!(other_rows[0].status, MvActuationStatus::Pending);
+    let superseded = TuneMvActuationRow::finalize(
+        &pool,
+        other_rows[0].id,
+        MvActuationStatus::Superseded,
+        Some("restore command took over confirmation"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(superseded.status, MvActuationStatus::Superseded);
+
+    let error = TuneMvActuationRow::finalize_pending_for_run(
+        &pool,
+        run.id,
+        MvActuationStatus::Pending,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, DbError::InvalidMvActuationFinalStatus));
+}
+// }}}1
+
 // tune_writes {{{1
 
 #[tokio::test]
@@ -1729,7 +2075,7 @@ async fn delete_matching_with_no_matches_deletes_nothing_and_returns_zero() {
 }
 
 #[tokio::test]
-async fn delete_matching_cascades_to_samples_results_and_writes() {
+async fn delete_matching_cascades_to_samples_results_mv_actuations_and_writes() {
     let pool = connect_in_memory().await.unwrap();
     let now = Utc::now();
     let run = TuneRunRow::start(
@@ -1773,6 +2119,9 @@ async fn delete_matching_cascades_to_samples_results_and_writes() {
     TuneWriteRow::insert(&pool, run.id, new_write)
         .await
         .unwrap();
+    TuneMvActuationRow::insert_pending(&pool, run.id, sample_mv_actuation(0, now))
+        .await
+        .unwrap();
 
     let deleted = TuneRunRow::delete_matching(
         &pool,
@@ -1797,6 +2146,12 @@ async fn delete_matching_cascades_to_samples_results_and_writes() {
     );
     assert!(
         TuneWriteRow::list_for_run(&pool, run.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        TuneMvActuationRow::list_for_run(&pool, run.id)
             .await
             .unwrap()
             .is_empty()
