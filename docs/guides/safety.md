@@ -92,7 +92,10 @@ sampling remains writable, but should be reviewed against the trend and the reco
 before it is applied.
 
 The timing snapshot includes successful PV-read, MV-write, MV-verification-read,
-sample-persistence, and total-tick-work latency summaries in addition to sample gaps. Failed,
+sample-persistence, and total-tick-work latency summaries in addition to sample gaps. When a
+pending relay is checked by the normal batched PV/MV poll, the same underlying OPC operation may
+contribute to both the PV-read and MV-verification categories; those categories describe
+overlapping evidence and must not be added together as independent network durations. Failed,
 cancelled, and timed-out operations are excluded from these successful-latency measurements.
 
 ## Input validation
@@ -118,11 +121,17 @@ measurement can arise from a future algorithm or data-path defect.
 
 ## MV actuation verification
 
-Every accepted OPC DA relay write is read back before a later relay command can replace it. The
-first check occurs at the earlier of the MRFT noise-protection boundary and four seconds after
-write acceptance. An early mismatch remains pending and is retried; a mismatch at four seconds,
-or when the engine genuinely needs the next relay command, aborts the run without writing the
-replacement.
+Every accepted OPC DA relay write is read back before a later relay command can replace it. While
+that command is pending, the normal poll requests PV and MV in one deduplicated batch and evaluates
+the MV observation before the PV sample is persisted or the MRFT engine advances. This makes the
+normal poll the primary verification path without weakening the safety rule. If normal polling
+does not provide usable evidence before the deadline, a separately bounded MV-only read remains
+available as a fallback.
+
+The first check occurs at the earlier of the MRFT noise-protection boundary and four seconds
+after write acceptance. An early mismatch remains pending and is retried; a mismatch at four
+seconds, or when the engine genuinely needs the next relay command, aborts the run without
+writing the replacement.
 
 The absolute tolerance combines the `f32` precision floor with 0.1% of the configured MV span.
 For relay commands it is capped at 25% of the actual step, preventing a wide range from making a
@@ -137,9 +146,11 @@ not confirm the command. The fresh read started at the deadline is independently
 second, rather than inheriting the full per-operation timeout, so a stalled read cannot hold the
 tune open indefinitely.
 
-Verification reads are separate from PV samples: they do not advance MRFT time, add trend/export
-samples, or increment polling timing statistics. `bhtune history show <run>` records each
-accepted command, observation, tolerance, deadline, and final status.
+The MV observation is evidence about physical actuation, not a second trend point: it does not
+advance MRFT time or add a separate trend/export sample. A batched PV/MV request does, however,
+record the successful operation in both the PV-read and MV-verification latency categories;
+those categories overlap because they describe one request. `bhtune history show <run>` records
+each accepted command, observation, tolerance, deadline, and final status.
 
 ## OPC quality
 

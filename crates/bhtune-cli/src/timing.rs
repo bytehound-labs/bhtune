@@ -105,6 +105,9 @@ impl DurationAccumulator {
 
 #[derive(Debug, Default)]
 struct PollLatencyAccumulator {
+    // These categories are observational, not additive: a pending OPC relay check uses one
+    // batched read for both PV sampling and MV verification, so that operation can contribute
+    // the same elapsed duration to both summaries.
     pv_read: DurationAccumulator,
     mv_write: DurationAccumulator,
     mv_verification: DurationAccumulator,

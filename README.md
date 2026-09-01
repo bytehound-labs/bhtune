@@ -174,9 +174,11 @@ columns, and the derivative column remains visible for PI runs with `0` to clear
 derivative action.
 The run-detail page keeps its major sections independently collapsible: Calculated results,
 Trend, Summary, Notes, Test configuration, Initial readings, and PID change history start
-expanded, while **Sampling diagnostics** and **MV actuation verification** are lower
-diagnostic sections that start collapsed. Sampling adequacy is kept out of the primary
-results area because it is advisory and does not itself change the result or block a write.
+expanded, while **Sampling diagnostics** is a lower diagnostic section that starts collapsed.
+Sampling adequacy is kept out of the primary results area because it is advisory and does not
+itself change the result or block a write. Detailed MV command/readback evidence remains
+available through `bhtune history show`, the run-detail API, and structured logs rather than
+the normal web page.
 
 ## Installation
 
@@ -477,15 +479,20 @@ language, including exactly what happens on the first and second Ctrl+C:
   run-detail API, and structured logs retain successful PV-read, MV-write, MV-verification-read,
   sample-persistence, and total-tick-work latency summaries. Failed, cancelled, and timed-out
   operations are not presented as successful timing measurements.
-- **Accepted OPC DA MV commands are physically verified.** Relay writes are read back before a
+- **Accepted OPC DA MV commands are physically verified.** While a relay command is pending,
+  the normal OPC DA poll requests PV and MV together, evaluates the MV evidence before the
+  engine advances, and avoids a competing second read. Relay writes are read back before a
   later relay step can replace them and no later than four seconds after acceptance. An early
   mismatch remains pending and is retried; a mismatch at the deadline, or when the next relay
-  step is required, aborts the tune without writing that replacement. Verification tolerance
-  combines the `f32` precision floor with 0.1% of the MV span and caps relay tolerance at 25% of
-  the actual step. The final snapback hands confirmation responsibility to the authoritative
-  restore write, avoiding duplicate waits. These checks are audited in run history and do not
-  create PV samples or advance MRFT timing. A readback that returns after the confirmation deadline
-  does not count, even if the read started before the deadline.
+  step is required, aborts the tune without writing that replacement. A bounded MV-only read
+  remains as a fallback when normal polling has not supplied usable evidence. Verification
+  tolerance combines the `f32` precision floor with 0.1% of the MV span and caps relay tolerance
+  at 25% of the actual step. The final snapback hands confirmation responsibility to the
+  authoritative restore write, avoiding duplicate waits. These checks are audited in run history;
+  the MV observation is not added as a trend sample or used as MRFT time, although the shared
+  batch contributes to both the PV-read and MV-verification latency categories. A readback that
+  returns after the confirmation deadline does not count, even if the read started before the
+  deadline.
   The fresh read started at that deadline has its own one-second bound, so a stalled MV read
   cannot consume the full per-operation timeout and leave the run waiting indefinitely.
 - **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) bounds putting the loop

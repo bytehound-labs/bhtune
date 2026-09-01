@@ -44,6 +44,7 @@ use crate::timing::{PollTimingAccumulator, RunTimeAnchor, TickTimeSource};
 pub const MV_ACTUATION_CONFIRMATION_SECS: u64 = 4;
 const MV_ACTUATION_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const MV_ACTUATION_DEADLINE_READ_MAX: Duration = Duration::from_secs(1);
+const MV_ACTUATION_FALLBACK_HEADROOM: Duration = Duration::from_secs(1);
 const MV_RESTORE_HANDOFF_READ_MAX: Duration = Duration::from_secs(1);
 const MV_SPAN_TOLERANCE_FRACTION: f32 = 0.001;
 const RELAY_STEP_TOLERANCE_FRACTION: f32 = 0.25;
@@ -1083,7 +1084,6 @@ struct PendingMvActuation {
     first_check_at: Instant,
     deadline: Instant,
     last_readback: Option<f32>,
-    precheck_deferred_for_poll: bool,
 }
 
 #[derive(Debug)]
@@ -1177,7 +1177,6 @@ impl MvActuationTracker {
             first_check_at: first_check_at.min(deadline),
             deadline,
             last_readback: None,
-            precheck_deferred_for_poll: false,
         });
         Ok(())
     }
@@ -1206,7 +1205,6 @@ impl MvActuationTracker {
             first_check_at: accepted_instant,
             deadline,
             last_readback: None,
-            precheck_deferred_for_poll: false,
         };
         let row = TuneMvActuationRow::insert_pending(
             pool,
@@ -1245,10 +1243,12 @@ impl MvActuationTracker {
 
     fn next_verification_wakeup(&self) -> Option<Instant> {
         self.pending.as_ref().map(|pending| {
-            if pending.last_readback.is_some() || pending.precheck_deferred_for_poll {
+            if pending.last_readback.is_some() {
                 pending.deadline
             } else {
-                pending.first_check_at
+                pending
+                    .first_check_at
+                    .max(pending.deadline - MV_ACTUATION_FALLBACK_HEADROOM)
             }
         })
     }
@@ -2007,13 +2007,12 @@ async fn resolve_direction_from_batch(
     }
 }
 
-/// Reads the PV tag for one in-flight MRFT poll tick, without hard-failing on its
-/// [`bhtune_driver::Quality`] the way [`read_f32`] does. `run_polling_loop` needs the raw
-/// quality alongside the value so it can record the sample (with its quality) *before*
-/// deciding whether to abort -- finding 5 requires "the sample that triggered it is
-/// recorded", which a propagated `anyhow::Error` from a `check_quality`-enforcing read would
-/// lose. Still hard-fails on a non-numeric/non-finite value regardless of quality, exactly
-/// like [`read_f32`], since that's a data-shape problem no quality policy can excuse.
+/// Test-only single-tag PV reader that preserves raw quality alongside the value. The production
+/// polling path uses [`read_poll_batch`] so pending OPC relay checks can share one read with PV
+/// sampling. This helper remains for focused tests of the single-tag parsing behavior and still
+/// hard-fails on non-numeric/non-finite values regardless of quality, exactly like [`read_f32`],
+/// since that's a data-shape problem no quality policy can excuse.
+#[cfg(test)]
 async fn read_pv_sample(
     driver: &dyn Driver,
     tag: &str,
@@ -2038,6 +2037,37 @@ async fn read_numeric_sample(
     if !numeric.is_finite() {
         anyhow::bail!("tag '{tag}' value '{}' is not a finite number", value.value);
     }
+    Ok((numeric, value.quality))
+}
+
+async fn read_poll_batch(
+    driver: &dyn Driver,
+    pv_tag: &str,
+    mv_tag: Option<&str>,
+) -> anyhow::Result<HashMap<String, TagValue>> {
+    let mut requested_tags = vec![pv_tag.to_string()];
+    if let Some(mv_tag) = mv_tag
+        && mv_tag != pv_tag
+    {
+        requested_tags.push(mv_tag.to_string());
+    }
+
+    Ok(driver
+        .read(&requested_tags)
+        .await?
+        .into_iter()
+        .map(|value| (value.tag.clone(), value))
+        .collect())
+}
+
+fn read_numeric_from_batch(
+    values: &HashMap<String, TagValue>,
+    tag: &str,
+) -> anyhow::Result<(f32, bhtune_driver::Quality)> {
+    let value = values
+        .get(tag)
+        .ok_or_else(|| anyhow::anyhow!("driver returned no value for tag '{tag}'"))?;
+    let numeric = parse_f32_value(tag, &value.value)?;
     Ok((numeric, value.quality))
 }
 
@@ -2412,11 +2442,11 @@ async fn restore_mode_attribute_step(
     restore_raw_step(driver, attr_tag, attr_raw).await
 }
 
-/// The outcome of racing one driver call ([`read_pv_sample`]/[`write_value`], during a poll
-/// tick) against Ctrl+C and `[tuning].op_timeout_secs` -- see [`bounded_driver_call`]. Distinct
-/// from a genuine `Err` from the call itself (a rejected write, a malformed value, a
-/// transport error), which [`bounded_driver_call`] still propagates via `?` rather than
-/// wrapping here, since those are real failures, not "gave up waiting".
+/// The outcome of racing one driver call (a poll batch or [`write_value`], during a poll tick)
+/// against Ctrl+C and `[tuning].op_timeout_secs` -- see [`bounded_driver_call`]. Distinct from a
+/// genuine `Err` from the call itself (a rejected write, a malformed value, a transport error),
+/// which [`bounded_driver_call`] still propagates via `?` rather than wrapping here, since those
+/// are real failures, not "gave up waiting".
 #[derive(Debug)]
 enum TickOperation<T> {
     /// `fut` resolved before either interrupt source.
@@ -2490,7 +2520,6 @@ enum ActuationAuditPolicy {
 #[derive(Debug, Clone, Copy)]
 enum MvVerificationCallLimit {
     None,
-    PreservePoll(Instant),
     Restore(Instant),
 }
 
@@ -2498,7 +2527,6 @@ enum MvVerificationCallLimit {
 enum MvVerificationLimitKind {
     Confirmation,
     Deadline,
-    PreservePoll,
     Restore,
 }
 
@@ -2614,10 +2642,7 @@ fn verification_trigger(
 ) -> Option<MvVerificationTrigger> {
     if now >= pending.deadline {
         Some(MvVerificationTrigger::Deadline)
-    } else if pending.last_readback.is_none()
-        && !pending.precheck_deferred_for_poll
-        && now >= pending.first_check_at
-    {
+    } else if pending.last_readback.is_none() && now >= pending.first_check_at {
         Some(MvVerificationTrigger::Scheduled)
     } else {
         None
@@ -2638,9 +2663,6 @@ fn mv_verification_read_limit(
 ) -> (Instant, MvVerificationLimitKind) {
     let external = match call_limit {
         MvVerificationCallLimit::None => None,
-        MvVerificationCallLimit::PreservePoll(deadline) => {
-            Some((deadline, MvVerificationLimitKind::PreservePoll))
-        }
         MvVerificationCallLimit::Restore(deadline) => {
             Some((deadline, MvVerificationLimitKind::Restore))
         }
@@ -2701,7 +2723,6 @@ async fn verify_pending_mv_actuation_with_timing(
     )
     .await?
     {
-        PendingMvVerificationRead::Deferred => Ok(None),
         PendingMvVerificationRead::DeadlineTimedOut {
             pending,
             checked_at,
@@ -2813,7 +2834,6 @@ enum PendingMvVerificationRead {
         checked_instant: Instant,
         read_duration: Duration,
     },
-    Deferred,
     DeadlineTimedOut {
         pending: PendingMvActuation,
         checked_at: DateTime<Utc>,
@@ -2864,7 +2884,7 @@ async fn read_pending_mv_verification_with_timing(
     ctrl_c: &mut CtrlC,
     tracker: &mut MvActuationTracker,
     mut trigger: MvVerificationTrigger,
-    mut call_limit: MvVerificationCallLimit,
+    call_limit: MvVerificationCallLimit,
 ) -> anyhow::Result<PendingMvVerificationRead> {
     loop {
         let limit = {
@@ -2888,9 +2908,6 @@ async fn read_pending_mv_verification_with_timing(
             Err(_) => match limit_kind {
                 MvVerificationLimitKind::Confirmation => {
                     trigger = MvVerificationTrigger::Deadline;
-                    if matches!(call_limit, MvVerificationCallLimit::PreservePoll(_)) {
-                        call_limit = MvVerificationCallLimit::None;
-                    }
                 }
 
                 MvVerificationLimitKind::Deadline => {
@@ -2905,14 +2922,6 @@ async fn read_pending_mv_verification_with_timing(
                         checked_at,
                         checked_instant,
                     });
-                }
-                MvVerificationLimitKind::PreservePoll => {
-                    tracker
-                        .pending
-                        .as_mut()
-                        .expect("pending actuation existed before the bounded read")
-                        .precheck_deferred_for_poll = true;
-                    return Ok(PendingMvVerificationRead::Deferred);
                 }
                 MvVerificationLimitKind::Restore => {
                     let pending = tracker
@@ -2930,29 +2939,6 @@ async fn read_pending_mv_verification_with_timing(
             },
         }
     }
-}
-
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-async fn read_pending_mv_verification(
-    args: &TuneArgs,
-    tag: &str,
-    driver: &dyn Driver,
-    ctrl_c: &mut CtrlC,
-    tracker: &mut MvActuationTracker,
-    trigger: MvVerificationTrigger,
-    call_limit: MvVerificationCallLimit,
-) -> anyhow::Result<PendingMvVerificationRead> {
-    read_pending_mv_verification_with_timing(
-        test_effective_timing(args),
-        tag,
-        driver,
-        ctrl_c,
-        tracker,
-        trigger,
-        call_limit,
-    )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3066,6 +3052,57 @@ async fn resolve_pending_mv_read(
             checked_instant,
         },
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn resolve_pending_mv_poll(
+    pool: &SqlitePool,
+    effective_timing: EffectiveTiming,
+    pv_mv_values: TickOperation<HashMap<String, TagValue>>,
+    mv_tag: &str,
+    checked_at: DateTime<Utc>,
+    checked_instant: Instant,
+    read_duration: Duration,
+    allow_uncertain_quality: bool,
+    tracker: &mut MvActuationTracker,
+    timing: &mut PollTimingAccumulator,
+) -> anyhow::Result<(Option<AbortReason>, bool)> {
+    let operation = match pv_mv_values {
+        TickOperation::Completed(values) => match read_numeric_from_batch(&values, mv_tag) {
+            Ok(value) => Ok(TickOperation::Completed(value)),
+            Err(error) => Err(error),
+        },
+        TickOperation::Cancelled => Ok(TickOperation::Cancelled),
+        TickOperation::TimedOut => Ok(TickOperation::TimedOut),
+    };
+
+    match resolve_pending_mv_read(
+        pool,
+        effective_timing,
+        mv_tag,
+        tracker,
+        operation,
+        checked_at,
+        checked_instant,
+        allow_uncertain_quality,
+    )
+    .await?
+    {
+        PendingMvVerificationResult::Abort(reason) => Ok((Some(reason), false)),
+        PendingMvVerificationResult::Value(value) => {
+            timing.observe_mv_verification(read_duration);
+            let outcome = finalize_pending_mv_verification(
+                pool,
+                mv_tag,
+                tracker,
+                value,
+                MvVerificationTrigger::Scheduled,
+                ActuationAuditPolicy::Required,
+            )
+            .await?;
+            Ok((outcome, true))
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4166,13 +4203,7 @@ async fn run_polling_loop_with_timing(
                         tracker,
                         trigger,
                         match trigger {
-                            MvVerificationTrigger::Scheduled => {
-                                if next_poll_at > Instant::now() {
-                                    MvVerificationCallLimit::PreservePoll(next_poll_at)
-                                } else {
-                                    MvVerificationCallLimit::None
-                                }
-                            }
+                            MvVerificationTrigger::Scheduled => MvVerificationCallLimit::None,
                             MvVerificationTrigger::Deadline
                             | MvVerificationTrigger::Replacement => MvVerificationCallLimit::None,
                         },
@@ -4187,23 +4218,110 @@ async fn run_polling_loop_with_timing(
             _ = tokio::time::sleep_until(next_poll_at) => {
                 let tick_started = Instant::now();
                 next_poll_at = Instant::now() + poll_interval;
+                let pending_actuation = mv_actuations
+                    .as_ref()
+                    .is_some_and(|tracker| tracker.pending.is_some());
+                let mut poll_provided_mv_evidence = false;
+                let mut batched_mv_abort_reason = None;
                 let pv_read_started = Instant::now();
                 let (pv, quality) = match bounded_driver_call(
                     effective_timing.op_timeout_secs,
                     ctrl_c,
-                    read_pv_sample(driver, &tags.process_variable),
+                    read_poll_batch(
+                        driver,
+                        &tags.process_variable,
+                        pending_actuation.then_some(tags.manipulated_variable.as_str()),
+                    ),
                 )
                 .await?
                 {
-                    TickOperation::Completed(sample) => {
+                    TickOperation::Completed(values) => {
                         timing.observe_pv_read(pv_read_started.elapsed());
-                        sample
+                        let completed_at = Instant::now();
+                        if pending_actuation {
+                            let pending = mv_actuations
+                                .as_ref()
+                                .and_then(|tracker| tracker.pending.as_ref())
+                                .expect("pending actuation existed for the batched poll");
+                            let checked_at = checked_at_for_pending(pending, completed_at)?;
+                            if let Some(tracker) = mv_actuations.as_mut() {
+                                let (reason, evidence) = resolve_pending_mv_poll(
+                                    pool,
+                                    effective_timing,
+                                    TickOperation::Completed(values.clone()),
+                                    &tags.manipulated_variable,
+                                    checked_at,
+                                    completed_at,
+                                    pv_read_started.elapsed(),
+                                    allow_uncertain_quality,
+                                    tracker,
+                                    timing,
+                                )
+                                .await?;
+                                poll_provided_mv_evidence = evidence;
+                                batched_mv_abort_reason = reason;
+                            }
+                        }
+                        let (pv, quality) = read_numeric_from_batch(&values, &tags.process_variable)?;
+                        (pv, quality)
                     }
                     TickOperation::Cancelled => {
+                        if let Some(tracker) = mv_actuations.as_mut()
+                            && tracker.pending.is_some()
+                        {
+                            let completed_at = Instant::now();
+                            let pending = tracker
+                                .pending
+                                .as_ref()
+                                .expect("pending actuation existed for the cancelled poll");
+                            let checked_at = checked_at_for_pending(pending, completed_at)?;
+                            let (reason, _) = resolve_pending_mv_poll(
+                                pool,
+                                effective_timing,
+                                TickOperation::Cancelled,
+                                &tags.manipulated_variable,
+                                checked_at,
+                                completed_at,
+                                pv_read_started.elapsed(),
+                                allow_uncertain_quality,
+                                tracker,
+                                timing,
+                            )
+                            .await?;
+                            if let Some(reason) = reason {
+                                return Ok(PollOutcome::Aborted(reason));
+                            }
+                        }
                         tracing::warn!(run_id, tick_index, "Ctrl+C received while reading the PV; aborting run");
                         return Ok(PollOutcome::Aborted(AbortReason::UserInterrupt));
                     }
                     TickOperation::TimedOut => {
+                        if let Some(tracker) = mv_actuations.as_mut()
+                            && tracker.pending.is_some()
+                        {
+                            let completed_at = Instant::now();
+                            let pending = tracker
+                                .pending
+                                .as_ref()
+                                .expect("pending actuation existed for the timed-out poll");
+                            let checked_at = checked_at_for_pending(pending, completed_at)?;
+                            let (reason, _) = resolve_pending_mv_poll(
+                                pool,
+                                effective_timing,
+                                TickOperation::TimedOut,
+                                &tags.manipulated_variable,
+                                checked_at,
+                                completed_at,
+                                pv_read_started.elapsed(),
+                                allow_uncertain_quality,
+                                tracker,
+                                timing,
+                            )
+                            .await?;
+                            if let Some(reason) = reason {
+                                return Ok(PollOutcome::Aborted(reason));
+                            }
+                        }
                         tracing::warn!(
                             run_id,
                             tick_index,
@@ -4254,6 +4372,21 @@ async fn run_polling_loop_with_timing(
                     }));
                 }
 
+                if let Some(reason) = batched_mv_abort_reason {
+                    insert_tune_sample_with_timing(
+                        pool,
+                        run_id,
+                        tick_index,
+                        tick,
+                        engine.state(),
+                        sample_quality,
+                        timing,
+                    )
+                    .await?;
+                    timing.observe_tick_work(tick_started.elapsed());
+                    return Ok(PollOutcome::Aborted(reason));
+                }
+
                 if completion.is_none() && now < pre_delay_end {
                     insert_tune_sample_with_timing(
                         pool,
@@ -4285,45 +4418,7 @@ async fn run_polling_loop_with_timing(
                         let tracker = mv_actuations
                             .as_mut()
                             .expect("a pending actuation requires an OPC DA tracker");
-                        let trigger = if tracker
-                            .pending
-                            .as_ref()
-                            .is_some_and(|pending| tick_observed_instant >= pending.deadline)
-                        {
-                            MvVerificationTrigger::Deadline
-                        } else {
-                            MvVerificationTrigger::Replacement
-                        };
-                        if let Some(reason) = verify_pending_mv_actuation_with_timing(
-                            pool,
-                            args,
-                            effective_timing,
-                            &tags.manipulated_variable,
-                            driver,
-                            ctrl_c,
-                            allow_uncertain_quality,
-                            tracker,
-                            trigger,
-                            MvVerificationCallLimit::None,
-                            ActuationAuditPolicy::Required,
-                            Some(timing),
-                        )
-                        .await?
-                        {
-                            insert_tune_sample_with_timing(
-                                pool,
-                                run_id,
-                                tick_index,
-                                tick,
-                                state_before_step,
-                                sample_quality,
-                                timing,
-                            )
-                            .await?;
-                            timing.observe_tick_work(tick_started.elapsed());
-                            return Ok(PollOutcome::Aborted(reason));
-                        }
-                        if tracker.pending.is_some() {
+                        if poll_provided_mv_evidence {
                             let reason = reject_replacement_for_pending_actuation(
                                 pool,
                                 &tags.manipulated_variable,
@@ -4342,6 +4437,65 @@ async fn run_polling_loop_with_timing(
                             .await?;
                             timing.observe_tick_work(tick_started.elapsed());
                             return Ok(PollOutcome::Aborted(reason));
+                        } else {
+                            let trigger = if tracker
+                                .pending
+                                .as_ref()
+                                .is_some_and(|pending| tick_observed_instant >= pending.deadline)
+                            {
+                                MvVerificationTrigger::Deadline
+                            } else {
+                                MvVerificationTrigger::Replacement
+                            };
+                            if let Some(reason) = verify_pending_mv_actuation_with_timing(
+                                pool,
+                                args,
+                                effective_timing,
+                                &tags.manipulated_variable,
+                                driver,
+                                ctrl_c,
+                                allow_uncertain_quality,
+                                tracker,
+                                trigger,
+                                MvVerificationCallLimit::None,
+                                ActuationAuditPolicy::Required,
+                                Some(timing),
+                            )
+                            .await?
+                            {
+                                insert_tune_sample_with_timing(
+                                    pool,
+                                    run_id,
+                                    tick_index,
+                                    tick,
+                                    state_before_step,
+                                    sample_quality,
+                                    timing,
+                                )
+                                .await?;
+                                timing.observe_tick_work(tick_started.elapsed());
+                                return Ok(PollOutcome::Aborted(reason));
+                            }
+                            if tracker.pending.is_some() {
+                                let reason = reject_replacement_for_pending_actuation(
+                                    pool,
+                                    &tags.manipulated_variable,
+                                    tracker,
+                                )
+                                .await?;
+                                insert_tune_sample_with_timing(
+                                    pool,
+                                    run_id,
+                                    tick_index,
+                                    tick,
+                                    state_before_step,
+                                    sample_quality,
+                                    timing,
+                                )
+                                .await?;
+                                timing.observe_tick_work(tick_started.elapsed());
+                                return Ok(PollOutcome::Aborted(reason));
+                            }
                         }
                     }
                     *engine = preview;
@@ -6484,6 +6638,7 @@ mod tests {
         read_sequences:
             std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<String>>>,
         read_batches: std::sync::Mutex<Vec<Vec<String>>>,
+        reverse_read_results: bool,
         writes: std::sync::Mutex<Vec<(String, String)>>,
         reject_writes: std::collections::HashSet<String>,
         error_reads: std::collections::HashSet<String>,
@@ -6591,6 +6746,13 @@ mod tests {
 
         fn delaying_read(mut self, tag: &str, delay: Duration) -> MockDriver {
             self.read_delays.insert(tag.to_string(), delay);
+            self
+        }
+
+        /// Returns multi-tag reads in reverse order, proving callers map responses by tag
+        /// rather than relying on the driver's request-order convention.
+        fn reversing_read_results(mut self) -> MockDriver {
+            self.reverse_read_results = true;
             self
         }
 
@@ -6793,6 +6955,9 @@ mod tests {
                     timestamp: None,
                 });
             }
+            if self.reverse_read_results {
+                out.reverse();
+            }
             Ok(out)
         }
 
@@ -6931,7 +7096,6 @@ mod tests {
             first_check_at,
             deadline,
             last_readback,
-            precheck_deferred_for_poll: false,
         }
     }
 
@@ -7147,48 +7311,6 @@ mod tests {
             None
         );
         assert!(driver.read_batches().is_empty());
-    }
-
-    #[tokio::test]
-    async fn preserve_poll_limit_is_cleared_after_the_confirmation_deadline() {
-        let driver = honeywell_driver_auto().hanging_read("Unit1.LIC101.OP");
-        let mut args = fast_simulator_args();
-        args.driver = DriverKindArg::Opcda;
-        args.op_timeout_secs = 30;
-        let now = Instant::now();
-        let mut tracker = tracker_with_pending(pending_actuation(
-            None,
-            MvActuationKind::Relay,
-            55.0,
-            now,
-            now + Duration::from_millis(10),
-            None,
-        ));
-        let (mut ctrl_c, tx) = CtrlC::test_pair();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            let _ = tx.send(1);
-        });
-
-        let read = read_pending_mv_verification(
-            &args,
-            "Unit1.LIC101.OP",
-            &driver,
-            &mut ctrl_c,
-            &mut tracker,
-            MvVerificationTrigger::Scheduled,
-            MvVerificationCallLimit::PreservePoll(now + Duration::from_secs(1)),
-        )
-        .await
-        .unwrap();
-
-        assert!(matches!(
-            read,
-            PendingMvVerificationRead::Ready {
-                operation: Ok(TickOperation::Cancelled),
-                ..
-            }
-        ));
     }
 
     #[tokio::test]
@@ -7654,19 +7776,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn slow_verification_does_not_delay_the_next_scheduled_pv_sample() {
+    async fn stalled_shared_pv_mv_poll_is_cancelled_without_recording_a_sample() {
         let pool = seeded_pool().await;
         let (run_id, config, _template, tags) =
-            start_opc_test_run(&pool, "actuation-preserve-poll").await;
+            start_opc_test_run(&pool, "actuation-shared-poll-cancel").await;
         let driver = honeywell_driver_auto()
             .delaying_read(&tags.manipulated_variable, Duration::from_secs(2))
             .degrade_quality_after(&tags.process_variable, 1, bhtune_driver::Quality::Bad);
         let mut args = fast_simulator_args();
         args.driver = DriverKindArg::Opcda;
-        // Leave a wide margin between the scheduled verification and the next poll. The
-        // assertion is about preserving that deadline, not about racing a 10ms database/setup
-        // delay, which is especially scheduler-sensitive on Windows CI.
-        args.poll_interval_ms = 1_000;
         args.mrft_delay = 10;
         args.timeout_secs = 3;
         let initial = sample_initial_state();
@@ -7679,7 +7797,7 @@ mod tests {
                 run_id,
                 MvActuationKind::Relay,
                 55.0,
-                commanded_instant + Duration::from_millis(100),
+                commanded_instant + Duration::from_secs(1),
                 commanded_at,
                 commanded_instant,
                 mv_actuation_tolerance(MvActuationKind::Relay, 55.0, 45.0, 100.0).unwrap(),
@@ -7705,6 +7823,11 @@ mod tests {
             Utc::now(),
             MrftCompat::default(),
         );
+        let (mut ctrl_c, tx) = CtrlC::test_pair();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tx.send(1);
+        });
         let mut timing = timing_for_args(&args);
 
         let outcome = run_polling_loop(
@@ -7715,7 +7838,7 @@ mod tests {
             &driver,
             &mut engine,
             RunTimeAnchor::now(),
-            &mut CtrlC::never(),
+            &mut ctrl_c,
             &mut MutationGuard::default(),
             false,
             &mut timing,
@@ -7727,23 +7850,31 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            PollOutcome::Aborted(AbortReason::PoorQuality { .. })
+            PollOutcome::Aborted(AbortReason::UserInterrupt)
         ));
         assert!(
             driver.delayed_read_was_cancelled(&tags.manipulated_variable),
-            "the slow MV verification read must be dropped at the next scheduled PV deadline"
+            "the shared PV/MV read must be dropped when Ctrl+C cancels the operation"
         );
-        let reads = driver.read_batches();
-        assert_eq!(reads[0], vec![tags.process_variable.clone()]);
-        assert_eq!(reads[1], vec![tags.manipulated_variable.clone()]);
-        assert_eq!(reads[2], vec![tags.process_variable.clone()]);
-        let samples = TuneSampleRow::list_for_run(&pool, run_id).await.unwrap();
-        assert_eq!(samples.len(), 2, "only PV reads create tune samples");
+        assert_eq!(
+            driver.read_batches(),
+            vec![vec![
+                tags.process_variable.clone(),
+                tags.manipulated_variable.clone()
+            ]]
+        );
+        assert!(
+            TuneSampleRow::list_for_run(&pool, run_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a cancelled shared read has no valid PV sample to persist"
+        );
         let rows = TuneMvActuationRow::list_for_run(&pool, run_id)
             .await
             .unwrap();
+        assert_eq!(rows[0].status, MvActuationStatus::Unverified);
         assert_eq!(rows[0].attempt_count, 0);
-        assert_eq!(rows[0].status, MvActuationStatus::Pending);
     }
 
     #[tokio::test]
@@ -7824,7 +7955,13 @@ mod tests {
             PollOutcome::Aborted(AbortReason::MvActuationUnconfirmed { .. })
         ));
         let reads = driver.read_batches();
-        assert_eq!(reads[0], vec![tags.process_variable.clone()]);
+        assert_eq!(
+            reads[0],
+            vec![
+                tags.process_variable.clone(),
+                tags.manipulated_variable.clone()
+            ]
+        );
         assert_eq!(reads[1], vec![tags.manipulated_variable.clone()]);
         assert_eq!(
             TuneSampleRow::list_for_run(&pool, run_id)
@@ -7918,85 +8055,6 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn due_scheduled_verification_with_a_due_poll_uses_no_poll_preservation_limit() {
-        let pool = seeded_pool().await;
-        let (run_id, config, _template, tags) =
-            start_opc_test_run(&pool, "scheduled-verification-before-due-poll").await;
-        let driver = honeywell_driver_auto()
-            .with_quality(&tags.process_variable, bhtune_driver::Quality::Bad);
-        let mut args = fast_simulator_args();
-        args.driver = DriverKindArg::Opcda;
-        args.mrft_delay = 10;
-        let initial = sample_initial_state();
-        let now = Instant::now();
-        let mut tracker = MvActuationTracker::for_run(&args, &initial).unwrap();
-        tracker
-            .record_accepted(
-                &pool,
-                run_id,
-                MvActuationKind::Relay,
-                initial.mv_ini,
-                now,
-                Utc::now(),
-                now,
-                0.1,
-            )
-            .await
-            .unwrap();
-        let mut tracker = Some(tracker);
-        let started_at = Utc::now();
-        let mut engine = MrftEngine::new(
-            config,
-            initial.direction,
-            lookup(
-                config.process_type,
-                config.controller_type,
-                ResponseLevel::Aggressive,
-            )
-            .beta,
-            InitialReadings {
-                pv_ini: initial.pv_ini,
-                mv_ini: initial.mv_ini,
-                mv_range_low: initial.mv_range_low,
-                mv_range_high: initial.mv_range_high,
-            },
-            started_at,
-            MrftCompat::default(),
-        );
-        let mut timing = timing_for_args(&args);
-
-        let outcome = run_polling_loop(
-            &pool,
-            run_id,
-            &args,
-            &tags,
-            &driver,
-            &mut engine,
-            time_anchor_at(started_at),
-            &mut CtrlC::never(),
-            &mut MutationGuard::default(),
-            false,
-            &mut timing,
-            &mut tracker,
-            config,
-        )
-        .await
-        .unwrap();
-
-        assert!(matches!(
-            outcome,
-            PollOutcome::Aborted(AbortReason::PoorQuality { .. })
-        ));
-        assert_eq!(
-            driver.read_batches(),
-            vec![
-                vec![tags.manipulated_variable.clone()],
-                vec![tags.process_variable.clone()]
-            ]
         );
     }
 
@@ -8249,10 +8307,12 @@ mod tests {
             driver.read_batches(),
             vec![
                 vec![tags.manipulated_variable.clone()],
-                vec![tags.process_variable.clone()],
-                vec![tags.manipulated_variable.clone()],
+                vec![
+                    tags.process_variable.clone(),
+                    tags.manipulated_variable.clone()
+                ],
             ],
-            "the replacement preview must use a fresh MV read from the preview tick"
+            "the replacement preview must use the fresh batched PV/MV read from the preview tick"
         );
         let rows = TuneMvActuationRow::list_for_run(&pool, run_id)
             .await
@@ -10779,6 +10839,29 @@ mod tests {
         assert_eq!(
             read_batch_f32(&values, "Unit1.LIC101.PV", false).unwrap(),
             42.5
+        );
+    }
+
+    #[tokio::test]
+    async fn read_poll_batch_maps_reordered_responses_by_tag() {
+        let driver = MockDriver::new(&[("Unit1.LIC101.PV", "42.5"), ("Unit1.LIC101.OP", "60.0")])
+            .reversing_read_results();
+
+        let values = read_poll_batch(&driver, "Unit1.LIC101.PV", Some("Unit1.LIC101.OP"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            read_numeric_from_batch(&values, "Unit1.LIC101.PV")
+                .unwrap()
+                .0,
+            42.5
+        );
+        assert_eq!(
+            read_numeric_from_batch(&values, "Unit1.LIC101.OP")
+                .unwrap()
+                .0,
+            60.0
         );
     }
 

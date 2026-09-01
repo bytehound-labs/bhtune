@@ -450,7 +450,10 @@ pub struct TimingSummary {
 /// Operation-latency diagnostics captured while a run is polling.
 ///
 /// Each category counts only operations that completed successfully. A zero count with
-/// `None` mean/max means that the operation did not occur during the run.
+/// `None` mean/max means that the operation did not occur during the run. Categories can
+/// overlap: while a relay command is pending, one batched OPC read supplies both the PV sample
+/// and MV verification, so its elapsed duration may appear in both summaries and must not be
+/// added twice as independent I/O time.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct PollLatencyMetrics {
