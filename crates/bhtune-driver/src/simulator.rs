@@ -466,6 +466,52 @@ mod tests {
         assert!(process.step() > 10.1);
     }
 
+    #[tokio::test]
+    async fn unsupported_namespace_operations_are_reported() {
+        let driver = SimulatorDriver::new(
+            "PV",
+            "MV",
+            FopdtConfig::new(1.0, 2.0, 0.0, 1.0),
+            0.0,
+            0.0,
+            1,
+        );
+        assert!(matches!(
+            driver.capabilities().await,
+            Err(DriverError::Unsupported {
+                operation: "capabilities"
+            })
+        ));
+        assert!(matches!(
+            driver.browse(BrowsePageRequest::root(1)).await,
+            Err(DriverError::Unsupported {
+                operation: "browse"
+            })
+        ));
+        assert!(matches!(
+            driver.close_browse_session("s").await,
+            Err(DriverError::Unsupported {
+                operation: "browse-session close"
+            })
+        ));
+        assert!(matches!(
+            driver
+                .search(SearchRequest {
+                    query: "PV".into(),
+                    match_mode: crate::types::SearchMatchMode::Exact,
+                    session_id: None,
+                    scope_node_key: None,
+                    max_results: 1,
+                    include_branches: false,
+                    refresh: false,
+                })
+                .await,
+            Err(DriverError::Unsupported {
+                operation: "search"
+            })
+        ));
+    }
+
     #[test]
     fn same_seed_produces_identical_pv_sequences() {
         let config = FopdtConfig::new(1.0, 4.0, 0.0, 1.0).with_noise_amplitude(0.5);

@@ -965,6 +965,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn opc_conversion_helpers_cover_all_enum_variants_and_sse_events() {
+        for (wire, expected) in [
+            (BrowseNodeKind::Unspecified, "unspecified"),
+            (BrowseNodeKind::Branch, "branch"),
+            (BrowseNodeKind::Item, "item"),
+            (BrowseNodeKind::BranchAndItem, "branch_and_item"),
+        ] {
+            assert_eq!(browse_node_kind_name(wire), expected);
+            let _ = OpcBrowseNodeKind::from(wire);
+        }
+        for (value, expected) in [
+            (NamespaceOrganization::Unspecified, "unspecified"),
+            (NamespaceOrganization::Flat, "flat"),
+            (NamespaceOrganization::Hierarchical, "hierarchical"),
+        ] {
+            assert_eq!(organization_name(value), expected);
+        }
+        for (value, expected) in [
+            (BrowseSource::Unspecified, "unspecified"),
+            (BrowseSource::Da3, "da3"),
+            (BrowseSource::Da2, "da2"),
+            (BrowseSource::Flat, "flat"),
+            (BrowseSource::Derived, "derived"),
+        ] {
+            assert_eq!(source_name(value), expected);
+        }
+        for value in ["exact", "prefix", "contains"] {
+            assert!(parse_search_match_mode(value).is_ok());
+        }
+        let events = [
+            SearchEvent::Match(SearchMatch {
+                node: BrowseNode {
+                    node_key: "n".into(),
+                    display_name: "PV".into(),
+                    kind: BrowseNodeKind::Item,
+                    item_id: Some("Area.PV".into()),
+                },
+                breadcrumbs: vec![],
+            }),
+            SearchEvent::Progress(bhtune_driver::SearchProgress {
+                visited_nodes: 2,
+                matches: 1,
+                partial: true,
+            }),
+            SearchEvent::Completed(bhtune_driver::SearchCompleted {
+                complete: true,
+                cancelled: false,
+                truncated: false,
+                warning: None,
+            }),
+        ];
+        for event in events {
+            let rendered = search_event_to_sse(event);
+            assert!(!format!("{rendered:?}").is_empty());
+        }
+        let json = json_search_match(&SearchMatch {
+            node: BrowseNode {
+                node_key: "n".into(),
+                display_name: "PV".into(),
+                kind: BrowseNodeKind::BranchAndItem,
+                item_id: Some("Area.PV".into()),
+            },
+            breadcrumbs: vec![bhtune_driver::BrowseBreadcrumb {
+                node_key: "area".into(),
+                display_name: "Area".into(),
+            }],
+        });
+        assert_eq!(json["breadcrumbs"][0]["display_name"], "Area");
+    }
+
     /// A fresh in-memory [`AppState`] with `bridge_host`/`opc_server` overridden -- every
     /// test in this module needs the config resolution to pick up a specific mock gateway
     /// (or a deliberately unreachable/unset one), never the four seeded built-in templates.
@@ -1388,6 +1459,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn close_browse_session_forwards_the_opaque_session_id() {
+        let host = start_mock_server(MockBridgeService::default()).await;
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+        let response = get(
+            app,
+            "/api/opc/browse/sessions/session-42?opc_server=Sim.Server",
+        )
+        .await;
+        // A GET is intentionally rejected by the route method; exercise the real DELETE below.
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+        let response = app
+            .oneshot(
+                Request::delete("/api/opc/browse/sessions/session-42?opc_server=Sim.Server")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["closed"], true);
+    }
+
+    #[tokio::test]
+    async fn search_stream_returns_match_progress_and_completed_events() {
+        let host = start_mock_server(MockBridgeService {
+            search_events: vec![
+                opcda_bridge_proto::bridge::SearchEvent {
+                    event: Some(opcda_bridge_proto::bridge::search_event::Event::Match(
+                        opcda_bridge_proto::bridge::SearchMatch {
+                            node: Some(ProtoBrowseNode {
+                                node_key: "pv".into(),
+                                display_name: "PV".into(),
+                                kind: ProtoBrowseNodeKind::Item as i32,
+                                item_id: Some("Area.PV".into()),
+                            }),
+                            breadcrumbs: vec![opcda_bridge_proto::bridge::BrowseBreadcrumb {
+                                node_key: "area".into(),
+                                display_name: "Area".into(),
+                            }],
+                        },
+                    )),
+                },
+                opcda_bridge_proto::bridge::SearchEvent {
+                    event: Some(opcda_bridge_proto::bridge::search_event::Event::Progress(
+                        opcda_bridge_proto::bridge::SearchProgress {
+                            visited_nodes: 3,
+                            matches: 1,
+                            partial: false,
+                        },
+                    )),
+                },
+                opcda_bridge_proto::bridge::SearchEvent {
+                    event: Some(opcda_bridge_proto::bridge::search_event::Event::Completed(
+                        opcda_bridge_proto::bridge::SearchCompleted {
+                            complete: true,
+                            cancelled: false,
+                            truncated: false,
+                            warning: None,
+                        },
+                    )),
+                },
+            ],
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+        let response = get(
+            app,
+            "/api/opc/search?opc_server=Sim.Server&query=PV&match_mode=exact&max_results=4",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("event: match"));
+        assert!(text.contains("event: progress"));
+        assert!(text.contains("event: completed"));
+        assert!(text.contains("Area.PV"));
+    }
+
+    #[tokio::test]
     async fn read_returns_the_value_quality_and_timestamp_from_a_mock_gateway() {
         let host = start_mock_server(MockBridgeService {
             // Constructed directly (rather than via `good_reading`, which hardcodes an
@@ -1475,6 +1628,39 @@ mod tests {
 
         let response = get(app, "/api/opc/read?tag=Unit1.LIC101.PV").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn close_browse_session_validates_empty_ids_before_connecting() {
+        let app = crate::build_router(state_with(None, Some("Sim.Server")).await);
+        let response = app
+            .oneshot(
+                Request::delete("/api/opc/browse/sessions/%20?opc_server=Sim.Server")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("session ID")
+        );
+    }
+
+    #[tokio::test]
+    async fn search_validates_empty_query_before_connecting() {
+        let app = crate::build_router(state_with(None, Some("Sim.Server")).await);
+        let response = get(app, "/api/opc/search?query=%20").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            body_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("search query")
+        );
     }
 
     #[tokio::test]

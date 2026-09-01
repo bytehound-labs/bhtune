@@ -428,6 +428,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn browse_page_request_builders_preserve_navigation_and_refresh_state() {
+        assert_eq!(
+            BrowsePageRequest::root(25),
+            BrowsePageRequest {
+                session_id: None,
+                parent_node_key: None,
+                page_token: None,
+                page_size: 25,
+                refresh: false,
+            }
+        );
+        assert_eq!(
+            BrowsePageRequest::children("session", "parent", 10),
+            BrowsePageRequest {
+                session_id: Some("session".into()),
+                parent_node_key: Some("parent".into()),
+                page_token: None,
+                page_size: 10,
+                refresh: false,
+            }
+        );
+        assert_eq!(
+            BrowsePageRequest::next("session", Some("parent".into()), "token", 5)
+                .with_refresh(true),
+            BrowsePageRequest {
+                session_id: Some("session".into()),
+                parent_node_key: Some("parent".into()),
+                page_token: Some("token".into()),
+                page_size: 5,
+                refresh: true,
+            }
+        );
+    }
+
+    #[test]
     fn only_good_quality_is_trustworthy() {
         assert!(Quality::Good.is_trustworthy());
         assert!(!Quality::Uncertain.is_trustworthy());

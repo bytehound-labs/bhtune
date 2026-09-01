@@ -6496,6 +6496,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn delayed_write_observer_records_cancellation_only_when_incomplete() {
+        let driver = MockDriver::default();
+        {
+            let _observer = DelayedWriteObserver {
+                driver: &driver,
+                tag: "MV".into(),
+                completed: false,
+            };
+        }
+        assert!(driver.delayed_write_was_cancelled("MV"));
+
+        {
+            let _observer = DelayedWriteObserver {
+                driver: &driver,
+                tag: "completed".into(),
+                completed: true,
+            };
+        }
+        assert!(!driver.delayed_write_was_cancelled("completed"));
+    }
+
     #[async_trait::async_trait]
     impl Driver for MockDriver {
         async fn read(

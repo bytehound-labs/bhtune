@@ -335,6 +335,45 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn unsupported_namespace_operations_are_reported() {
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        assert!(matches!(
+            driver.capabilities().await,
+            Err(DriverError::Unsupported {
+                operation: "capabilities"
+            })
+        ));
+        assert!(matches!(
+            driver.browse(BrowsePageRequest::root(1)).await,
+            Err(DriverError::Unsupported {
+                operation: "browse"
+            })
+        ));
+        assert!(matches!(
+            driver.close_browse_session("s").await,
+            Err(DriverError::Unsupported {
+                operation: "browse-session close"
+            })
+        ));
+        assert!(matches!(
+            driver
+                .search(SearchRequest {
+                    query: "PV".into(),
+                    match_mode: crate::types::SearchMatchMode::Exact,
+                    session_id: None,
+                    scope_node_key: None,
+                    max_results: 1,
+                    include_branches: false,
+                    refresh: false,
+                })
+                .await,
+            Err(DriverError::Unsupported {
+                operation: "search"
+            })
+        ));
+    }
+
     // --- construction / basic read-back ---------------------------------------------------
 
     #[tokio::test]

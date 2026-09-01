@@ -337,7 +337,7 @@ pub(crate) mod mock_bridge {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use opcda_bridge_proto::bridge::BrowseRequest;
+        use opcda_bridge_proto::bridge::{BrowseRequest, SearchEvent, SearchRequest};
 
         #[tokio::test]
         async fn browse_returns_the_configured_page() {
@@ -360,6 +360,20 @@ pub(crate) mod mock_bridge {
         async fn mock_server_can_be_shutdown_and_joined() {
             let (_host, handle) = start_mock_server_with_handle(MockBridgeService::default()).await;
             handle.shutdown().await;
+        }
+
+        #[tokio::test]
+        async fn search_stream_sender_handles_a_dropped_receiver() {
+            let service = MockBridgeService {
+                search_events: vec![SearchEvent::default()],
+                ..Default::default()
+            };
+            let response = service
+                .search(Request::new(SearchRequest::default()))
+                .await
+                .unwrap();
+            drop(response);
+            tokio::task::yield_now().await;
         }
     }
 }

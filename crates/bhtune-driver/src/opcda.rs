@@ -736,6 +736,193 @@ mod tests {
     }
 
     #[test]
+    fn protocol_enum_mappers_cover_every_wire_variant() {
+        for (wire, expected) in [
+            (
+                opcda_bridge::NamespaceOrganization::Unspecified,
+                NamespaceOrganization::Unspecified,
+            ),
+            (
+                opcda_bridge::NamespaceOrganization::Flat,
+                NamespaceOrganization::Flat,
+            ),
+            (
+                opcda_bridge::NamespaceOrganization::Hierarchical,
+                NamespaceOrganization::Hierarchical,
+            ),
+        ] {
+            assert_eq!(namespace_organization_from_bridge(wire), expected);
+        }
+        for (wire, expected) in [
+            (
+                opcda_bridge::BrowseSource::Unspecified,
+                BrowseSource::Unspecified,
+            ),
+            (opcda_bridge::BrowseSource::Da3, BrowseSource::Da3),
+            (opcda_bridge::BrowseSource::Da2, BrowseSource::Da2),
+            (opcda_bridge::BrowseSource::Flat, BrowseSource::Flat),
+            (opcda_bridge::BrowseSource::Derived, BrowseSource::Derived),
+        ] {
+            assert_eq!(browse_source_from_bridge(wire), expected);
+        }
+        for (wire, expected) in [
+            (
+                opcda_bridge::SearchIndexState::Unspecified,
+                SearchIndexState::Unspecified,
+            ),
+            (
+                opcda_bridge::SearchIndexState::NotIndexed,
+                SearchIndexState::NotIndexed,
+            ),
+            (
+                opcda_bridge::SearchIndexState::Partial,
+                SearchIndexState::Partial,
+            ),
+            (
+                opcda_bridge::SearchIndexState::Ready,
+                SearchIndexState::Ready,
+            ),
+            (
+                opcda_bridge::SearchIndexState::Stale,
+                SearchIndexState::Stale,
+            ),
+            (
+                opcda_bridge::SearchIndexState::Refreshing,
+                SearchIndexState::Refreshing,
+            ),
+            (
+                opcda_bridge::SearchIndexState::Failed,
+                SearchIndexState::Failed,
+            ),
+        ] {
+            assert_eq!(search_index_state_from_bridge(wire), expected);
+        }
+        for (wire, expected) in [
+            (SearchMatchMode::Exact, opcda_bridge::SearchMatchMode::Exact),
+            (
+                SearchMatchMode::Prefix,
+                opcda_bridge::SearchMatchMode::Prefix,
+            ),
+            (
+                SearchMatchMode::Contains,
+                opcda_bridge::SearchMatchMode::Contains,
+            ),
+        ] {
+            assert_eq!(match_search_mode(wire), expected);
+        }
+        for (wire, expected) in [
+            (
+                SearchIndexControlAction::Pause,
+                opcda_bridge::SearchIndexControlAction::Pause,
+            ),
+            (
+                SearchIndexControlAction::Resume,
+                opcda_bridge::SearchIndexControlAction::Resume,
+            ),
+            (
+                SearchIndexControlAction::Cancel,
+                opcda_bridge::SearchIndexControlAction::Cancel,
+            ),
+        ] {
+            assert_eq!(
+                <opcda_bridge::SearchIndexControlAction as From<_>>::from(wire),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn indexed_search_mappers_cover_all_node_kinds_and_optional_progress() {
+        let kinds = [
+            opcda_bridge::BrowseNodeKind::Unspecified,
+            opcda_bridge::BrowseNodeKind::Branch,
+            opcda_bridge::BrowseNodeKind::Item,
+            opcda_bridge::BrowseNodeKind::BranchAndItem,
+        ];
+        for kind in kinds {
+            let found = indexed_search_match_from_bridge(opcda_bridge::IndexedSearchMatch {
+                item_id: "item".into(),
+                display_name: "Item".into(),
+                kind,
+                breadcrumbs: vec!["Area".into()],
+            });
+            let expected = match kind {
+                opcda_bridge::BrowseNodeKind::Unspecified => BrowseNodeKind::Unspecified,
+                opcda_bridge::BrowseNodeKind::Branch => BrowseNodeKind::Branch,
+                opcda_bridge::BrowseNodeKind::Item => BrowseNodeKind::Item,
+                opcda_bridge::BrowseNodeKind::BranchAndItem => BrowseNodeKind::BranchAndItem,
+            };
+            assert_eq!(found.kind, expected);
+        }
+        let status = search_index_status_from_bridge(opcda_bridge::SearchIndexStatus {
+            server: "S".into(),
+            state: opcda_bridge::SearchIndexState::Partial,
+            configured: true,
+            active_generation: 2,
+            entry_count: 3,
+            unique_item_count: 4,
+            started_at: None,
+            completed_at: None,
+            last_error: Some("warning".into()),
+            database_bytes: 5,
+            organization: opcda_bridge::NamespaceOrganization::Flat,
+            source: opcda_bridge::BrowseSource::Derived,
+            progress: None,
+        });
+        assert_eq!(status.state, SearchIndexState::Partial);
+        assert!(status.progress.is_none());
+    }
+
+    #[test]
+    fn search_event_mapper_handles_match_progress_and_completion() {
+        let events = [
+            opcda_bridge::SearchEvent::Match(opcda_bridge::SearchMatch {
+                node: opcda_bridge::BrowseNode {
+                    node_key: "n".into(),
+                    display_name: "PV".into(),
+                    kind: opcda_bridge::BrowseNodeKind::Item,
+                    item_id: Some("PV".into()),
+                },
+                breadcrumbs: vec![opcda_bridge::BrowseBreadcrumb {
+                    node_key: "root".into(),
+                    display_name: "Root".into(),
+                }],
+            }),
+            opcda_bridge::SearchEvent::Progress(opcda_bridge::SearchProgress {
+                visited_nodes: 2,
+                matches: 1,
+                partial: true,
+            }),
+            opcda_bridge::SearchEvent::Completed(opcda_bridge::SearchCompleted {
+                complete: false,
+                cancelled: true,
+                truncated: true,
+                warning: Some("partial".into()),
+            }),
+        ];
+        assert!(matches!(
+            search_event_from_bridge(events[0].clone()).unwrap(),
+            SearchEvent::Match(_)
+        ));
+        assert!(matches!(
+            search_event_from_bridge(events[1].clone()).unwrap(),
+            SearchEvent::Progress(SearchProgress {
+                visited_nodes: 2,
+                matches: 1,
+                partial: true
+            })
+        ));
+        assert!(matches!(
+            search_event_from_bridge(events[2].clone()).unwrap(),
+            SearchEvent::Completed(SearchCompleted {
+                cancelled: true,
+                truncated: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn indexed_search_precondition_preserves_gateway_reason() {
         let err = map_bridge_error_for(
             opcda_bridge::Error::Rpc(tonic::Status::failed_precondition(
@@ -747,6 +934,49 @@ mod tests {
             err,
             DriverError::IndexOperationRejected { message }
                 if message == "server is not configured for namespace indexing"
+        ));
+    }
+
+    #[test]
+    fn bridge_error_mapping_distinguishes_browse_state_and_gateway_compatibility() {
+        assert!(matches!(
+            map_bridge_error_for(
+                opcda_bridge::Error::Rpc(tonic::Status::not_found("gone")),
+                "paged browse",
+            ),
+            DriverError::BrowseStateInvalid
+        ));
+        assert!(matches!(
+            map_bridge_error_for(
+                opcda_bridge::Error::Rpc(tonic::Status::failed_precondition("gone")),
+                "browse-session close",
+            ),
+            DriverError::BrowseStateInvalid
+        ));
+        assert!(matches!(
+            map_bridge_error_for(
+                opcda_bridge::Error::Rpc(tonic::Status::internal("boom")),
+                "read OPC DA tags",
+            ),
+            DriverError::Operation(_)
+        ));
+        assert!(matches!(
+            map_bridge_error_for(
+                opcda_bridge::Error::IncompatibleGateway {
+                    operation: "capability discovery",
+                },
+                "capability discovery",
+            ),
+            DriverError::IncompatibleGateway {
+                operation: "capability discovery"
+            }
+        ));
+        assert!(matches!(
+            map_bridge_error_for(
+                opcda_bridge::Error::Protocol("bad payload".into()),
+                "read OPC DA tags",
+            ),
+            DriverError::Operation(_)
         ));
     }
 
@@ -804,6 +1034,7 @@ mod smoke_tests {
         search_events: Vec<ProtoSearchEvent>,
         search_index_status_response: ProtoSearchIndexStatus,
         search_index_response: ProtoSearchIndexResponse,
+        close_error: Option<Status>,
     }
 
     #[tonic::async_trait]
@@ -833,6 +1064,9 @@ mod smoke_tests {
             &self,
             _request: Request<CloseBrowseSessionRequest>,
         ) -> Result<Response<()>, Status> {
+            if let Some(status) = self.close_error.clone() {
+                return Err(status);
+            }
             Ok(Response::new(()))
         }
 
@@ -1095,6 +1329,92 @@ mod smoke_tests {
             .unwrap();
         assert!(matches!(events[0], SearchEvent::Progress(_)));
         assert!(matches!(events[1], SearchEvent::Completed(_)));
+    }
+
+    #[tokio::test]
+    async fn driver_trait_delegates_all_opcda_operations() {
+        let host = start_mock_server(MockBridgeService {
+            capabilities_response: GetCapabilitiesResponse {
+                protocol_version: "2".into(),
+                ..Default::default()
+            },
+            browse_response: ProtoBrowsePage {
+                complete: true,
+                ..Default::default()
+            },
+            search_index_response: ProtoSearchIndexResponse {
+                status: Some(ProtoSearchIndexStatus::default()),
+                ..Default::default()
+            },
+            search_events: vec![ProtoSearchEvent {
+                event: Some(search_event::Event::Completed(
+                    opcda_bridge_proto::bridge::SearchCompleted {
+                        complete: true,
+                        ..Default::default()
+                    },
+                )),
+            }],
+            ..Default::default()
+        })
+        .await;
+        let driver = OpcDaDriver::connect(&host, "S1").await.unwrap();
+        assert_eq!(
+            <OpcDaDriver as Driver>::capabilities(&driver)
+                .await
+                .unwrap()
+                .protocol_version,
+            "2"
+        );
+        <OpcDaDriver as Driver>::browse(&driver, BrowsePageRequest::root(1))
+            .await
+            .unwrap();
+        <OpcDaDriver as Driver>::close_browse_session(&driver, "session")
+            .await
+            .unwrap();
+        let events = <OpcDaDriver as Driver>::search(
+            &driver,
+            SearchRequest::new("PV", SearchMatchMode::Contains, 10),
+        )
+        .await
+        .unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(
+            <OpcDaDriver as Driver>::search_index_status(&driver)
+                .await
+                .is_ok()
+        );
+        assert!(
+            <OpcDaDriver as Driver>::refresh_search_index(&driver, false)
+                .await
+                .is_ok()
+        );
+        assert!(
+            <OpcDaDriver as Driver>::control_search_index(&driver, SearchIndexControlAction::Pause)
+                .await
+                .is_ok()
+        );
+        assert!(
+            <OpcDaDriver as Driver>::search_index(
+                &driver,
+                SearchIndexRequest::new("PV", SearchMatchMode::Exact, 1)
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn driver_trait_maps_close_browse_rpc_errors() {
+        let host = start_mock_server(MockBridgeService {
+            close_error: Some(Status::internal("close failed")),
+            ..Default::default()
+        })
+        .await;
+        let driver = OpcDaDriver::connect(&host, "S1").await.unwrap();
+        assert!(matches!(
+            <OpcDaDriver as Driver>::close_browse_session(&driver, "session").await,
+            Err(DriverError::Operation(_))
+        ));
     }
 
     #[tokio::test]

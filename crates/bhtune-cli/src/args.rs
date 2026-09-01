@@ -975,6 +975,26 @@ mod tests {
     }
 
     #[test]
+    fn search_enum_conversions_cover_every_choice() {
+        assert_eq!(
+            bhtune_driver::SearchIndexControlAction::from(SearchIndexControlActionArg::Pause),
+            bhtune_driver::SearchIndexControlAction::Pause
+        );
+        assert_eq!(
+            bhtune_driver::SearchIndexControlAction::from(SearchIndexControlActionArg::Resume),
+            bhtune_driver::SearchIndexControlAction::Resume
+        );
+        assert_eq!(
+            bhtune_driver::SearchIndexControlAction::from(SearchIndexControlActionArg::Cancel),
+            bhtune_driver::SearchIndexControlAction::Cancel
+        );
+        assert_eq!(
+            bhtune_driver::SearchMatchMode::from(OpcSearchMatchModeArg::Prefix),
+            bhtune_driver::SearchMatchMode::Prefix
+        );
+    }
+
+    #[test]
     fn history_command_output_format_covers_every_variant() {
         assert_eq!(
             HistoryCommand::List {

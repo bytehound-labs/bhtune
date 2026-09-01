@@ -27,6 +27,7 @@ pub(crate) struct MockBridgeService {
     pub(crate) read_response: ReadResponse,
     pub(crate) write_response: WriteResponse,
     pub(crate) browse_response: BrowsePage,
+    pub(crate) browse_continuation_response: Option<BrowsePage>,
     pub(crate) list_servers_response: ListServersResponse,
     pub(crate) capabilities_response: GetCapabilitiesResponse,
     pub(crate) search_events: Vec<SearchEvent>,
@@ -53,6 +54,7 @@ impl Default for MockBridgeService {
                 complete: true,
                 ..Default::default()
             },
+            browse_continuation_response: None,
             list_servers_response: ListServersResponse::default(),
             capabilities_response: GetCapabilitiesResponse {
                 application_version: "0.4.0".to_string(),
@@ -101,9 +103,16 @@ impl Bridge for MockBridgeService {
 
     async fn browse(
         &self,
-        _request: Request<BrowseRequest>,
+        request: Request<BrowseRequest>,
     ) -> Result<Response<BrowsePage>, Status> {
-        Ok(Response::new(self.browse_response.clone()))
+        let response = if request.into_inner().page_token.is_some() {
+            self.browse_continuation_response
+                .clone()
+                .unwrap_or_else(|| self.browse_response.clone())
+        } else {
+            self.browse_response.clone()
+        };
+        Ok(Response::new(response))
     }
 
     async fn close_browse_session(
@@ -289,6 +298,39 @@ mod tests {
             .unwrap()
             .into_inner();
         assert_eq!(page.session_id, "session");
+    }
+
+    #[tokio::test]
+    async fn capabilities_and_browse_continuation_fallback_are_callable() {
+        let service = MockBridgeService::default();
+        let capabilities = service
+            .get_capabilities(Request::new(GetCapabilitiesRequest::default()))
+            .await
+            .unwrap();
+        assert_eq!(capabilities.into_inner().max_page_size, 1000);
+        let page = service
+            .browse(Request::new(BrowseRequest {
+                page_token: Some("token".into()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(page.complete);
+    }
+
+    #[tokio::test]
+    async fn search_stream_sender_handles_a_dropped_receiver() {
+        let service = MockBridgeService {
+            search_events: vec![SearchEvent::default()],
+            ..Default::default()
+        };
+        let response = service
+            .search(Request::new(SearchRequest::default()))
+            .await
+            .unwrap();
+        drop(response);
+        tokio::task::yield_now().await;
     }
 
     #[tokio::test]

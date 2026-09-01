@@ -335,6 +335,13 @@ struct BrowseOptions {
     refresh: bool,
 }
 
+#[derive(serde::Serialize)]
+struct BrowsePagesOutput {
+    session_id: String,
+    pages: Vec<serde_json::Value>,
+    complete: bool,
+}
+
 async fn browse_with_output(
     bridge_host: &str,
     server: &str,
@@ -372,14 +379,12 @@ async fn browse_with_output(
                 serde_json::to_string_pretty(&json_browse_page(&pages[0]))?
             );
         } else {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "session_id": session,
-                    "pages": pages.iter().map(json_browse_page).collect::<Vec<_>>(),
-                    "complete": pages.last().is_some_and(|page| page.complete),
-                }))?
-            );
+            let response = BrowsePagesOutput {
+                session_id: session,
+                pages: pages.iter().map(json_browse_page).collect(),
+                complete: pages.last().is_some_and(|page| page.complete),
+            };
+            println!("{}", serde_json::to_string_pretty(&response)?);
         }
         return Ok(());
     }
@@ -584,14 +589,14 @@ async fn search_with_output(
             println!("{item}\t{breadcrumb}");
         }
     }
-    if let Some(done) = completed {
+    let _ = completed.map(|done| {
         if let Some(warning) = done.warning {
             eprintln!("search warning: {warning}");
         }
         if done.truncated {
             eprintln!("search results were truncated at the requested maximum");
         }
-    }
+    });
     Ok(())
 }
 
@@ -630,14 +635,14 @@ fn print_search_index_status(
             progress.entries_seen, progress.items_per_second
         );
     }
-    if let Some(diagnostic) = &status.last_error {
+    status.last_error.iter().for_each(|diagnostic| {
         let label = if status.state != bhtune_driver::SearchIndexState::Failed {
             "Last warning"
         } else {
             "Last error"
         };
         println!("{label}: {diagnostic}");
-    }
+    });
     Ok(())
 }
 
@@ -724,10 +729,13 @@ fn quality_name(quality: Quality) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::args::SearchIndexControlActionArg;
     use crate::test_support::{MockBridgeService, start_mock_server};
     use opcda_bridge_proto::bridge::{
-        BrowseNode, BrowseNodeKind, BrowsePage, ListServersResponse, ReadResponse,
-        TagValue as ProtoTagValue, WriteResponse,
+        BrowseNode, BrowseNodeKind, BrowsePage, ListServersResponse, ReadResponse, SearchCompleted,
+        SearchEvent as ProtoSearchEvent, SearchIndexResponse as ProtoSearchIndexResponse,
+        SearchIndexState as ProtoSearchIndexState, SearchIndexStatus as ProtoSearchIndexStatus,
+        SearchProgress, TagValue as ProtoTagValue, WriteResponse, search_event,
     };
 
     #[tokio::test]
@@ -1096,5 +1104,430 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("no OPC server specified"));
+    }
+
+    #[tokio::test]
+    async fn search_and_index_commands_cover_table_json_and_control_paths() {
+        let status = ProtoSearchIndexStatus {
+            server: "Sim.Server".into(),
+            state: ProtoSearchIndexState::Partial as i32,
+            configured: true,
+            active_generation: 2,
+            entry_count: 3,
+            unique_item_count: 2,
+            started_at: Some("2026-01-01T00:00:00Z".into()),
+            completed_at: None,
+            last_error: Some("inventory incomplete".into()),
+            database_bytes: 42,
+            progress: Some(opcda_bridge_proto::bridge::IndexedSearchProgress {
+                branches_visited: 1,
+                entries_seen: 3,
+                unique_items: 2,
+                active_time_ms: 10,
+                paused_time_ms: 2,
+                items_per_second: 1.5,
+                estimated_remaining_ms: Some(5),
+            }),
+            ..Default::default()
+        };
+        let (host, server) = start_mock_server(MockBridgeService {
+            search_events: vec![
+                ProtoSearchEvent {
+                    event: Some(search_event::Event::Progress(SearchProgress {
+                        visited_nodes: 4,
+                        matches: 1,
+                        partial: true,
+                    })),
+                },
+                ProtoSearchEvent {
+                    event: Some(search_event::Event::Match(
+                        opcda_bridge_proto::bridge::SearchMatch {
+                            node: Some(BrowseNode {
+                                node_key: "pv".into(),
+                                display_name: "PV".into(),
+                                kind: BrowseNodeKind::Item as i32,
+                                item_id: Some("Area.PV".into()),
+                            }),
+                            breadcrumbs: vec![opcda_bridge_proto::bridge::BrowseBreadcrumb {
+                                node_key: "area".into(),
+                                display_name: "Area".into(),
+                            }],
+                        },
+                    )),
+                },
+                ProtoSearchEvent {
+                    event: Some(search_event::Event::Completed(SearchCompleted {
+                        complete: false,
+                        cancelled: false,
+                        truncated: true,
+                        warning: Some("partial result".into()),
+                    })),
+                },
+            ],
+            search_index_status_response: status.clone(),
+            search_index_response: ProtoSearchIndexResponse {
+                matches: vec![],
+                has_more: true,
+                status: Some(status),
+            },
+            ..Default::default()
+        })
+        .await;
+        let config = crate::config::BhtuneConfig::default();
+
+        run_with_output(
+            OpcCommand::Search {
+                bridge_host: Some(host.clone()),
+                server: Some("Sim.Server".into()),
+                query: "PV".into(),
+                match_mode: OpcSearchMatchModeArg::Contains,
+                max_results: 10,
+                session_id: Some("session".into()),
+                scope_node_key: Some("area".into()),
+                include_branches: true,
+                refresh: true,
+            },
+            &config,
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+        run_with_output(
+            OpcCommand::Search {
+                bridge_host: Some(host.clone()),
+                server: Some("Sim.Server".into()),
+                query: "PV".into(),
+                match_mode: OpcSearchMatchModeArg::Exact,
+                max_results: 10,
+                session_id: None,
+                scope_node_key: None,
+                include_branches: false,
+                refresh: false,
+            },
+            &config,
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap();
+
+        for command in [
+            SearchIndexCommand::Status {
+                bridge_host: Some(host.clone()),
+                server: Some("Sim.Server".into()),
+            },
+            SearchIndexCommand::Refresh {
+                bridge_host: Some(host.clone()),
+                server: Some("Sim.Server".into()),
+                force: true,
+            },
+            SearchIndexCommand::Control {
+                bridge_host: Some(host.clone()),
+                server: Some("Sim.Server".into()),
+                action: SearchIndexControlActionArg::Pause,
+            },
+        ] {
+            run_with_output(
+                OpcCommand::SearchIndex { command },
+                &config,
+                OutputFormat::Table,
+            )
+            .await
+            .unwrap();
+        }
+        run_with_output(
+            OpcCommand::SearchIndex {
+                command: SearchIndexCommand::Search {
+                    bridge_host: Some(host.clone()),
+                    server: Some("Sim.Server".into()),
+                    query: "PV".into(),
+                    match_mode: OpcSearchMatchModeArg::Prefix,
+                    max_results: 5,
+                },
+            },
+            &config,
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap();
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn diagnostic_commands_cover_json_and_validation_branches() {
+        let status = bhtune_driver::SearchIndexStatus {
+            server: "Sim.Server".into(),
+            state: bhtune_driver::SearchIndexState::Failed,
+            configured: true,
+            active_generation: 1,
+            entry_count: 2,
+            unique_item_count: 1,
+            started_at: None,
+            completed_at: None,
+            last_error: Some("failed".into()),
+            database_bytes: 10,
+            organization: bhtune_driver::NamespaceOrganization::Flat,
+            source: bhtune_driver::BrowseSource::Flat,
+            progress: Some(bhtune_driver::IndexedSearchProgress {
+                branches_visited: 1,
+                entries_seen: 2,
+                unique_items: 1,
+                active_time_ms: 1,
+                paused_time_ms: 0,
+                items_per_second: 2.0,
+                estimated_remaining_ms: None,
+            }),
+        };
+        let indexed = bhtune_driver::SearchIndexResponse {
+            matches: vec![bhtune_driver::IndexedSearchMatch {
+                item_id: "Area.PV".into(),
+                display_name: "PV".into(),
+                kind: bhtune_driver::BrowseNodeKind::BranchAndItem,
+                breadcrumbs: vec!["Area".into()],
+            }],
+            has_more: true,
+            status: status.clone(),
+        };
+        assert_eq!(quality_name(Quality::Good), "good");
+        assert_eq!(quality_name(Quality::Uncertain), "uncertain");
+        assert_eq!(quality_name(Quality::Bad), "bad");
+        print_search_index_status(&status, OutputFormat::Table).unwrap();
+        print_search_index_status(&status, OutputFormat::Json).unwrap();
+        print_search_index_results(&indexed, OutputFormat::Table).unwrap();
+        print_search_index_results(&indexed, OutputFormat::Json).unwrap();
+        print_search_index_results(
+            &bhtune_driver::SearchIndexResponse {
+                matches: vec![],
+                has_more: false,
+                status,
+            },
+            OutputFormat::Table,
+        )
+        .unwrap();
+
+        let host_service = MockBridgeService {
+            read_response: ReadResponse {
+                values: vec![ProtoTagValue {
+                    tag_id: "Area.PV".into(),
+                    value: "1.5".into(),
+                    quality: "Uncertain".into(),
+                    timestamp: "N/A".into(),
+                }],
+            },
+            write_response: WriteResponse {
+                tag_id: "Area.MV".into(),
+                success: false,
+                error: None,
+            },
+            browse_response: BrowsePage {
+                session_id: "s".into(),
+                nodes: vec![
+                    BrowseNode {
+                        node_key: "u".into(),
+                        display_name: "Unspecified".into(),
+                        kind: BrowseNodeKind::Unspecified as i32,
+                        item_id: None,
+                    },
+                    BrowseNode {
+                        node_key: "i".into(),
+                        display_name: "Item".into(),
+                        kind: BrowseNodeKind::Item as i32,
+                        item_id: Some("Area.PV".into()),
+                    },
+                    BrowseNode {
+                        node_key: "b".into(),
+                        display_name: "Branch".into(),
+                        kind: BrowseNodeKind::Branch as i32,
+                        item_id: None,
+                    },
+                    BrowseNode {
+                        node_key: "both".into(),
+                        display_name: "Both".into(),
+                        kind: BrowseNodeKind::BranchAndItem as i32,
+                        item_id: Some("Area.Both".into()),
+                    },
+                ],
+                next_page_token: Some("next".into()),
+                complete: false,
+                ..Default::default()
+            },
+            browse_continuation_response: Some(BrowsePage {
+                session_id: "s".into(),
+                complete: true,
+                ..Default::default()
+            }),
+            list_servers_response: ListServersResponse {
+                servers: vec!["Sim.Server".into()],
+            },
+            ..Default::default()
+        };
+        let (host, server) = start_mock_server(host_service).await;
+        servers_with_output(&host, OutputFormat::Json)
+            .await
+            .unwrap();
+        read_with_output(&host, "Sim.Server", &["Area.PV".into()], OutputFormat::Json)
+            .await
+            .unwrap();
+        write_with_output(&host, "Sim.Server", "Area.MV", "1.0", OutputFormat::Json)
+            .await
+            .unwrap_err();
+        let err = write_with_output(
+            &host,
+            "Sim.Server",
+            "Area.MV",
+            "not-numeric",
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("driver rejected"));
+        browse_with_output(
+            &host,
+            "Sim.Server",
+            BrowseOptions {
+                page_size: 2,
+                all: true,
+                ..Default::default()
+            },
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap();
+        browse_with_output(
+            &host,
+            "Sim.Server",
+            BrowseOptions {
+                page_size: 2,
+                all: false,
+                ..Default::default()
+            },
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap();
+        browse_with_output(
+            &host,
+            "Sim.Server",
+            BrowseOptions {
+                page_size: 2,
+                all: true,
+                ..Default::default()
+            },
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+        browse_with_output(
+            &host,
+            "Sim.Server",
+            BrowseOptions {
+                page_size: 2,
+                all: false,
+                ..Default::default()
+            },
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+        let err = browse_with_output(
+            &host,
+            "Sim.Server",
+            BrowseOptions {
+                parent_node_key: Some("parent".into()),
+                ..Default::default()
+            },
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("--session-id"));
+        let err = close_with_output(&host, " ", OutputFormat::Table)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("session ID"));
+        close_with_output(&host, "s", OutputFormat::Json)
+            .await
+            .unwrap();
+        server.shutdown().await;
+
+        let (host, server) = start_mock_server(MockBridgeService {
+            write_response: WriteResponse {
+                tag_id: "Area.MV".into(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+        write_with_output(&host, "Sim.Server", "Area.MV", "1.0", OutputFormat::Json)
+            .await
+            .unwrap();
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn table_search_reports_empty_results_and_completion_diagnostics() {
+        let (host, server) = start_mock_server(MockBridgeService {
+            search_events: vec![ProtoSearchEvent {
+                event: Some(search_event::Event::Completed(SearchCompleted {
+                    complete: false,
+                    cancelled: false,
+                    truncated: true,
+                    warning: Some("partial".into()),
+                })),
+            }],
+            ..Default::default()
+        })
+        .await;
+        search_with_output(
+            &host,
+            "Sim.Server",
+            SearchOptions {
+                query: "PV".into(),
+                match_mode: OpcSearchMatchModeArg::Contains,
+                max_results: 1,
+                session_id: None,
+                scope_node_key: None,
+                include_branches: false,
+                refresh: false,
+            },
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap();
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn browse_all_stops_at_the_safety_page_limit() {
+        let (host, server) = start_mock_server(MockBridgeService {
+            browse_response: BrowsePage {
+                session_id: "s".into(),
+                next_page_token: Some("next".into()),
+                complete: false,
+                ..Default::default()
+            },
+            browse_continuation_response: Some(BrowsePage {
+                session_id: "s".into(),
+                next_page_token: Some("next".into()),
+                complete: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await;
+        let err = browse_with_output(
+            &host,
+            "Sim.Server",
+            BrowseOptions {
+                all: true,
+                ..Default::default()
+            },
+            OutputFormat::Table,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("safety limit"));
+        server.shutdown().await;
     }
 }

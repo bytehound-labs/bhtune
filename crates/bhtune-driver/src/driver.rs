@@ -117,6 +117,31 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use std::sync::Mutex;
 
+    struct BareDriver;
+
+    #[async_trait]
+    impl Driver for BareDriver {
+        async fn read(&self, _tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
+            Ok(Vec::new())
+        }
+
+        async fn write(&self, _tag: &TagId, _value: TagWrite) -> DriverResult<WriteOutcome> {
+            Ok(WriteOutcome::success())
+        }
+
+        async fn browse(&self, _request: BrowsePageRequest) -> DriverResult<BrowsePage> {
+            Ok(BrowsePage {
+                session_id: "s".into(),
+                nodes: Vec::new(),
+                next_page_token: None,
+                complete: true,
+                organization: crate::types::NamespaceOrganization::Unspecified,
+                source: crate::types::BrowseSource::Unspecified,
+                warning: None,
+            })
+        }
+    }
+
     /// A minimal in-memory `Driver` used only to prove the trait itself is usable: object-safe
     /// (`Box<dyn Driver>`), async-dispatchable, and that its methods compose the way real
     /// callers (a future `driver-opcda`/`driver-simulator`) will need.
@@ -218,6 +243,124 @@ mod tests {
         assert_eq!(values[1].tag, "Area1.LIC101.PV");
         assert_eq!(values[1].value, "42.5");
         assert_eq!(values[1].quality, Quality::Good);
+    }
+
+    #[tokio::test]
+    async fn default_trait_operations_report_unsupported() {
+        let driver = BareDriver;
+        assert!(driver.read(&[]).await.unwrap().is_empty());
+        assert!(
+            driver
+                .write(&"MV".to_string(), TagWrite::Float(1.0))
+                .await
+                .unwrap()
+                .success
+        );
+        assert_eq!(
+            driver
+                .browse(BrowsePageRequest::root(1))
+                .await
+                .unwrap()
+                .session_id,
+            "s"
+        );
+        assert!(matches!(
+            driver.capabilities().await,
+            Err(DriverError::Unsupported {
+                operation: "capabilities"
+            })
+        ));
+        assert!(matches!(
+            driver.close_browse_session("session").await,
+            Err(DriverError::Unsupported {
+                operation: "browse-session close"
+            })
+        ));
+        assert!(matches!(
+            driver
+                .search(SearchRequest {
+                    query: "PV".into(),
+                    match_mode: crate::types::SearchMatchMode::Contains,
+                    session_id: None,
+                    scope_node_key: None,
+                    max_results: 10,
+                    include_branches: false,
+                    refresh: false,
+                })
+                .await,
+            Err(DriverError::Unsupported {
+                operation: "search"
+            })
+        ));
+        assert!(matches!(
+            driver.search_index_status().await,
+            Err(DriverError::Unsupported {
+                operation: "indexed-search status"
+            })
+        ));
+        assert!(matches!(
+            driver.refresh_search_index(false).await,
+            Err(DriverError::Unsupported {
+                operation: "indexed-search refresh"
+            })
+        ));
+        assert!(matches!(
+            driver
+                .control_search_index(crate::types::SearchIndexControlAction::Pause)
+                .await,
+            Err(DriverError::Unsupported {
+                operation: "indexed-search control"
+            })
+        ));
+        assert!(matches!(
+            driver
+                .search_index(crate::types::SearchIndexRequest::new(
+                    "PV",
+                    crate::types::SearchMatchMode::Exact,
+                    1,
+                ))
+                .await,
+            Err(DriverError::Unsupported {
+                operation: "indexed search"
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn mock_driver_capabilities_and_explicit_unsupported_operations_are_callable() {
+        let driver = mock();
+        let capabilities = <MockDriver as Driver>::capabilities(&driver).await.unwrap();
+        assert_eq!(capabilities.application_version, "test");
+        assert!(matches!(
+            <MockDriver as Driver>::browse(&driver, BrowsePageRequest::root(1)).await,
+            Err(DriverError::Unsupported {
+                operation: "browse"
+            })
+        ));
+        assert!(matches!(
+            <MockDriver as Driver>::close_browse_session(&driver, "session").await,
+            Err(DriverError::Unsupported {
+                operation: "browse-session close"
+            })
+        ));
+        assert!(matches!(
+            <MockDriver as Driver>::search(
+                &driver,
+                SearchRequest {
+                    query: "PV".into(),
+                    match_mode: crate::types::SearchMatchMode::Exact,
+                    session_id: None,
+                    scope_node_key: None,
+                    max_results: 1,
+                    include_branches: false,
+                    refresh: false,
+                },
+            )
+            .await,
+            Err(DriverError::Unsupported {
+                operation: "search"
+            })
+        ));
     }
 
     #[tokio::test]
