@@ -212,9 +212,10 @@ a trusted network.
      diagnostics remain available through the CLI, API, and structured logs.
    - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
      Notes, Test configuration, Initial readings, and PID change history start expanded so the
-     main result and audit information is immediately visible. **MV actuation verification**
-     follows PID change history at the bottom and starts collapsed; open it when the detailed
-     command/readback audit is needed.
+     main result and PID audit information is immediately visible. Sampling diagnostics starts
+     collapsed because it is advisory. Detailed MV command/readback evidence is available through
+     `bhtune history show`, the run-detail API, and structured logs when deeper support or safety
+     analysis is needed.
 
    Detailed polling timing diagnostics remain available through `bhtune history show`, the
    run-detail API, and structured logs, but are not part of the normal web run-detail view.

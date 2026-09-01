@@ -250,14 +250,16 @@ test.describe("post-tune PID actions", () => {
       "Test configuration",
       "Initial readings",
       "PID change history",
-      "MV actuation verification",
     ]);
-    for (const title of sectionTitles.slice(0, -1)) {
+    for (const title of sectionTitles) {
       await expect(detailSection(page, title)).toHaveAttribute("open", "");
     }
     await expect(
-      detailSection(page, "MV actuation verification"),
-    ).not.toHaveAttribute("open", "");
+      page.getByRole("heading", {
+        name: "MV actuation verification",
+        exact: true,
+      }),
+    ).toHaveCount(0);
 
     await detailSection(page, "Summary").locator("summary").click();
     await expect(detailSection(page, "Summary")).not.toHaveAttribute(

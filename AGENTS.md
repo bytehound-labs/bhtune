@@ -54,7 +54,10 @@ sampling/operation-latency diagnostics are recorded for every run that has usabl
 see "MRFT measurement correction and result validity" below. Variant B, which would also seed
 hysteresis from the switch sample, remains closed-loop simulation research only.
 The Phase 6.5 live-plant safety hardening pass is done, including OPC DA MV actuation
-verification (see "Live-plant safety hardening" below). Phase 6.6's `template-catalog` and
+verification (see "Live-plant safety hardening" below). Pending relay checks now share the
+normal OPC DA PV/MV poll, while the strict four-second completion deadline and independent
+restore verification remain unchanged; detailed actuation evidence stays in the CLI/API/
+database/log surfaces rather than the normal browser page. Phase 6.6's `template-catalog` and
 `template-provenance` are also done: the four
 built-in DCS templates moved from hardcoded Rust constructors to an embedded, contributable
 TOML catalog (`crates/bhtune-core/templates/builtin.toml`) with a `DcsTemplate::validate()`
@@ -1991,19 +1994,24 @@ rationale for code that still exists (not a changelog of the review itself):
   tolerance, and a matching readback that completes after the deadline is still a failure.
   The fresh deadline read has an independent one-second bound instead of inheriting the full
   per-operation timeout, so a stalled MV read cannot hold the run open indefinitely.
-  Verification is given priority when its deadline and a PV poll become ready together, so a
-  due safety check cannot be hidden behind another engine step. An unconfirmed relay aborts
-  without issuing the replacement write, records `TuneOutcome::ActuationFailed`/exit code `7`
-  when restore is confirmed, and preserves the existing restore-incomplete exit code `6` when
-  restoration is not confirmed. Simulator/replay runs deliberately do not perform this
-  live-I/O verification or add timing work.
+  The normal OPC DA poll requests PV and MV together while a relay is pending, evaluates the MV
+  evidence before persisting the PV sample or advancing the engine, and maps returned values by
+  tag identity rather than response position. A separately bounded MV-only read remains as a
+  fallback when polling supplies no usable evidence before the deadline. Verification is given
+  priority when its deadline and a PV poll become ready together, so a due safety check cannot be
+  hidden behind another engine step. An unconfirmed relay aborts without issuing the replacement
+  write, records `TuneOutcome::ActuationFailed`/exit code `7` when restore is confirmed, and
+  preserves the existing restore-incomplete exit code `6` when restoration is not confirmed.
+  Simulator/replay runs deliberately do not perform this live-I/O verification or add timing work.
 
   The same tracker records one durable `tune_mv_actuations` row per accepted relay or restore
   command, including target, tolerance, deadline, attempts, readback quality, and terminal
   status. Restore remains authoritative for the original MV and is coordinated with the final
-  MRFT snapback so the same target is not subjected to duplicate waits. Verification reads are
-  not PV samples: commanded MV remains the trend/sample/export series, while measured MV
-  evidence is exposed only in the actuation audit.
+  MRFT snapback so the same target is not subjected to duplicate waits. MV observations are not
+  additional PV samples: commanded MV remains the trend/sample/export series, while measured MV
+  evidence is exposed only in the actuation audit. A shared PV/MV request can contribute to both
+  the PV-read and MV-verification latency categories; those diagnostics overlap and must not be
+  summed as independent network durations.
 
 - **`--dry-run` removed entirely** — done. It was documented as never touching the DCS, but
   actually forced the full mode transition and stroked the MV through a complete relay test,
@@ -3799,10 +3807,12 @@ Sampling quality is reported separately from mathematical result validity. A run
 when it has at least 6.0 observed samples per measured oscillation period, `marginal` when it has
 a finite positive value below that threshold, and `not_assessed` when no usable period exists.
 This classification is advisory: it does not currently invalidate a result, abort a tune, or
-block a valid PID write. `TimingMetrics` also records successful PV-read, MV-write,
-MV-verification-read, sample-persistence, and total-tick-work latency summaries so a requested
-poll interval can be compared with the actual cadence before changing defaults. Failed,
-cancelled, and timed-out operations are excluded from these summaries.
+block a valid PID write. `TimingMetrics` also records successful PV-read, MV-write, MV-verification-read,
+sample-persistence, and total-tick-work latency summaries so a requested poll interval can be
+compared with the actual cadence before changing defaults. A pending relay's batched PV/MV
+request may populate both the PV-read and MV-verification categories; those measurements describe
+one overlapping operation, not two durations to add. Failed, cancelled, and timed-out operations
+are excluded from these summaries.
 
 Variant B — resetting hysteresis extrema to the switch sample as well as result extrema — is
 not shipped. It requires closed-loop FOPDT simulation because a changed switch schedule cannot be
@@ -4006,13 +4016,17 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     clamps it, updates it late, or returns a stale value. OPC DA relay and restore commands are
     therefore tracked in `tune_mv_actuations` and read back against their exact targets within a
     fixed four-second confirmation window; a matching read that completes after the deadline is
-    still invalid, and a due verification runs before a due PV poll. A mismatch aborts before a
-    replacement relay is issued and restores the loop, with confirmed restoration reported as
-    `TuneOutcome::ActuationFailed`/exit code `7` and incomplete restoration retaining the higher
-    priority `RestoreIncomplete`/exit code `6`. Verification reads never become PV samples and
-    never alter MRFT timing: trends and exports remain commanded MV, while measured MV evidence
-    lives only in the actuation audit. Simulator and replay drivers remain free of this live-I/O
-    policy.
+    still invalid, and a due verification runs before a due PV poll. While a relay is pending,
+    normal OPC DA polling requests PV and MV together, maps the response by tag identity, and
+    evaluates MV evidence before the engine advances; a bounded MV-only read remains as a fallback.
+    A mismatch aborts before a replacement relay is issued and restores the loop, with confirmed
+    restoration reported as `TuneOutcome::ActuationFailed`/exit code `7` and incomplete restoration
+    retaining the higher priority `RestoreIncomplete`/exit code `6`. MV evidence never becomes an
+    additional trend/sample/export point or changes MRFT timing. A shared batch can populate both
+    PV-read and MV-verification latency categories, which overlap and must not be summed.
+    Simulator and replay drivers remain free of this live-I/O policy. The detailed actuation
+    audit remains available through the CLI/API/database/logs; the normal browser run-detail page
+    shows the summarized outcome instead of the raw table.
 20. **`[fixed, no flag needed]` Base Tag changes must invalidate Custom mappings, and historical
     result labels must come from the run's template snapshot.** The New Run form routes manual
     edits, template-driven suffix replacement, and OPC browser selection through
@@ -4416,8 +4430,9 @@ bhtune-driver`), its OPC DA implementation (`driver-opcda`: `OpcDaDriver` in
    sub-phases are done — `bhtune-cli` is a complete, fully headless, scriptable adapter on its
    own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done,
    including OPC DA MV actuation verification with durable command/readback audit records,
-   fixed four-second confirmation, late-readback rejection, and restore-aware exit-code
-   precedence — see "Live-plant safety hardening" above. Tune history also records sampling
+   shared pending-relay PV/MV polling, fixed four-second confirmation, late-readback rejection,
+   and restore-aware exit-code precedence — see "Live-plant safety hardening" above. Tune history
+   also records sampling
    adequacy and successful operation-latency diagnostics, while invalid calculated results remain
    explicit evidence and cannot be written back. Phase 6.6, turning the built-in
    DCS/PLC templates
@@ -4503,8 +4518,9 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    centered viewport popup that is rendered through one shared body-level `Modal` component for
    PID review, OPC server discovery, and OPC tag browsing, and shows exact tags and values.
    Run-detail sections are independently collapsible: Calculated results, Trend, Summary, Notes,
-   Test configuration, Initial readings, and PID change history start open, while MV actuation
-   verification follows PID history at the bottom and starts closed.
+   Test configuration, Initial readings, and PID change history start open, while Sampling
+   diagnostics starts closed. Detailed MV actuation command/readback evidence remains available
+   through CLI/API/database/log surfaces rather than the normal browser page.
    `ui-prefill-last-run` seeds the New Run form from the newest run's stored request server-side
    as a compatibility fallback, plus a "Reset to defaults"
    action and a "Duplicate this run" action. The follow-on New Tune draft flow stores every
