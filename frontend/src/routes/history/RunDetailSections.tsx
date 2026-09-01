@@ -30,13 +30,14 @@ import {
 import type { TrendPoint } from "../../lib/trend";
 import {
   formatNumber,
-  type RunResult,
+  type ValidRunResult,
   type RunWrite,
   type WriteEligibility,
   writeFailureMessage,
   writeKey,
 } from "./runDetailHelpers";
 import { PidResultsPanel } from "./PidResultsPanel";
+import { SamplingDiagnosticsSection } from "./SamplingDiagnosticsSection";
 
 function dateTime(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : "—";
@@ -624,7 +625,7 @@ export function RunDetailContent({
   readonly onNotesChange: (value: string) => void;
   readonly onSaveNotes: () => void;
   readonly onClearNotes: () => void;
-  readonly onWrite: (result: RunResult) => void;
+  readonly onWrite: (result: ValidRunResult) => void;
   readonly onRevert: (write: RunWrite) => void;
 }) {
   return (
@@ -669,6 +670,7 @@ export function RunDetailContent({
         revertPending={revertPending}
         onRevert={onRevert}
       />
+      <SamplingDiagnosticsSection timing={run.timing_metrics} />
       {run.driver === "opcda" && (
         <MvActuationSection actuations={run.mv_actuations ?? []} />
       )}

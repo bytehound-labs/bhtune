@@ -9,11 +9,16 @@
 
 use std::time::Duration;
 
-use bhtune_db::models::{TimingBasis, TimingMetrics};
+use bhtune_db::models::{
+    PollLatencyMetrics, SamplingAdequacy, TimingBasis, TimingMetrics, TimingSummary,
+};
 use chrono::{DateTime, Utc};
 use tokio::time::Instant;
 
 use crate::args::DriverKindArg;
+
+/// Six samples per measured period is an advisory minimum for interpreting extrema.
+pub(crate) const MIN_SAMPLES_PER_PERIOD: f64 = 6.0;
 
 /// A UTC timestamp paired with the monotonic instant at which it was observed.
 ///
@@ -67,6 +72,64 @@ pub(crate) struct PollTimingAccumulator {
     total_gap_micros: u128,
     max_gap_micros: u128,
     missed_poll_opportunity_count: u64,
+    latency: PollLatencyAccumulator,
+}
+
+#[derive(Debug, Default)]
+struct DurationAccumulator {
+    count: u64,
+    total_ms: f64,
+    max_ms: Option<f64>,
+}
+
+impl DurationAccumulator {
+    fn observe(&mut self, duration: Duration) {
+        let elapsed_ms = duration.as_secs_f64() * 1_000.0;
+        self.count = self.count.saturating_add(1);
+        self.total_ms += elapsed_ms;
+        self.max_ms = Some(self.max_ms.map_or(elapsed_ms, |max| max.max(elapsed_ms)));
+    }
+
+    fn finish(&self) -> TimingSummary {
+        TimingSummary {
+            count: self.count,
+            mean_ms: (self.count > 0).then(|| self.total_ms / self.count as f64),
+            max_ms: self.max_ms,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+}
+
+#[derive(Debug, Default)]
+struct PollLatencyAccumulator {
+    pv_read: DurationAccumulator,
+    mv_write: DurationAccumulator,
+    mv_verification: DurationAccumulator,
+    sample_persist: DurationAccumulator,
+    tick_work: DurationAccumulator,
+}
+
+impl PollLatencyAccumulator {
+    fn is_empty(&self) -> bool {
+        self.pv_read.is_empty()
+            && self.mv_write.is_empty()
+            && self.mv_verification.is_empty()
+            && self.sample_persist.is_empty()
+            && self.tick_work.is_empty()
+    }
+
+    fn finish(&self) -> PollLatencyMetrics {
+        PollLatencyMetrics {
+            pv_read: self.pv_read.finish(),
+            mv_write: self.mv_write.finish(),
+            mv_verification: self.mv_verification.finish(),
+            sample_persist: self.sample_persist.finish(),
+            tick_work: self.tick_work.finish(),
+        }
+    }
 }
 
 impl PollTimingAccumulator {
@@ -79,6 +142,7 @@ impl PollTimingAccumulator {
             total_gap_micros: 0,
             max_gap_micros: 0,
             missed_poll_opportunity_count: 0,
+            latency: PollLatencyAccumulator::default(),
         }
     }
 
@@ -119,6 +183,26 @@ impl PollTimingAccumulator {
         Ok(())
     }
 
+    pub(crate) fn observe_pv_read(&mut self, duration: Duration) {
+        self.latency.pv_read.observe(duration);
+    }
+
+    pub(crate) fn observe_mv_write(&mut self, duration: Duration) {
+        self.latency.mv_write.observe(duration);
+    }
+
+    pub(crate) fn observe_mv_verification(&mut self, duration: Duration) {
+        self.latency.mv_verification.observe(duration);
+    }
+
+    pub(crate) fn observe_sample_persist(&mut self, duration: Duration) {
+        self.latency.sample_persist.observe(duration);
+    }
+
+    pub(crate) fn observe_tick_work(&mut self, duration: Duration) {
+        self.latency.tick_work.observe(duration);
+    }
+
     pub(crate) fn finish(
         &self,
         measured_oscillation_period_ms: Option<f64>,
@@ -136,6 +220,7 @@ impl PollTimingAccumulator {
                 .filter(|mean| *mean > 0.0)
                 .map(|mean| period / mean)
         });
+        let sampling_adequacy = classify_sampling_adequacy(approximate_samples_per_period);
 
         Some(TimingMetrics {
             basis: self.basis,
@@ -146,7 +231,19 @@ impl PollTimingAccumulator {
             missed_poll_opportunity_count: self.missed_poll_opportunity_count,
             measured_oscillation_period_ms,
             approximate_samples_per_period,
+            sampling_adequacy,
+            poll_latency: (!self.latency.is_empty()).then(|| self.latency.finish()),
         })
+    }
+}
+
+fn classify_sampling_adequacy(samples_per_period: Option<f64>) -> SamplingAdequacy {
+    match samples_per_period {
+        Some(value) if value.is_finite() && value >= MIN_SAMPLES_PER_PERIOD => {
+            SamplingAdequacy::Adequate
+        }
+        Some(value) if value.is_finite() && value > 0.0 => SamplingAdequacy::Marginal,
+        _ => SamplingAdequacy::NotAssessed,
     }
 }
 
@@ -358,6 +455,8 @@ mod tests {
         assert_eq!(metrics.missed_poll_opportunity_count, 0);
         assert_eq!(metrics.measured_oscillation_period_ms, None);
         assert_eq!(metrics.approximate_samples_per_period, None);
+        assert_eq!(metrics.sampling_adequacy, SamplingAdequacy::NotAssessed);
+        assert_eq!(metrics.poll_latency, None);
     }
 
     #[test]
@@ -381,6 +480,7 @@ mod tests {
             metrics.approximate_samples_per_period,
             Some(100.0 / (61.0 / 3.0))
         );
+        assert_eq!(metrics.sampling_adequacy, SamplingAdequacy::Marginal);
     }
 
     #[test]
@@ -396,6 +496,48 @@ mod tests {
             timing.finish(None).unwrap().missed_poll_opportunity_count,
             1
         );
+    }
+
+    #[test]
+    fn sampling_adequacy_is_adequate_at_the_advisory_threshold() {
+        let start = DateTime::UNIX_EPOCH;
+        let mut timing = PollTimingAccumulator::new(TimingBasis::SimulatedFixedStep, 100);
+        timing.observe(start).unwrap();
+        timing
+            .observe(start + chrono::Duration::milliseconds(100))
+            .unwrap();
+
+        let marginal = timing.finish(Some(500.0)).unwrap();
+        assert_eq!(marginal.sampling_adequacy, SamplingAdequacy::Marginal);
+
+        let adequate = timing.finish(Some(600.0)).unwrap();
+        assert_eq!(adequate.sampling_adequacy, SamplingAdequacy::Adequate);
+    }
+
+    #[test]
+    fn latency_metrics_accumulate_each_operation_category() {
+        let mut timing = PollTimingAccumulator::new(TimingBasis::LiveMonotonic, 800);
+        timing.observe(DateTime::UNIX_EPOCH).unwrap();
+        timing.observe_pv_read(Duration::from_millis(4));
+        timing.observe_pv_read(Duration::from_millis(8));
+        timing.observe_mv_write(Duration::from_millis(10));
+        timing.observe_mv_verification(Duration::from_millis(12));
+        timing.observe_sample_persist(Duration::from_millis(14));
+        timing.observe_tick_work(Duration::from_millis(20));
+
+        let latency = timing
+            .finish(None)
+            .unwrap()
+            .poll_latency
+            .expect("observed operation timings should be present");
+
+        assert_eq!(latency.pv_read.count, 2);
+        assert_eq!(latency.pv_read.mean_ms, Some(6.0));
+        assert_eq!(latency.pv_read.max_ms, Some(8.0));
+        assert_eq!(latency.mv_write.mean_ms, Some(10.0));
+        assert_eq!(latency.mv_verification.max_ms, Some(12.0));
+        assert_eq!(latency.sample_persist.count, 1);
+        assert_eq!(latency.tick_work.count, 1);
     }
 
     #[test]

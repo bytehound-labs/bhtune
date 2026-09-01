@@ -50,11 +50,29 @@ four-second confirmation window; a command that remains outside tolerance, or wh
 readback arrives after the deadline, aborts the test and starts restoration. Simulator and replay
 runs do not add this live-I/O verification step.
 
+## How boundary samples are measured
+
+BHTune keeps two kinds of extrema while the relay test runs. The hysteresis extrema determine
+when the next relay switch is needed; the measurement extrema determine the PV amplitude used for
+the final tuning calculation. At a switch, the hysteresis extrema retain the established
+switching behavior, while the just-recorded switch sample seeds the new measurement interval.
+That shared boundary sample can therefore contribute to both adjacent half-cycles.
+
+This distinction matters when polling is sparse. If the new half-cycle has no later sample on its
+own side of the initial PV, resetting its measurement extrema to the initial value would make a
+real oscillation look flat and could produce an unusable zero amplitude. Seeding the measurement
+interval with the switch sample prevents that measurement artifact without changing hysteresis,
+switch timing, MV commands, or actuation verification.
+
 The other operational timing and safety limits are installation-wide settings under `[tuning]`:
 MRFT delay padding, the whole-run timeout, driver-operation timeout, and restore timeout. They
 are configured on the web GUI's Config page or in `bhtune.toml`, apply to future tune starts, and
 are frozen into each run when preparation begins. OPC DA requires a restore timeout of at least
 four seconds because MV actuation confirmation can take up to that long.
+History also records successful PV-read, MV-write, MV-verification-read, sample-persistence, and
+total-tick-work latency summaries. These measurements help distinguish a slow driver or database
+from an overly aggressive polling request; failed, cancelled, and timed-out operations are not
+treated as successful latency samples.
 
 The MV values shown in the trend, persisted samples, and sample exports are the **commanded**
 values produced by the MRFT engine. The actual MV values returned by OPC DA readbacks are
@@ -85,6 +103,15 @@ three, in the units your DCS/PLC template expects (Proportional Band % or Gain, 
 Reset Rate, Derivative Time or Derivative Gain — see
 [DCS/PLC templates](../dcs-templates.md)), so the choice is made after seeing the numbers, not
 before.
+
+Every response-level result is checked before it is stored as usable tuning data. A non-positive
+or non-finite amplitude or period, or a non-finite intermediate or converted PID value, is
+stored as `Invalid` with a diagnostic reason and no numeric values. The CLI and web GUI do not
+offer that invalid row as a calculated-result write target. A run also reports whether its
+measured sampling was `adequate`, `marginal`, or `not assessed` in the collapsed **Sampling
+diagnostics** section on the web run-detail page; a marginal advisory is a reason to inspect the
+trend and timing diagnostics, not an automatic rejection.
+
 The web run-detail **Calculated results** table uses the constant names from the run's
 snapshotted template, so a Yokogawa run shows `P`, `I`, and `D` rather than generic engine
 labels. It keeps the derivative column for PI runs and displays `0`, because the write path

@@ -119,7 +119,8 @@ validation.
       template setting; Ti→Ri or Ti→Ki; Td→Kd — per the active template's type/unit settings.
 - [ ] REQUIRED — write-back semantics: never automatic, requires explicit per-response-level
       confirmation; P is always written; I is written as a neutralizing sentinel value (not simply
-      skipped) when the controller type is P-only; D is written only for full PID.
+      skipped) when the controller type is P-only; PI writes its calculated I and explicitly writes
+      `D = 0`; full PID writes its calculated D.
 - [ ] REQUIRED — abort/error restoration: write the original MV back before anything else, then
       restore mode/mode-attribute/setpoint to their captured initial values (only if they were
       changed at test start).

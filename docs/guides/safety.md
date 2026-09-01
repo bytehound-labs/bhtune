@@ -84,6 +84,17 @@ twice the requested interval, because that objectively means at least one comple
 opportunity was missed. This is a warning, not a validity verdict: it does not abort the run,
 change its calculated constants, or prevent an engineer from applying them.
 
+Each run also reports sampling adequacy in the collapsed **Sampling diagnostics** section on the
+web run-detail page. `adequate` means at least six observed samples per measured oscillation
+period; `marginal` means fewer than six; and `not_assessed` means no usable finite period was
+available. This is an advisory signal, not an automatic rejection: a valid result with marginal
+sampling remains writable, but should be reviewed against the trend and the recorded timing data
+before it is applied.
+
+The timing snapshot includes successful PV-read, MV-write, MV-verification-read,
+sample-persistence, and total-tick-work latency summaries in addition to sample gaps. Failed,
+cancelled, and timed-out operations are excluded from these successful-latency measurements.
+
 ## Input validation
 
 Every number that reaches the tuning engine is validated before any live I/O happens: relay
@@ -95,6 +106,15 @@ non-finite/out-of-range input immediately with a clear message; anything read fr
 (a real DCS/PLC's current ranges, for instance) is validated again right after being read, before
 the loop is ever switched to manual. An effective relay step below the minimum that can be
 distinguished safely at `f32` precision is rejected at this same pre-mutation boundary.
+
+## Invalid calculated results
+
+Every response-level result is checked before it is stored as usable tuning data. A non-positive
+or non-finite PV amplitude or period, or any non-finite intermediate or template-converted PID
+value, is stored as `Invalid` with an explicit diagnostic reason and without numeric tuning
+values. Invalid calculated-result rows cannot be selected for PID write-back in the CLI or web
+GUI. This backstop remains important even when sampling is adequate, because a degenerate
+measurement can arise from a future algorithm or data-path defect.
 
 ## MV actuation verification
 
@@ -180,7 +200,11 @@ approve it interactively. BHTune:
 3. **Rolls back only what was actually confirmed** if any constant fails partway through — if P
    succeeds and I fails, only P is rolled back (D, never attempted, needs nothing; I, never
    confirmed, has nothing to put back).
-4. **Records every outcome**, including which case applies: nothing written, everything written
+4. **Writes D explicitly for PI controllers.** A PI result writes its calculated integral value
+   and `D = 0.0`, clearing any stale derivative action in the controller. A P-only result uses
+   the template-specific integral-disabling sentinel; a full PID result writes its calculated
+   derivative value.
+5. **Records every outcome**, including which case applies: nothing written, everything written
    and confirmed, a partial write successfully rolled back, or — the case that needs a human —
    a partial write whose rollback itself failed. That last case prints a message pointing at
    `bhtune history revert <run-id>`, which writes the persisted previous values back under the

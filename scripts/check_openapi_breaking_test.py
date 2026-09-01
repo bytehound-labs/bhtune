@@ -120,6 +120,56 @@ def spec_with_timing_fields(*, remove_timing=False):
     }
 
 
+RESULT_FIELDS = (
+    "kp",
+    "ti_minutes",
+    "td_minutes",
+    "proportional",
+    "integral",
+    "derivative",
+)
+
+
+def spec_with_result_response(*, nullable=False, include_unrelated=False, other_schema=False):
+    properties = {name: {"type": "number"} for name in RESULT_FIELDS}
+    required = list(RESULT_FIELDS)
+    if include_unrelated:
+        properties["label"] = {"type": "string"}
+        required.append("label")
+    if nullable:
+        for name in RESULT_FIELDS:
+            properties[name] = {"type": ["number", "null"]}
+        required = [name for name in required if name not in RESULT_FIELDS]
+    response_schema_name = "OtherResponse" if other_schema else "ResultResponse"
+    return {
+        "openapi": "3.1.0",
+        "paths": {
+            "/api/runs/{id}": {
+                "get": {
+                    "responses": {
+                        "200": {
+                            "content": {
+                                JSON_CONTENT_TYPE: {
+                                    "schema": {"$ref": f"#/components/schemas/{response_schema_name}"}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                response_schema_name: {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                }
+            }
+        },
+    }
+
+
 class OpenApiBreakingTests(unittest.TestCase):
     def test_identical_specs_are_compatible(self):
         self.assertEqual(find_breaking_changes(spec(), spec()), [])
@@ -179,6 +229,32 @@ class OpenApiBreakingTests(unittest.TestCase):
         new["paths"][OTHER_PATH] = new["paths"].pop(RUNS_PATH)
         errors = find_breaking_changes(old, new)
         self.assertTrue(any("'mrft_delay' was removed" in error for error in errors))
+
+    def test_checked_result_numeric_fields_may_become_nullable(self):
+        self.assertEqual(
+            find_breaking_changes(
+                spec_with_result_response(),
+                spec_with_result_response(nullable=True),
+            ),
+            [],
+        )
+
+    def test_unrelated_result_response_field_nullable_change_remains_breaking(self):
+        old = spec_with_result_response(include_unrelated=True)
+        new = spec_with_result_response(include_unrelated=True)
+        new["components"]["schemas"]["ResultResponse"]["properties"]["label"] = {
+            "type": ["string", "null"]
+        }
+        new["components"]["schemas"]["ResultResponse"]["required"] = RESULT_FIELDS
+        errors = find_breaking_changes(old, new)
+        self.assertTrue(any("label" in error for error in errors))
+
+    def test_nullable_allowance_does_not_apply_to_another_schema(self):
+        errors = find_breaking_changes(
+            spec_with_result_response(other_schema=True),
+            spec_with_result_response(nullable=True, other_schema=True),
+        )
+        self.assertTrue(any("schema type changed" in error for error in errors))
 
 
 if __name__ == "__main__":

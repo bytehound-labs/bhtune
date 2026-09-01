@@ -1,9 +1,12 @@
 import type { RunDetailResponse, ResponseLevel } from "../../api/runs";
 import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
-import { Button, CollapsibleSection } from "../../components/ui";
+import { Badge, Button, CollapsibleSection } from "../../components/ui";
 import {
   formatNumber,
+  invalidResultReason,
+  isValidRunResult,
   type RunResult,
+  type ValidRunResult,
   type WriteEligibility,
 } from "./runDetailHelpers";
 
@@ -13,7 +16,7 @@ interface PidResultsPanelProps {
   readonly writePending: boolean;
   readonly writingResponseLevel?: ResponseLevel;
   readonly promoted?: boolean;
-  readonly onWrite: (result: RunResult) => void;
+  readonly onWrite: (result: ValidRunResult) => void;
 }
 
 export function PidResultsPanel({
@@ -71,6 +74,7 @@ export function PidResultsPanel({
                 <th className="px-4 py-2 font-medium">
                   {pidLabels.derivative}
                 </th>
+                <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 font-medium">Actions</th>
               </tr>
             </thead>
@@ -109,10 +113,13 @@ function ResultRow({
   readonly eligibility: WriteEligibility;
   readonly writePending: boolean;
   readonly writingResponseLevel?: ResponseLevel;
-  readonly onWrite: (result: RunResult) => void;
+  readonly onWrite: (result: ValidRunResult) => void;
 }) {
   const isWriting =
     writePending && writingResponseLevel === result.response_level;
+  const isValid = isValidRunResult(result);
+  const resultReason = isValid ? undefined : invalidResultReason(result);
+  const canWrite = eligibility.eligible && isValid;
 
   return (
     <tr>
@@ -120,17 +127,35 @@ function ResultRow({
         {RESPONSE_LEVEL_LABELS[result.response_level]}
       </td>
       <td className="px-4 py-3 font-mono">
-        {formatNumber(result.proportional)}
+        {isValid ? formatNumber(result.proportional) : "—"}
       </td>
-      <td className="px-4 py-3 font-mono">{formatNumber(result.integral)}</td>
-      <td className="px-4 py-3 font-mono">{formatNumber(result.derivative)}</td>
+      <td className="px-4 py-3 font-mono">
+        {isValid ? formatNumber(result.integral) : "—"}
+      </td>
+      <td className="px-4 py-3 font-mono">
+        {isValid ? formatNumber(result.derivative) : "—"}
+      </td>
+      <td className="px-4 py-3 align-top">
+        {isValid ? (
+          <Badge tone="success">Valid</Badge>
+        ) : (
+          <div className="max-w-xs space-y-1">
+            <Badge tone="error">Invalid</Badge>
+            <p className="text-xs text-red-300">{resultReason}</p>
+          </div>
+        )}
+      </td>
       <td className="px-4 py-3">
         <Button
           variant="primary"
-          disabled={!eligibility.eligible || writePending}
-          title={eligibility.reason}
+          disabled={!canWrite || writePending}
+          title={
+            isValid
+              ? eligibility.reason
+              : `Calculated result unavailable: ${resultReason}`
+          }
           onClick={() => {
-            if (eligibility.eligible) onWrite(result);
+            if (canWrite) onWrite(result);
           }}
         >
           {isWriting ? "Writing…" : "Review & write"}

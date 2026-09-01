@@ -202,6 +202,14 @@ a trusted network.
      run's snapshotted template. A Yokogawa run therefore shows `P`, `I`, and `D` instead of
      the engine's intermediate `Kp`, `Ti`, and `Td` columns. The derivative column remains
      visible for PI runs and shows `0`, the explicit value used to clear stale derivative action.
+     A result whose amplitude, period, or converted PID values are zero, non-finite, or otherwise
+     unusable is shown as **Invalid** with a reason and no numeric values; its calculated-result
+     write action is disabled.
+   - The collapsed **Sampling diagnostics** section reports sampling adequacy: **adequate** means
+     at least six observed samples per measured period, **marginal** means fewer than six, and
+     **not assessed** means no usable finite period was available. This is an advisory signal, not
+     an automatic block on a valid result. Detailed sample-gap and successful operation-latency
+     diagnostics remain available through the CLI, API, and structured logs.
    - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
      Notes, Test configuration, Initial readings, and PID change history start expanded so the
      main result and audit information is immediately visible. **MV actuation verification**

@@ -174,8 +174,9 @@ columns, and the derivative column remains visible for PI runs with `0` to clear
 derivative action.
 The run-detail page keeps its major sections independently collapsible: Calculated results,
 Trend, Summary, Notes, Test configuration, Initial readings, and PID change history start
-expanded, while **MV actuation verification** is the final diagnostic section and starts
-collapsed.
+expanded, while **Sampling diagnostics** and **MV actuation verification** are lower
+diagnostic sections that start collapsed. Sampling adequacy is kept out of the primary
+results area because it is advisory and does not itself change the result or block a write.
 
 ## Installation
 
@@ -464,6 +465,18 @@ language, including exactly what happens on the first and second Ctrl+C:
   A live run logs a warning when any adjacent sample gap reaches at least twice the requested
   interval, proving that at least one complete polling opportunity was missed. The warning is
   diagnostic only: it does not abort the run or block PID write-back.
+- **Calculated results are checked before they can be used.** A non-positive or non-finite
+  oscillation amplitude or period, or any non-finite intermediate or converted PID value, is
+  persisted as an `Invalid` result with an explicit reason and no numeric values. Invalid
+  calculated-result rows cannot be written to a controller from the CLI or web GUI. Each run
+  also reports sampling adequacy as `adequate` (at least six samples per measured period),
+  `marginal` (fewer than six), or `not assessed`; the web GUI places this advisory in the
+  collapsed Sampling diagnostics section and it does not by itself abort a run or block a valid
+  write.
+- **Timing diagnostics include operation latency.** In addition to sample gaps, history, the
+  run-detail API, and structured logs retain successful PV-read, MV-write, MV-verification-read,
+  sample-persistence, and total-tick-work latency summaries. Failed, cancelled, and timed-out
+  operations are not presented as successful timing measurements.
 - **Accepted OPC DA MV commands are physically verified.** Relay writes are read back before a
   later relay step can replace them and no later than four seconds after acceptance. An early
   mismatch remains pending and is retried; a mismatch at the deadline, or when the next relay
@@ -508,6 +521,10 @@ language, including exactly what happens on the first and second Ctrl+C:
   value, the written value, and the confirmed readback for every constant, plus whether a
   rollback was needed and whether it succeeded — a rollback that itself fails is called out
   explicitly, since it means the loop may hold constants that need fixing by hand.
+- **PI write-back explicitly writes `D = 0.0`.** P-only controllers use the template-specific
+  integral-disabling sentinel; PI controllers receive their calculated integral value and an
+  explicit zero derivative value so stale derivative action in the controller is cleared.
+  Full PID controllers receive the calculated derivative value.
 - **A past write-back can be undone with `bhtune history revert <run-id>`** — it writes the
   run's recorded pre-write values back to the live loop, under the same pre-read/verify/audit
   behavior and the same `--yes` confirmation gate as the original write-back. Useful when a
@@ -551,9 +568,11 @@ The repository also validates high-risk boundaries and delivery artifacts automa
   repository checkout, keeping captured logs and generated fixtures within the documented
   `tests/golden/` tree.
 - Pull requests compare the generated `openapi.json` with the base branch and reject removed
-  operations, response shapes, enum values, or newly required request fields. Only explicitly
-  allowlisted pre-v1 request-property removals are treated as compatible; the allowlist includes
-  the per-tune quality and timing settings that are owned by global configuration.
+  operations, response shapes, enum values, or newly required request fields. The pre-v1 checked
+  result migration has one explicit response allowance: the six numeric `ResultResponse` fields
+  may become nullable because invalid calculations persist no safe numeric value. All other
+  response changes remain breaking; the request allowlist covers only per-tune quality and timing
+  settings that are owned by global configuration.
 - Rust workspace source-line coverage is a strict 100% gate: the coverage workflow rejects any
   zero-hit canonical LCOV source-line record, and Codecov uses zero tolerance for both project
   and patch coverage.
