@@ -65,6 +65,10 @@ pub struct MrftCompat {
     /// `mv_range_low == 0` (the common 0-100% case); only visibly wrong for cascaded loops
     /// with a nonzero MV range floor.
     pub replicate_lower_clamp_bug: bool,
+    /// Replicates the legacy extrema reset: after a switch, result measurement starts from
+    /// `pv_value_ini` instead of the switch sample. This can discard the shared switch endpoint
+    /// from the next half-cycle and produce a zero or biased PV amplitude when sampling is sparse.
+    pub replicate_extrema_reset_bug: bool,
 }
 
 /// Computes the raw engineering-unit relay amplitude from a percentage of the MV range, and
@@ -134,6 +138,8 @@ pub struct MrftEngine {
     mv_value_next_step: f32,
     max_pv_cycle: f32,
     min_pv_cycle: f32,
+    max_pv_result: f32,
+    min_pv_result: f32,
     hysteresis: f32,
     mv_sign_next_step: i8,
     mv_sign_init: i8,
@@ -143,6 +149,7 @@ pub struct MrftEngine {
     troughs: Vec<f32>,
     switch_times: Vec<DateTime<Utc>>,
     completed: bool,
+    compat: MrftCompat,
 }
 
 impl MrftEngine {
@@ -190,6 +197,8 @@ impl MrftEngine {
             mv_value_next_step: initial.mv_ini,
             max_pv_cycle: initial.pv_ini,
             min_pv_cycle: initial.pv_ini,
+            max_pv_result: initial.pv_ini,
+            min_pv_result: initial.pv_ini,
             hysteresis: 0.0,
             mv_sign_next_step: 1,
             mv_sign_init: 0,
@@ -199,6 +208,7 @@ impl MrftEngine {
             troughs: Vec::new(),
             switch_times: Vec::new(),
             completed: false,
+            compat,
         }
     }
 
@@ -275,6 +285,8 @@ impl MrftEngine {
 
         self.max_pv_cycle = self.max_pv_cycle.max(tick.pv);
         self.min_pv_cycle = self.min_pv_cycle.min(tick.pv);
+        self.max_pv_result = self.max_pv_result.max(tick.pv);
+        self.min_pv_result = self.min_pv_result.min(tick.pv);
 
         self.hysteresis = self.beta
             * (self.max_pv_cycle - self.pv_value_ini).max(self.pv_value_ini - self.min_pv_cycle);
@@ -334,14 +346,21 @@ impl MrftEngine {
             self.switch_times.push(tick.time);
 
             if self.mv_sign_next_step as i32 * self.action_multiplier as i32 == 1 {
-                self.peaks.push(self.max_pv_cycle);
+                self.peaks.push(self.max_pv_result);
             } else {
-                self.troughs.push(self.min_pv_cycle);
+                self.troughs.push(self.min_pv_result);
             }
         }
 
         self.max_pv_cycle = self.pv_value_ini;
         self.min_pv_cycle = self.pv_value_ini;
+        if self.compat.replicate_extrema_reset_bug {
+            self.max_pv_result = self.pv_value_ini;
+            self.min_pv_result = self.pv_value_ini;
+        } else {
+            self.max_pv_result = tick.pv;
+            self.min_pv_result = tick.pv;
+        }
 
         self.mv_value_current = if self.cycles_remaining() == 0 {
             self.mv_value_ini
@@ -356,7 +375,11 @@ impl MrftEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{controller_type::ControllerType, process_type::ProcessType};
+    use crate::{
+        constants::{ResponseLevel, lookup},
+        controller_type::ControllerType,
+        process_type::ProcessType,
+    };
 
     fn t(secs: i64) -> DateTime<Utc> {
         DateTime::UNIX_EPOCH + Duration::seconds(secs)
@@ -385,6 +408,10 @@ mod tests {
             mv_range_low: 0.0,
             mv_range_high: 100.0,
         }
+    }
+
+    fn t_ms(offset_ms: i64) -> DateTime<Utc> {
+        DateTime::UNIX_EPOCH + Duration::milliseconds(offset_ms)
     }
 
     mod clamp_relay_amplitude_tests {
@@ -420,6 +447,7 @@ mod tests {
         fn lower_clamp_replicates_legacy_bug_when_compat_flag_set() {
             let compat = MrftCompat {
                 replicate_lower_clamp_bug: true,
+                ..MrftCompat::default()
             };
             let amp = clamp_relay_amplitude(10.0, 10.0, 5.0, 100.0, compat);
             assert_eq!(amp, 15.0); // legacy: mv_range_low + mv_ini
@@ -437,6 +465,7 @@ mod tests {
                 100.0,
                 MrftCompat {
                     replicate_lower_clamp_bug: true,
+                    ..MrftCompat::default()
                 },
             );
             assert_eq!(fixed, buggy);
@@ -546,8 +575,8 @@ mod tests {
             vec![
                 Action::WriteMv(50.0),
                 Action::Complete {
-                    peaks: vec![50.0],
-                    troughs: vec![50.0, 50.0],
+                    peaks: vec![55.0],
+                    troughs: vec![50.0, 45.0],
                     switch_times: vec![t(1), t(2), t(3)],
                     mv_sign_init: -1,
                 },
@@ -565,6 +594,42 @@ mod tests {
             }
         );
         assert!(engine.is_complete());
+    }
+
+    #[test]
+    fn extrema_compatibility_flag_reproduces_the_legacy_reset() {
+        let mut engine = MrftEngine::new(
+            config(),
+            ControllerDirection::Reverse,
+            0.3,
+            initial(),
+            t(0),
+            MrftCompat {
+                replicate_extrema_reset_bug: true,
+                ..MrftCompat::default()
+            },
+        );
+
+        let mut last_actions = Vec::new();
+        for (i, pv) in [55.0, 45.0, 55.0].into_iter().enumerate() {
+            last_actions = engine.step(Tick {
+                time: t(i as i64 + 1),
+                pv,
+            });
+        }
+
+        assert_eq!(
+            last_actions,
+            vec![
+                Action::WriteMv(50.0),
+                Action::Complete {
+                    peaks: vec![50.0],
+                    troughs: vec![50.0, 50.0],
+                    switch_times: vec![t(1), t(2), t(3)],
+                    mv_sign_init: -1,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -593,13 +658,166 @@ mod tests {
                 Action::Complete {
                     // Swapped vs. the Reverse scenario: Direct flips which sign counts as
                     // a peak vs. a trough (`MvSignNextStep * ActionMultiplier`).
-                    peaks: vec![50.0, 50.0],
-                    troughs: vec![50.0],
+                    peaks: vec![50.0, 60.0],
+                    troughs: vec![40.0],
                     switch_times: vec![t(1), t(2), t(3)],
                     mv_sign_init: -1,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn run_7_like_trace_includes_switch_endpoints_in_recorded_extrema() {
+        let config = LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 10.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 3,
+            mrft_delay_secs: 0,
+        };
+        let initial = InitialReadings {
+            pv_ini: 2.25,
+            mv_ini: 50.0,
+            mv_range_low: 12.0,
+            mv_range_high: 100.0,
+        };
+        let beta = lookup(
+            ProcessType::Flow,
+            ControllerType::Pi,
+            ResponseLevel::Aggressive,
+        )
+        .beta;
+        let samples = [
+            (0, 2.25),
+            (2001, 2.49),
+            (2999, 2.67),
+            (3999, 2.72),
+            (5999, 2.25),
+            (6999, 1.89),
+            (8999, 2.26),
+            (10001, 2.61),
+            (12002, 2.24),
+            (12999, 1.89),
+            (13999, 1.80),
+            (15999, 2.25),
+            (17999, 2.61),
+            (19000, 2.24),
+            (20000, 1.89),
+            (21000, 1.80),
+        ];
+        let mut engine = MrftEngine::new(
+            config,
+            ControllerDirection::Reverse,
+            beta,
+            initial,
+            t_ms(0),
+            MrftCompat::default(),
+        );
+
+        let completion = samples.iter().find_map(|(offset_ms, pv)| {
+            engine
+                .step(Tick {
+                    time: t_ms(*offset_ms),
+                    pv: *pv,
+                })
+                .into_iter()
+                .find_map(|action| match action {
+                    Action::Complete {
+                        peaks,
+                        troughs,
+                        switch_times,
+                        mv_sign_init,
+                    } => Some((peaks, troughs, switch_times, mv_sign_init)),
+                    Action::WriteMv(_) => None,
+                })
+        });
+
+        let (peaks, troughs, switch_times, mv_sign_init) =
+            completion.expect("run 7-like trace must complete");
+        assert_eq!(mv_sign_init, 1);
+        assert_eq!(switch_times.len(), 5);
+        assert_eq!(peaks, vec![2.72, 2.61, 2.61]);
+        assert_eq!(troughs, vec![1.89, 1.80]);
+    }
+
+    #[test]
+    fn run_10_like_trace_keeps_the_final_switch_pv_as_a_trough() {
+        let config = LoopConfig {
+            process_type: ProcessType::PressureLine,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 10.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 3,
+            mrft_delay_secs: 0,
+        };
+        let initial = InitialReadings {
+            pv_ini: 189.94,
+            mv_ini: 50.0,
+            mv_range_low: 0.0,
+            mv_range_high: 100.0,
+        };
+        let beta = lookup(
+            ProcessType::PressureLine,
+            ControllerType::Pi,
+            ResponseLevel::Aggressive,
+        )
+        .beta;
+        let samples = [
+            (0, 189.96),
+            (2001, 189.97),
+            (3003, 181.07),
+            (5989, 174.54),
+            (6989, 187.07),
+            (8989, 204.0),
+            (10990, 204.43),
+            (11988, 192.14),
+            (12990, 182.73),
+            (15990, 175.28),
+            (17989, 197.09),
+            (20003, 200.38),
+            (20988, 189.04),
+            (22991, 173.70),
+            (24991, 174.22),
+            (25990, 186.82),
+            (27989, 203.86),
+        ];
+        let mut engine = MrftEngine::new(
+            config,
+            ControllerDirection::Reverse,
+            beta,
+            initial,
+            t_ms(0),
+            MrftCompat::default(),
+        );
+
+        let completion = samples.iter().find_map(|(offset_ms, pv)| {
+            engine
+                .step(Tick {
+                    time: t_ms(*offset_ms),
+                    pv: *pv,
+                })
+                .into_iter()
+                .find_map(|action| match action {
+                    Action::Complete {
+                        peaks,
+                        troughs,
+                        switch_times,
+                        mv_sign_init,
+                    } => Some((peaks, troughs, switch_times, mv_sign_init)),
+                    Action::WriteMv(_) => None,
+                })
+        });
+
+        let (peaks, troughs, switch_times, mv_sign_init) =
+            completion.expect("run 10-like trace must complete");
+        assert_eq!(mv_sign_init, -1);
+        assert_eq!(switch_times.len(), 5);
+        assert_eq!(peaks, vec![204.43, 200.38]);
+        assert_eq!(troughs, vec![174.54, 175.28, 173.70]);
     }
 
     #[test]
@@ -722,8 +940,8 @@ mod tests {
             vec![
                 Action::WriteMv(50.0),
                 Action::Complete {
-                    peaks: vec![50.0],
-                    troughs: vec![50.0, 50.0],
+                    peaks: vec![60.0],
+                    troughs: vec![40.0, 40.0],
                     switch_times: vec![t(3), t(4), t(5)],
                     mv_sign_init: -1,
                 },

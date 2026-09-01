@@ -4,6 +4,7 @@
 //! `list_for_run` helpers — the actual query patterns the CLI and GUI history explorer will
 //! depend on.
 
+use bhtune_core::{CheckedTuningResult, TuningResultInvalidReason, TuningResultStatus};
 use bhtune_core::{
     ControllerDirection, ControllerType, DcsTemplate, LoopConfig, LoopTags, MrftState, ProcessType,
     ResponseLevel, Tick, built_in_templates,
@@ -13,9 +14,10 @@ use bhtune_db::{
     DbError, connect_in_memory,
     models::{
         DcsTemplateRow, EffectiveTuning, MvActuationKind, MvActuationStatus, NewTuneMvActuation,
-        NewTuneWrite, Pagination, RollbackState, SampleQuality, TemplateOrigin, TimingBasis,
-        TimingMetrics, TuneDriver, TuneMvActuationRow, TuneOutcome, TuneResultRow, TuneRunFilter,
-        TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteReadback,
+        NewTuneWrite, Pagination, RollbackState, SampleQuality, SamplingAdequacy, TemplateOrigin,
+        TimingBasis, TimingMetrics, TuneDriver, TuneMvActuationRow, TuneOutcome, TuneResultRow,
+        TuneRunFilter, TuneRunInitialReadings, TuneRunRow, TuneSampleRow, TuneWriteRow,
+        WriteReadback,
     },
 };
 use chrono::{DateTime, Duration, Utc};
@@ -121,6 +123,8 @@ fn sample_timing_metrics() -> TimingMetrics {
         missed_poll_opportunity_count: 1,
         measured_oscillation_period_ms: Some(12_345.0),
         approximate_samples_per_period: Some(13.713_69),
+        sampling_adequacy: SamplingAdequacy::Adequate,
+        poll_latency: None,
     }
 }
 
@@ -1505,6 +1509,71 @@ async fn tune_result_list_for_run_is_empty_for_an_incomplete_run() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn tune_result_checked_rows_round_trip_valid_and_invalid_values() {
+    let pool = connect_in_memory().await.unwrap();
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC111",
+        TuneDriver::Simulator,
+        sample_config(),
+        TemplateOrigin::Builtin,
+        &sample_template(),
+        &sample_tags(),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+
+    let valid = CheckedTuningResult {
+        response_level: ResponseLevel::Aggressive,
+        status: TuningResultStatus::Valid,
+        invalid_reason: None,
+        tuning: Some(sample_tuning_result(ResponseLevel::Aggressive)),
+        pid: Some(sample_pid_parameters(ResponseLevel::Aggressive)),
+    };
+    let invalid = CheckedTuningResult {
+        response_level: ResponseLevel::Moderate,
+        status: TuningResultStatus::Invalid,
+        invalid_reason: Some(TuningResultInvalidReason::NonPositivePvAmplitude),
+        tuning: None,
+        pid: None,
+    };
+
+    let inserted_valid = TuneResultRow::insert(&pool, &TuneResultRow::from_checked(run.id, valid))
+        .await
+        .unwrap();
+    let inserted_invalid =
+        TuneResultRow::insert(&pool, &TuneResultRow::from_checked(run.id, invalid))
+            .await
+            .unwrap();
+
+    assert_eq!(inserted_valid.status, TuningResultStatus::Valid);
+    assert!(inserted_valid.invalid_reason.is_none());
+    assert_eq!(inserted_valid.kp, Some(1.5));
+    assert_eq!(inserted_valid.integral, Some(2.5));
+    assert_eq!(inserted_invalid.status, TuningResultStatus::Invalid);
+    assert_eq!(
+        inserted_invalid.invalid_reason,
+        Some(TuningResultInvalidReason::NonPositivePvAmplitude)
+    );
+    assert_eq!(
+        (
+            inserted_invalid.kp,
+            inserted_invalid.ti_minutes,
+            inserted_invalid.td_minutes,
+            inserted_invalid.proportional,
+            inserted_invalid.integral,
+            inserted_invalid.derivative,
+        ),
+        (None, None, None, None, None, None)
+    );
+
+    let listed = TuneResultRow::list_for_run(&pool, run.id).await.unwrap();
+    assert_eq!(listed, vec![inserted_valid, inserted_invalid]);
 }
 // }}}1
 

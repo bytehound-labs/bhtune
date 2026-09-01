@@ -2470,6 +2470,34 @@
           }
         }
       },
+      "PollLatencyMetrics": {
+        "type": "object",
+        "description": "Operation-latency diagnostics captured while a run is polling.\n\nEach category counts only operations that completed successfully. A zero count with\n`None` mean/max means that the operation did not occur during the run.",
+        "required": [
+          "pv_read",
+          "mv_write",
+          "mv_verification",
+          "sample_persist",
+          "tick_work"
+        ],
+        "properties": {
+          "mv_verification": {
+            "$ref": "#/components/schemas/TimingSummary"
+          },
+          "mv_write": {
+            "$ref": "#/components/schemas/TimingSummary"
+          },
+          "pv_read": {
+            "$ref": "#/components/schemas/TimingSummary"
+          },
+          "sample_persist": {
+            "$ref": "#/components/schemas/TimingSummary"
+          },
+          "tick_work": {
+            "$ref": "#/components/schemas/TimingSummary"
+          }
+        }
+      },
       "ProcessType": {
         "type": "string",
         "description": "A process/loop category. Each has its own row in the tuning-constant matrices in\n[`crate::constants`] and its own default cycle/noise-protection settings.\n\nDiscriminants double as the row index into those matrices — see\n[`ProcessType::index`].",
@@ -2512,39 +2540,65 @@
         "description": "Local projection of [`TuneResultRow`].",
         "required": [
           "response_level",
-          "kp",
-          "ti_minutes",
-          "td_minutes",
-          "proportional",
-          "integral",
-          "derivative"
+          "status"
         ],
         "properties": {
           "derivative": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "float"
           },
           "integral": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "float"
           },
+          "invalid_reason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TuningResultInvalidReason"
+              }
+            ]
+          },
           "kp": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "float"
           },
           "proportional": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "float"
           },
           "response_level": {
             "$ref": "#/components/schemas/ResponseLevel"
           },
+          "status": {
+            "$ref": "#/components/schemas/TuningResultStatus"
+          },
           "td_minutes": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "float"
           },
           "ti_minutes": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "format": "float"
           }
         }
@@ -2857,6 +2911,15 @@
             "format": "int64"
           }
         }
+      },
+      "SamplingAdequacy": {
+        "type": "string",
+        "description": "Advisory assessment of whether the recorded samples provide enough observations per\noscillation period for a trustworthy extrema measurement.",
+        "enum": [
+          "adequate",
+          "marginal",
+          "not_assessed"
+        ]
       },
       "StartRunRequest": {
         "type": "object",
@@ -3211,7 +3274,7 @@
       },
       "TimingMetrics": {
         "type": "object",
-        "description": "Polling-cadence diagnostics captured over one run's successful PV samples.\n\nThe two optional gap fields are `None` when fewer than two samples were observed. The\nmeasured oscillation fields are populated only for a completed MRFT run.",
+        "description": "Polling-cadence diagnostics captured over one run's successful PV samples.\n\nThe two optional gap fields are `None` when fewer than two samples were observed. The\nmeasured oscillation fields are populated only for a completed MRFT run. Sampling adequacy\nis advisory metadata and does not determine calculated-result validity or write eligibility.",
         "required": [
           "basis",
           "requested_interval_ms",
@@ -3256,6 +3319,17 @@
             "description": "Number of adjacent sample gaps at least twice the requested interval. Each such gap\nproves that at least one complete polling opportunity was missed.",
             "minimum": 0
           },
+          "poll_latency": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PollLatencyMetrics",
+                "description": "Detailed operation timings. Old timing snapshots may not contain this field."
+              }
+            ]
+          },
           "requested_interval_ms": {
             "type": "integer",
             "format": "int64",
@@ -3265,6 +3339,38 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "sampling_adequacy": {
+            "$ref": "#/components/schemas/SamplingAdequacy",
+            "description": "Assessment uses the observed samples-per-period value and a six-sample advisory\nthreshold. Old timing snapshots deserialize as `not_assessed`."
+          }
+        }
+      },
+      "TimingSummary": {
+        "type": "object",
+        "description": "Summary statistics for one class of measured polling work.",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "mean_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -3285,6 +3391,32 @@
           "completed",
           "failed",
           "aborted"
+        ]
+      },
+      "TuningResultInvalidReason": {
+        "type": "string",
+        "description": "Why a calculated response-level result was marked invalid.",
+        "enum": [
+          "non_finite_pv_amplitude",
+          "non_positive_pv_amplitude",
+          "non_finite_period",
+          "non_positive_period",
+          "non_finite_frequency",
+          "non_positive_frequency",
+          "non_finite_kp",
+          "non_finite_ti_minutes",
+          "non_finite_td_minutes",
+          "non_finite_proportional",
+          "non_finite_integral",
+          "non_finite_derivative"
+        ]
+      },
+      "TuningResultStatus": {
+        "type": "string",
+        "description": "Whether a calculated response-level result contains values that are safe to use.",
+        "enum": [
+          "valid",
+          "invalid"
         ]
       },
       "UpdateConfigRequest": {

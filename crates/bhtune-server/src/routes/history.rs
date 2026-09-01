@@ -20,6 +20,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use bhtune_core::{
     ControllerDirection, ControllerType, DcsTemplate, LoopConfig, ProcessType, ResponseLevel, Tick,
+    TuningResultInvalidReason, TuningResultStatus,
 };
 use bhtune_db::models::{
     MvActuationKind, MvActuationStatus, Pagination, RestoreStatus, RollbackState, SampleQuality,
@@ -278,12 +279,14 @@ impl From<&TuneSampleRow> for SampleResponse {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ResultResponse {
     pub response_level: ResponseLevel,
-    pub kp: f32,
-    pub ti_minutes: f32,
-    pub td_minutes: f32,
-    pub proportional: f32,
-    pub integral: f32,
-    pub derivative: f32,
+    pub kp: Option<f32>,
+    pub ti_minutes: Option<f32>,
+    pub td_minutes: Option<f32>,
+    pub proportional: Option<f32>,
+    pub integral: Option<f32>,
+    pub derivative: Option<f32>,
+    pub status: TuningResultStatus,
+    pub invalid_reason: Option<TuningResultInvalidReason>,
 }
 
 impl From<&TuneResultRow> for ResultResponse {
@@ -296,6 +299,8 @@ impl From<&TuneResultRow> for ResultResponse {
             proportional: r.proportional,
             integral: r.integral,
             derivative: r.derivative,
+            status: r.status,
+            invalid_reason: r.invalid_reason,
         }
     }
 }
@@ -851,6 +856,34 @@ mod tests {
                 missed_poll_opportunity_count: 0,
                 measured_oscillation_period_ms: Some(50.0),
                 approximate_samples_per_period: Some(10.0),
+                sampling_adequacy: bhtune_db::models::SamplingAdequacy::Adequate,
+                poll_latency: Some(bhtune_db::models::PollLatencyMetrics {
+                    pv_read: bhtune_db::models::TimingSummary {
+                        count: 10,
+                        mean_ms: Some(1.25),
+                        max_ms: Some(2.5),
+                    },
+                    mv_write: bhtune_db::models::TimingSummary {
+                        count: 3,
+                        mean_ms: Some(3.5),
+                        max_ms: Some(4.0),
+                    },
+                    mv_verification: bhtune_db::models::TimingSummary {
+                        count: 3,
+                        mean_ms: Some(2.0),
+                        max_ms: Some(2.5),
+                    },
+                    sample_persist: bhtune_db::models::TimingSummary {
+                        count: 10,
+                        mean_ms: Some(0.75),
+                        max_ms: Some(1.0),
+                    },
+                    tick_work: bhtune_db::models::TimingSummary {
+                        count: 10,
+                        mean_ms: Some(5.5),
+                        max_ms: Some(7.0),
+                    },
+                }),
             },
         )
         .await
@@ -883,12 +916,14 @@ mod tests {
                 id: 0,
                 run_id,
                 response_level: ResponseLevel::Moderate,
-                kp: 1.5,
-                ti_minutes: 2.0,
-                td_minutes: 0.0,
-                proportional: 66.7,
-                integral: 2.0,
-                derivative: 0.0,
+                kp: Some(1.5),
+                ti_minutes: Some(2.0),
+                td_minutes: Some(0.0),
+                proportional: Some(66.7),
+                integral: Some(2.0),
+                derivative: Some(0.0),
+                status: TuningResultStatus::Valid,
+                invalid_reason: None,
             },
         )
         .await
@@ -1186,6 +1221,14 @@ mod tests {
         assert_eq!(timing["missed_poll_opportunity_count"], 0);
         assert_eq!(timing["measured_oscillation_period_ms"], 50.0);
         assert_eq!(timing["approximate_samples_per_period"], 10.0);
+        assert_eq!(timing["sampling_adequacy"], "adequate");
+        assert_eq!(timing["poll_latency"]["pv_read"]["count"], 10);
+        assert_eq!(timing["poll_latency"]["pv_read"]["mean_ms"], 1.25);
+        assert_eq!(timing["poll_latency"]["pv_read"]["max_ms"], 2.5);
+        assert_eq!(timing["poll_latency"]["mv_write"]["count"], 3);
+        assert_eq!(timing["poll_latency"]["mv_verification"]["count"], 3);
+        assert_eq!(timing["poll_latency"]["sample_persist"]["count"], 10);
+        assert_eq!(timing["poll_latency"]["tick_work"]["count"], 10);
 
         let samples = body["samples"].as_array().unwrap();
         assert_eq!(samples.len(), 1);

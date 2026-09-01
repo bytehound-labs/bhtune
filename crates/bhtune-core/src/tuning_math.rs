@@ -82,6 +82,98 @@ pub struct OpcWriteValues {
     pub derivative: f32,
 }
 
+/// Whether a calculated response-level result contains values that are safe to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TuningResultStatus {
+    Valid,
+    Invalid,
+}
+
+/// Why a calculated response-level result was marked invalid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TuningResultInvalidReason {
+    NonFinitePvAmplitude,
+    NonPositivePvAmplitude,
+    NonFinitePeriod,
+    NonPositivePeriod,
+    NonFiniteFrequency,
+    NonPositiveFrequency,
+    NonFiniteKp,
+    NonFiniteTiMinutes,
+    NonFiniteTdMinutes,
+    NonFiniteProportional,
+    NonFiniteIntegral,
+    NonFiniteDerivative,
+}
+
+impl std::fmt::Display for TuningResultInvalidReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::NonFinitePvAmplitude => "PV amplitude is not finite",
+            Self::NonPositivePvAmplitude => "PV amplitude is not positive",
+            Self::NonFinitePeriod => "oscillation period is not finite",
+            Self::NonPositivePeriod => "oscillation period is not positive",
+            Self::NonFiniteFrequency => "oscillation frequency is not finite",
+            Self::NonPositiveFrequency => "oscillation frequency is not positive",
+            Self::NonFiniteKp => "Kp is not finite",
+            Self::NonFiniteTiMinutes => "Ti is not finite",
+            Self::NonFiniteTdMinutes => "Td is not finite",
+            Self::NonFiniteProportional => "proportional value is not finite",
+            Self::NonFiniteIntegral => "integral value is not finite",
+            Self::NonFiniteDerivative => "derivative value is not finite",
+        };
+        f.write_str(message)
+    }
+}
+
+/// A checked result for one response level.
+///
+/// Invalid results retain their response level and an explicit diagnostic reason, but never
+/// expose numeric tuning/PID values for callers to accidentally write or display as usable
+/// constants.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CheckedTuningResult {
+    pub response_level: ResponseLevel,
+    pub status: TuningResultStatus,
+    pub invalid_reason: Option<TuningResultInvalidReason>,
+    pub tuning: Option<TuningResult>,
+    pub pid: Option<PidParameters>,
+}
+
+impl CheckedTuningResult {
+    fn invalid(response_level: ResponseLevel, reason: TuningResultInvalidReason) -> Self {
+        Self {
+            response_level,
+            status: TuningResultStatus::Invalid,
+            invalid_reason: Some(reason),
+            tuning: None,
+            pid: None,
+        }
+    }
+
+    fn valid(tuning: TuningResult, pid: PidParameters) -> Self {
+        Self {
+            response_level: tuning.response_level,
+            status: TuningResultStatus::Valid,
+            invalid_reason: None,
+            tuning: Some(tuning),
+            pid: Some(pid),
+        }
+    }
+
+    /// Returns the calculated values only when this result is safe to use.
+    pub fn usable_values(&self) -> Option<(TuningResult, PidParameters)> {
+        match (self.status, self.invalid_reason, self.tuning, self.pid) {
+            (TuningResultStatus::Valid, None, Some(tuning), Some(pid)) => Some((tuning, pid)),
+            _ => None,
+        }
+    }
+}
+
 /// Computes oscillation measurements (period, frequency, PV amplitude) from a completed MRFT
 /// run's recorded peaks/troughs/switch-times. Pure port of `TuningConstantsCalc`'s
 /// period/frequency/amplitude math — everything before the per-response-level Kp/Ti/Td split,
@@ -332,6 +424,108 @@ pub fn calculate_all(
         let pid = calculate_pid_parameters(result, template);
         (result, pid)
     })
+}
+
+/// Checked counterpart to [`calculate_all`].
+///
+/// The legacy numeric functions remain available for parity/replay callers. Production
+/// persistence should use this entry point so a degenerate PV amplitude or any non-finite
+/// intermediate/final value becomes an explicit invalid result instead of reaching SQLite or
+/// PID write-back as `NaN`/infinity.
+#[allow(clippy::too_many_arguments)]
+pub fn calculate_all_checked(
+    peaks: &[f32],
+    troughs: &[f32],
+    switch_times: &[DateTime<Utc>],
+    mv_sign_init: i8,
+    direction: ControllerDirection,
+    config: LoopConfig,
+    pv_range: PvRange,
+    template: &DcsTemplate,
+    compat: TuningMathCompat,
+) -> [CheckedTuningResult; 3] {
+    let oscillation = measure_oscillation(
+        peaks,
+        troughs,
+        switch_times,
+        mv_sign_init,
+        direction,
+        config,
+        pv_range,
+        compat,
+    );
+
+    let oscillation_reason = invalid_oscillation_reason(oscillation);
+
+    ResponseLevel::ALL.map(|level| {
+        if let Some(reason) = oscillation_reason {
+            return CheckedTuningResult::invalid(level, reason);
+        }
+
+        let tuning = calculate_tuning_result(oscillation, config, level);
+        checked_result_from_tuning(tuning, template)
+    })
+}
+
+fn invalid_oscillation_reason(oscillation: Oscillation) -> Option<TuningResultInvalidReason> {
+    if !oscillation.pv_amp_raw.is_finite() || !oscillation.pv_amp_percent.is_finite() {
+        Some(TuningResultInvalidReason::NonFinitePvAmplitude)
+    } else if oscillation.pv_amp_raw <= 0.0 || oscillation.pv_amp_percent <= 0.0 {
+        Some(TuningResultInvalidReason::NonPositivePvAmplitude)
+    } else if !oscillation.period_minutes.is_finite() {
+        Some(TuningResultInvalidReason::NonFinitePeriod)
+    } else if oscillation.period_minutes <= 0.0 {
+        Some(TuningResultInvalidReason::NonPositivePeriod)
+    } else if !oscillation.frequency.is_finite() {
+        Some(TuningResultInvalidReason::NonFiniteFrequency)
+    } else if oscillation.frequency <= 0.0 {
+        Some(TuningResultInvalidReason::NonPositiveFrequency)
+    } else {
+        None
+    }
+}
+
+fn checked_result_from_tuning(tuning: TuningResult, template: &DcsTemplate) -> CheckedTuningResult {
+    if !tuning.kp.is_finite() {
+        return CheckedTuningResult::invalid(
+            tuning.response_level,
+            TuningResultInvalidReason::NonFiniteKp,
+        );
+    }
+    if !tuning.ti_minutes.is_finite() {
+        return CheckedTuningResult::invalid(
+            tuning.response_level,
+            TuningResultInvalidReason::NonFiniteTiMinutes,
+        );
+    }
+    if !tuning.td_minutes.is_finite() {
+        return CheckedTuningResult::invalid(
+            tuning.response_level,
+            TuningResultInvalidReason::NonFiniteTdMinutes,
+        );
+    }
+
+    let pid = calculate_pid_parameters(tuning, template);
+    if !pid.proportional.is_finite() {
+        return CheckedTuningResult::invalid(
+            tuning.response_level,
+            TuningResultInvalidReason::NonFiniteProportional,
+        );
+    }
+    if !pid.integral.is_finite() {
+        return CheckedTuningResult::invalid(
+            tuning.response_level,
+            TuningResultInvalidReason::NonFiniteIntegral,
+        );
+    }
+    if !pid.derivative.is_finite() {
+        return CheckedTuningResult::invalid(
+            tuning.response_level,
+            TuningResultInvalidReason::NonFiniteDerivative,
+        );
+    }
+
+    CheckedTuningResult::valid(tuning, pid)
 }
 
 #[cfg(test)]
@@ -849,6 +1043,354 @@ mod tests {
         // The intermediate TuningResult (Kp/Ti/Td) is also present alongside PidParameters.
         assert_eq!(results[0].0.response_level, ResponseLevel::Aggressive);
         assert!(results[0].0.kp > 0.0);
+    }
+
+    fn checked_fixture(
+        peaks: &[f32],
+        troughs: &[f32],
+        switch_times: &[DateTime<Utc>],
+        config: LoopConfig,
+        template: &DcsTemplate,
+    ) -> [CheckedTuningResult; 3] {
+        calculate_all_checked(
+            peaks,
+            troughs,
+            switch_times,
+            1,
+            ControllerDirection::Reverse,
+            config,
+            PvRange {
+                high: 100.0,
+                low: 0.0,
+            },
+            template,
+            TuningMathCompat::default(),
+        )
+    }
+
+    #[test]
+    fn checked_calculation_rejects_zero_pv_amplitude_for_every_response_level() {
+        let config = flow_pi_config();
+        let template = template::built_in_templates().remove(0);
+        let results = checked_fixture(
+            &[2.25, 2.25, 2.25],
+            &[2.25, 2.25],
+            &[t(0), t(30), t(60), t(90), t(120)],
+            config,
+            &template,
+        );
+
+        for result in results {
+            assert_eq!(result.status, TuningResultStatus::Invalid);
+            assert_eq!(
+                result.invalid_reason,
+                Some(TuningResultInvalidReason::NonPositivePvAmplitude)
+            );
+            assert!(result.tuning.is_none());
+            assert!(result.pid.is_none());
+            assert!(result.usable_values().is_none());
+        }
+    }
+
+    #[test]
+    fn checked_calculation_rejects_negative_pv_amplitude() {
+        let config = flow_pi_config();
+        let template = template::built_in_templates().remove(0);
+        let results = checked_fixture(
+            &[1.0, 1.0, 1.0],
+            &[2.0, 2.0],
+            &[t(0), t(30), t(60), t(90), t(120)],
+            config,
+            &template,
+        );
+
+        assert!(results.iter().all(|result| {
+            result.status == TuningResultStatus::Invalid
+                && result.invalid_reason == Some(TuningResultInvalidReason::NonPositivePvAmplitude)
+        }));
+    }
+
+    #[test]
+    fn checked_calculation_rejects_non_finite_pv_amplitude() {
+        let config = flow_pi_config();
+        let template = template::built_in_templates().remove(0);
+        let results = checked_fixture(
+            &[1.0, f32::NAN, 1.0],
+            &[0.0, 0.0],
+            &[t(0), t(30), t(60), t(90), t(120)],
+            config,
+            &template,
+        );
+
+        assert!(results.iter().all(|result| {
+            result.status == TuningResultStatus::Invalid
+                && result.invalid_reason == Some(TuningResultInvalidReason::NonFinitePvAmplitude)
+        }));
+    }
+
+    #[test]
+    fn checked_calculation_rejects_a_zero_period_before_non_finite_frequency() {
+        let config = flow_pi_config();
+        let template = template::built_in_templates().remove(0);
+        let results = checked_fixture(
+            &[1.0, 2.0, 1.5],
+            &[0.0, 0.0],
+            &[t(0), t(0), t(0), t(0), t(0)],
+            config,
+            &template,
+        );
+
+        assert!(results.iter().all(|result| {
+            result.status == TuningResultStatus::Invalid
+                && result.invalid_reason == Some(TuningResultInvalidReason::NonPositivePeriod)
+        }));
+    }
+
+    #[test]
+    fn checked_calculation_accepts_finite_zero_terms_for_a_p_only_result() {
+        let config = LoopConfig {
+            controller_type: ControllerType::P,
+            ..flow_pi_config()
+        };
+        let mut template = template::built_in_templates().remove(0);
+        template.integral_type = IntegralType::ResetTime;
+        let results = checked_fixture(
+            &[60.0, 52.0, 48.0],
+            &[50.0, 46.0],
+            &[t(0), t(30), t(60), t(90), t(120)],
+            config,
+            &template,
+        );
+
+        for result in results {
+            assert_eq!(result.status, TuningResultStatus::Valid);
+            assert!(result.invalid_reason.is_none());
+            let (tuning, pid) = result.usable_values().expect("result should be usable");
+            assert!(tuning.kp.is_finite() && tuning.kp > 0.0);
+            assert!(pid.proportional.is_finite() && pid.proportional > 0.0);
+            assert_eq!(pid.integral, 0.0);
+            assert_eq!(pid.derivative, 0.0);
+        }
+    }
+
+    #[test]
+    fn checked_calculation_rejects_non_finite_kp() {
+        let mut config = flow_pi_config();
+        config.relay_amp_percent = f32::INFINITY;
+        let template = template::built_in_templates().remove(0);
+        let results = checked_fixture(
+            &[60.0, 52.0, 48.0],
+            &[50.0, 46.0],
+            &[t(0), t(30), t(60), t(90), t(120)],
+            config,
+            &template,
+        );
+
+        assert!(results.iter().all(|result| {
+            result.status == TuningResultStatus::Invalid
+                && result.invalid_reason == Some(TuningResultInvalidReason::NonFiniteKp)
+        }));
+    }
+
+    #[test]
+    fn invalid_result_reasons_have_stable_operator_messages() {
+        let cases = [
+            (
+                TuningResultInvalidReason::NonFinitePvAmplitude,
+                "PV amplitude is not finite",
+            ),
+            (
+                TuningResultInvalidReason::NonPositivePvAmplitude,
+                "PV amplitude is not positive",
+            ),
+            (
+                TuningResultInvalidReason::NonFinitePeriod,
+                "oscillation period is not finite",
+            ),
+            (
+                TuningResultInvalidReason::NonPositivePeriod,
+                "oscillation period is not positive",
+            ),
+            (
+                TuningResultInvalidReason::NonFiniteFrequency,
+                "oscillation frequency is not finite",
+            ),
+            (
+                TuningResultInvalidReason::NonPositiveFrequency,
+                "oscillation frequency is not positive",
+            ),
+            (TuningResultInvalidReason::NonFiniteKp, "Kp is not finite"),
+            (
+                TuningResultInvalidReason::NonFiniteTiMinutes,
+                "Ti is not finite",
+            ),
+            (
+                TuningResultInvalidReason::NonFiniteTdMinutes,
+                "Td is not finite",
+            ),
+            (
+                TuningResultInvalidReason::NonFiniteProportional,
+                "proportional value is not finite",
+            ),
+            (
+                TuningResultInvalidReason::NonFiniteIntegral,
+                "integral value is not finite",
+            ),
+            (
+                TuningResultInvalidReason::NonFiniteDerivative,
+                "derivative value is not finite",
+            ),
+        ];
+
+        for (reason, expected) in cases {
+            assert_eq!(reason.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn checked_calculation_classifies_every_oscillation_guard() {
+        let valid = Oscillation {
+            period_minutes: 1.0,
+            frequency: 1.0,
+            pv_amp_raw: 1.0,
+            pv_amp_percent: 1.0,
+        };
+        let cases = [
+            (
+                Oscillation {
+                    pv_amp_raw: f32::NAN,
+                    ..valid
+                },
+                Some(TuningResultInvalidReason::NonFinitePvAmplitude),
+            ),
+            (
+                Oscillation {
+                    pv_amp_raw: 0.0,
+                    ..valid
+                },
+                Some(TuningResultInvalidReason::NonPositivePvAmplitude),
+            ),
+            (
+                Oscillation {
+                    period_minutes: f32::NAN,
+                    ..valid
+                },
+                Some(TuningResultInvalidReason::NonFinitePeriod),
+            ),
+            (
+                Oscillation {
+                    period_minutes: 0.0,
+                    ..valid
+                },
+                Some(TuningResultInvalidReason::NonPositivePeriod),
+            ),
+            (
+                Oscillation {
+                    frequency: f32::NAN,
+                    ..valid
+                },
+                Some(TuningResultInvalidReason::NonFiniteFrequency),
+            ),
+            (
+                Oscillation {
+                    frequency: 0.0,
+                    ..valid
+                },
+                Some(TuningResultInvalidReason::NonPositiveFrequency),
+            ),
+            (valid, None),
+        ];
+
+        for (oscillation, expected) in cases {
+            assert_eq!(invalid_oscillation_reason(oscillation), expected);
+        }
+    }
+
+    fn sample_tuning() -> TuningResult {
+        TuningResult {
+            response_level: ResponseLevel::Moderate,
+            kp: 2.0,
+            ti_minutes: 4.0,
+            td_minutes: 0.5,
+        }
+    }
+
+    fn assert_invalid_checked_result(
+        tuning: TuningResult,
+        template: &DcsTemplate,
+        reason: TuningResultInvalidReason,
+    ) {
+        let result = checked_result_from_tuning(tuning, template);
+        assert_eq!(result.status, TuningResultStatus::Invalid);
+        assert_eq!(result.invalid_reason, Some(reason));
+        assert!(result.tuning.is_none());
+        assert!(result.pid.is_none());
+    }
+
+    #[test]
+    fn checked_calculation_classifies_every_calculated_value_guard() {
+        let gain_template = template::built_in_templates().remove(1);
+        assert_invalid_checked_result(
+            TuningResult {
+                kp: f32::INFINITY,
+                ..sample_tuning()
+            },
+            &gain_template,
+            TuningResultInvalidReason::NonFiniteKp,
+        );
+        assert_invalid_checked_result(
+            TuningResult {
+                ti_minutes: f32::INFINITY,
+                ..sample_tuning()
+            },
+            &gain_template,
+            TuningResultInvalidReason::NonFiniteTiMinutes,
+        );
+        assert_invalid_checked_result(
+            TuningResult {
+                td_minutes: f32::INFINITY,
+                ..sample_tuning()
+            },
+            &gain_template,
+            TuningResultInvalidReason::NonFiniteTdMinutes,
+        );
+
+        let band_template = template::built_in_templates().remove(0);
+        assert_invalid_checked_result(
+            TuningResult {
+                kp: 0.0,
+                ..sample_tuning()
+            },
+            &band_template,
+            TuningResultInvalidReason::NonFiniteProportional,
+        );
+
+        let mut reset_rate_template = gain_template.clone();
+        reset_rate_template.integral_type = IntegralType::ResetRate;
+        assert_invalid_checked_result(
+            TuningResult {
+                ti_minutes: 0.0,
+                ..sample_tuning()
+            },
+            &reset_rate_template,
+            TuningResultInvalidReason::NonFiniteIntegral,
+        );
+
+        let mut derivative_gain_template = gain_template;
+        derivative_gain_template.derivative_type = DerivativeType::DerivativeGain;
+        assert_invalid_checked_result(
+            TuningResult {
+                kp: f32::MAX,
+                td_minutes: f32::MAX,
+                ..sample_tuning()
+            },
+            &derivative_gain_template,
+            TuningResultInvalidReason::NonFiniteDerivative,
+        );
+
+        let valid = checked_result_from_tuning(sample_tuning(), &template::built_in_templates()[1]);
+        assert_eq!(valid.status, TuningResultStatus::Valid);
+        assert!(valid.usable_values().is_some());
     }
 
     /// Fields unpacked from a real engine's `Action::Complete`, named here purely to keep

@@ -184,6 +184,25 @@ test.describe("running a tune", () => {
     await expect(
       page.getByText("Timing warning:", { exact: false }),
     ).toHaveCount(0);
+    const samplingSection = page.locator("details").filter({
+      has: page.getByRole("heading", {
+        name: "Sampling diagnostics",
+        exact: true,
+      }),
+    });
+    await expect(samplingSection).toHaveCount(1);
+    await expect(samplingSection).not.toHaveAttribute("open");
+    await expect(
+      resultsSection.getByText("Sampling adequacy", { exact: true }),
+    ).toHaveCount(0);
+    await page
+      .getByRole("heading", { name: "Sampling diagnostics", exact: true })
+      .click();
+    await expect(samplingSection).toHaveAttribute("open", "");
+    await expect(
+      page.getByText("Sampling adequacy", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Adequate", { exact: true })).toBeVisible();
 
     await expect(
       page.getByText(/\d+ measurements were recorded/),

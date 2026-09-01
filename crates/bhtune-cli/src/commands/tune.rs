@@ -17,8 +17,8 @@ use bhtune_core::mrft::clamp_relay_amplitude;
 use bhtune_core::{
     Action, ControllerDirection, ControllerType, DcsTemplate, InitialReadings, LoopConfig,
     LoopTags, MrftCompat, MrftEngine, MvRange, PidParameters, ProcessType, PvRange, ResponseLevel,
-    TagOrValue, TagOverrides, Tick, TuningMathCompat, calculate_all, lookup, measure_oscillation,
-    opc_write_values,
+    TagOrValue, TagOverrides, Tick, TuningMathCompat, TuningResultStatus, calculate_all_checked,
+    lookup, measure_oscillation, opc_write_values,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
@@ -2661,11 +2661,12 @@ fn mv_verification_read_limit(
     }
 }
 
-/// Checks the accepted OPC DA MV command without producing a tune sample or advancing either
-/// timing accumulator. Transport failures remain ordinary failed-run errors, an individual
-/// operation timeout remains [`AbortReason::OperationTimedOut`], and rejected quality remains
-/// [`AbortReason::PoorQuality`]. Only a finite, acceptable-quality mismatch can become
-/// [`AbortReason::MvActuationUnconfirmed`].
+/// Checks the accepted OPC DA MV command without producing a tune sample. Transport failures
+/// remain ordinary failed-run errors, an individual operation timeout remains
+/// [`AbortReason::OperationTimedOut`], and rejected quality remains [`AbortReason::PoorQuality`].
+/// Only a finite, acceptable-quality mismatch can become
+/// [`AbortReason::MvActuationUnconfirmed`]. Successful verification-read duration is optionally
+/// recorded when this is called from the polling loop.
 #[allow(clippy::too_many_arguments)]
 async fn verify_pending_mv_actuation_with_timing(
     pool: &SqlitePool,
@@ -2679,6 +2680,7 @@ async fn verify_pending_mv_actuation_with_timing(
     trigger: MvVerificationTrigger,
     call_limit: MvVerificationCallLimit,
     audit_policy: ActuationAuditPolicy,
+    mut timing: Option<&mut PollTimingAccumulator>,
 ) -> anyhow::Result<Option<AbortReason>> {
     let Some(pending) = tracker.pending.as_ref() else {
         return Ok(None);
@@ -2748,6 +2750,7 @@ async fn verify_pending_mv_actuation_with_timing(
             operation,
             checked_at,
             checked_instant,
+            read_duration,
         } => match resolve_pending_mv_read(
             pool,
             effective_timing,
@@ -2762,6 +2765,9 @@ async fn verify_pending_mv_actuation_with_timing(
         {
             PendingMvVerificationResult::Abort(reason) => Ok(Some(reason)),
             PendingMvVerificationResult::Value(value) => {
+                if let Some(timing) = timing.as_mut() {
+                    timing.observe_mv_verification(read_duration);
+                }
                 finalize_pending_mv_verification(pool, tag, tracker, value, trigger, audit_policy)
                     .await
             }
@@ -2795,6 +2801,7 @@ async fn verify_pending_mv_actuation_with(
         trigger,
         call_limit,
         audit_policy,
+        None,
     )
     .await
 }
@@ -2804,6 +2811,7 @@ enum PendingMvVerificationRead {
         operation: anyhow::Result<TickOperation<(f32, bhtune_driver::Quality)>>,
         checked_at: DateTime<Utc>,
         checked_instant: Instant,
+        read_duration: Duration,
     },
     Deferred,
     DeadlineTimedOut {
@@ -2833,6 +2841,7 @@ enum PendingMvVerificationResult {
 fn pending_verification_ready(
     tracker: &MvActuationTracker,
     operation: anyhow::Result<TickOperation<(f32, bhtune_driver::Quality)>>,
+    read_duration: Duration,
 ) -> anyhow::Result<PendingMvVerificationRead> {
     let checked_instant = Instant::now();
     let pending = tracker
@@ -2843,6 +2852,7 @@ fn pending_verification_ready(
         operation,
         checked_at: checked_at_for_pending(pending, checked_instant)?,
         checked_instant,
+        read_duration,
     })
 }
 
@@ -2864,6 +2874,7 @@ async fn read_pending_mv_verification_with_timing(
                 .expect("pending actuation existed before the bounded read");
             mv_verification_read_limit(trigger, pending, call_limit)
         };
+        let read_started = Instant::now();
         let read = bounded_driver_call(
             effective_timing.op_timeout_secs,
             ctrl_c,
@@ -2871,7 +2882,9 @@ async fn read_pending_mv_verification_with_timing(
         );
         let (deadline, limit_kind) = limit;
         match tokio::time::timeout_at(deadline, read).await {
-            Ok(operation) => return pending_verification_ready(tracker, operation),
+            Ok(operation) => {
+                return pending_verification_ready(tracker, operation, read_started.elapsed());
+            }
             Err(_) => match limit_kind {
                 MvVerificationLimitKind::Confirmation => {
                     trigger = MvVerificationTrigger::Deadline;
@@ -3234,6 +3247,7 @@ async fn verify_pending_mv_actuation(
             MvVerificationCallLimit::Restore,
         ),
         ActuationAuditPolicy::Required,
+        None,
     )
     .await
 }
@@ -3627,6 +3641,7 @@ async fn restore_mv_with_verification_with_timing(
             trigger,
             MvVerificationCallLimit::Restore(restore_deadline),
             ActuationAuditPolicy::BestEffort,
+            None,
         )
         .await;
         match verification {
@@ -4064,6 +4079,21 @@ enum PollOutcome {
     Aborted(AbortReason),
 }
 
+async fn insert_tune_sample_with_timing(
+    pool: &SqlitePool,
+    run_id: i64,
+    tick_index: i64,
+    tick: Tick,
+    state: bhtune_core::MrftState,
+    sample_quality: SampleQuality,
+    timing: &mut PollTimingAccumulator,
+) -> anyhow::Result<()> {
+    let started = Instant::now();
+    TuneSampleRow::insert(pool, run_id, tick_index, tick, state, sample_quality).await?;
+    timing.observe_sample_persist(started.elapsed());
+    Ok(())
+}
+
 /// Polls the driver on the frozen global polling interval, driving `engine` once the pre-test
 /// `[tuning].mrft_delay_secs` padding period has elapsed, and continuing to record (but not evaluate)
 /// samples for the same padding period after completion. Returns `Ok(PollOutcome::Completed`
@@ -4147,6 +4177,7 @@ async fn run_polling_loop_with_timing(
                             | MvVerificationTrigger::Replacement => MvVerificationCallLimit::None,
                         },
                         ActuationAuditPolicy::Required,
+                        Some(timing),
                     )
                     .await?
                 {
@@ -4154,7 +4185,9 @@ async fn run_polling_loop_with_timing(
                 }
             }
             _ = tokio::time::sleep_until(next_poll_at) => {
+                let tick_started = Instant::now();
                 next_poll_at = Instant::now() + poll_interval;
+                let pv_read_started = Instant::now();
                 let (pv, quality) = match bounded_driver_call(
                     effective_timing.op_timeout_secs,
                     ctrl_c,
@@ -4162,7 +4195,10 @@ async fn run_polling_loop_with_timing(
                 )
                 .await?
                 {
-                    TickOperation::Completed(sample) => sample,
+                    TickOperation::Completed(sample) => {
+                        timing.observe_pv_read(pv_read_started.elapsed());
+                        sample
+                    }
                     TickOperation::Cancelled => {
                         tracing::warn!(run_id, tick_index, "Ctrl+C received while reading the PV; aborting run");
                         return Ok(PollOutcome::Aborted(AbortReason::UserInterrupt));
@@ -4201,7 +4237,17 @@ async fn run_polling_loop_with_timing(
                     );
                     // Record the triggering sample (with its real quality) before aborting, so
                     // the history explorer can show exactly what was seen when the run gave up.
-                    TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
+                    insert_tune_sample_with_timing(
+                        pool,
+                        run_id,
+                        tick_index,
+                        tick,
+                        engine.state(),
+                        sample_quality,
+                        timing,
+                    )
+                    .await?;
+                    timing.observe_tick_work(tick_started.elapsed());
                     return Ok(PollOutcome::Aborted(AbortReason::PoorQuality {
                         tag: tags.process_variable.clone(),
                         quality,
@@ -4209,7 +4255,17 @@ async fn run_polling_loop_with_timing(
                 }
 
                 if completion.is_none() && now < pre_delay_end {
-                    TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
+                    insert_tune_sample_with_timing(
+                        pool,
+                        run_id,
+                        tick_index,
+                        tick,
+                        engine.state(),
+                        sample_quality,
+                        timing,
+                    )
+                    .await?;
+                    timing.observe_tick_work(tick_started.elapsed());
                     tick_index += 1;
                     continue;
                 }
@@ -4250,10 +4306,21 @@ async fn run_polling_loop_with_timing(
                             trigger,
                             MvVerificationCallLimit::None,
                             ActuationAuditPolicy::Required,
+                            Some(timing),
                         )
                         .await?
                         {
-                            TuneSampleRow::insert(pool, run_id, tick_index, tick, state_before_step, sample_quality).await?;
+                            insert_tune_sample_with_timing(
+                                pool,
+                                run_id,
+                                tick_index,
+                                tick,
+                                state_before_step,
+                                sample_quality,
+                                timing,
+                            )
+                            .await?;
+                            timing.observe_tick_work(tick_started.elapsed());
                             return Ok(PollOutcome::Aborted(reason));
                         }
                         if tracker.pending.is_some() {
@@ -4263,7 +4330,17 @@ async fn run_polling_loop_with_timing(
                                 tracker,
                             )
                             .await?;
-                            TuneSampleRow::insert(pool, run_id, tick_index, tick, state_before_step, sample_quality).await?;
+                            insert_tune_sample_with_timing(
+                                pool,
+                                run_id,
+                                tick_index,
+                                tick,
+                                state_before_step,
+                                sample_quality,
+                                timing,
+                            )
+                            .await?;
+                            timing.observe_tick_work(tick_started.elapsed());
                             return Ok(PollOutcome::Aborted(reason));
                         }
                     }
@@ -4287,7 +4364,8 @@ async fn run_polling_loop_with_timing(
                                 })
                                 .transpose()?;
                             guard.mv_written = true;
-                            match bounded_driver_call(
+                                let mv_write_started = Instant::now();
+                                match bounded_driver_call(
                                 effective_timing.op_timeout_secs,
                                 ctrl_c,
                                 write_value(driver, &tags.manipulated_variable, v),
@@ -4295,6 +4373,7 @@ async fn run_polling_loop_with_timing(
                             .await?
                             {
                                 TickOperation::Completed(()) => {
+                                    timing.observe_mv_write(mv_write_started.elapsed());
                                     if let (Some(tracker), Some(tolerance)) =
                                         (mv_actuations.as_mut(), tolerance)
                                     {
@@ -4323,12 +4402,32 @@ async fn run_polling_loop_with_timing(
                                     // (unlike the PV-read timeout/cancel case above), so record
                                     // it before aborting -- same rationale as the quality-check
                                     // abort above.
-                                    TuneSampleRow::insert(pool, run_id, tick_index, tick, state_before_step, sample_quality).await?;
+                                    insert_tune_sample_with_timing(
+                                        pool,
+                                        run_id,
+                                        tick_index,
+                                        tick,
+                                        state_before_step,
+                                        sample_quality,
+                                        timing,
+                                    )
+                                    .await?;
+                                    timing.observe_tick_work(tick_started.elapsed());
                                     tracing::warn!(run_id, tick_index, "Ctrl+C received while writing the MV; aborting run");
                                     return Ok(PollOutcome::Aborted(AbortReason::UserInterrupt));
                                 }
                                 TickOperation::TimedOut => {
-                                    TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
+                                    insert_tune_sample_with_timing(
+                                        pool,
+                                        run_id,
+                                        tick_index,
+                                        tick,
+                                        engine.state(),
+                                        sample_quality,
+                                        timing,
+                                    )
+                                    .await?;
+                                    timing.observe_tick_work(tick_started.elapsed());
                                     tracing::warn!(
                                         run_id,
                                         tick_index,
@@ -4359,7 +4458,17 @@ async fn run_polling_loop_with_timing(
                     }
                 }
                 tracing::trace!(run_id, tick_index, pv, "recorded tune sample");
-                TuneSampleRow::insert(pool, run_id, tick_index, tick, engine.state(), sample_quality).await?;
+                insert_tune_sample_with_timing(
+                    pool,
+                    run_id,
+                    tick_index,
+                    tick,
+                    engine.state(),
+                    sample_quality,
+                    timing,
+                )
+                .await?;
+                timing.observe_tick_work(tick_started.elapsed());
                 tick_index += 1;
 
                 if let Some(end) = post_delay_end
@@ -4446,7 +4555,7 @@ async fn persist_results(
         anyhow::bail!("internal error: persist_results called with a non-Complete action");
     };
 
-    let results = calculate_all(
+    let results = calculate_all_checked(
         &peaks,
         &troughs,
         &switch_times,
@@ -4458,8 +4567,8 @@ async fn persist_results(
         TuningMathCompat::default(),
     );
 
-    for (tuning, pid) in results {
-        let row = TuneResultRow::from_calculated(run_id, tuning, pid);
+    for result in results {
+        let row = TuneResultRow::from_checked(run_id, result);
         TuneResultRow::insert(pool, &row).await?;
     }
 
@@ -4735,6 +4844,68 @@ enum WriteBackSelection<'a> {
     Failed(String),
 }
 
+/// Converts a persisted result into the exact PID values that may be written to a controller.
+///
+/// This is the single validity gate shared by the CLI and HTTP write paths. A result must be
+/// explicitly valid and contain finite values for all three constants; malformed historical
+/// rows are rejected rather than being allowed to reach a live driver.
+pub fn pid_parameters_for_result(result: &TuneResultRow) -> anyhow::Result<PidParameters> {
+    if result.status != TuningResultStatus::Valid {
+        let reason = result
+            .invalid_reason
+            .map(|reason| reason.to_string())
+            .unwrap_or_else(|| "no invalid reason was recorded".to_string());
+        anyhow::bail!(
+            "{:?} calculated result is invalid: {reason}",
+            result.response_level
+        );
+    }
+    if result.invalid_reason.is_some() {
+        anyhow::bail!(
+            "{:?} calculated result has an invalid reason despite being marked valid",
+            result.response_level
+        );
+    }
+
+    let proportional = result.proportional.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{:?} calculated result is missing its proportional value",
+            result.response_level
+        )
+    })?;
+    let integral = result.integral.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{:?} calculated result is missing its integral value",
+            result.response_level
+        )
+    })?;
+    let derivative = result.derivative.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{:?} calculated result is missing its derivative value",
+            result.response_level
+        )
+    })?;
+    if !proportional.is_finite() || !integral.is_finite() || !derivative.is_finite() {
+        anyhow::bail!(
+            "{:?} calculated result contains a non-finite PID value",
+            result.response_level
+        );
+    }
+
+    Ok(PidParameters {
+        response_level: result.response_level,
+        proportional,
+        integral,
+        derivative,
+    })
+}
+
+fn result_write_back_error(result: &TuneResultRow) -> Option<String> {
+    pid_parameters_for_result(result)
+        .err()
+        .map(|error| error.to_string())
+}
+
 fn select_named_write_back_result<'a>(
     results: &'a [TuneResultRow],
     level: ResponseLevel,
@@ -4742,6 +4913,14 @@ fn select_named_write_back_result<'a>(
 ) -> WriteBackSelection<'a> {
     match results.iter().find(|r| r.response_level == level) {
         Some(result) => {
+            if let Some(detail) = result_write_back_error(result) {
+                if prints_table_output(output) {
+                    println!(
+                        "Calculated {level:?} result is invalid; skipping write-back: {detail}"
+                    );
+                }
+                return WriteBackSelection::Failed(detail);
+            }
             if prints_table_output(output) {
                 println!(
                     "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
@@ -4767,14 +4946,21 @@ fn select_interactive_write_back_result<'a>(
 ) -> WriteBackSelection<'a> {
     eprintln!("\nCalculated PID parameters:");
     for (i, result) in results.iter().enumerate() {
-        eprintln!(
-            "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
-            i + 1,
-            result.response_level,
-            result.proportional,
-            result.integral,
-            result.derivative
-        );
+        match pid_parameters_for_result(result) {
+            Ok(pid) => eprintln!(
+                "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
+                i + 1,
+                result.response_level,
+                pid.proportional,
+                pid.integral,
+                pid.derivative
+            ),
+            Err(error) => eprintln!(
+                "  {}. {:?}: INVALID ({error})",
+                i + 1,
+                result.response_level
+            ),
+        }
     }
     eprintln!(
         "Write which response level's PID parameters back to the DCS? [1-{}, or Enter/n to skip]:",
@@ -4792,7 +4978,16 @@ fn select_interactive_write_back_result<'a>(
     }
 
     match input.parse::<usize>() {
-        Ok(n) if n >= 1 && n <= results.len() => WriteBackSelection::Selected(&results[n - 1]),
+        Ok(n) if n >= 1 && n <= results.len() => {
+            let result = &results[n - 1];
+            match result_write_back_error(result) {
+                Some(detail) => {
+                    eprintln!("Selected result is invalid; skipping PID write-back: {detail}");
+                    WriteBackSelection::Failed(detail)
+                }
+                None => WriteBackSelection::Selected(result),
+            }
+        }
         _ => {
             eprintln!("Invalid selection; skipping PID write-back.");
             WriteBackSelection::Skipped("invalid response level selection".to_string())
@@ -4916,13 +5111,8 @@ async fn maybe_write_back(
         }
     };
 
-    let response_level = selected.response_level;
-    let pid = PidParameters {
-        response_level: selected.response_level,
-        proportional: selected.proportional,
-        integral: selected.integral,
-        derivative: selected.derivative,
-    };
+    let pid = pid_parameters_for_result(selected)?;
+    let response_level = pid.response_level;
     let written = opc_write_values(pid, config.controller_type, template.integral_type);
     let target = WriteReadback {
         proportional: written.proportional,
@@ -4959,7 +5149,7 @@ fn skips_interactive_prompt(write_pid: Option<ResponseLevel>, output: OutputForm
 mod tests {
     use super::*;
     use crate::args::{ControllerTypeArg, DirectionArg, ProcessTypeArg};
-    use bhtune_db::models::TemplateOrigin;
+    use bhtune_db::models::{SamplingAdequacy, TemplateOrigin};
 
     async fn seeded_pool() -> SqlitePool {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
@@ -5066,6 +5256,93 @@ mod tests {
         assert_eq!(rendered, r#"{"error": "injected encoding failure"}"#);
     }
 
+    fn valid_pid_result_row() -> TuneResultRow {
+        TuneResultRow {
+            id: 0,
+            run_id: 1,
+            response_level: ResponseLevel::Moderate,
+            kp: Some(2.0),
+            ti_minutes: Some(4.0),
+            td_minutes: Some(0.5),
+            proportional: Some(2.0),
+            integral: Some(4.0),
+            derivative: Some(0.5),
+            status: TuningResultStatus::Valid,
+            invalid_reason: None,
+        }
+    }
+
+    #[test]
+    fn pid_result_validation_rejects_every_malformed_shape() {
+        let mut result = valid_pid_result_row();
+        result.status = TuningResultStatus::Invalid;
+        result.invalid_reason =
+            Some(bhtune_core::TuningResultInvalidReason::NonPositivePvAmplitude);
+        let error = pid_parameters_for_result(&result).unwrap_err();
+        assert!(error.to_string().contains("PV amplitude is not positive"));
+
+        let mut result = valid_pid_result_row();
+        result.invalid_reason = Some(bhtune_core::TuningResultInvalidReason::NonFiniteKp);
+        let error = pid_parameters_for_result(&result).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("has an invalid reason despite being marked valid")
+        );
+
+        let mut proportional_missing = valid_pid_result_row();
+        proportional_missing.proportional = None;
+        let mut integral_missing = valid_pid_result_row();
+        integral_missing.integral = None;
+        let mut derivative_missing = valid_pid_result_row();
+        derivative_missing.derivative = None;
+        for (result, expected) in [
+            (proportional_missing, "missing its proportional value"),
+            (integral_missing, "missing its integral value"),
+            (derivative_missing, "missing its derivative value"),
+        ] {
+            assert!(
+                pid_parameters_for_result(&result)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(expected)
+            );
+        }
+
+        let mut result = valid_pid_result_row();
+        result.integral = Some(f32::NAN);
+        let error = pid_parameters_for_result(&result).unwrap_err();
+        assert!(error.to_string().contains("non-finite PID value"));
+
+        let valid = pid_parameters_for_result(&valid_pid_result_row()).unwrap();
+        assert_eq!(valid.response_level, ResponseLevel::Moderate);
+        assert_eq!(valid.proportional, 2.0);
+    }
+
+    #[test]
+    fn write_back_selection_rejects_invalid_results_in_named_and_interactive_paths() {
+        let mut invalid = valid_pid_result_row();
+        invalid.status = TuningResultStatus::Invalid;
+        invalid.invalid_reason =
+            Some(bhtune_core::TuningResultInvalidReason::NonPositivePvAmplitude);
+        let results = vec![invalid];
+
+        assert!(matches!(
+            select_named_write_back_result(&results, ResponseLevel::Moderate, OutputFormat::Table),
+            WriteBackSelection::Failed(detail) if detail.contains("PV amplitude is not positive")
+        ));
+        assert!(matches!(
+            select_named_write_back_result(&results, ResponseLevel::Moderate, OutputFormat::Json),
+            WriteBackSelection::Failed(detail) if detail.contains("PV amplitude is not positive")
+        ));
+
+        let mut reader = std::io::Cursor::new(b"1\n");
+        assert!(matches!(
+            select_interactive_write_back_result(&results, &mut reader),
+            WriteBackSelection::Failed(detail) if detail.contains("PV amplitude is not positive")
+        ));
+    }
+
     #[test]
     fn utc_after_elapsed_rejects_a_duration_outside_chrono_range() {
         let error = utc_after_elapsed(Utc::now(), Duration::MAX).unwrap_err();
@@ -5120,6 +5397,8 @@ mod tests {
             missed_poll_opportunity_count: 1,
             measured_oscillation_period_ms: None,
             approximate_samples_per_period: None,
+            sampling_adequacy: SamplingAdequacy::NotAssessed,
+            poll_latency: None,
         }
     }
 
@@ -10118,12 +10397,14 @@ mod tests {
                 id: 0,
                 run_id: run.id,
                 response_level: ResponseLevel::Aggressive,
-                kp: 1.0,
-                ti_minutes: 1.0,
-                td_minutes: 1.0,
-                proportional: 1.0,
-                integral: 1.0,
-                derivative: 1.0,
+                kp: Some(1.0),
+                ti_minutes: Some(1.0),
+                td_minutes: Some(1.0),
+                proportional: Some(1.0),
+                integral: Some(1.0),
+                derivative: Some(1.0),
+                status: TuningResultStatus::Valid,
+                invalid_reason: None,
             },
         )
         .await
@@ -10910,12 +11191,14 @@ mod tests {
                     id: 0,
                     run_id: run.id,
                     response_level: level,
-                    kp,
-                    ti_minutes: ti,
-                    td_minutes: td,
-                    proportional: p,
-                    integral: i,
-                    derivative: d,
+                    kp: Some(kp),
+                    ti_minutes: Some(ti),
+                    td_minutes: Some(td),
+                    proportional: Some(p),
+                    integral: Some(i),
+                    derivative: Some(d),
+                    status: TuningResultStatus::Valid,
+                    invalid_reason: None,
                 },
             )
             .await
@@ -11543,12 +11826,14 @@ mod tests {
                     id: 0,
                     run_id: run.id,
                     response_level: level,
-                    kp,
-                    ti_minutes: ti,
-                    td_minutes: td,
-                    proportional: p,
-                    integral: i,
-                    derivative: d,
+                    kp: Some(kp),
+                    ti_minutes: Some(ti),
+                    td_minutes: Some(td),
+                    proportional: Some(p),
+                    integral: Some(i),
+                    derivative: Some(d),
+                    status: TuningResultStatus::Valid,
+                    invalid_reason: None,
                 },
             )
             .await

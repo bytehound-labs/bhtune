@@ -34,6 +34,22 @@ INTENTIONAL_REMOVED_REQUEST_PROPERTIES = frozenset(
     }
 )
 
+# This is the deliberate pre-v1 result-validity migration: an invalid calculated
+# result has no safe numeric value, so these response fields may become nullable.
+# Keep the allowance tied to this one component and these exact properties.
+INTENTIONAL_NULLABLE_RESPONSE_PROPERTIES = {
+    "ResultResponse": frozenset(
+        {
+            "kp",
+            "ti_minutes",
+            "td_minutes",
+            "proportional",
+            "integral",
+            "derivative",
+        }
+    )
+}
+
 
 def _schema_type(schema: dict[str, Any]) -> str | None:
     return schema.get("type")
@@ -44,6 +60,16 @@ def _enum_removed(old: dict[str, Any], new: dict[str, Any]) -> bool:
     new_enum = new.get("enum")
     return isinstance(old_enum, list) and isinstance(new_enum, list) and not set(old_enum) <= set(
         new_enum
+    )
+
+
+def _is_nullable_expansion(old: dict[str, Any], new: dict[str, Any]) -> bool:
+    old_type = old.get("type")
+    new_type = new.get("type")
+    return (
+        isinstance(old_type, str)
+        and isinstance(new_type, list)
+        and set(new_type) == {old_type, "null"}
     )
 
 
@@ -59,7 +85,11 @@ def _schema_header_breaks(old: dict[str, Any], new: dict[str, Any], location: st
 
 
 def _required_breaks(
-    old: dict[str, Any], new: dict[str, Any], direction: str, location: str
+    old: dict[str, Any],
+    new: dict[str, Any],
+    direction: str,
+    location: str,
+    allowed_nullable_properties: frozenset[str],
 ) -> list[str]:
     old_required = set(old.get("required", []))
     new_required = set(new.get("required", []))
@@ -69,6 +99,19 @@ def _required_breaks(
             return [f"{location}: request fields became required: {', '.join(changed)}"]
     else:
         changed = sorted(old_required - new_required)
+        old_properties = old.get("properties", {})
+        new_properties = new.get("properties", {})
+        if isinstance(old_properties, dict) and isinstance(new_properties, dict):
+            changed = [
+                name
+                for name in changed
+                if not (
+                    name in allowed_nullable_properties
+                    and isinstance(old_properties.get(name), dict)
+                    and isinstance(new_properties.get(name), dict)
+                    and _is_nullable_expansion(old_properties[name], new_properties[name])
+                )
+            ]
         if changed:
             return [f"{location}: response fields stopped being required: {', '.join(changed)}"]
     return []
@@ -81,6 +124,7 @@ def _property_break(
     direction: str,
     location: str,
     allowed_removed_properties: frozenset[str],
+    allowed_nullable_properties: frozenset[str],
 ) -> list[str]:
     if name not in new_properties:
         if name in allowed_removed_properties:
@@ -92,11 +136,18 @@ def _property_break(
     new_property = new_properties[name]
     if not isinstance(old_property, dict) or not isinstance(new_property, dict):
         return []
+    if (
+        direction == "response"
+        and name in allowed_nullable_properties
+        and _is_nullable_expansion(old_property, new_property)
+    ):
+        return []
     return _schema_breaks(
         old_property,
         new_property,
         direction,
         f"{location}.{name}",
+        frozenset(),
         frozenset(),
     )
 
@@ -107,6 +158,7 @@ def _property_breaks(
     direction: str,
     location: str,
     allowed_removed_properties: frozenset[str],
+    allowed_nullable_properties: frozenset[str],
 ) -> list[str]:
     errors: list[str] = []
     for name, old_property in old_properties.items():
@@ -118,6 +170,7 @@ def _property_breaks(
                 direction,
                 location,
                 allowed_removed_properties,
+                allowed_nullable_properties,
             )
         )
     return errors
@@ -129,9 +182,18 @@ def _schema_breaks(
     direction: str,
     location: str,
     allowed_removed_properties: frozenset[str] = frozenset(),
+    allowed_nullable_properties: frozenset[str] = frozenset(),
 ) -> list[str]:
     errors = _schema_header_breaks(old, new, location)
-    errors.extend(_required_breaks(old, new, direction, location))
+    errors.extend(
+        _required_breaks(
+            old,
+            new,
+            direction,
+            location,
+            allowed_nullable_properties,
+        )
+    )
 
     old_properties = old.get("properties", {})
     new_properties = new.get("properties", {})
@@ -143,6 +205,7 @@ def _schema_breaks(
                 direction,
                 location,
                 allowed_removed_properties,
+                allowed_nullable_properties,
             )
         )
     return errors
@@ -154,6 +217,7 @@ def _content_breaks(
     direction: str,
     location: str,
     allowed_removed_properties: frozenset[str] = frozenset(),
+    allowed_nullable_properties: frozenset[str] = frozenset(),
 ) -> list[str]:
     errors: list[str] = []
     for content_type, old_media in old_content.items():
@@ -170,6 +234,7 @@ def _content_breaks(
                     direction,
                     f"{location} {content_type}",
                     allowed_removed_properties,
+                    allowed_nullable_properties,
                 )
             )
     return errors
@@ -358,7 +423,8 @@ def _component_break(
     name: str,
     old_schema: Any,
     new_schemas: dict[str, Any],
-    allowances: dict[str, frozenset[str]],
+    request_allowances: dict[str, frozenset[str]],
+    response_nullable_allowances: dict[str, frozenset[str]],
 ) -> list[str]:
     if name not in new_schemas:
         return [f"component schema {name!r} was removed"]
@@ -370,18 +436,28 @@ def _component_break(
         new_schema,
         "response",
         f"schema {name!r}",
-        allowances.get(name, frozenset()),
+        request_allowances.get(name, frozenset()),
+        response_nullable_allowances.get(name, frozenset()),
     )
 
 
 def _component_breaks(
     old_schemas: dict[str, Any],
     new_schemas: dict[str, Any],
-    allowances: dict[str, frozenset[str]],
+    request_allowances: dict[str, frozenset[str]],
+    response_nullable_allowances: dict[str, frozenset[str]],
 ) -> list[str]:
     errors: list[str] = []
     for name, old_schema in old_schemas.items():
-        errors.extend(_component_break(name, old_schema, new_schemas, allowances))
+        errors.extend(
+            _component_break(
+                name,
+                old_schema,
+                new_schemas,
+                request_allowances,
+                response_nullable_allowances,
+            )
+        )
     return errors
 
 
@@ -392,11 +468,17 @@ def find_breaking_changes(old: dict[str, Any], new: dict[str, Any]) -> list[str]
 
     old_schemas = old.get("components", {}).get("schemas", {})
     new_schemas = new.get("components", {}).get("schemas", {})
+    response_nullable_allowances = {
+        name: properties
+        for name, properties in INTENTIONAL_NULLABLE_RESPONSE_PROPERTIES.items()
+        if name in old_schemas and name in new_schemas
+    }
     errors.extend(
         _component_breaks(
             old_schemas,
             new_schemas,
             _component_request_allowances(old_paths),
+            response_nullable_allowances,
         )
     )
     return errors

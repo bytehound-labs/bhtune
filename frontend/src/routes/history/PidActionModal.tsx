@@ -4,14 +4,14 @@ import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
 import { Badge, Button, ErrorBanner, Modal } from "../../components/ui";
 import {
   formatNumber,
-  type RunResult,
+  type ValidRunResult,
   type RunWrite,
 } from "./runDetailHelpers";
 
 export type PidAction =
   | {
       readonly kind: "write";
-      readonly result: RunResult;
+      readonly result: ValidRunResult;
     }
   | {
       readonly kind: "revert";

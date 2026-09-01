@@ -77,6 +77,7 @@ async fn run_migrations(pool: &SqlitePool) -> DbResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::Row;
 
     async fn apply_migrations_through(pool: &SqlitePool, migration_count: usize) {
         sqlx::query(
@@ -382,6 +383,148 @@ mod tests {
         assert_eq!(
             remaining, 0,
             "the new audit table must cascade-delete with an upgraded run"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_upgrades_migration_0006_results_without_losing_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("before-checked-results.db");
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+
+        apply_migrations_through(&pool, 6).await;
+        let started_at = chrono::Utc::now();
+        let run_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO tune_runs (
+                loop_name, template_name, template_origin, template_snapshot_json,
+                tags_json, driver, started_at, outcome, process_type, controller_type,
+                relay_amp_percent, num_cycles_skip, num_cycles_count,
+                noise_protection_secs, mrft_delay_secs, created_at
+            ) VALUES (
+                'migration-0006-results', 'fixture', 'builtin', '{}', '{}', 'simulator',
+                ?, 'completed', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(started_at)
+        .bind(started_at)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO tune_results (
+                run_id, response_level, kp, ti_minutes, td_minutes,
+                proportional, integral, derivative
+            ) VALUES (?, 'moderate', 1.5, 2.5, 0.0, 66.7, 2.5, 0.0)
+            "#,
+        )
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let upgraded = connect(&path).await.unwrap();
+        let row = sqlx::query(
+            "SELECT kp, ti_minutes, td_minutes, proportional, integral, derivative, \
+             status, invalid_reason FROM tune_results WHERE run_id = ?",
+        )
+        .bind(run_id)
+        .fetch_one(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(row.try_get::<f32, _>("kp").unwrap(), 1.5);
+        assert_eq!(row.try_get::<f32, _>("ti_minutes").unwrap(), 2.5);
+        assert_eq!(row.try_get::<f32, _>("td_minutes").unwrap(), 0.0);
+        assert_eq!(row.try_get::<f32, _>("proportional").unwrap(), 66.7);
+        assert_eq!(row.try_get::<f32, _>("integral").unwrap(), 2.5);
+        assert_eq!(row.try_get::<f32, _>("derivative").unwrap(), 0.0);
+        assert_eq!(row.try_get::<String, _>("status").unwrap(), "valid");
+        assert_eq!(
+            row.try_get::<Option<String>, _>("invalid_reason").unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_classifies_legacy_non_finite_results_as_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("before-checked-results-with-infinity.db");
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+
+        apply_migrations_through(&pool, 6).await;
+        let started_at = chrono::Utc::now();
+        let run_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO tune_runs (
+                loop_name, template_name, template_origin, template_snapshot_json,
+                tags_json, driver, started_at, outcome, process_type, controller_type,
+                relay_amp_percent, num_cycles_skip, num_cycles_count,
+                noise_protection_secs, mrft_delay_secs, created_at
+            ) VALUES (
+                'migration-0006-infinity', 'fixture', 'builtin', '{}', '{}', 'simulator',
+                ?, 'completed', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?
+            )
+            RETURNING id
+            "#,
+        )
+        .bind(started_at)
+        .bind(started_at)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO tune_results (
+                run_id, response_level, kp, ti_minutes, td_minutes,
+                proportional, integral, derivative
+            ) VALUES (?, 'moderate', 1e999, 2.5, 0.0, 66.7, 2.5, 0.0)
+            "#,
+        )
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let upgraded = connect(&path).await.unwrap();
+        let row = sqlx::query(
+            "SELECT kp, ti_minutes, td_minutes, proportional, integral, derivative, \
+             status, invalid_reason FROM tune_results WHERE run_id = ?",
+        )
+        .bind(run_id)
+        .fetch_one(&upgraded)
+        .await
+        .unwrap();
+        assert_eq!(row.try_get::<Option<f32>, _>("kp").unwrap(), None);
+        assert_eq!(row.try_get::<Option<f32>, _>("ti_minutes").unwrap(), None);
+        assert_eq!(row.try_get::<Option<f32>, _>("td_minutes").unwrap(), None);
+        assert_eq!(row.try_get::<Option<f32>, _>("proportional").unwrap(), None);
+        assert_eq!(row.try_get::<Option<f32>, _>("integral").unwrap(), None);
+        assert_eq!(row.try_get::<Option<f32>, _>("derivative").unwrap(), None);
+        assert_eq!(row.try_get::<String, _>("status").unwrap(), "invalid");
+        assert_eq!(
+            row.try_get::<String, _>("invalid_reason").unwrap(),
+            "non_finite_kp"
         );
     }
 }

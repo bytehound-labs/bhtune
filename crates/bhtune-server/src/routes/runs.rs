@@ -14,11 +14,12 @@ use axum::routing::{post, put};
 use axum::{Json, Router};
 use bhtune_cli::args::{DriverKindArg, TuneArgs};
 use bhtune_cli::cancel::CtrlC;
-use bhtune_cli::commands::tune::{PidWriteOutcome, drive, prepare, write_pid_values};
+use bhtune_cli::commands::tune::{
+    PidWriteOutcome, drive, pid_parameters_for_result, prepare, write_pid_values,
+};
 use bhtune_cli::output::OutputFormat;
 use bhtune_core::{
-    ControllerDirection, ControllerType, PidParameters, ProcessType, ResponseLevel, TagOverrides,
-    opc_write_values,
+    ControllerDirection, ControllerType, ProcessType, ResponseLevel, TagOverrides, opc_write_values,
 };
 use bhtune_db::models::{
     TuneDriver, TuneOutcome, TuneResultRow, TuneRunRow, TuneWriteRow, WriteKind, WriteReadback,
@@ -721,12 +722,8 @@ pub(crate) async fn write_run(
             ))
         })?;
 
-    let pid = PidParameters {
-        response_level: selected.response_level,
-        proportional: selected.proportional,
-        integral: selected.integral,
-        derivative: selected.derivative,
-    };
+    let pid = pid_parameters_for_result(selected)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let written = opc_write_values(pid, run.config.controller_type, run.template.integral_type);
     let target = WriteReadback {
         proportional: written.proportional,
@@ -1573,12 +1570,40 @@ mod tests {
                 id: 0,
                 run_id,
                 response_level: ResponseLevel::Moderate,
-                kp: 1.5,
-                ti_minutes: 2.0,
-                td_minutes: 1.0,
-                proportional: 10.0,
-                integral: 10.0,
-                derivative: 10.0,
+                kp: Some(1.5),
+                ti_minutes: Some(2.0),
+                td_minutes: Some(1.0),
+                proportional: Some(10.0),
+                integral: Some(10.0),
+                derivative: Some(10.0),
+                status: bhtune_core::TuningResultStatus::Valid,
+                invalid_reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn add_invalid_moderate_result(state: &AppState, run_id: i64) {
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+        TuneResultRow::insert(
+            &state.pool,
+            &TuneResultRow {
+                id: 0,
+                run_id,
+                response_level: ResponseLevel::Moderate,
+                kp: None,
+                ti_minutes: None,
+                td_minutes: None,
+                proportional: None,
+                integral: None,
+                derivative: None,
+                status: bhtune_core::TuningResultStatus::Invalid,
+                invalid_reason: Some(
+                    bhtune_core::TuningResultInvalidReason::NonPositivePvAmplitude,
+                ),
             },
         )
         .await
@@ -2041,6 +2066,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn write_run_rejects_an_invalid_result_before_connecting_to_the_driver() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = start_opcda_run(&state).await;
+        TuneRunRow::record_connection(
+            &state.pool,
+            run_id,
+            Some("Sim.Server"),
+            Some("127.0.0.1:1"),
+            "{}",
+        )
+        .await
+        .unwrap();
+        add_invalid_moderate_result(&state, run_id).await;
+
+        let response = post_json(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        let message = error["error"].as_str().unwrap();
+        assert!(message.contains("Moderate"));
+        assert!(message.contains("invalid"));
+        assert!(message.contains("PV amplitude is not positive"));
+    }
+
+    #[tokio::test]
     async fn write_run_returns_400_when_the_driver_connection_fails() {
         let state = crate::test_support::in_memory_state().await;
         // Nothing is listening on this port, so `OpcDaDriver::connect` fails at the
@@ -2154,6 +2208,66 @@ mod tests {
         assert_eq!(revert_row["derivative_written"], 10.0);
         // Reverts never chain a nested rollback of themselves.
         assert!(revert_row["rollback_state"].is_null());
+    }
+
+    #[tokio::test]
+    async fn revert_run_can_restore_recorded_values_when_calculated_result_is_invalid() {
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = start_opcda_run(&state).await;
+        TuneRunRow::record_connection(&state.pool, run_id, Some("Sim.Server"), Some(&host), "{}")
+            .await
+            .unwrap();
+        add_invalid_moderate_result(&state, run_id).await;
+
+        let mut previous_write =
+            bhtune_db::models::NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());
+        previous_write.previous = Some(WriteReadback {
+            proportional: 10.0,
+            integral: 10.0,
+            derivative: 10.0,
+        });
+        previous_write.proportional_written = Some(66.7);
+        previous_write.integral_written = Some(2.0);
+        previous_write.derivative_written = Some(0.5);
+        previous_write.proportional_readback = Some(66.7);
+        previous_write.integral_readback = Some(2.0);
+        previous_write.derivative_readback = Some(0.5);
+        previous_write.success = true;
+        TuneWriteRow::insert(&state.pool, run_id, previous_write)
+            .await
+            .unwrap();
+
+        let response = post_empty(
+            crate::build_router(state),
+            &format!("/api/runs/{run_id}/revert"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail = body_json(response).await;
+        assert_eq!(detail["results"][0]["status"], "invalid");
+        let revert_row = detail["writes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|write| write["kind"] == "revert")
+            .unwrap();
+        assert_eq!(revert_row["success"], true);
+        assert_eq!(revert_row["derivative_written"], 10.0);
     }
 
     #[tokio::test]

@@ -28,6 +28,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use bhtune_core::TuningResultStatus;
 use bhtune_core::constants::ResponseLevel;
 use bhtune_core::controller_type::ControllerType;
 use bhtune_core::process_type::ProcessType;
@@ -300,46 +301,69 @@ fn assert_result_matches(scenario: &str, actual: &TuneResultRow, expected: Expec
         actual.response_level, expected.response_level,
         "{scenario}: result row has the wrong response level"
     );
+    assert_eq!(
+        actual.status,
+        TuningResultStatus::Valid,
+        "{scenario} {:?}: expected a valid result, got {:?} ({:?})",
+        expected.response_level,
+        actual.status,
+        actual.invalid_reason
+    );
+    assert!(
+        actual.invalid_reason.is_none(),
+        "{scenario} {:?}: valid result must not have an invalid reason",
+        expected.response_level
+    );
     assert_amplitude_matches(
         scenario,
         expected.response_level,
         "kp",
-        actual.kp,
+        actual.kp.expect("valid simulator result must contain Kp"),
         expected.kp,
     );
     assert_period_matches(
         scenario,
         expected.response_level,
         "ti_minutes",
-        actual.ti_minutes,
+        actual
+            .ti_minutes
+            .expect("valid simulator result must contain Ti"),
         expected.ti_minutes,
     );
     assert_period_matches(
         scenario,
         expected.response_level,
         "td_minutes",
-        actual.td_minutes,
+        actual
+            .td_minutes
+            .expect("valid simulator result must contain Td"),
         expected.td_minutes,
     );
     assert_amplitude_matches(
         scenario,
         expected.response_level,
         "proportional",
-        actual.proportional,
+        actual
+            .proportional
+            .expect("valid simulator result must contain proportional value"),
         expected.proportional,
     );
     assert_period_matches(
         scenario,
         expected.response_level,
         "integral",
-        actual.integral,
+        actual
+            .integral
+            .expect("valid simulator result must contain integral value"),
         expected.integral,
     );
     assert_period_matches(
         scenario,
         expected.response_level,
         "derivative",
-        actual.derivative,
+        actual
+            .derivative
+            .expect("valid simulator result must contain derivative value"),
         expected.derivative,
     );
 }
@@ -444,22 +468,31 @@ async fn assert_matrix_case(scenario: SimulatorScenario) {
     let aggressive = by_level(ResponseLevel::Aggressive);
     let moderate = by_level(ResponseLevel::Moderate);
     let sluggish = by_level(ResponseLevel::Sluggish);
+    let aggressive_kp = aggressive
+        .kp
+        .expect("valid simulator result must contain Aggressive Kp");
+    let moderate_kp = moderate
+        .kp
+        .expect("valid simulator result must contain Moderate Kp");
+    let sluggish_kp = sluggish
+        .kp
+        .expect("valid simulator result must contain Sluggish Kp");
 
     assert!(
-        aggressive.kp > 0.0,
+        aggressive_kp > 0.0,
         "{}: kp must be positive",
         scenario.name
     );
-    assert!(moderate.kp > 0.0, "{}: kp must be positive", scenario.name);
-    assert!(sluggish.kp > 0.0, "{}: kp must be positive", scenario.name);
+    assert!(moderate_kp > 0.0, "{}: kp must be positive", scenario.name);
+    assert!(sluggish_kp > 0.0, "{}: kp must be positive", scenario.name);
     assert!(
-        aggressive.kp > moderate.kp && moderate.kp > sluggish.kp,
+        aggressive_kp > moderate_kp && moderate_kp > sluggish_kp,
         "{}: kp must strictly decrease Aggressive > Moderate > Sluggish, got: \
          aggressive={}, moderate={}, sluggish={}",
         scenario.name,
-        aggressive.kp,
-        moderate.kp,
-        sluggish.kp
+        aggressive_kp,
+        moderate_kp,
+        sluggish_kp
     );
 
     // Ti/Td are response-level-invariant by design: their constants are indexed only by

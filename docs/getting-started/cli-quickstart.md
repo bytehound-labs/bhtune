@@ -41,7 +41,8 @@ bhtune history show 1
 ```
 
 ```text
-Run #1: Sim.Loop1.PV
+Run #1 — Tag name: Sim.Loop1.PV
+  Notes:           —
   Driver:          Simulator
   Outcome:          Completed
   Started at:       2026-08-16T06:51:28.165183623+00:00
@@ -55,19 +56,43 @@ Run #1: Sim.Loop1.PV
   PV range:         0 - 100
   Direction:        Reverse
   Samples recorded: 64
+  Timing:
+    Basis:                    FixedStep
+    Requested interval:       800 ms
+    Observed sample gaps:     63
+    Mean / max sample gap:    800.000 / 800.000 ms
+    Missed poll opportunities: 0
+    Oscillation period:       46500.000 ms
+    Approx. samples / period: 58.125
+    Sampling adequacy:        adequate
+    Poll latency:
+    PV reads:                 count=64 mean=0.010 ms max=0.050 ms
+    MV writes:                none
+    MV verification:          none
+    Sample persistence:       count=64 mean=0.100 ms max=0.500 ms
+    Total tick work:          count=64 mean=0.200 ms max=1.000 ms
   Restore:          confirmed
   Calculated results:
-    LEVEL        KP         TI(min)    TD(min)    PROP         INTEGRAL   DERIV
-    Aggressive   0.5885     0.0971     0.0000     169.9304     5.8256     0.0000
-    Moderate     0.3941     0.0971     0.0000     253.7703     5.8256     0.0000
-    Sluggish     0.2949     0.0971     0.0000     339.1090     5.8256     0.0000
+    LEVEL        STATUS     KP         TI(min)    TD(min)    PROP         INTEGRAL   DERIV      REASON
+    Aggressive   Valid      0.5885     0.0971     0.0000     169.9304     5.8256     0.0000     -
+    Moderate     Valid      0.3941     0.0971     0.0000     253.7703     5.8256     0.0000     -
+    Sluggish     Valid      0.2949     0.0971     0.0000     339.1090     5.8256     0.0000     -
 ```
 
-Three response levels are always calculated (Aggressive/Moderate/Sluggish) — see
-[MRFT concepts](../guides/mrft-concepts.md) for what they mean and how to pick one. `PROP` and
-`INTEGRAL` here are the Yokogawa CentumVP template's own units (Proportional Band % and Reset
-Time in minutes); a different template reports these in whatever units that DCS/PLC family
-expects — see [DCS/PLC templates](../dcs-templates.md).
+Three response levels are always evaluated (Aggressive/Moderate/Sluggish) — see
+[MRFT concepts](../guides/mrft-concepts.md) for what they mean and how to pick one. A usable
+row has `STATUS` set to `Valid`; if the measured amplitude, period, or a converted PID value is
+zero, non-finite, or otherwise unusable, the row is retained as `Invalid` with a diagnostic
+reason and no numeric values, and cannot be written back. `PROP` and `INTEGRAL` here are the
+Yokogawa CentumVP template's own units (Proportional Band % and Reset Time in minutes); a
+different template reports these in whatever units that DCS/PLC family expects — see
+[DCS/PLC templates](../dcs-templates.md).
+
+`history show` also prints timing diagnostics, including the requested and observed cadence,
+sampling adequacy (`adequate`, `marginal`, or `not assessed`), and successful latency summaries
+for PV reads, MV writes, MV verification, sample persistence, and total tick work. Sampling
+adequacy is advisory: `marginal` does not automatically reject a valid result, but it is a
+reason to inspect the trend before applying constants.
 
 Every run's exact numbers depend on the simulator's process parameters
 (`--sim-gain`/`--sim-tau`/`--sim-dead-time`/`--sim-noise`/`--sim-seed`). The simulator
@@ -119,9 +144,10 @@ timestamps use monotonic elapsed time anchored to UTC, so NTP/manual clock chang
 the measured relay period; real host, gateway, and OPC latency remains visible. Keep the host and
 gateway responsive and use a poll interval comfortably shorter than the expected oscillation
 period. Afterward, `bhtune history show <run-id>` reports the requested and observed sampling
-cadence, measured oscillation period, and approximate samples per period. A live sample gap at
-least twice the requested interval is reported as a missed-poll warning without aborting the run
-or blocking write-back. To also write the calculated PID constants back:
+cadence, measured oscillation period, approximate samples per period, sampling adequacy, and
+successful operation-latency summaries. A live sample gap at least twice the requested interval
+is reported as a missed-poll warning without aborting the run or blocking write-back. To also
+write the calculated PID constants back:
 
 ```sh
 bhtune tune ... --write-pid moderate --yes

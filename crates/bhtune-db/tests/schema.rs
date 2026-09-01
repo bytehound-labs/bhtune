@@ -819,6 +819,139 @@ async fn tune_results_enforce_unique_response_level_and_cascade_delete_with_the_
 }
 
 #[tokio::test]
+async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() {
+    let pool = connect_in_memory().await.unwrap();
+    let run_id = seed_failed_run(&pool, None).await;
+
+    sqlx::query(
+        r#"
+        INSERT INTO tune_results (
+            run_id, response_level, kp, ti_minutes, td_minutes,
+            proportional, integral, derivative, status, invalid_reason
+        ) VALUES (?, 'aggressive', 1.0, 2.0, 0.0, 3.0, 0.0, 0.0, 'valid', NULL)
+        "#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let valid_without_value = sqlx::query(
+        r#"
+        INSERT INTO tune_results (
+            run_id, response_level, kp, ti_minutes, td_minutes,
+            proportional, integral, derivative, status, invalid_reason
+        ) VALUES (?, 'moderate', NULL, 2.0, 0.0, 3.0, 0.0, 0.0, 'valid', NULL)
+        "#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        valid_without_value.is_err(),
+        "valid results must contain every numeric value"
+    );
+
+    let invalid_with_value = sqlx::query(
+        r#"
+        INSERT INTO tune_results (
+            run_id, response_level, kp, ti_minutes, td_minutes,
+            proportional, integral, derivative, status, invalid_reason
+        ) VALUES (?, 'moderate', NULL, NULL, NULL, 3.0, NULL, NULL,
+                   'invalid', 'non_positive_pv_amplitude')
+        "#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        invalid_with_value.is_err(),
+        "invalid results must not contain any numeric value"
+    );
+
+    let invalid_without_reason = sqlx::query(
+        r#"
+        INSERT INTO tune_results (
+            run_id, response_level, kp, ti_minutes, td_minutes,
+            proportional, integral, derivative, status, invalid_reason
+        ) VALUES (?, 'moderate', NULL, NULL, NULL, NULL, NULL, NULL, 'invalid', NULL)
+        "#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        invalid_without_reason.is_err(),
+        "invalid results must carry a reason"
+    );
+
+    let unknown_status = sqlx::query(
+        r#"
+        INSERT INTO tune_results (
+            run_id, response_level, kp, ti_minutes, td_minutes,
+            proportional, integral, derivative, status, invalid_reason
+        ) VALUES (?, 'moderate', 1.0, 2.0, 0.0, 3.0, 0.0, 0.0, 'unknown', NULL)
+        "#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        unknown_status.is_err(),
+        "unknown result status must be rejected"
+    );
+
+    let unknown_reason = sqlx::query(
+        r#"
+        INSERT INTO tune_results (
+            run_id, response_level, kp, ti_minutes, td_minutes,
+            proportional, integral, derivative, status, invalid_reason
+        ) VALUES (?, 'moderate', NULL, NULL, NULL, NULL, NULL, NULL,
+                   'invalid', 'not_a_real_reason')
+        "#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        unknown_reason.is_err(),
+        "unknown invalid-result reason must be rejected"
+    );
+
+    let non_finite = sqlx::query(
+        r#"
+        INSERT INTO tune_results (
+            run_id, response_level, kp, ti_minutes, td_minutes,
+            proportional, integral, derivative, status, invalid_reason
+        ) VALUES (?, 'moderate', 1e999, 2.0, 0.0, 3.0, 0.0, 0.0, 'valid', NULL)
+        "#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        non_finite.is_err(),
+        "infinite numeric result values must be rejected"
+    );
+
+    let above_f32_max = sqlx::query(
+        r#"
+        INSERT INTO tune_results (
+            run_id, response_level, kp, ti_minutes, td_minutes,
+            proportional, integral, derivative, status, invalid_reason
+        ) VALUES (?, 'sluggish', 3.45e38, 2.0, 0.0, 3.0, 0.0, 0.0, 'valid', NULL)
+        "#,
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await;
+    assert!(
+        above_f32_max.is_err(),
+        "values above finite f32::MAX must be rejected"
+    );
+}
+
+#[tokio::test]
 async fn tune_mv_actuations_enforce_audit_constraints_and_cascade_with_the_run() {
     let pool = connect_in_memory().await.unwrap();
     let run_id = seed_failed_run(&pool, None).await;

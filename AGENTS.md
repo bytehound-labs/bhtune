@@ -47,6 +47,12 @@ file, resolved through the same `CLI > env > TOML > default` precedence as every
 setting, with console mirroring confined to stderr so it can never corrupt the `--output
 json` stdout contract — see "Logging" below. This completes all five `bhtune-cli` sub-phases;
 the CLI is a fully headless, scriptable adapter on its own, no server required.
+The MRFT boundary-measurement correction and calculated-result safety guard are also implemented:
+result extrema are tracked separately from relay-switching hysteresis, degenerate or non-finite
+results are persisted as explicitly invalid rather than exposed as writable constants, and
+sampling/operation-latency diagnostics are recorded for every run that has usable timing data —
+see "MRFT measurement correction and result validity" below. Variant B, which would also seed
+hysteresis from the switch sample, remains closed-loop simulation research only.
 The Phase 6.5 live-plant safety hardening pass is done, including OPC DA MV actuation
 verification (see "Live-plant safety hardening" below). Phase 6.6's `template-catalog` and
 `template-provenance` are also done: the four
@@ -231,7 +237,10 @@ gap count/mean/maximum, gaps at least twice the requested interval, completed-ru
 period, and approximate samples per period) in `tune_runs.timing_metrics_json`; `history show`,
 `GET /api/runs/{id}`, and structured logs expose it, while the normal run-detail UI intentionally
 omits the low-level diagnostics. Live runs log a warning when at least one complete poll
-opportunity was missed without aborting or blocking write-back.
+opportunity was missed without aborting or blocking write-back. The same snapshot now includes
+`sampling_adequacy` (`adequate` at least 6.0 samples per measured period, `marginal` below that,
+or `not_assessed`) plus successful PV-read, MV-write, MV-verification-read, sample-persistence,
+and total-tick-work latency summaries; these are advisory diagnostics, not a PID-validity policy.
 `e2e-playwright` is also done: a
 Playwright suite (`frontend/e2e/`) drives a full tune through the real, built React SPA
 served by a real `bhtune-server` binary (debug profile, which serves `frontend/dist/` live
@@ -565,7 +574,9 @@ only when that row is a successful write (`kind === "write" && success`) — onc
 a later write or revert, the button disappears, matching the server's own "revert always
 targets the most recent write" rule. When calculated results exist, the single results panel
 is promoted directly below the run heading and before the trend; without results it remains
-in its lower diagnostic position. Verified with real browser automation (`@playwright/test`'s `chromium`
+in its lower diagnostic position. Sampling adequacy is rendered in a separate collapsed
+Sampling diagnostics section near the bottom of the run detail, rather than alongside the
+primary results. Verified with real browser automation (`@playwright/test`'s `chromium`
 launcher driven from standalone Node scripts, since the `chrome-devtools-*` MCP tools
 timed out repeatedly in this environment) against a real running `bhtune-server` and Vite
 dev server: an eligible opcda run (hand-crafted via direct SQLite edits, since no real OPC
@@ -3757,6 +3768,48 @@ fully self-contained — the raw CSVs had no remaining purpose beyond provenance
 docstring records how the fixture was produced, so the provenance is documented even with the raw
 files gone.
 
+## MRFT measurement correction and result validity
+
+The production MRFT path uses a measurement-only boundary correction. `MrftEngine` keeps
+`max_pv_cycle`/`min_pv_cycle` for hysteresis and relay-switch decisions, while
+`max_pv_result`/`min_pv_result` measure the response amplitude used by the tuning formulas.
+The result extrema update on every PV sample; when a switch closes one interval, its PV sample
+is recorded for that interval and seeds the newly opened interval. The hysteresis extrema still
+reset to `pv_value_ini`, so this correction cannot change switch timing, MV commands, actuation
+verification, or the recorded sample trail.
+
+`MrftCompat::replicate_extrema_reset_bug` retains the legacy reset-to-`pv_value_ini` behavior for
+parity experiments only. It is not enabled by production callers. The committed
+`flow_pi_direct` golden fixture remains a regression oracle for the legacy observable state, but
+it cannot distinguish this correction from the legacy behavior because its switches occur before
+the discarded boundary extrema matter. A recorded trace also cannot validate the coupled
+hysteresis change: changing the switch schedule would change the plant response that the trace
+contains.
+
+Production result persistence uses `calculate_all_checked`, not the legacy numeric
+`calculate_all` entry point used by parity/replay callers. A result is `Valid` only when its PV
+amplitude, period, frequency, calculated Kp/Ti/Td, and template-converted P/I/D values are finite
+and usable. Zero or negative amplitudes/periods and non-finite intermediates become an `Invalid`
+result with an explicit reason; its numeric columns remain `NULL`. SQLite constraints enforce the
+valid/invalid shape, and CLI/HTTP calculated-result write paths reject invalid rows before driver
+connection. This prevents run 7's zero proportional-band value from being treated as a real PID
+constant while retaining the run, samples, trend, and diagnostic evidence needed to investigate it.
+
+Sampling quality is reported separately from mathematical result validity. A run is `adequate`
+when it has at least 6.0 observed samples per measured oscillation period, `marginal` when it has
+a finite positive value below that threshold, and `not_assessed` when no usable period exists.
+This classification is advisory: it does not currently invalidate a result, abort a tune, or
+block a valid PID write. `TimingMetrics` also records successful PV-read, MV-write,
+MV-verification-read, sample-persistence, and total-tick-work latency summaries so a requested
+poll interval can be compared with the actual cadence before changing defaults. Failed,
+cancelled, and timed-out operations are excluded from these summaries.
+
+Variant B — resetting hysteresis extrema to the switch sample as well as result extrema — is
+not shipped. It requires closed-loop FOPDT simulation because a changed switch schedule cannot be
+replayed against a fixed historical PV trace. It remains research-only until simulation evidence
+and an explicitly approved, operator-attended noncritical-loop trial exist; no live-plant trial
+is part of the current implementation.
+
 ## Correctness-critical design details (also the legacy bug register, `core-bug-register`)
 
 These are easy to get subtly wrong, so they're called out explicitly. Each should have direct
@@ -3777,6 +3830,10 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
   bug has nothing to attach to.
 - **`[preserved rule]`** — not a bug: a real legacy behavior that must be kept exactly as-is,
   included here because it is just as easy to accidentally break as an actual defect.
+- **`[advisory diagnostic]`** — an operator-facing measurement warning that informs review but
+  intentionally does not change result validity or live-loop control without field evidence.
+- **`[research-only]`** — an unshipped alternative evaluated outside production behavior, requiring
+  stronger closed-loop or live evidence before it can be considered for release.
 
 1. **`[fixed, compat flag available]` The MV boundary clamp must be dimensionally consistent on
    both sides.** If the relay step
@@ -3968,6 +4025,30 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     template rather than the mutable catalog; it intentionally keeps all three template-specific
     columns visible for P, PI, and PID, and PI runs display derivative `0` because the write path
     explicitly clears stale derivative action.
+21. **`[fixed, compat flag available]` Measurement extrema must not be conflated with hysteresis
+    extrema.** The legacy reset of both trackers to `pv_value_ini` after a switch can discard the
+    shared switch endpoint from the next measured half-cycle when polling is sparse, producing a
+    zero or biased PV amplitude even though the relay state machine itself is behaving
+    consistently. Production `MrftEngine` therefore keeps separate result extrema, includes the
+    switch sample in the new measurement interval, and leaves the hysteresis trackers on the
+    legacy reset so switching behavior is unchanged. `MrftCompat::replicate_extrema_reset_bug`
+    is available only for parity experiments. Variant B — changing the hysteresis reset too — is
+    `[research-only]` and must be evaluated with a closed-loop simulator rather than a recorded
+    trace.
+22. **`[fixed, no flag needed]` Degenerate calculated results must never become writable PID
+    constants.** A zero/negative/non-finite PV amplitude or period, a non-finite tuning
+    intermediate, or a non-finite template-converted P/I/D value produces an explicitly invalid
+    response-level row with a diagnostic reason and no numeric values. `calculate_all_checked` is
+    the production boundary; SQLite constraints preserve the shape, and CLI/HTTP write paths
+    require a valid result before connecting to a driver. The run's raw samples and
+    invalid-result evidence remain available for history investigation.
+23. **`[advisory diagnostic]` Sampling and operation latency must be visible before changing
+    timing defaults.** `TimingMetrics` classifies observed samples per oscillation period as
+    `adequate` at `>= 6.0`, `marginal` below that, or `not_assessed` without a usable period, and
+    records successful operation-latency summaries for PV reads, MV writes, MV verification reads,
+    sample persistence, and total tick work. These diagnostics are intentionally advisory: they
+    do not invalidate otherwise finite results, abort a run, or block a valid PID write until
+    field evidence supports a stronger policy.
 
 ## Documentation contract (`docs-contract`)
 
@@ -4197,9 +4278,11 @@ The repository now has a layered hardening gate for both source changes and rele
   for removed operations/responses/properties/enum values, newly required request fields, and
   newly mandatory authentication. Its unit tests run in CI, and pull requests compare the
   generated revision to the base branch in addition to the existing drift check. The only
-  request-property removals allowed by the comparator are exact pre-v1 migrations of the
-  per-tune quality/timing settings into global configuration; unrelated removals remain
-  breaking.
+  response nullability allowance is the exact pre-v1 checked-result migration for the six
+  numeric fields of `ResultResponse`, because invalid calculations persist no safe numeric
+  value; unrelated response changes remain breaking. The request-property removals allowed by
+  the comparator are exact pre-v1 migrations of the per-tune quality/timing settings into global
+  configuration; unrelated removals remain breaking.
 - **Database compatibility.** Migration `0002_history_query_indexes.sql` is the first
   forward migration after the initial schema. `pool.rs` constructs a representative database
   at migration 0001, inserts data, opens it through the normal connection path, and verifies
@@ -4293,6 +4376,9 @@ binary does something real and gains its own targeted tests.
    golden-master replay harness are all done, with the correctness-critical details above baked
    in and unit-tested directly, plus one real captured trace now proving exact behavioral parity
    with the legacy C# app (see "Validation strategy: golden-master replay" above).
+   The production MRFT path now also uses separate measurement extrema at switch boundaries while
+   preserving the legacy hysteresis reset, and `calculate_all_checked` rejects degenerate or
+   non-finite results before they can become writable constants.
    `core-bug-register` is also done: every legacy defect found during the migration has an
    explicit replicate-or-fix decision — see "Correctness-critical design details (also the legacy
    bug register, `core-bug-register`)" above, which doubles as that register.
@@ -4331,7 +4417,9 @@ bhtune-driver`), its OPC DA implementation (`driver-opcda`: `OpcDaDriver` in
    own, with no server required. The Phase 6.5 live-plant safety hardening pass is also done,
    including OPC DA MV actuation verification with durable command/readback audit records,
    fixed four-second confirmation, late-readback rejection, and restore-aware exit-code
-   precedence — see "Live-plant safety hardening" above. Phase 6.6, turning the built-in
+   precedence — see "Live-plant safety hardening" above. Tune history also records sampling
+   adequacy and successful operation-latency diagnostics, while invalid calculated results remain
+   explicit evidence and cannot be written back. Phase 6.6, turning the built-in
    DCS/PLC templates
    into a community-contributable catalog, is done: `template-catalog` (`bhtune-core`),
    `template-provenance` (`bhtune-db` schema: a real three-way `origin` column plus
