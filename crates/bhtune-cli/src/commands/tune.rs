@@ -6812,6 +6812,73 @@ mod tests {
             self.read_batches.lock().unwrap().clone()
         }
 
+        fn next_read_count(&self, tag: &str) -> usize {
+            let mut counts = self.read_counts.lock().unwrap();
+            let count = counts.entry(tag.to_string()).or_insert(0);
+            *count += 1;
+            *count
+        }
+
+        fn quality_for_read(&self, tag: &str, count: usize) -> bhtune_driver::Quality {
+            let baseline_quality = self
+                .qualities
+                .lock()
+                .unwrap()
+                .get(tag)
+                .copied()
+                .unwrap_or(bhtune_driver::Quality::Good);
+            self.degrade_quality_after.get(tag).map_or(
+                baseline_quality,
+                |(good_reads, degraded)| {
+                    if count > *good_reads {
+                        *degraded
+                    } else {
+                        baseline_quality
+                    }
+                },
+            )
+        }
+
+        fn read_tag(
+            &self,
+            tag: &str,
+            store: &std::collections::HashMap<String, String>,
+            sequences: &mut std::collections::HashMap<String, std::collections::VecDeque<String>>,
+        ) -> bhtune_driver::DriverResult<Option<bhtune_driver::TagValue>> {
+            if self.error_reads.contains(tag) {
+                return Err(bhtune_driver::DriverError::Operation(Box::new(
+                    std::io::Error::other("mock read error"),
+                )));
+            }
+            if self.empty_reads.contains(tag) {
+                return Ok(None);
+            }
+
+            let count = self.next_read_count(tag);
+            if self
+                .error_reads_after
+                .get(tag)
+                .is_some_and(|good_reads| count > *good_reads)
+            {
+                return Err(bhtune_driver::DriverError::Operation(Box::new(
+                    std::io::Error::other("mock read error after good reads"),
+                )));
+            }
+
+            let quality = self.quality_for_read(tag, count);
+            let value = sequences
+                .get_mut(tag)
+                .and_then(std::collections::VecDeque::pop_front)
+                .or_else(|| store.get(tag).cloned())
+                .unwrap_or_default();
+            Ok(Some(bhtune_driver::TagValue {
+                tag: tag.to_string(),
+                value,
+                quality,
+                timestamp: None,
+            }))
+        }
+
         fn delayed_read_was_cancelled(&self, tag: &str) -> bool {
             self.cancelled_delayed_reads.lock().unwrap().contains(tag)
         }
@@ -6850,57 +6917,9 @@ mod tests {
             let mut sequences = self.read_sequences.lock().unwrap();
             let mut out = Vec::new();
             for tag in tags {
-                if self.error_reads.contains(tag) {
-                    return Err(bhtune_driver::DriverError::Operation(Box::new(
-                        std::io::Error::other("mock read error"),
-                    )));
+                if let Some(value) = self.read_tag(tag, &store, &mut sequences)? {
+                    out.push(value);
                 }
-                if self.empty_reads.contains(tag) {
-                    continue;
-                }
-                // Shared per-tag read counter, consulted by both `degrade_quality_after` and
-                // `erroring_read_after` -- each test only ever registers a tag in one of the
-                // two, but counting once keeps the two mechanisms consistent if that changed.
-                let count = {
-                    let mut counts = self.read_counts.lock().unwrap();
-                    let count = counts.entry(tag.clone()).or_insert(0);
-                    *count += 1;
-                    *count
-                };
-                if let Some(good_reads) = self.error_reads_after.get(tag)
-                    && count > *good_reads
-                {
-                    return Err(bhtune_driver::DriverError::Operation(Box::new(
-                        std::io::Error::other("mock read error after good reads"),
-                    )));
-                }
-                let baseline_quality = self
-                    .qualities
-                    .lock()
-                    .unwrap()
-                    .get(tag)
-                    .copied()
-                    .unwrap_or(bhtune_driver::Quality::Good);
-                let quality = match self.degrade_quality_after.get(tag) {
-                    Some((good_reads, degraded)) => {
-                        if count > *good_reads {
-                            *degraded
-                        } else {
-                            baseline_quality
-                        }
-                    }
-                    None => baseline_quality,
-                };
-                out.push(bhtune_driver::TagValue {
-                    tag: tag.clone(),
-                    value: sequences
-                        .get_mut(tag)
-                        .and_then(std::collections::VecDeque::pop_front)
-                        .or_else(|| store.get(tag).cloned())
-                        .unwrap_or_default(),
-                    quality,
-                    timestamp: None,
-                });
             }
             if self.reverse_read_results {
                 out.reverse();
