@@ -45,6 +45,8 @@ pub use range::{MvRange, PvRange, RangeError};
 pub use tags::{LoopTags, TagOrValue, TagOverrides, TagOverridesError, derive_tag};
 pub use template::{DcsTemplate, built_in_templates};
 pub use tuning_math::{
-    OpcWriteValues, Oscillation, PidParameters, TuningMathCompat, TuningResult, calculate_all,
-    calculate_pid_parameters, calculate_tuning_result, measure_oscillation, opc_write_values,
+    CheckedTuningResult, OpcWriteValues, Oscillation, PidParameters, TuningMathCompat,
+    TuningResult, TuningResultInvalidReason, TuningResultStatus, calculate_all,
+    calculate_all_checked, calculate_pid_parameters, calculate_tuning_result, measure_oscillation,
+    opc_write_values,
 };

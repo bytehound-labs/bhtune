@@ -1,8 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { RunDetailResponse } from "../src/api/runs";
 
 const RUN_ID = 4242;
 
-function completedRun(withResults = true) {
+function completedRun(withResults = true): RunDetailResponse {
   return {
     id: RUN_ID,
     tag_name: "Area.FIC101",
@@ -75,6 +76,8 @@ function completedRun(withResults = true) {
             proportional: 20.5,
             integral: 1.2,
             derivative: 0,
+            status: "valid",
+            invalid_reason: null,
           },
           {
             response_level: "moderate",
@@ -84,6 +87,8 @@ function completedRun(withResults = true) {
             proportional: 25,
             integral: 1.5,
             derivative: 0,
+            status: "valid",
+            invalid_reason: null,
           },
           {
             response_level: "sluggish",
@@ -93,6 +98,8 @@ function completedRun(withResults = true) {
             proportional: 30,
             integral: 1.8,
             derivative: 0,
+            status: "valid",
+            invalid_reason: null,
           },
         ]
       : [],
@@ -156,6 +163,22 @@ async function openRun(page: Page, run = completedRun()) {
   await expect(
     page.getByRole("heading", { name: "Calculated results", exact: true }),
   ).toBeVisible();
+}
+
+function completedRunWithInvalidAggressiveResult() {
+  const run = completedRun();
+  run.results[0] = {
+    ...run.results[0],
+    kp: null,
+    ti_minutes: null,
+    td_minutes: null,
+    proportional: null,
+    integral: null,
+    derivative: null,
+    status: "invalid",
+    invalid_reason: "non_positive_pv_amplitude",
+  };
+  return run;
 }
 
 function resultsSection(page: Page) {
@@ -227,14 +250,16 @@ test.describe("post-tune PID actions", () => {
       "Test configuration",
       "Initial readings",
       "PID change history",
-      "MV actuation verification",
     ]);
-    for (const title of sectionTitles.slice(0, -1)) {
+    for (const title of sectionTitles) {
       await expect(detailSection(page, title)).toHaveAttribute("open", "");
     }
     await expect(
-      detailSection(page, "MV actuation verification"),
-    ).not.toHaveAttribute("open", "");
+      page.getByRole("heading", {
+        name: "MV actuation verification",
+        exact: true,
+      }),
+    ).toHaveCount(0);
 
     await detailSection(page, "Summary").locator("summary").click();
     await expect(detailSection(page, "Summary")).not.toHaveAttribute(
@@ -284,6 +309,28 @@ test.describe("post-tune PID actions", () => {
         exact: true,
       }),
     ).toBeVisible();
+  });
+
+  test("shows invalid calculated results and disables only their write action", async ({
+    page,
+  }) => {
+    await openRun(page, completedRunWithInvalidAggressiveResult());
+
+    const rows = resultsSection(page).locator("tbody tr");
+    const invalidRow = rows.filter({ hasText: "Aggressive" });
+    await expect(invalidRow).toContainText("Invalid");
+    await expect(invalidRow).toContainText(
+      "The measured PV amplitude was zero or negative.",
+    );
+    await expect(invalidRow.locator("td").nth(1)).toHaveText("—");
+    await expect(
+      invalidRow.getByRole("button", { name: "Review & write" }),
+    ).toBeDisabled();
+
+    const validRow = rows.filter({ hasText: "Moderate" });
+    await expect(
+      validRow.getByRole("button", { name: "Review & write" }),
+    ).toBeEnabled();
   });
 
   test("closes the write review modal immediately and stays silent after success", async ({

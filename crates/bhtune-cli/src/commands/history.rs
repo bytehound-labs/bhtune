@@ -2,8 +2,9 @@
 
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    MvActuationKind, MvActuationStatus, Pagination, SampleQuality, TuneDriver, TuneMvActuationRow,
-    TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
+    MvActuationKind, MvActuationStatus, Pagination, SampleQuality, SamplingAdequacy, TimingSummary,
+    TuneDriver, TuneMvActuationRow, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow,
+    TuneWriteRow, WriteKind,
 };
 use bhtune_driver::OpcDaDriver;
 
@@ -101,12 +102,14 @@ impl From<bhtune_db::models::TuneRunInitialReadings> for InitialReadingsJson {
 #[derive(serde::Serialize)]
 struct ResultJson {
     response_level: bhtune_core::ResponseLevel,
-    kp: f32,
-    ti_minutes: f32,
-    td_minutes: f32,
-    proportional: f32,
-    integral: f32,
-    derivative: f32,
+    kp: Option<f32>,
+    ti_minutes: Option<f32>,
+    td_minutes: Option<f32>,
+    proportional: Option<f32>,
+    integral: Option<f32>,
+    derivative: Option<f32>,
+    status: bhtune_core::TuningResultStatus,
+    invalid_reason: Option<bhtune_core::TuningResultInvalidReason>,
 }
 
 impl From<&TuneResultRow> for ResultJson {
@@ -119,6 +122,8 @@ impl From<&TuneResultRow> for ResultJson {
             proportional: r.proportional,
             integral: r.integral,
             derivative: r.derivative,
+            status: r.status,
+            invalid_reason: r.invalid_reason,
         }
     }
 }
@@ -426,6 +431,28 @@ fn fmt_opt_f64(value: Option<f64>) -> String {
     }
 }
 
+fn sampling_adequacy_label(adequacy: SamplingAdequacy) -> &'static str {
+    match adequacy {
+        SamplingAdequacy::Adequate => "adequate",
+        SamplingAdequacy::Marginal => "marginal",
+        SamplingAdequacy::NotAssessed => "not assessed",
+    }
+}
+
+fn print_latency_summary(label: &str, summary: TimingSummary) {
+    if summary.count == 0 {
+        println!("    {label:<26} none");
+        return;
+    }
+
+    println!(
+        "    {label:<26} count={} mean={} ms max={} ms",
+        summary.count,
+        fmt_opt_f64(summary.mean_ms),
+        fmt_opt_f64(summary.max_ms),
+    );
+}
+
 fn print_show_table(
     run: &TuneRunRow,
     samples: &[TuneSampleRow],
@@ -508,6 +535,18 @@ fn print_show_table(
             "    Approx. samples / period: {}",
             fmt_opt_f64(timing.approximate_samples_per_period)
         );
+        println!(
+            "    Sampling adequacy:        {}",
+            sampling_adequacy_label(timing.sampling_adequacy)
+        );
+        if let Some(poll_latency) = timing.poll_latency {
+            println!("    Poll latency:");
+            print_latency_summary("PV reads:", poll_latency.pv_read);
+            print_latency_summary("MV writes:", poll_latency.mv_write);
+            print_latency_summary("MV verification:", poll_latency.mv_verification);
+            print_latency_summary("Sample persistence:", poll_latency.sample_persist);
+            print_latency_summary("Total tick work:", poll_latency.tick_work);
+        }
     }
 
     match (run.restore_status, &run.restore_detail) {
@@ -534,19 +573,24 @@ fn print_show_results(results: &[TuneResultRow]) {
     }
     println!("  Calculated results:");
     println!(
-        "    {:<12} {:<10} {:<10} {:<10} {:<12} {:<10} {:<10}",
-        "LEVEL", "KP", "TI(min)", "TD(min)", "PROP", "INTEGRAL", "DERIV"
+        "    {:<12} {:<10} {:<10} {:<10} {:<10} {:<12} {:<10} {:<10}  REASON",
+        "LEVEL", "STATUS", "KP", "TI(min)", "TD(min)", "PROP", "INTEGRAL", "DERIV"
     );
     for result in results {
         println!(
-            "    {:<12} {:<10.4} {:<10.4} {:<10.4} {:<12.4} {:<10.4} {:<10.4}",
+            "    {:<12} {:<10} {:<10} {:<10} {:<10} {:<12} {:<10} {:<10}  {}",
             format!("{:?}", result.response_level),
-            result.kp,
-            result.ti_minutes,
-            result.td_minutes,
-            result.proportional,
-            result.integral,
-            result.derivative
+            format!("{:?}", result.status),
+            fmt_opt_f32(result.kp),
+            fmt_opt_f32(result.ti_minutes),
+            fmt_opt_f32(result.td_minutes),
+            fmt_opt_f32(result.proportional),
+            fmt_opt_f32(result.integral),
+            fmt_opt_f32(result.derivative),
+            result
+                .invalid_reason
+                .map(|reason| reason.to_string())
+                .unwrap_or_else(|| "-".to_string())
         );
     }
 }
@@ -945,6 +989,22 @@ mod tests {
     }
 
     #[test]
+    fn sampling_adequacy_labels_cover_all_states() {
+        assert_eq!(
+            sampling_adequacy_label(SamplingAdequacy::Adequate),
+            "adequate"
+        );
+        assert_eq!(
+            sampling_adequacy_label(SamplingAdequacy::Marginal),
+            "marginal"
+        );
+        assert_eq!(
+            sampling_adequacy_label(SamplingAdequacy::NotAssessed),
+            "not assessed"
+        );
+    }
+
+    #[test]
     fn fmt_opt_f32_formats_values_and_missing_fields() {
         assert_eq!(fmt_opt_f32(Some(1.23456)), "1.2346");
         assert_eq!(fmt_opt_f32(Some(-0.5)), "-0.5000");
@@ -1022,6 +1082,8 @@ mod tests {
                 missed_poll_opportunity_count: 0,
                 measured_oscillation_period_ms: Some(50.0),
                 approximate_samples_per_period: Some(10.0),
+                sampling_adequacy: bhtune_db::models::SamplingAdequacy::Adequate,
+                poll_latency: None,
             },
         )
         .await
@@ -1147,12 +1209,14 @@ mod tests {
                 id: 0,
                 run_id: run.id,
                 response_level: bhtune_core::ResponseLevel::Moderate,
-                kp: 1.5,
-                ti_minutes: 0.7,
-                td_minutes: 0.15,
-                proportional: 12.0,
-                integral: 2.5,
-                derivative: 0.6,
+                kp: Some(1.5),
+                ti_minutes: Some(0.7),
+                td_minutes: Some(0.15),
+                proportional: Some(12.0),
+                integral: Some(2.5),
+                derivative: Some(0.6),
+                status: bhtune_core::TuningResultStatus::Valid,
+                invalid_reason: None,
             },
         )
         .await
@@ -1264,6 +1328,34 @@ mod tests {
                 missed_poll_opportunity_count: 1,
                 measured_oscillation_period_ms: Some(4_800.0),
                 approximate_samples_per_period: Some(5.33),
+                sampling_adequacy: bhtune_db::models::SamplingAdequacy::Marginal,
+                poll_latency: Some(bhtune_db::models::PollLatencyMetrics {
+                    pv_read: bhtune_db::models::TimingSummary {
+                        count: 2,
+                        mean_ms: Some(11.0),
+                        max_ms: Some(15.0),
+                    },
+                    mv_write: bhtune_db::models::TimingSummary {
+                        count: 1,
+                        mean_ms: Some(20.0),
+                        max_ms: Some(20.0),
+                    },
+                    mv_verification: bhtune_db::models::TimingSummary {
+                        count: 1,
+                        mean_ms: Some(30.0),
+                        max_ms: Some(30.0),
+                    },
+                    sample_persist: bhtune_db::models::TimingSummary {
+                        count: 2,
+                        mean_ms: Some(4.0),
+                        max_ms: Some(5.0),
+                    },
+                    tick_work: bhtune_db::models::TimingSummary {
+                        count: 2,
+                        mean_ms: Some(70.0),
+                        max_ms: Some(75.0),
+                    },
+                }),
             },
         )
         .await

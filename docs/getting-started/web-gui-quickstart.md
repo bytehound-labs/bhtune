@@ -217,11 +217,20 @@ a trusted network.
      run's snapshotted template. A Yokogawa run therefore shows `P`, `I`, and `D` instead of
      the engine's intermediate `Kp`, `Ti`, and `Td` columns. The derivative column remains
      visible for PI runs and shows `0`, the explicit value used to clear stale derivative action.
+     A result whose amplitude, period, or converted PID values are zero, non-finite, or otherwise
+     unusable is shown as **Invalid** with a reason and no numeric values; its calculated-result
+     write action is disabled.
+   - The collapsed **Sampling diagnostics** section reports sampling adequacy: **adequate** means
+     at least six observed samples per measured period, **marginal** means fewer than six, and
+     **not assessed** means no usable finite period was available. This is an advisory signal, not
+     an automatic block on a valid result. Detailed sample-gap and successful operation-latency
+     diagnostics remain available through the CLI, API, and structured logs.
    - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
      Notes, Test configuration, Initial readings, and PID change history start expanded so the
-     main result and audit information is immediately visible. **MV actuation verification**
-     follows PID change history at the bottom and starts collapsed; open it when the detailed
-     command/readback audit is needed.
+     main result and PID audit information is immediately visible. Sampling diagnostics starts
+     collapsed because it is advisory. Detailed MV command/readback evidence is available through
+     `bhtune history show`, the run-detail API, and structured logs when deeper support or safety
+     analysis is needed.
 
    Detailed polling timing diagnostics remain available through `bhtune history show`, the
    run-detail API, and structured logs, but are not part of the normal web run-detail view.

@@ -71,6 +71,24 @@ export const OUTCOME_LABELS: Record<
   aborted: "Aborted",
 };
 
+export const SAMPLING_ADEQUACY_LABELS: Record<
+  components["schemas"]["SamplingAdequacy"],
+  string
+> = {
+  adequate: "Adequate",
+  marginal: "Marginal",
+  not_assessed: "Not assessed",
+};
+
+export const SAMPLING_ADEQUACY_TONE: Record<
+  components["schemas"]["SamplingAdequacy"],
+  "success" | "warning" | "neutral"
+> = {
+  adequate: "success",
+  marginal: "warning",
+  not_assessed: "neutral",
+};
+
 export const SAMPLE_QUALITY_LABELS: Record<
   components["schemas"]["SampleQuality"],
   string
@@ -92,21 +110,25 @@ export const SAMPLE_QUALITY_TONE: Record<
   bad: "error",
 };
 
-export const MV_ACTUATION_KIND_LABELS: Record<
-  components["schemas"]["MvActuationKind"],
+export const TUNING_RESULT_INVALID_REASON_LABELS: Record<
+  components["schemas"]["TuningResultInvalidReason"],
   string
 > = {
-  relay: "Relay",
-  restore: "Restore",
-};
-
-export const MV_ACTUATION_STATUS_LABELS: Record<
-  components["schemas"]["MvActuationStatus"],
-  string
-> = {
-  pending: "Pending",
-  confirmed: "Confirmed",
-  failed: "Failed",
-  unverified: "Unverified",
-  superseded: "Superseded",
+  non_finite_pv_amplitude: "The measured PV amplitude was not a finite number.",
+  non_positive_pv_amplitude: "The measured PV amplitude was zero or negative.",
+  non_finite_period: "The measured oscillation period was not a finite number.",
+  non_positive_period: "The measured oscillation period was zero or negative.",
+  non_finite_frequency:
+    "The calculated oscillation frequency was not a finite number.",
+  non_positive_frequency:
+    "The calculated oscillation frequency was zero or negative.",
+  non_finite_kp: "The calculated Kp was not a finite number.",
+  non_finite_ti_minutes: "The calculated Ti was not a finite number.",
+  non_finite_td_minutes: "The calculated Td was not a finite number.",
+  non_finite_proportional:
+    "The calculated proportional setting was not a finite number.",
+  non_finite_integral:
+    "The calculated integral setting was not a finite number.",
+  non_finite_derivative:
+    "The calculated derivative setting was not a finite number.",
 };

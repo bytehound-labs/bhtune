@@ -1,8 +1,20 @@
 import type { RunDetailResponse } from "../../api/runs";
-import { DRIVER_LABELS } from "../../lib/enumLabels";
+import {
+  DRIVER_LABELS,
+  TUNING_RESULT_INVALID_REASON_LABELS,
+} from "../../lib/enumLabels";
 
 export type RunResult = RunDetailResponse["results"][number];
 export type RunWrite = RunDetailResponse["writes"][number];
+export type ValidRunResult = RunResult & {
+  readonly status: "valid";
+  readonly kp: number;
+  readonly ti_minutes: number;
+  readonly td_minutes: number;
+  readonly proportional: number;
+  readonly integral: number;
+  readonly derivative: number;
+};
 
 export interface WriteEligibility {
   readonly eligible: boolean;
@@ -12,6 +24,27 @@ export interface WriteEligibility {
 export function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
   return String(Number(value.toFixed(4)));
+}
+
+export function isValidRunResult(result: RunResult): result is ValidRunResult {
+  return (
+    result.status === "valid" &&
+    [
+      result.kp,
+      result.ti_minutes,
+      result.td_minutes,
+      result.proportional,
+      result.integral,
+      result.derivative,
+    ].every((value) => typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+export function invalidResultReason(result: RunResult): string {
+  if (result.invalid_reason) {
+    return TUNING_RESULT_INVALID_REASON_LABELS[result.invalid_reason];
+  }
+  return "The calculated values are not safe to use.";
 }
 
 /**

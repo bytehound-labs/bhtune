@@ -33,8 +33,9 @@ unchanged.
    moves — this is what "closes the loop" around the relay instead of a PID block.
 4. **Every PV sample is polled and logged** (by default every 800 ms, matching the legacy tool's
    timer) using the global `[tuning].poll_interval_ms` setting, building up a picture of the
-   resulting oscillation: its peaks, its troughs, and the
-   exact times each switch happened.
+   resulting oscillation: its peaks, its troughs, and the exact times each switch happened.
+   When an OPC DA relay command is awaiting confirmation, that same poll also requests the MV so
+   BHTune can verify the physical command before the engine advances.
 5. **The first few cycles are skipped** (the visible Process defaults are selected per process
    type) before any switch is counted, and then a fixed number of cycles are counted to measure
    the steady-state oscillation. Noise-protection delays around relay switches are also shown as
@@ -50,16 +51,37 @@ four-second confirmation window; a command that remains outside tolerance, or wh
 readback arrives after the deadline, aborts the test and starts restoration. Simulator and replay
 runs do not add this live-I/O verification step.
 
+## How boundary samples are measured
+
+BHTune keeps two kinds of extrema while the relay test runs. The hysteresis extrema determine
+when the next relay switch is needed; the measurement extrema determine the PV amplitude used for
+the final tuning calculation. At a switch, the hysteresis extrema retain the established
+switching behavior, while the just-recorded switch sample seeds the new measurement interval.
+That shared boundary sample can therefore contribute to both adjacent half-cycles.
+
+This distinction matters when polling is sparse. If the new half-cycle has no later sample on its
+own side of the initial PV, resetting its measurement extrema to the initial value would make a
+real oscillation look flat and could produce an unusable zero amplitude. Seeding the measurement
+interval with the switch sample prevents that measurement artifact without changing hysteresis,
+switch timing, MV commands, or actuation verification.
+
 The other operational timing and safety limits are installation-wide settings under `[tuning]`:
 MRFT delay padding, the whole-run timeout, driver-operation timeout, and restore timeout. They
 are configured on the web GUI's Config page or in `bhtune.toml`, apply to future tune starts, and
 are frozen into each run when preparation begins. OPC DA requires a restore timeout of at least
 four seconds because MV actuation confirmation can take up to that long.
+History also records successful PV-read, MV-write, MV-verification-read, sample-persistence, and
+total-tick-work latency summaries. A pending relay's batched PV/MV request may appear in both the
+PV-read and MV-verification categories; these are overlapping descriptions of one OPC operation,
+not durations to sum. The measurements help distinguish a slow driver or database from an overly
+aggressive polling request; failed, cancelled, and timed-out operations are not treated as
+successful latency samples.
 
 The MV values shown in the trend, persisted samples, and sample exports are the **commanded**
 values produced by the MRFT engine. The actual MV values returned by OPC DA readbacks are
-separate actuation-audit records shown in run history; keeping these series separate preserves
-the engine's timing and export semantics while making physical actuation evidence available.
+separate actuation-audit records available through run history, the API, and structured logs;
+keeping these series separate preserves the engine's timing and export semantics while making
+physical actuation evidence available.
 
 Nothing here writes a PID constant. That only happens if you explicitly ask for it
 (`--write-pid <level>` on the CLI, or the Automatic PID settings section of the New tune form) — see
@@ -85,6 +107,15 @@ three, in the units your DCS/PLC template expects (Proportional Band % or Gain, 
 Reset Rate, Derivative Time or Derivative Gain — see
 [DCS/PLC templates](../dcs-templates.md)), so the choice is made after seeing the numbers, not
 before.
+
+Every response-level result is checked before it is stored as usable tuning data. A non-positive
+or non-finite amplitude or period, or a non-finite intermediate or converted PID value, is
+stored as `Invalid` with a diagnostic reason and no numeric values. The CLI and web GUI do not
+offer that invalid row as a calculated-result write target. A run also reports whether its
+measured sampling was `adequate`, `marginal`, or `not assessed` in the collapsed **Sampling
+diagnostics** section on the web run-detail page; a marginal advisory is a reason to inspect the
+trend and timing diagnostics, not an automatic rejection.
+
 The web run-detail **Calculated results** table uses the constant names from the run's
 snapshotted template, so a Yokogawa run shows `P`, `I`, and `D` rather than generic engine
 labels. It keeps the derivative column for PI runs and displays `0`, because the write path
@@ -97,9 +128,11 @@ while transport failures or failed physical writes/readbacks appear in a page-le
 newest successful write can be restored from the same popup using its recorded pre-write values.
 Confirming a restore closes the popup immediately as well; successful restores stay silent, while
 transport failures or failed physical restores/readbacks appear in a page-level alert.
-The run-detail sections are independently collapsible and start expanded except
-for **MV actuation verification**, which appears below PID change history and starts collapsed so
-the primary results and PID actions remain prominent.
+The run-detail sections are independently collapsible. Calculated results, Trend, Summary, Notes,
+Test configuration, Initial readings, and PID change history start expanded, while Sampling
+diagnostics starts collapsed so the primary results and PID actions remain prominent. Detailed
+MV command/readback evidence is available through `bhtune history show`, the run-detail API, and
+structured logs rather than the normal web run-detail page.
 
 ## Controller type and process type
 

@@ -28,7 +28,10 @@
 use bhtune_core::{
     ControllerDirection, ControllerType, DcsTemplate, LoopConfig, LoopTags, MrftState, ProcessType,
     ResponseLevel, Tick,
-    tuning_math::{PidParameters, TuningResult},
+    tuning_math::{
+        CheckedTuningResult, PidParameters, TuningResult, TuningResultInvalidReason,
+        TuningResultStatus,
+    },
 };
 use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, sqlite::SqliteRow};
@@ -418,10 +421,54 @@ pub enum TimingBasis {
     LiveMonotonic,
 }
 
+/// Advisory assessment of whether the recorded samples provide enough observations per
+/// oscillation period for a trustworthy extrema measurement.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SamplingAdequacy {
+    /// At least the documented minimum number of samples per measured oscillation period.
+    Adequate,
+    /// Fewer than the documented minimum number of samples per measured oscillation period.
+    Marginal,
+    /// No finite, positive oscillation period was available for this assessment.
+    #[default]
+    NotAssessed,
+}
+
+/// Summary statistics for one class of measured polling work.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct TimingSummary {
+    pub count: u64,
+    pub mean_ms: Option<f64>,
+    pub max_ms: Option<f64>,
+}
+
+/// Operation-latency diagnostics captured while a run is polling.
+///
+/// Each category counts only operations that completed successfully. A zero count with
+/// `None` mean/max means that the operation did not occur during the run. Categories can
+/// overlap: while a relay command is pending, one batched OPC read supplies both the PV sample
+/// and MV verification, so its elapsed duration may appear in both summaries and must not be
+/// added twice as independent I/O time.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct PollLatencyMetrics {
+    pub pv_read: TimingSummary,
+    pub mv_write: TimingSummary,
+    pub mv_verification: TimingSummary,
+    pub sample_persist: TimingSummary,
+    pub tick_work: TimingSummary,
+}
+
 /// Polling-cadence diagnostics captured over one run's successful PV samples.
 ///
 /// The two optional gap fields are `None` when fewer than two samples were observed. The
-/// measured oscillation fields are populated only for a completed MRFT run.
+/// measured oscillation fields are populated only for a completed MRFT run. Sampling adequacy
+/// is advisory metadata and does not determine calculated-result validity or write eligibility.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 pub struct TimingMetrics {
@@ -435,6 +482,13 @@ pub struct TimingMetrics {
     pub missed_poll_opportunity_count: u64,
     pub measured_oscillation_period_ms: Option<f64>,
     pub approximate_samples_per_period: Option<f64>,
+    /// Assessment uses the observed samples-per-period value and a six-sample advisory
+    /// threshold. Old timing snapshots deserialize as `not_assessed`.
+    #[serde(default)]
+    pub sampling_adequacy: SamplingAdequacy,
+    /// Detailed operation timings. Old timing snapshots may not contain this field.
+    #[serde(default)]
+    pub poll_latency: Option<PollLatencyMetrics>,
 }
 
 /// Concrete tune timing values after configuration defaults have been resolved.
@@ -1545,12 +1599,14 @@ pub struct TuneResultRow {
     pub id: i64,
     pub run_id: i64,
     pub response_level: ResponseLevel,
-    pub kp: f32,
-    pub ti_minutes: f32,
-    pub td_minutes: f32,
-    pub proportional: f32,
-    pub integral: f32,
-    pub derivative: f32,
+    pub kp: Option<f32>,
+    pub ti_minutes: Option<f32>,
+    pub td_minutes: Option<f32>,
+    pub proportional: Option<f32>,
+    pub integral: Option<f32>,
+    pub derivative: Option<f32>,
+    pub status: TuningResultStatus,
+    pub invalid_reason: Option<TuningResultInvalidReason>,
 }
 
 impl TuneResultRow {
@@ -1573,12 +1629,34 @@ impl TuneResultRow {
             id: 0,
             run_id,
             response_level: tuning.response_level,
-            kp: tuning.kp,
-            ti_minutes: tuning.ti_minutes,
-            td_minutes: tuning.td_minutes,
-            proportional: pid.proportional,
-            integral: pid.integral,
-            derivative: pid.derivative,
+            kp: Some(tuning.kp),
+            ti_minutes: Some(tuning.ti_minutes),
+            td_minutes: Some(tuning.td_minutes),
+            proportional: Some(pid.proportional),
+            integral: Some(pid.integral),
+            derivative: Some(pid.derivative),
+            status: TuningResultStatus::Valid,
+            invalid_reason: None,
+        }
+    }
+
+    /// Builds a row from the checked calculation path. Invalid results retain their response
+    /// level and reason while leaving every numeric value absent, so they cannot be mistaken for
+    /// writable PID constants.
+    pub fn from_checked(run_id: i64, checked: CheckedTuningResult) -> TuneResultRow {
+        let values = checked.usable_values();
+        TuneResultRow {
+            id: 0,
+            run_id,
+            response_level: checked.response_level,
+            kp: values.map(|(tuning, _)| tuning.kp),
+            ti_minutes: values.map(|(tuning, _)| tuning.ti_minutes),
+            td_minutes: values.map(|(tuning, _)| tuning.td_minutes),
+            proportional: values.map(|(_, pid)| pid.proportional),
+            integral: values.map(|(_, pid)| pid.integral),
+            derivative: values.map(|(_, pid)| pid.derivative),
+            status: checked.status,
+            invalid_reason: checked.invalid_reason,
         }
     }
 
@@ -1591,8 +1669,8 @@ impl TuneResultRow {
             r#"
             INSERT INTO tune_results (
                 run_id, response_level, kp, ti_minutes, td_minutes,
-                proportional, integral, derivative
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                proportional, integral, derivative, status, invalid_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             "#,
         )
@@ -1604,6 +1682,8 @@ impl TuneResultRow {
         .bind(row.proportional)
         .bind(row.integral)
         .bind(row.derivative)
+        .bind(enum_to_text(&row.status))
+        .bind(row.invalid_reason.map(|reason| enum_to_text(&reason)))
         .fetch_one(pool)
         .await
         .map_err(DbError::Query)?;
@@ -1638,6 +1718,17 @@ fn row_to_tune_result(row: SqliteRow) -> DbResult<TuneResultRow> {
         proportional: row.try_get("proportional").map_err(DbError::Query)?,
         integral: row.try_get("integral").map_err(DbError::Query)?,
         derivative: row.try_get("derivative").map_err(DbError::Query)?,
+        status: {
+            let status: String = row.try_get("status").map_err(DbError::Query)?;
+            text_to_enum("status", &status)?
+        },
+        invalid_reason: {
+            let reason: Option<String> = row.try_get("invalid_reason").map_err(DbError::Query)?;
+            reason
+                .as_deref()
+                .map(|reason| text_to_enum("invalid_reason", reason))
+                .transpose()?
+        },
     })
 }
 // }}}1
@@ -2335,8 +2426,8 @@ mod tests {
         let row = TuneResultRow::from_calculated(42, tuning, pid);
         assert_eq!(row.run_id, 42);
         assert_eq!(row.response_level, ResponseLevel::Moderate);
-        assert_eq!(row.kp, 1.0);
-        assert_eq!(row.proportional, 3.0);
+        assert_eq!(row.kp, Some(1.0));
+        assert_eq!(row.proportional, Some(3.0));
     }
 
     #[test]

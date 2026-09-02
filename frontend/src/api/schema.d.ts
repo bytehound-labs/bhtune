@@ -1091,6 +1091,22 @@ export interface components {
       proportional: string;
     };
     /**
+     * @description Operation-latency diagnostics captured while a run is polling.
+     *
+     *     Each category counts only operations that completed successfully. A zero count with
+     *     `None` mean/max means that the operation did not occur during the run. Categories can
+     *     overlap: while a relay command is pending, one batched OPC read supplies both the PV sample
+     *     and MV verification, so its elapsed duration may appear in both summaries and must not be
+     *     added twice as independent I/O time.
+     */
+    PollLatencyMetrics: {
+      mv_verification: components["schemas"]["TimingSummary"];
+      mv_write: components["schemas"]["TimingSummary"];
+      pv_read: components["schemas"]["TimingSummary"];
+      sample_persist: components["schemas"]["TimingSummary"];
+      tick_work: components["schemas"]["TimingSummary"];
+    };
+    /**
      * @description A process/loop category. Each has its own row in the tuning-constant matrices in
      *     [`crate::constants`] and its own default cycle/noise-protection settings.
      *
@@ -1128,18 +1144,21 @@ export interface components {
     /** @description Local projection of [`TuneResultRow`]. */
     ResultResponse: {
       /** Format: float */
-      derivative: number;
+      derivative?: number | null;
       /** Format: float */
-      integral: number;
+      integral?: number | null;
+      invalid_reason?:
+        null | components["schemas"]["TuningResultInvalidReason"];
       /** Format: float */
-      kp: number;
+      kp?: number | null;
       /** Format: float */
-      proportional: number;
+      proportional?: number | null;
       response_level: components["schemas"]["ResponseLevel"];
+      status: components["schemas"]["TuningResultStatus"];
       /** Format: float */
-      td_minutes: number;
+      td_minutes?: number | null;
       /** Format: float */
-      ti_minutes: number;
+      ti_minutes?: number | null;
     };
     /**
      * @description Whether a best-effort rollback of a partially-completed PID write was attempted and, if
@@ -1270,6 +1289,12 @@ export interface components {
       /** Format: int64 */
       tick_index: number;
     };
+    /**
+     * @description Advisory assessment of whether the recorded samples provide enough observations per
+     *     oscillation period for a trustworthy extrema measurement.
+     * @enum {string}
+     */
+    SamplingAdequacy: "adequate" | "marginal" | "not_assessed";
     /**
      * @description The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values
      *     are intentionally absent: they are resolved from the global `[tuning]` configuration by
@@ -1482,7 +1507,8 @@ export interface components {
      * @description Polling-cadence diagnostics captured over one run's successful PV samples.
      *
      *     The two optional gap fields are `None` when fewer than two samples were observed. The
-     *     measured oscillation fields are populated only for a completed MRFT run.
+     *     measured oscillation fields are populated only for a completed MRFT run. Sampling adequacy
+     *     is advisory metadata and does not determine calculated-result validity or write eligibility.
      */
     TimingMetrics: {
       /** Format: double */
@@ -1500,10 +1526,25 @@ export interface components {
        *     proves that at least one complete polling opportunity was missed.
        */
       missed_poll_opportunity_count: number;
+      poll_latency?: null | components["schemas"]["PollLatencyMetrics"];
       /** Format: int64 */
       requested_interval_ms: number;
       /** Format: int64 */
       sample_gap_count: number;
+      /**
+       * @description Assessment uses the observed samples-per-period value and a six-sample advisory
+       *     threshold. Old timing snapshots deserialize as `not_assessed`.
+       */
+      sampling_adequacy?: components["schemas"]["SamplingAdequacy"];
+    };
+    /** @description Summary statistics for one class of measured polling work. */
+    TimingSummary: {
+      /** Format: int64 */
+      count: number;
+      /** Format: double */
+      max_ms?: number | null;
+      /** Format: double */
+      mean_ms?: number | null;
     };
     /**
      * @description Which [`crate`]-agnostic I/O driver a run used. Lives in `bhtune-db` rather than
@@ -1517,6 +1558,28 @@ export interface components {
      * @enum {string}
      */
     TuneOutcome: "running" | "completed" | "failed" | "aborted";
+    /**
+     * @description Why a calculated response-level result was marked invalid.
+     * @enum {string}
+     */
+    TuningResultInvalidReason:
+      | "non_finite_pv_amplitude"
+      | "non_positive_pv_amplitude"
+      | "non_finite_period"
+      | "non_positive_period"
+      | "non_finite_frequency"
+      | "non_positive_frequency"
+      | "non_finite_kp"
+      | "non_finite_ti_minutes"
+      | "non_finite_td_minutes"
+      | "non_finite_proportional"
+      | "non_finite_integral"
+      | "non_finite_derivative";
+    /**
+     * @description Whether a calculated response-level result contains values that are safe to use.
+     * @enum {string}
+     */
+    TuningResultStatus: "valid" | "invalid";
     UpdateConfigRequest: {
       allow_uncertain_quality: boolean;
       /** Format: int32 */
