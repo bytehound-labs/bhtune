@@ -1580,7 +1580,7 @@ function requiredNumber(
   value: number | undefined,
   label: string,
 ): number | string {
-  return value === undefined ? `${label} is required.` : value;
+  return value ?? `${label} is required.`;
 }
 
 function validateDemoRanges(
