@@ -123,6 +123,15 @@ fn quota_error(error: DemoQuotaExceeded) -> ApiError {
 }
 
 fn validate_demo_request(request: &StartRunRequest) -> Result<(), ApiError> {
+    validate_demo_identity(request)?;
+    validate_demo_scalar_ranges(request)?;
+    validate_demo_gain_and_direction(request)?;
+    validate_demo_discrete_fields(request)?;
+    validate_demo_process_ranges(request)?;
+    Ok(())
+}
+
+fn validate_demo_identity(request: &StartRunRequest) -> Result<(), ApiError> {
     if request.driver != TuneDriver::Simulator {
         return Err(bad_request("demo mode only supports the simulator driver"));
     }
@@ -144,7 +153,10 @@ fn validate_demo_request(request: &StartRunRequest) -> Result<(), ApiError> {
             "the selected controller type is not valid for the selected process type",
         ));
     }
+    Ok(())
+}
 
+fn validate_demo_scalar_ranges(request: &StartRunRequest) -> Result<(), ApiError> {
     let ranges = [
         (
             "relay_amp",
@@ -172,6 +184,10 @@ fn validate_demo_request(request: &StartRunRequest) -> Result<(), ApiError> {
             )));
         }
     }
+    Ok(())
+}
+
+fn validate_demo_gain_and_direction(request: &StartRunRequest) -> Result<(), ApiError> {
     if !request.sim_gain.is_finite()
         || !(DEMO_SIM_GAIN_ABS_MIN..=DEMO_SIM_GAIN_MAX).contains(&request.sim_gain.abs())
     {
@@ -199,6 +215,10 @@ fn validate_demo_request(request: &StartRunRequest) -> Result<(), ApiError> {
             }
         )));
     }
+    Ok(())
+}
+
+fn validate_demo_discrete_fields(request: &StartRunRequest) -> Result<(), ApiError> {
     if request.sim_seed > DEMO_SIM_SEED_MAX {
         return Err(bad_request(
             "demo field 'sim_seed' exceeds the supported maximum",
@@ -227,7 +247,10 @@ fn validate_demo_request(request: &StartRunRequest) -> Result<(), ApiError> {
             "demo field 'noise_protection_secs' must be between {DEMO_NOISE_PROTECTION_SECS_MIN} and {DEMO_NOISE_PROTECTION_SECS_MAX}"
         )));
     }
+    Ok(())
+}
 
+fn validate_demo_process_ranges(request: &StartRunRequest) -> Result<(), ApiError> {
     let pv_low = validate_range_endpoint("pv_range_low", request.pv_range_low)?;
     let pv_high = validate_range_endpoint("pv_range_high", request.pv_range_high)?;
     let mv_low = validate_range_endpoint("mv_range_low", request.mv_range_low)?;

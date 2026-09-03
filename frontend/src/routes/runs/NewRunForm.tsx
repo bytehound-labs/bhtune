@@ -308,21 +308,41 @@ function testParameterFields({
   );
 }
 
-function simulatorParameterFields({
+type SimulatorParameterProps = Pick<
+  NewRunFormProps,
+  "form" | "onChange" | "simulatorCapabilities"
+>;
+
+function simulatorPvSpan(form: FormState): number | undefined {
+  if (
+    typeof form.simPvRangeHigh !== "number" ||
+    typeof form.simPvRangeLow !== "number"
+  ) {
+    return undefined;
+  }
+  return form.simPvRangeHigh - form.simPvRangeLow;
+}
+
+function numericBounds(low: NumOrBlank, high: NumOrBlank) {
+  return {
+    min: typeof low === "number" ? low : undefined,
+    max: typeof high === "number" ? high : undefined,
+  };
+}
+
+function SimulatorProcessFields({
   form,
   onChange,
   simulatorCapabilities,
-}: Pick<NewRunFormProps, "form" | "onChange" | "simulatorCapabilities">) {
-  if (form.driver !== "simulator") return null;
-
+}: SimulatorParameterProps) {
   const limits = simulatorCapabilities?.limits;
-  const pvSpan =
-    typeof form.simPvRangeHigh === "number" &&
-    typeof form.simPvRangeLow === "number"
-      ? form.simPvRangeHigh - form.simPvRangeLow
+  const pvSpan = simulatorPvSpan(form);
+  const maxNoise =
+    limits && pvSpan !== undefined
+      ? Math.max(0, pvSpan * limits.max_noise_fraction_of_pv_span)
       : undefined;
   return (
-    <FormSection title="Simulator parameters" collapsible defaultOpen>
+    <>
       <NumberField
         label="Process gain"
         value={form.simGain}
@@ -356,18 +376,10 @@ function simulatorParameterFields({
         label="Measurement noise"
         value={form.simNoise}
         onChange={(value) => onChange("simNoise", value)}
-        min={simulatorCapabilities ? 0 : undefined}
-        max={
-          limits && pvSpan !== undefined
-            ? Math.max(0, pvSpan * limits.max_noise_fraction_of_pv_span)
-            : undefined
-        }
+        min={limits ? 0 : undefined}
+        max={maxNoise}
         step="any"
-        hint={
-          limits
-            ? `At most ${limits.max_noise_fraction_of_pv_span * 100}% of the PV span.`
-            : undefined
-        }
+        hint={simulatorNoiseHint(limits)}
       />
       <NumberField
         label="RNG seed"
@@ -378,77 +390,107 @@ function simulatorParameterFields({
         step={1}
         hint="Fixed seed = reproducible noise."
       />
+    </>
+  );
+}
+
+function simulatorNoiseHint(
+  limits: SimulatorCapabilities["limits"] | undefined,
+): string | undefined {
+  return limits
+    ? `At most ${limits.max_noise_fraction_of_pv_span * 100}% of the PV span.`
+    : undefined;
+}
+
+function SimulatorInitialFields({
+  form,
+  onChange,
+  simulatorCapabilities,
+}: SimulatorParameterProps) {
+  const pvBounds = simulatorCapabilities
+    ? numericBounds(form.simPvRangeLow, form.simPvRangeHigh)
+    : { min: undefined, max: undefined };
+  const mvBounds = simulatorCapabilities
+    ? numericBounds(form.simMvRangeLow, form.simMvRangeHigh)
+    : { min: undefined, max: undefined };
+  return (
+    <>
       <div />
       <NumberField
         label="Initial PV"
         value={form.simInitialPv}
         onChange={(value) => onChange("simInitialPv", value)}
-        min={
-          simulatorCapabilities && typeof form.simPvRangeLow === "number"
-            ? form.simPvRangeLow
-            : undefined
-        }
-        max={
-          simulatorCapabilities && typeof form.simPvRangeHigh === "number"
-            ? form.simPvRangeHigh
-            : undefined
-        }
+        min={pvBounds.min}
+        max={pvBounds.max}
         step="any"
       />
       <NumberField
         label="Initial MV"
         value={form.simInitialMv}
         onChange={(value) => onChange("simInitialMv", value)}
-        min={
-          simulatorCapabilities && typeof form.simMvRangeLow === "number"
-            ? form.simMvRangeLow
-            : undefined
-        }
-        max={
-          simulatorCapabilities && typeof form.simMvRangeHigh === "number"
-            ? form.simMvRangeHigh
-            : undefined
-        }
+        min={mvBounds.min}
+        max={mvBounds.max}
         step="any"
       />
-      {limits && (
-        <>
-          <NumberField
-            label="PV range low"
-            value={form.simPvRangeLow}
-            onChange={(value) => onChange("simPvRangeLow", value)}
-            min={limits.range_endpoint.min}
-            max={limits.range_endpoint.max}
-            step="any"
-          />
-          <NumberField
-            label="PV range high"
-            value={form.simPvRangeHigh}
-            onChange={(value) => onChange("simPvRangeHigh", value)}
-            min={limits.range_endpoint.min}
-            max={limits.range_endpoint.max}
-            step="any"
-            hint={`PV span must be ${limits.range_span.min}–${limits.range_span.max}.`}
-          />
-          <NumberField
-            label="MV range low"
-            value={form.simMvRangeLow}
-            onChange={(value) => onChange("simMvRangeLow", value)}
-            min={limits.range_endpoint.min}
-            max={limits.range_endpoint.max}
-            step="any"
-          />
-          <NumberField
-            label="MV range high"
-            value={form.simMvRangeHigh}
-            onChange={(value) => onChange("simMvRangeHigh", value)}
-            min={limits.range_endpoint.min}
-            max={limits.range_endpoint.max}
-            step="any"
-            hint={`MV span must be ${limits.range_span.min}–${limits.range_span.max}.`}
-          />
-        </>
-      )}
+    </>
+  );
+}
+
+function SimulatorRangeFields({
+  form,
+  onChange,
+  simulatorCapabilities,
+}: SimulatorParameterProps) {
+  if (!simulatorCapabilities) return null;
+  const { range_endpoint: endpoint, range_span: span } =
+    simulatorCapabilities.limits;
+  return (
+    <>
+      <NumberField
+        label="PV range low"
+        value={form.simPvRangeLow}
+        onChange={(value) => onChange("simPvRangeLow", value)}
+        min={endpoint.min}
+        max={endpoint.max}
+        step="any"
+      />
+      <NumberField
+        label="PV range high"
+        value={form.simPvRangeHigh}
+        onChange={(value) => onChange("simPvRangeHigh", value)}
+        min={endpoint.min}
+        max={endpoint.max}
+        step="any"
+        hint={`PV span must be ${span.min}–${span.max}.`}
+      />
+      <NumberField
+        label="MV range low"
+        value={form.simMvRangeLow}
+        onChange={(value) => onChange("simMvRangeLow", value)}
+        min={endpoint.min}
+        max={endpoint.max}
+        step="any"
+      />
+      <NumberField
+        label="MV range high"
+        value={form.simMvRangeHigh}
+        onChange={(value) => onChange("simMvRangeHigh", value)}
+        min={endpoint.min}
+        max={endpoint.max}
+        step="any"
+        hint={`MV span must be ${span.min}–${span.max}.`}
+      />
+    </>
+  );
+}
+
+function simulatorParameterFields(props: SimulatorParameterProps) {
+  if (props.form.driver !== "simulator") return null;
+  return (
+    <FormSection title="Simulator parameters" collapsible defaultOpen>
+      <SimulatorProcessFields {...props} />
+      <SimulatorInitialFields {...props} />
+      <SimulatorRangeFields {...props} />
     </FormSection>
   );
 }

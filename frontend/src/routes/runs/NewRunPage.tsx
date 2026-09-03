@@ -47,7 +47,10 @@ import {
   normalizeSimulatorRequest,
   TEMPERATURE_PROCESS_TYPES,
 } from "./newRunFormState";
-import type { AppCapabilities } from "../../api/capabilities";
+import type {
+  AppCapabilities,
+  SimulatorCapabilities,
+} from "../../api/capabilities";
 import { useDemoDraft } from "../../api/demoDraft";
 
 type DuplicateRunLocationState = {
@@ -105,6 +108,42 @@ function isDuplicateRunState(
   );
 }
 
+function pageFormFromDuplicate(
+  duplicateState: DuplicateRunLocationState | undefined,
+  isDemo: boolean,
+  simulatorCapabilities: SimulatorCapabilities | null,
+  defaultPageForm: FormState,
+): FormState {
+  if (!duplicateState) return defaultPageForm;
+  if (isDemo && simulatorCapabilities) {
+    return formFromDemoDuplicate(
+      duplicateState.duplicateRequest,
+      simulatorCapabilities,
+    );
+  }
+  return formFromRequest(duplicateState.duplicateRequest);
+}
+
+function controllerTypeForProcess(
+  current: FormState["controllerType"],
+  processType: ProcessType,
+  isDemo: boolean,
+  simulatorCapabilities: SimulatorCapabilities | null,
+): FormState["controllerType"] {
+  if (isDemo && simulatorCapabilities) {
+    const controllerTypes = demoControllerTypesFor(
+      simulatorCapabilities,
+      processType,
+    );
+    if (controllerTypes.includes(current)) return current;
+    return controllerTypes[0] ?? current;
+  }
+  if (current === "pid" && !TEMPERATURE_PROCESS_TYPES.has(processType)) {
+    return "pi";
+  }
+  return current;
+}
+
 export function NewRunPage({
   capabilities,
 }: {
@@ -130,14 +169,12 @@ export function NewRunPage({
     isDemo && capabilities.simulator
       ? formFromDemoCapabilities(capabilities.simulator)
       : initialForm;
-  const initialPageForm = duplicateState
-    ? isDemo && capabilities.simulator
-      ? formFromDemoDuplicate(
-          duplicateState.duplicateRequest,
-          capabilities.simulator,
-        )
-      : formFromRequest(duplicateState.duplicateRequest)
-    : defaultPageForm;
+  const initialPageForm = pageFormFromDuplicate(
+    duplicateState,
+    isDemo,
+    capabilities.simulator,
+    defaultPageForm,
+  );
 
   const [form, setForm] = useState<FormState>(() => initialPageForm);
   const demoDraftSnapshotRef = useRef(
@@ -163,25 +200,32 @@ export function NewRunPage({
   );
 
   useEffect(() => {
-    if (isDemo) {
-      if (hydratedRef.current) return;
-      hydratedRef.current = true;
-      setHydrated(true);
-      if (demoDraftValue) {
-        const nextForm = capabilities.simulator
-          ? formFromDemoDraft(demoDraftValue, capabilities.simulator)
-          : defaultPageForm;
-        const sanitizedDraft = demoDraftFromForm(nextForm);
-        const serializedDraft = JSON.stringify(sanitizedDraft);
-        demoDraftSnapshotRef.current = serializedDraft;
-        if (JSON.stringify(demoDraftValue) !== serializedDraft) {
-          saveDemoDraft(sanitizedDraft, demoDraftSavedAt ?? Date.now());
-        }
-        setForm(nextForm);
-        setPrefillSource({ kind: "draft" });
-      }
-      return;
+    if (!isDemo || hydratedRef.current) return;
+    hydratedRef.current = true;
+    setHydrated(true);
+    if (!demoDraftValue) return;
+
+    const nextForm = capabilities.simulator
+      ? formFromDemoDraft(demoDraftValue, capabilities.simulator)
+      : defaultPageForm;
+    const sanitizedDraft = demoDraftFromForm(nextForm);
+    const serializedDraft = JSON.stringify(sanitizedDraft);
+    demoDraftSnapshotRef.current = serializedDraft;
+    if (JSON.stringify(demoDraftValue) !== serializedDraft) {
+      saveDemoDraft(sanitizedDraft, demoDraftSavedAt ?? Date.now());
     }
+    setForm(nextForm);
+    setPrefillSource({ kind: "draft" });
+  }, [
+    capabilities.simulator,
+    defaultPageForm,
+    demoDraftSavedAt,
+    demoDraftValue,
+    isDemo,
+    saveDemoDraft,
+  ]);
+
+  useEffect(() => {
     if (isDemo || hydratedRef.current || duplicateState || runDraft.isPending) {
       return;
     }
@@ -215,11 +259,7 @@ export function NewRunPage({
       preserveBlankTemplateRef.current = false;
     }
   }, [
-    capabilities.simulator,
-    defaultPageForm,
     duplicateState,
-    demoDraftSavedAt,
-    demoDraftValue,
     isDemo,
     lastRunRequest.isPending,
     lastRunRequest.data,
@@ -227,7 +267,6 @@ export function NewRunPage({
     runDraft.error,
     runDraft.isError,
     runDraft.isPending,
-    saveDemoDraft,
   ]);
 
   useEffect(() => {
@@ -419,23 +458,20 @@ export function NewRunPage({
   }
 
   function setProcessType(value: ProcessType) {
+    const processDefaults =
+      isDemo && capabilities.simulator
+        ? demoProcessDefaultsFor(capabilities.simulator, value)
+        : processDefaultsFor(value);
     setForm((previous) => ({
       ...previous,
-      ...(isDemo && capabilities.simulator
-        ? demoProcessDefaultsFor(capabilities.simulator, value)
-        : processDefaultsFor(value)),
+      ...processDefaults,
       processType: value,
-      controllerType:
-        isDemo && capabilities.simulator
-          ? demoControllerTypesFor(capabilities.simulator, value).includes(
-              previous.controllerType,
-            )
-            ? previous.controllerType
-            : demoControllerTypesFor(capabilities.simulator, value)[0]
-          : previous.controllerType === "pid" &&
-              !TEMPERATURE_PROCESS_TYPES.has(value)
-            ? "pi"
-            : previous.controllerType,
+      controllerType: controllerTypeForProcess(
+        previous.controllerType,
+        value,
+        isDemo,
+        capabilities.simulator,
+      ),
     }));
   }
 

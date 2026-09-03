@@ -60,6 +60,8 @@ settings while omitting controls that require live equipment. Full mode retains 
 OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing
 requests require the exact configured browser origin; non-loopback self-hosting therefore uses
 an HTTPS reverse proxy rather than direct HTTP access to the bound application port.
+The browser fails closed when the capability document is missing or malformed; it never
+widens the Demo surface from incomplete server metadata.
 The fixed Demo defaults use a 200 ms simulator poll interval, a 0.5-second time constant, and
 1 second of dead time. The Demo interface presents this boundary, the history limit, and the
 session lifetime in one persistent notice.

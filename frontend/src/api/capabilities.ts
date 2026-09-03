@@ -102,14 +102,14 @@ function record(value: unknown, label: string): Record<string, unknown> {
 
 function bool(source: Record<string, unknown>, key: string, label: string) {
   if (typeof source[key] !== "boolean") {
-    throw new Error(`The server omitted the ${label}.${key} capability.`);
+    throw new TypeError(`The server omitted the ${label}.${key} capability.`);
   }
   return source[key] as boolean;
 }
 
 function text(source: Record<string, unknown>, key: string, label: string) {
   if (typeof source[key] !== "string") {
-    throw new Error(`The server omitted the ${label}.${key} capability.`);
+    throw new TypeError(`The server omitted the ${label}.${key} capability.`);
   }
   return source[key] as string;
 }
@@ -121,7 +121,7 @@ function finiteNumber(
 ) {
   const value = source[key];
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`The server omitted the ${label}.${key} capability.`);
+    throw new TypeError(`The server omitted the ${label}.${key} capability.`);
   }
   return value;
 }

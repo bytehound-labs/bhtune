@@ -127,6 +127,8 @@ controls. The Demo router does not mount Full-only endpoints, and private respon
 `no-store` caching and no-index headers. State-changing browser requests require the exact
 configured origin, and the service sends framing, content-type, referrer, resource-policy,
 permissions, and content-security headers.
+The browser also fails closed if the capability document is missing or malformed, so incomplete
+server metadata cannot enable a broader interface or weaker client-side restrictions.
 
 The demo is intentionally anonymous and has no accounts, CAPTCHA, multi-replica quota
 coordination, or remote-plant access. Treat the session cookie as bearer isolation state:
