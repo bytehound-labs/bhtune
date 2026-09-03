@@ -5,6 +5,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
+import { createConnection } from "node:net";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { closeHttpsProxy, startHttpsProxy } from "./demo-proxy.mjs";
@@ -127,11 +128,21 @@ async function waitForBackend() {
       );
     }
     try {
-      const response = await fetch(
-        `http://${BACKEND_HOST}:${BACKEND_PORT}/api/health`,
-      );
-      if (response.ok) return;
-      lastError = `HTTP ${response.status}`;
+      await new Promise((resolve, reject) => {
+        const socket = createConnection({
+          host: BACKEND_HOST,
+          port: BACKEND_PORT,
+        });
+        socket.once("connect", () => {
+          socket.destroy();
+          resolve();
+        });
+        socket.once("error", (error) => {
+          socket.destroy();
+          reject(error);
+        });
+      });
+      return;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
@@ -201,7 +212,7 @@ async function main() {
   createCertificate();
 
   console.log(
-    `e2e: starting isolated Demo backend on http://${BACKEND_HOST}:${BACKEND_PORT} and HTTPS proxy on ${BASE_URL}`,
+    `e2e: starting isolated Demo backend on ${BACKEND_HOST}:${BACKEND_PORT} and HTTPS proxy on ${BASE_URL}`,
   );
 
   backend = spawn(bin, ["--config", configPath], {

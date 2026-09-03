@@ -1647,6 +1647,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_rejects_when_session_history_reaches_the_configured_limit() {
+        let mut state = crate::test_support::in_memory_state().await;
+        state.mode = ServerMode::Demo;
+        state.demo_policy.max_runs_per_session = 1;
+        let token = raw_token("ab");
+        let now = Utc::now();
+        let (owner_id, run_id) = seed_owned_run(&state, &token, now).await;
+        TuneRunRow::complete(&state.pool, run_id, now)
+            .await
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, cookie("ab").parse().unwrap());
+        let result = start_run(
+            State(state.clone()),
+            headers,
+            PeerAddress("127.0.0.1:12345".parse().unwrap()),
+            Json(valid_request(ProcessType::Flow, ControllerType::Pi)),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(ApiError::TooManyRequests {
+                message,
+                retry_after_secs
+            }) if message == "maximum demo runs for this session has been reached"
+                && retry_after_secs == state.demo_policy.accepted_start_window_secs
+        ));
+        assert_eq!(
+            TuneRunRow::count_for_demo_session(&state.pool, owner_id)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn built_in_templates_are_read_only_and_user_templates_are_hidden() {
         let mut state = crate::test_support::in_memory_state().await;
         state.mode = ServerMode::Demo;

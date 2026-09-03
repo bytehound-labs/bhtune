@@ -366,8 +366,8 @@ test.describe("Demo mode contract", () => {
     await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
     await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
     await expect(page.getByLabel("Process gain")).toHaveValue("1");
-    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.1");
-    await expect(page.getByLabel("Dead time (s)")).toHaveValue("0.25");
+    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.5");
+    await expect(page.getByLabel("Dead time (s)")).toHaveValue("1");
     await expect(page.getByLabel("Initial PV")).toHaveValue("50");
     await expect(page.getByLabel("Initial MV")).toHaveValue("50");
     await expect(page.getByLabel("OPC DA server ProgID")).toHaveCount(0);
@@ -481,8 +481,8 @@ test.describe("Demo mode contract", () => {
       page.getByRole("combobox", { name: "Controller type", exact: true }),
     ).toHaveValue("pid");
     await expect(page.getByLabel("Process gain")).toHaveValue("-2.5");
-    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.1");
-    await expect(page.getByLabel("Dead time (s)")).toHaveValue("0.25");
+    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.5");
+    await expect(page.getByLabel("Dead time (s)")).toHaveValue("1");
     await expect(page.getByLabel("Initial PV")).toHaveValue("50");
     await expect(page.getByLabel("Initial MV")).toHaveValue("50");
     await expect(page.getByLabel("OPC DA server ProgID")).toHaveCount(0);
@@ -590,8 +590,8 @@ test.describe("Demo mode contract", () => {
     await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
     await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
     await expect(page.getByLabel("Process gain")).toHaveValue("1");
-    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.1");
-    await expect(page.getByLabel("Dead time (s)")).toHaveValue("0.25");
+    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.5");
+    await expect(page.getByLabel("Dead time (s)")).toHaveValue("1");
     await expect(page.getByLabel("Measurement noise")).toHaveValue("0");
     await expect(page.getByLabel("RNG seed")).toHaveValue("0");
     await expect(page.getByLabel("Initial PV")).toHaveValue("50");
@@ -814,8 +814,8 @@ test.describe("Demo mode contract", () => {
     await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
     await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
     await expect(page.getByLabel("Process gain")).toHaveValue("1");
-    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.1");
-    await expect(page.getByLabel("Dead time (s)")).toHaveValue("0.25");
+    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.5");
+    await expect(page.getByLabel("Dead time (s)")).toHaveValue("1");
     await expect(page.getByLabel("Measurement noise")).toHaveValue("0");
     await expect(page.getByLabel("RNG seed")).toHaveValue("0");
     await expect(page.getByLabel("Initial PV")).toHaveValue("50");
