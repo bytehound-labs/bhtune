@@ -4,6 +4,22 @@
  */
 
 export interface paths {
+  "/api/capabilities": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["capabilities"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/config": {
     parameters: {
       query?: never;
@@ -450,6 +466,33 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    CapabilitiesResponse: {
+      actions: components["schemas"]["CapabilityActions"];
+      demo: boolean;
+      demo_policy?: null | components["schemas"]["DemoPolicy"];
+      /** @description Driver identifiers accepted by the mode's tune-start surface. */
+      drivers: string[];
+      mode: components["schemas"]["ServerMode"];
+      quotas?: null | components["schemas"]["DemoQuotas"];
+      restrictions?: null | components["schemas"]["DemoRestrictions"];
+      security: components["schemas"]["SecurityCapabilities"];
+      simulator?: null | components["schemas"]["DemoSimulatorCapabilities"];
+    };
+    CapabilityActions: {
+      browse_opc: boolean;
+      cancel_run: boolean;
+      delete_run: boolean;
+      edit_notes: boolean;
+      export_run: boolean;
+      list_history: boolean;
+      manage_config: boolean;
+      manage_templates: boolean;
+      revert_pid: boolean;
+      start_opcda_tune: boolean;
+      start_simulator_tune: boolean;
+      stream_run: boolean;
+      write_pid: boolean;
+    };
     ConfigResponse: {
       backup_path?: string | null;
       config_path: string;
@@ -518,6 +561,15 @@ export interface components {
      * @enum {string}
      */
     ControllerType: "p" | "pi" | "pid";
+    CookieCapabilities: {
+      http_only: boolean;
+      /** Format: int64 */
+      max_age_secs: number;
+      name: string;
+      path: string;
+      same_site: string;
+      secure: boolean;
+    };
     /** @description One DCS/PLC vendor's conventions. */
     DcsTemplate: {
       /**
@@ -584,6 +636,196 @@ export interface components {
        */
       versions?: string[];
     };
+    /** @description Limits applied to the public simulator-only demo surface. */
+    DemoPolicy: {
+      /**
+       * Format: int64
+       * @description Window shared by both accepted-start quotas.
+       */
+      accepted_start_window_secs: number;
+      /**
+       * Format: int32
+       * @description Accepted starts for one client IP in the quota window.
+       */
+      accepted_starts_per_client_ip: number;
+      /**
+       * Format: int32
+       * @description Accepted starts for one session token in the quota window.
+       */
+      accepted_starts_per_token: number;
+      /**
+       * Format: int64
+       * @description Interval between Demo cleanup passes.
+       */
+      cleanup_interval_secs: number;
+      /**
+       * Format: int32
+       * @description Active Demo tune limit across all visitors.
+       */
+      max_active_runs_global: number;
+      /**
+       * Format: int32
+       * @description Active Demo tune limit for one visitor.
+       */
+      max_active_runs_per_visitor: number;
+      /**
+       * Format: int64
+       * @description Maximum JSON request-body size.
+       */
+      max_json_body_bytes: number;
+      /**
+       * Format: int32
+       * @description Maximum total demo runs accepted for one visitor.
+       */
+      max_runs_per_session: number;
+      /**
+       * Format: int32
+       * @description Simultaneous Demo SSE streams across all visitors.
+       */
+      max_sse_global: number;
+      /**
+       * Format: int32
+       * @description Simultaneous SSE streams for one visitor.
+       */
+      max_sse_per_visitor: number;
+      /**
+       * Format: int32
+       * @description Current Demo-owned `tune_runs` row limit across all visitors.
+       */
+      max_tune_run_rows_global: number;
+      /**
+       * Format: int32
+       * @description Concurrent ordinary, non-streaming Demo API requests.
+       */
+      ordinary_request_concurrency: number;
+      /**
+       * Format: int64
+       * @description Timeout for an ordinary, non-streaming Demo API request.
+       */
+      ordinary_request_timeout_secs: number;
+      /**
+       * Format: int64
+       * @description Simulator polling interval.
+       */
+      poll_interval_ms: number;
+      /**
+       * Format: int32
+       * @description Completed runs retained for one visitor.
+       */
+      retained_runs_per_visitor: number;
+      /**
+       * Format: int64
+       * @description Whole-run timeout.
+       */
+      run_timeout_secs: number;
+      /**
+       * Format: int64
+       * @description Anonymous visitor-session lifetime.
+       */
+      session_ttl_secs: number;
+      /**
+       * Format: int64
+       * @description Absolute lifetime of one Demo SSE stream.
+       */
+      sse_lifetime_secs: number;
+    };
+    DemoQuotas: {
+      /** Format: int64 */
+      accepted_start_window_secs: number;
+      /** Format: int32 */
+      accepted_starts_per_client_ip: number;
+      /** Format: int32 */
+      accepted_starts_per_token: number;
+      /** Format: int32 */
+      max_active_runs_global: number;
+      /** Format: int32 */
+      max_active_runs_per_visitor: number;
+      /** Format: int64 */
+      max_json_body_bytes: number;
+      /** Format: int32 */
+      max_runs_per_session: number;
+      /** Format: int32 */
+      max_sse_global: number;
+      /** Format: int32 */
+      max_sse_per_visitor: number;
+      /** Format: int32 */
+      max_tune_run_rows_global: number;
+      /** Format: int32 */
+      ordinary_request_concurrency: number;
+      /** Format: int64 */
+      ordinary_request_timeout_secs: number;
+      /** Format: int32 */
+      retained_runs_per_visitor: number;
+      /** Format: int64 */
+      sse_lifetime_secs: number;
+    };
+    DemoRestrictions: {
+      automatic_pid_write_allowed: boolean;
+      built_in_templates_only: boolean;
+      custom_tag_mappings_allowed: boolean;
+      direction_must_match_process_gain: boolean;
+      fixed_tag_name: boolean;
+      notes_allowed: boolean;
+      post_run_pid_write_allowed: boolean;
+      simulator_only: boolean;
+    };
+    DemoSimulatorCapabilities: {
+      compatibility: components["schemas"]["ProcessControllerCompatibility"][];
+      controller_types: components["schemas"]["ControllerType"][];
+      defaults: components["schemas"]["DemoSimulatorDefaults"];
+      limits: components["schemas"]["DemoSimulatorLimits"];
+      process_types: components["schemas"]["ProcessType"][];
+      tag_name: string;
+      template: string;
+      templates: string[];
+    };
+    DemoSimulatorDefaults: {
+      /** Format: int32 */
+      cycles_count: number;
+      /** Format: int32 */
+      cycles_skip: number;
+      direction: components["schemas"]["ControllerDirection"];
+      mv_range: components["schemas"]["FloatBounds"];
+      /** Format: int32 */
+      noise_protection_secs: number;
+      /** Format: int64 */
+      poll_interval_ms: number;
+      pv_range: components["schemas"]["FloatBounds"];
+      /** Format: float */
+      relay_amp: number;
+      /** Format: int64 */
+      run_timeout_secs: number;
+      /** Format: float */
+      sim_dead_time: number;
+      /** Format: float */
+      sim_gain: number;
+      /** Format: float */
+      sim_initial_mv: number;
+      /** Format: float */
+      sim_initial_pv: number;
+      /** Format: float */
+      sim_noise: number;
+      /** Format: int64 */
+      sim_seed: number;
+      /** Format: float */
+      sim_tau: number;
+      tag_name: string;
+      template: string;
+    };
+    DemoSimulatorLimits: {
+      cycles_count: components["schemas"]["IntegerBounds"];
+      cycles_skip: components["schemas"]["IntegerBounds"];
+      /** Format: float */
+      max_noise_fraction_of_pv_span: number;
+      noise_protection_secs: components["schemas"]["IntegerBounds"];
+      range_endpoint: components["schemas"]["FloatBounds"];
+      range_span: components["schemas"]["FloatBounds"];
+      relay_amp: components["schemas"]["FloatBounds"];
+      sim_dead_time: components["schemas"]["FloatBounds"];
+      sim_gain: components["schemas"]["FloatBounds"];
+      sim_seed: components["schemas"]["IntegerBounds"];
+      sim_tau: components["schemas"]["FloatBounds"];
+    };
     /**
      * @description How a DCS expresses the derivative term.
      * @enum {string}
@@ -646,6 +888,17 @@ export interface components {
     ErrorBody: {
       error: string;
     };
+    FloatBounds: {
+      /**
+       * Format: float
+       * @description When present, values strictly between `-absolute_min` and `absolute_min` are invalid.
+       */
+      absolute_min?: number | null;
+      /** Format: float */
+      max: number;
+      /** Format: float */
+      min: number;
+    };
     Health: {
       status: string;
       version: string;
@@ -673,6 +926,12 @@ export interface components {
       pv_range_low: number;
       /** Format: float */
       setpoint_ini?: number | null;
+    };
+    IntegerBounds: {
+      /** Format: int64 */
+      max: number;
+      /** Format: int64 */
+      min: number;
     };
     /**
      * @description How a DCS expresses the integral term.
@@ -922,6 +1181,10 @@ export interface components {
       sample_persist: components["schemas"]["TimingSummary"];
       tick_work: components["schemas"]["TimingSummary"];
     };
+    ProcessControllerCompatibility: {
+      controller_types: components["schemas"]["ControllerType"][];
+      process_type: components["schemas"]["ProcessType"];
+    };
     /**
      * @description A process/loop category. Each has its own row in the tuning-constant matrices in
      *     [`crate::constants`] and its own default cycle/noise-protection settings.
@@ -1111,6 +1374,21 @@ export interface components {
      * @enum {string}
      */
     SamplingAdequacy: "adequate" | "marginal" | "not_assessed";
+    SecurityCapabilities: {
+      allowed_origin: string;
+      cookie?: null | components["schemas"]["CookieCapabilities"];
+      exact_origin_required_for_mutations: boolean;
+      forwarded_client_ip_header?: string | null;
+      https_required: boolean;
+      loopback_http_allowed: boolean;
+      trusted_proxy_configured: boolean;
+    };
+    /**
+     * @description Runtime server exposure mode. Full mode preserves the normal live-plant API; Demo mode
+     *     is an explicitly restricted, simulator-only surface intended for public demonstrations.
+     * @enum {string}
+     */
+    ServerMode: "full" | "demo";
     /**
      * @description The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values
      *     are intentionally absent: they are resolved from the global `[tuning]` configuration by
@@ -1472,6 +1750,25 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  capabilities: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CapabilitiesResponse"];
+        };
+      };
+    };
+  };
   get_config: {
     parameters: {
       query?: never;

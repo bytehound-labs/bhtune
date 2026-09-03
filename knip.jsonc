@@ -5,7 +5,12 @@
       "ignoreDependencies": ["prettier"],
     },
     "frontend": {
-      "entry": ["e2e/start-server.mjs"],
+      "entry": [
+        "e2e/start-server.mjs",
+        "e2e/start-demo-server.mjs",
+        "e2e/demo-proxy.mjs",
+      ],
+      "ignoreBinaries": ["openssl"],
       "ignoreIssues": {
         "src/api/schema.d.ts": ["types"],
       },

@@ -133,6 +133,9 @@ jobs:
       - name: Check OpenAPI compatibility comparator
         run: python3 scripts/check_openapi_breaking_test.py
 
+      - name: Check image path filter consistency
+        run: python3 scripts/check_image_path_filters.py
+
       - name: Fetch base OpenAPI spec
         if: github.event_name == 'pull_request'
         env:

@@ -12,7 +12,7 @@
 use utoipa::OpenApi;
 
 use crate::error::ErrorBody;
-use crate::routes::{config, draft, health, history, opc, runs, stream, templates};
+use crate::routes::{capabilities, config, draft, health, history, opc, runs, stream, templates};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -23,6 +23,7 @@ use crate::routes::{config, draft, health, history, opc, runs, stream, templates
     ),
     paths(
         health::health,
+        capabilities::capabilities,
         templates::list_templates,
         templates::get_template,
         templates::create_template,
@@ -81,6 +82,18 @@ use crate::routes::{config, draft, health, history, opc, runs, stream, templates
         opc::OpcTagNodeResponse,
         opc::OpcBrowseResponse,
         opc::OpcReadResponse,
+        capabilities::CapabilitiesResponse,
+        capabilities::CapabilityActions,
+        capabilities::FloatBounds,
+        capabilities::IntegerBounds,
+        capabilities::ProcessControllerCompatibility,
+        capabilities::DemoSimulatorDefaults,
+        capabilities::DemoSimulatorLimits,
+        capabilities::DemoSimulatorCapabilities,
+        capabilities::DemoRestrictions,
+        capabilities::DemoQuotas,
+        capabilities::CookieCapabilities,
+        capabilities::SecurityCapabilities,
         ErrorBody,
     )),
     tags(

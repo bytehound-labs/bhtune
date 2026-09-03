@@ -62,6 +62,29 @@ pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundSer
     let loaded_config = config::load_config_store(config_path)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let config = loaded_config.config.clone();
+    let mode =
+        config::resolve_server_mode(std::env::var("BHTUNE_SERVER_MODE").ok().as_deref(), &config)
+            .map_err(|error| anyhow::anyhow!(error))?;
+    let demo_policy = if mode == config::ServerMode::Demo {
+        config::resolve_demo_policy_from_config(&config).map_err(|error| anyhow::anyhow!(error))?
+    } else {
+        config::DemoPolicy::default()
+    };
+    let bind_addr = config::resolve_bind_addr(std::env::var("BHTUNE_BIND").ok(), &config);
+    let addr: SocketAddr = bind_addr
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid bind address '{bind_addr}': {e}"))?;
+    let allowed_origin = config::resolve_origin(
+        std::env::var("BHTUNE_ORIGIN").ok(),
+        &config,
+        &bind_addr,
+        mode,
+    )
+    .map_err(|error| anyhow::anyhow!(error))?;
+    if mode == config::ServerMode::Demo {
+        config::validate_demo_trusted_proxy(config.trusted_proxy.as_deref())
+            .map_err(|error| anyhow::anyhow!(error))?;
+    }
 
     let default_log_dir = config::default_log_dir_from(
         std::env::var("XDG_DATA_HOME").ok().as_deref(),
@@ -102,21 +125,33 @@ pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundSer
         &config,
     );
     let pool = db::open(&db_path, user_templates, retention_days).await?;
+    if mode == config::ServerMode::Demo {
+        let now = chrono::Utc::now();
+        bhtune_db::models::DemoSessionRow::recover_running_demo_runs(&pool, now).await?;
+        bhtune_db::models::DemoSessionRow::cleanup_expired(&pool, now).await?;
+        bhtune_db::models::TuneRunRow::prune_terminal_demo_owned(
+            &pool,
+            demo_policy.retained_runs_per_visitor,
+        )
+        .await?;
+    }
 
     let config_store = Arc::new(RwLock::new(loaded_config));
     spawn_retention_sweeper(pool.clone(), config_store.clone());
 
-    let bind_addr = config::resolve_bind_addr(std::env::var("BHTUNE_BIND").ok(), &config);
-    let addr: SocketAddr = bind_addr
-        .parse()
-        .map_err(|e| anyhow::anyhow!("invalid bind address '{bind_addr}': {e}"))?;
-
-    let active_run = ActiveRun::default();
-    let app = build_router(AppState {
+    let state = AppState::for_mode_with_network_config(
         pool,
-        active_run: active_run.clone(),
         config_store,
-    });
+        mode,
+        demo_policy,
+        Some(allowed_origin),
+        config.trusted_proxy.clone(),
+    );
+    if mode == config::ServerMode::Demo {
+        spawn_demo_cleanup(state.clone());
+    }
+    let active_run = state.active_run.clone();
+    let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     // Logs the OS-assigned address, not the requested `addr` -- identical for every real
     // deployment (a concrete port is always configured), but the two differ whenever the
@@ -155,7 +190,11 @@ pub async fn serve(
     } = server;
 
     serve_http(
-        axum::serve(listener, app).with_graceful_shutdown(shutdown),
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown),
         active_run,
     )
     .await
@@ -233,6 +272,36 @@ fn spawn_retention_sweeper(
     });
 }
 
+/// Reaps expired anonymous Demo sessions and trims each visitor's terminal history while the
+/// server remains alive. Demo history is bounded independently of the Full-mode age-retention
+/// policy, so it needs its own maintenance loop.
+fn spawn_demo_cleanup(state: AppState) {
+    let interval_duration = Duration::from_secs(state.demo_policy.cleanup_interval_secs);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(interval_duration);
+        loop {
+            interval.tick().await;
+            demo_cleanup_tick(&state).await;
+        }
+    });
+}
+
+async fn demo_cleanup_tick(state: &AppState) {
+    let now = chrono::Utc::now();
+    state.demo_runtime.cleanup(now, state.demo_policy).await;
+    if let Err(error) = bhtune_db::models::DemoSessionRow::cleanup_expired(&state.pool, now).await {
+        tracing::warn!(error = %error, "demo session cleanup failed; will retry next interval");
+    }
+    if let Err(error) = bhtune_db::models::TuneRunRow::prune_terminal_demo_owned(
+        &state.pool,
+        state.demo_policy.retained_runs_per_visitor,
+    )
+    .await
+    {
+        tracing::warn!(error = %error, "demo history cleanup failed; will retry next interval");
+    }
+}
+
 async fn retention_tick_live(
     pool: &bhtune_db::SqlitePool,
     config_store: &Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
@@ -300,6 +369,93 @@ mod tests {
         assert!(result.is_err());
         let error = result.err().unwrap();
         assert!(error.to_string().contains("templates file not found"));
+    }
+
+    #[tokio::test]
+    async fn build_server_rejects_an_insecure_non_loopback_demo_origin_before_opening_the_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bhtune.toml");
+        let db_path = dir.path().join("must-not-exist.db");
+        std::fs::write(
+            &config_path,
+            format!(
+                "server_mode = \"demo\"\norigin = \"http://demo.example\"\n\
+                 bind = \"127.0.0.1:0\"\ndb = {:?}\n",
+                db_path
+            ),
+        )
+        .unwrap();
+
+        let error = build_server(Some(&config_path)).await.err().unwrap();
+
+        assert!(error.to_string().contains("must use HTTPS"));
+        assert!(!db_path.exists());
+    }
+
+    #[tokio::test]
+    async fn build_server_rejects_an_invalid_demo_policy_before_opening_the_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bhtune.toml");
+        let db_path = dir.path().join("must-not-exist.db");
+        std::fs::write(
+            &config_path,
+            format!(
+                "server_mode = \"demo\"\nbind = \"127.0.0.1:0\"\ndb = {:?}\n\
+                 [demo]\nmax_active_runs_global = 9\n",
+                db_path
+            ),
+        )
+        .unwrap();
+
+        let error = build_server(Some(&config_path)).await.err().unwrap();
+
+        assert!(
+            error
+                .to_string()
+                .contains("demo.max_active_runs_global must be exactly 8")
+        );
+        assert!(!db_path.exists());
+    }
+
+    #[tokio::test]
+    async fn build_server_rejects_an_invalid_demo_trusted_proxy_before_opening_the_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bhtune.toml");
+        let db_path = dir.path().join("must-not-exist.db");
+        std::fs::write(
+            &config_path,
+            format!(
+                "server_mode = \"demo\"\norigin = \"http://localhost\"\n\
+                 bind = \"127.0.0.1:0\"\n\
+                 trusted_proxy = \"proxy.example\"\ndb = {:?}\n",
+                db_path
+            ),
+        )
+        .unwrap();
+
+        let error = build_server(Some(&config_path)).await.err().unwrap();
+
+        assert!(error.to_string().contains("trusted_proxy"));
+        assert!(!db_path.exists());
+    }
+
+    #[tokio::test]
+    async fn build_server_starts_demo_cleanup_before_serving() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("bhtune.toml");
+        let db_path = dir.path().join("bhtune.db");
+        std::fs::write(
+            &config_path,
+            format!(
+                "server_mode = \"demo\"\norigin = \"http://localhost\"\n\
+                 db = {:?}\nbind = \"127.0.0.1:0\"\n",
+                db_path
+            ),
+        )
+        .unwrap();
+
+        let server = build_server(Some(&config_path)).await.unwrap();
+        serve(server, async {}).await.unwrap();
     }
 
     async fn insert_old_run(pool: &bhtune_db::SqlitePool) -> i64 {
@@ -489,6 +645,30 @@ mod tests {
         }));
 
         retention_tick_live(&pool, &store).await;
+    }
+
+    #[tokio::test]
+    async fn demo_cleanup_tick_succeeds_and_retries_database_failures() {
+        let state = crate::test_support::in_memory_state().await;
+        demo_cleanup_tick(&state).await;
+
+        state.pool.close().await;
+        demo_cleanup_tick(&state).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn spawned_demo_cleanup_runs_on_the_policy_interval() {
+        tokio::time::resume();
+        let state = crate::test_support::in_memory_state().await;
+        tokio::time::pause();
+        spawn_demo_cleanup(state);
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(
+            bhtune_cli::config::DEMO_CLEANUP_INTERVAL_SECS,
+        ))
+        .await;
+        tokio::time::resume();
+        tokio::task::yield_now().await;
     }
 
     #[tokio::test(start_paused = true)]

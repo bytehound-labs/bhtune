@@ -1,0 +1,138 @@
+skip_clone: true
+
+concurrency:
+  limit: 1
+
+when:
+  - event: push
+    branch: main
+    path:
+      include:
+        - ".dockerignore"
+        - ".github/workflows/docker-publish.yml"
+        - "Cargo.lock"
+        - "Cargo.toml"
+        - "Dockerfile"
+        - "crates/**"
+        - "frontend/**"
+        - "package.json"
+        - "pnpm-lock.yaml"
+        - "pnpm-workspace.yaml"
+
+steps:
+  deploy:
+    image: alpine:3.20.3
+    environment:
+      BHTUNE_GITHUB_TOKEN:
+        from_secret: BHTUNE_GITHUB_TOKEN
+      BHTUNE_APP1_SSH_PRIVATE_KEY:
+        from_secret: BHTUNE_APP1_SSH_PRIVATE_KEY
+      BHTUNE_APP1_KNOWN_HOSTS:
+        from_secret: BHTUNE_APP1_KNOWN_HOSTS
+    commands:
+      - apk add --no-cache bash ca-certificates curl github-cli jq openssh-client
+      - |
+        bash -euo pipefail <<'SCRIPT'
+        image_repo='ghcr.io/bytehound-labs/bhtune'
+        expected_sha="${CI_COMMIT_SHA:?CI_COMMIT_SHA is required}"
+
+        if ! printf '%s\n' "$expected_sha" | grep -Eq '^[0-9a-f]{40}$'; then
+          printf 'error: CI_COMMIT_SHA is not a full lowercase commit SHA\n' >&2
+          exit 1
+        fi
+
+        image_tag="sha-${expected_sha}"
+        registry_token="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+          "https://ghcr.io/token?service=ghcr.io&scope=repository:bytehound-labs/bhtune:pull" |
+          jq -er '.token')"
+        work_dir="$(mktemp -d)"
+        trap 'rm -rf "$work_dir"' EXIT
+        registry_curl_config="$work_dir/registry-curl.conf"
+        printf 'header = "%s: %s %s"\n' 'Authorization' 'Bearer' "$registry_token" \
+          > "$registry_curl_config"
+        chmod 600 "$registry_curl_config"
+        registry_token_deadline=$((SECONDS + 240))
+        manifest_url="https://ghcr.io/v2/bytehound-labs/bhtune/manifests/${image_tag}"
+        deadline=$((SECONDS + 2100))
+        digest=''
+
+        printf 'Waiting for %s:%s to appear in GHCR...\n' "$image_repo" "$image_tag"
+        while (( SECONDS < deadline )); do
+          if (( SECONDS >= registry_token_deadline )); then
+            registry_token="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:bytehound-labs/bhtune:pull" |
+              jq -er '.token')"
+            printf 'header = "%s: %s %s"\n' 'Authorization' 'Bearer' "$registry_token" \
+              > "$registry_curl_config"
+            chmod 600 "$registry_curl_config"
+            registry_token_deadline=$((SECONDS + 240))
+          fi
+          headers="$(mktemp)"
+          status="$(
+            curl -sS --retry 2 --connect-timeout 10 --max-time 30 \
+              -D "$headers" -o /dev/null -w '%{http_code}' \
+              --config "$registry_curl_config" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              "$manifest_url" || true
+          )"
+          digest="$(awk 'tolower($1) == "docker-content-digest:" { print $2; exit }' "$headers" | tr -d '\r')"
+          rm -f "$headers"
+
+          if [[ "$status" == '200' ]] &&
+            printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            break
+          fi
+
+          printf 'GHCR response %s; image is not ready yet\n' "$status"
+          sleep 10
+        done
+
+        if ! printf '%s\n' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+          printf 'error: timed out waiting for the immutable image tag %s\n' "$image_tag" >&2
+          exit 1
+        fi
+
+        printf 'Resolved %s to %s\n' "$image_tag" "$digest"
+        export GH_TOKEN="$BHTUNE_GITHUB_TOKEN"
+        gh attestation verify "oci://${image_repo}@${digest}" \
+          --repo bytehound-labs/bhtune \
+          --signer-workflow bytehound-labs/bhtune/.github/workflows/docker-publish.yml \
+          --source-ref refs/heads/main \
+          --source-digest "$expected_sha"
+
+        printf '%s\n' "$BHTUNE_APP1_SSH_PRIVATE_KEY" > "$work_dir/id_ed25519"
+        printf '%s\n' "$BHTUNE_APP1_KNOWN_HOSTS" > "$work_dir/known_hosts"
+        chmod 600 "$work_dir/id_ed25519" "$work_dir/known_hosts"
+
+        ssh -T \
+          -i "$work_dir/id_ed25519" \
+          -o IdentitiesOnly=yes \
+          -o ConnectTimeout=30 \
+          -o StrictHostKeyChecking=yes \
+          -o UserKnownHostsFile="$work_dir/known_hosts" \
+          -o BatchMode=yes \
+          -o ForwardAgent=no \
+          -o ClearAllForwardings=yes \
+          bhtune-demo-deploy@192.168.0.241 \
+          /home/mike/git/FrontEnd/bhtune-demo/deploy.sh "$image_repo@$digest"
+        SCRIPT
+
+  notify:
+    image: deblan/woodpecker-email
+    settings:
+      dsn:
+        from_secret: EMAIL_DSN
+      from:
+        address: "mike@bytehound.ca"
+        name: "Woodpecker"
+      recipients:
+        - michaelboiko@gmail.com
+      recipients_only: true
+      content:
+        subject: "{{ repo.full_name }} ({{ commit.branch }} - {{ commit.sha[0:8] }})"
+        body: |
+          {{ commit.sha }}<br>
+          {{ pipeline.status }}<br>
+          {{ commit.author_email }}<br>
+    when:
+      status: [failure]

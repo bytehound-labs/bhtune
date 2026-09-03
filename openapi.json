@@ -9,6 +9,26 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/capabilities": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "capabilities",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config": {
       "get": {
         "tags": [
@@ -1259,6 +1279,136 @@
   },
   "components": {
     "schemas": {
+      "CapabilitiesResponse": {
+        "type": "object",
+        "required": [
+          "mode",
+          "drivers",
+          "actions",
+          "demo",
+          "security"
+        ],
+        "properties": {
+          "actions": {
+            "$ref": "#/components/schemas/CapabilityActions"
+          },
+          "demo": {
+            "type": "boolean"
+          },
+          "demo_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DemoPolicy"
+              }
+            ]
+          },
+          "drivers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Driver identifiers accepted by the mode's tune-start surface."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ServerMode"
+          },
+          "quotas": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DemoQuotas"
+              }
+            ]
+          },
+          "restrictions": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DemoRestrictions"
+              }
+            ]
+          },
+          "security": {
+            "$ref": "#/components/schemas/SecurityCapabilities"
+          },
+          "simulator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DemoSimulatorCapabilities"
+              }
+            ]
+          }
+        }
+      },
+      "CapabilityActions": {
+        "type": "object",
+        "required": [
+          "start_simulator_tune",
+          "start_opcda_tune",
+          "cancel_run",
+          "stream_run",
+          "list_history",
+          "export_run",
+          "delete_run",
+          "edit_notes",
+          "write_pid",
+          "revert_pid",
+          "manage_templates",
+          "manage_config",
+          "browse_opc"
+        ],
+        "properties": {
+          "browse_opc": {
+            "type": "boolean"
+          },
+          "cancel_run": {
+            "type": "boolean"
+          },
+          "delete_run": {
+            "type": "boolean"
+          },
+          "edit_notes": {
+            "type": "boolean"
+          },
+          "export_run": {
+            "type": "boolean"
+          },
+          "list_history": {
+            "type": "boolean"
+          },
+          "manage_config": {
+            "type": "boolean"
+          },
+          "manage_templates": {
+            "type": "boolean"
+          },
+          "revert_pid": {
+            "type": "boolean"
+          },
+          "start_opcda_tune": {
+            "type": "boolean"
+          },
+          "start_simulator_tune": {
+            "type": "boolean"
+          },
+          "stream_run": {
+            "type": "boolean"
+          },
+          "write_pid": {
+            "type": "boolean"
+          }
+        }
+      },
       "ConfigResponse": {
         "type": "object",
         "required": [
@@ -1486,6 +1636,39 @@
           "pid"
         ]
       },
+      "CookieCapabilities": {
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "max_age_secs",
+          "http_only",
+          "secure",
+          "same_site"
+        ],
+        "properties": {
+          "http_only": {
+            "type": "boolean"
+          },
+          "max_age_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "same_site": {
+            "type": "string"
+          },
+          "secure": {
+            "type": "boolean"
+          }
+        }
+      },
       "DcsTemplate": {
         "type": "object",
         "description": "One DCS/PLC vendor's conventions.",
@@ -1615,6 +1798,488 @@
               "type": "string"
             },
             "description": "DCS/PLC releases this mapping is known to apply to (e.g. `[\"R5\", \"R6\"]`), in each\nvendor's own version-naming convention rather than a normalized scheme. A newer\nrelease that changes tag conventions gets its *own* template entry with its own\n`name` and `versions` list -- never an edit to this one in place, since sites still\nrunning the older release depend on the existing mapping (see\n`docs/dcs-templates.md`). May be empty for a contribution whose version coverage\nisn't yet known; `name` is what makes a template unique, not `versions`."
+          }
+        }
+      },
+      "DemoPolicy": {
+        "type": "object",
+        "description": "Limits applied to the public simulator-only demo surface.",
+        "required": [
+          "session_ttl_secs",
+          "poll_interval_ms",
+          "run_timeout_secs",
+          "max_active_runs_global",
+          "max_active_runs_per_visitor",
+          "accepted_starts_per_token",
+          "accepted_starts_per_client_ip",
+          "accepted_start_window_secs",
+          "retained_runs_per_visitor",
+          "max_runs_per_session",
+          "max_tune_run_rows_global",
+          "max_json_body_bytes",
+          "max_sse_per_visitor",
+          "max_sse_global",
+          "sse_lifetime_secs",
+          "ordinary_request_concurrency",
+          "ordinary_request_timeout_secs",
+          "cleanup_interval_secs"
+        ],
+        "properties": {
+          "accepted_start_window_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Window shared by both accepted-start quotas.",
+            "maximum": 600,
+            "minimum": 600
+          },
+          "accepted_starts_per_client_ip": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Accepted starts for one client IP in the quota window.",
+            "maximum": 6,
+            "minimum": 6
+          },
+          "accepted_starts_per_token": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Accepted starts for one session token in the quota window.",
+            "maximum": 6,
+            "minimum": 6
+          },
+          "cleanup_interval_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Interval between Demo cleanup passes.",
+            "maximum": 300,
+            "minimum": 300
+          },
+          "max_active_runs_global": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Active Demo tune limit across all visitors.",
+            "maximum": 8,
+            "minimum": 8
+          },
+          "max_active_runs_per_visitor": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Active Demo tune limit for one visitor.",
+            "maximum": 1,
+            "minimum": 1
+          },
+          "max_json_body_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Maximum JSON request-body size.",
+            "maximum": 32768,
+            "minimum": 32768
+          },
+          "max_runs_per_session": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum total demo runs accepted for one visitor.",
+            "minimum": 0
+          },
+          "max_sse_global": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Simultaneous Demo SSE streams across all visitors.",
+            "maximum": 32,
+            "minimum": 32
+          },
+          "max_sse_per_visitor": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Simultaneous SSE streams for one visitor.",
+            "maximum": 2,
+            "minimum": 2
+          },
+          "max_tune_run_rows_global": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Current Demo-owned `tune_runs` row limit across all visitors.",
+            "maximum": 5000,
+            "minimum": 5000
+          },
+          "ordinary_request_concurrency": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Concurrent ordinary, non-streaming Demo API requests.",
+            "maximum": 64,
+            "minimum": 64
+          },
+          "ordinary_request_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Timeout for an ordinary, non-streaming Demo API request.",
+            "maximum": 10,
+            "minimum": 10
+          },
+          "poll_interval_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Simulator polling interval.",
+            "maximum": 200,
+            "minimum": 200
+          },
+          "retained_runs_per_visitor": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Completed runs retained for one visitor.",
+            "maximum": 10,
+            "minimum": 10
+          },
+          "run_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Whole-run timeout.",
+            "maximum": 30,
+            "minimum": 30
+          },
+          "session_ttl_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Anonymous visitor-session lifetime.",
+            "maximum": 86400,
+            "minimum": 86400
+          },
+          "sse_lifetime_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Absolute lifetime of one Demo SSE stream.",
+            "maximum": 45,
+            "minimum": 45
+          }
+        }
+      },
+      "DemoQuotas": {
+        "type": "object",
+        "required": [
+          "max_active_runs_global",
+          "max_active_runs_per_visitor",
+          "max_runs_per_session",
+          "accepted_starts_per_token",
+          "accepted_starts_per_client_ip",
+          "accepted_start_window_secs",
+          "retained_runs_per_visitor",
+          "max_tune_run_rows_global",
+          "max_json_body_bytes",
+          "max_sse_per_visitor",
+          "max_sse_global",
+          "sse_lifetime_secs",
+          "ordinary_request_concurrency",
+          "ordinary_request_timeout_secs"
+        ],
+        "properties": {
+          "accepted_start_window_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "accepted_starts_per_client_ip": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "accepted_starts_per_token": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_active_runs_global": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_active_runs_per_visitor": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_json_body_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_runs_per_session": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_sse_global": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_sse_per_visitor": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_tune_run_rows_global": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "ordinary_request_concurrency": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "ordinary_request_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "retained_runs_per_visitor": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "sse_lifetime_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "DemoRestrictions": {
+        "type": "object",
+        "required": [
+          "simulator_only",
+          "built_in_templates_only",
+          "fixed_tag_name",
+          "direction_must_match_process_gain",
+          "custom_tag_mappings_allowed",
+          "notes_allowed",
+          "automatic_pid_write_allowed",
+          "post_run_pid_write_allowed"
+        ],
+        "properties": {
+          "automatic_pid_write_allowed": {
+            "type": "boolean"
+          },
+          "built_in_templates_only": {
+            "type": "boolean"
+          },
+          "custom_tag_mappings_allowed": {
+            "type": "boolean"
+          },
+          "direction_must_match_process_gain": {
+            "type": "boolean"
+          },
+          "fixed_tag_name": {
+            "type": "boolean"
+          },
+          "notes_allowed": {
+            "type": "boolean"
+          },
+          "post_run_pid_write_allowed": {
+            "type": "boolean"
+          },
+          "simulator_only": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DemoSimulatorCapabilities": {
+        "type": "object",
+        "required": [
+          "template",
+          "templates",
+          "tag_name",
+          "process_types",
+          "controller_types",
+          "compatibility",
+          "defaults",
+          "limits"
+        ],
+        "properties": {
+          "compatibility": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProcessControllerCompatibility"
+            }
+          },
+          "controller_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ControllerType"
+            }
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/DemoSimulatorDefaults"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/DemoSimulatorLimits"
+          },
+          "process_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProcessType"
+            }
+          },
+          "tag_name": {
+            "type": "string"
+          },
+          "template": {
+            "type": "string"
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DemoSimulatorDefaults": {
+        "type": "object",
+        "required": [
+          "tag_name",
+          "template",
+          "direction",
+          "pv_range",
+          "mv_range",
+          "poll_interval_ms",
+          "run_timeout_secs",
+          "relay_amp",
+          "cycles_skip",
+          "cycles_count",
+          "noise_protection_secs",
+          "sim_gain",
+          "sim_tau",
+          "sim_dead_time",
+          "sim_noise",
+          "sim_seed",
+          "sim_initial_pv",
+          "sim_initial_mv"
+        ],
+        "properties": {
+          "cycles_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "cycles_skip": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "direction": {
+            "$ref": "#/components/schemas/ControllerDirection"
+          },
+          "mv_range": {
+            "$ref": "#/components/schemas/FloatBounds"
+          },
+          "noise_protection_secs": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "poll_interval_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pv_range": {
+            "$ref": "#/components/schemas/FloatBounds"
+          },
+          "relay_amp": {
+            "type": "number",
+            "format": "float"
+          },
+          "run_timeout_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "sim_dead_time": {
+            "type": "number",
+            "format": "float"
+          },
+          "sim_gain": {
+            "type": "number",
+            "format": "float"
+          },
+          "sim_initial_mv": {
+            "type": "number",
+            "format": "float"
+          },
+          "sim_initial_pv": {
+            "type": "number",
+            "format": "float"
+          },
+          "sim_noise": {
+            "type": "number",
+            "format": "float"
+          },
+          "sim_seed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "sim_tau": {
+            "type": "number",
+            "format": "float"
+          },
+          "tag_name": {
+            "type": "string"
+          },
+          "template": {
+            "type": "string"
+          }
+        }
+      },
+      "DemoSimulatorLimits": {
+        "type": "object",
+        "required": [
+          "relay_amp",
+          "cycles_skip",
+          "cycles_count",
+          "noise_protection_secs",
+          "sim_gain",
+          "sim_tau",
+          "sim_dead_time",
+          "sim_seed",
+          "range_endpoint",
+          "range_span",
+          "max_noise_fraction_of_pv_span"
+        ],
+        "properties": {
+          "cycles_count": {
+            "$ref": "#/components/schemas/IntegerBounds"
+          },
+          "cycles_skip": {
+            "$ref": "#/components/schemas/IntegerBounds"
+          },
+          "max_noise_fraction_of_pv_span": {
+            "type": "number",
+            "format": "float"
+          },
+          "noise_protection_secs": {
+            "$ref": "#/components/schemas/IntegerBounds"
+          },
+          "range_endpoint": {
+            "$ref": "#/components/schemas/FloatBounds"
+          },
+          "range_span": {
+            "$ref": "#/components/schemas/FloatBounds"
+          },
+          "relay_amp": {
+            "$ref": "#/components/schemas/FloatBounds"
+          },
+          "sim_dead_time": {
+            "$ref": "#/components/schemas/FloatBounds"
+          },
+          "sim_gain": {
+            "$ref": "#/components/schemas/FloatBounds"
+          },
+          "sim_seed": {
+            "$ref": "#/components/schemas/IntegerBounds"
+          },
+          "sim_tau": {
+            "$ref": "#/components/schemas/FloatBounds"
           }
         }
       },
@@ -1761,6 +2426,31 @@
           }
         }
       },
+      "FloatBounds": {
+        "type": "object",
+        "required": [
+          "min",
+          "max"
+        ],
+        "properties": {
+          "absolute_min": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "When present, values strictly between `-absolute_min` and `absolute_min` are invalid."
+          },
+          "max": {
+            "type": "number",
+            "format": "float"
+          },
+          "min": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -1834,6 +2524,25 @@
               "null"
             ],
             "format": "float"
+          }
+        }
+      },
+      "IntegerBounds": {
+        "type": "object",
+        "required": [
+          "min",
+          "max"
+        ],
+        "properties": {
+          "max": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "min": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -2498,6 +3207,24 @@
           }
         }
       },
+      "ProcessControllerCompatibility": {
+        "type": "object",
+        "required": [
+          "process_type",
+          "controller_types"
+        ],
+        "properties": {
+          "controller_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ControllerType"
+            }
+          },
+          "process_type": {
+            "$ref": "#/components/schemas/ProcessType"
+          }
+        }
+      },
       "ProcessType": {
         "type": "string",
         "description": "A process/loop category. Each has its own row in the tuning-constant matrices in\n[`crate::constants`] and its own default cycle/noise-protection settings.\n\nDiscriminants double as the row index into those matrices — see\n[`ProcessType::index`].",
@@ -2919,6 +3646,57 @@
           "adequate",
           "marginal",
           "not_assessed"
+        ]
+      },
+      "SecurityCapabilities": {
+        "type": "object",
+        "required": [
+          "allowed_origin",
+          "exact_origin_required_for_mutations",
+          "https_required",
+          "loopback_http_allowed",
+          "trusted_proxy_configured"
+        ],
+        "properties": {
+          "allowed_origin": {
+            "type": "string"
+          },
+          "cookie": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CookieCapabilities"
+              }
+            ]
+          },
+          "exact_origin_required_for_mutations": {
+            "type": "boolean"
+          },
+          "forwarded_client_ip_header": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "https_required": {
+            "type": "boolean"
+          },
+          "loopback_http_allowed": {
+            "type": "boolean"
+          },
+          "trusted_proxy_configured": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ServerMode": {
+        "type": "string",
+        "description": "Runtime server exposure mode. Full mode preserves the normal live-plant API; Demo mode\nis an explicitly restricted, simulator-only surface intended for public demonstrations.",
+        "enum": [
+          "full",
+          "demo"
         ]
       },
       "StartRunRequest": {

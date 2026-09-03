@@ -14,6 +14,22 @@
 #                (falls back to $HOME/.config/bhtune/bhtune.toml)
 #   Windows:     %APPDATA%\bhtune\bhtune.toml
 
+# Server exposure mode: "full" keeps the complete live-plant API; "demo" exposes only
+# the restricted public simulator workflow. The environment variable
+# BHTUNE_SERVER_MODE takes precedence.
+server_mode = "full"
+
+# Exact browser origin allowed for state-changing requests. BHTUNE_ORIGIN takes precedence.
+# Demo mode requires HTTPS, except that explicit localhost/loopback HTTP origins are accepted
+# for local tests and development. An origin contains only a scheme, host, and optional port.
+# origin = "https://bhtunedemo.example.com"
+
+# Optional reverse-proxy address trusted to supply X-BHTune-Client-IP for Demo quotas. Use one
+# exact IPv4/IPv6 address or a matching-family CIDR (for example, "10.0.0.0/24"). The proxy
+# must replace that header with one IP address; forwarding chains and duplicate values are
+# rejected. Leave this unset when clients connect directly.
+# trusted_proxy = "127.0.0.1"
+
 # SQLite database path. Relative paths are resolved against the current
 # working directory when the process starts. Missing parent directories
 # are created automatically.
@@ -47,6 +63,35 @@ allow_uncertain_quality = true
 # Optional automatic history retention. Omit this key to retain runs forever;
 # when present, it must be a positive whole number of days.
 retention_days = 30
+
+# Public Demo policy. Every key is optional, but any key that is present must use the
+# exact approved value shown here. These limits cannot be widened or otherwise overridden
+# by deployment configuration.
+[demo]
+# Anonymous visitor-session lifetime.
+session_ttl_secs = 86400
+# Simulator tune timing. Demo uses a fixed 200 ms poll interval.
+poll_interval_ms = 200
+run_timeout_secs = 30
+# Active tune limits.
+max_active_runs_global = 8
+max_active_runs_per_visitor = 1
+# Accepted tune-start quotas. Ordinary API reads do not consume these quotas.
+accepted_starts_per_token = 6
+accepted_starts_per_client_ip = 6
+accepted_start_window_secs = 600
+# History limits.
+retained_runs_per_visitor = 10
+max_tune_run_rows_global = 5000
+# HTTP and streaming limits.
+max_json_body_bytes = 32768
+max_sse_per_visitor = 2
+max_sse_global = 32
+sse_lifetime_secs = 45
+ordinary_request_concurrency = 64
+ordinary_request_timeout_secs = 10
+# Expired-session and excess-history cleanup cadence.
+cleanup_interval_secs = 300
 
 # Global MRFT timing and safety settings. These values apply to future tunes;
 # an already prepared or running tune keeps the values it captured at start.

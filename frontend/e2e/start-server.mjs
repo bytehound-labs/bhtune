@@ -3,9 +3,9 @@
 // `crates/bhtune-server/Cargo.toml`'s `rust-embed` dependency comment: without `--release`
 // it reads `frontend/dist/` live off disk on every request, so this script's caller only
 // has to build the frontend once and `cargo build -p bhtune-server` once, not re-embed
-// anything between runs) against a fresh temp SQLite database and isolated XDG state
-// directories, bound to a fixed port so `playwright.config.ts`'s `webServer.url` can poll
-// it deterministically.
+// anything between runs) against a fresh SQLite database and isolated XDG state directories
+// under Playwright's ignored `test-results/` tree, bound to a fixed port so
+// `playwright.config.ts`'s `webServer.url` can poll it deterministically.
 //
 // This is `playwright.config.ts`'s `webServer.command` -- Playwright starts it before the
 // test run, waits for its `BASE_URL`'s `/api/health` to answer, and tears it down after.
@@ -13,8 +13,7 @@
 // (temp DB, temp XDG dirs, `BHTUNE_BIND` env var) from the Rust side, translated to Node
 // since this runs from the frontend workspace.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,7 +34,8 @@ if (!existsSync(bin)) {
   process.exit(1);
 }
 
-const stateDir = mkdtempSync(join(tmpdir(), "bhtune-e2e-"));
+const stateDir = resolve(here, "..", "test-results", "server-state", "full");
+rmSync(stateDir, { recursive: true, force: true });
 const configDir = join(stateDir, "bhtune");
 mkdirSync(configDir, { recursive: true });
 writeFileSync(

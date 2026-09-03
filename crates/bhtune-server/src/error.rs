@@ -2,7 +2,7 @@
 //! status code plus a JSON `{"error": "..."}` body.
 
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -22,6 +22,22 @@ pub enum ApiError {
     /// (`DcsTemplate::validate`, an unparseable filter value axum's extractors didn't already
     /// reject). 400.
     BadRequest(String),
+    /// The request was authenticated but is not permitted. 403.
+    Forbidden(String),
+    /// A per-client or per-session limit was exceeded. 429, with a `Retry-After` header.
+    TooManyRequests {
+        message: String,
+        retry_after_secs: u64,
+    },
+    /// The public demo has exhausted a global capacity limit. 503, with a `Retry-After`
+    /// header. Keeping this distinct from per-client throttling lets callers avoid telling a
+    /// client that its own request rate caused shared service saturation.
+    GlobalCapacity {
+        message: String,
+        retry_after_secs: u64,
+    },
+    /// No valid demo identity was supplied. 401.
+    Unauthorized(String),
     /// Anything else: a database connection/query failure, or any other unexpected error.
     /// Deliberately doesn't echo the underlying error's `Display` text into the response body
     /// (logged via `tracing::error!` instead) -- an internal error's detail is for the
@@ -40,19 +56,46 @@ pub struct ErrorBody {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message),
-            ApiError::Conflict(message) => (StatusCode::CONFLICT, message),
-            ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
+        let (status, message, retry_after_secs) = match self {
+            ApiError::NotFound(message) => (StatusCode::NOT_FOUND, message, None),
+            ApiError::Conflict(message) => (StatusCode::CONFLICT, message, None),
+            ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message, None),
+            ApiError::Forbidden(message) => (StatusCode::FORBIDDEN, message, None),
+            ApiError::TooManyRequests {
+                message,
+                retry_after_secs,
+            } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                message,
+                Some(retry_after_secs),
+            ),
+            ApiError::GlobalCapacity {
+                message,
+                retry_after_secs,
+            } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                message,
+                Some(retry_after_secs),
+            ),
+            ApiError::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message, None),
             ApiError::Internal(err) => {
                 tracing::error!(error = %err, "internal error handling request");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal server error".to_string(),
+                    None,
                 )
             }
         };
-        (status, Json(ErrorBody { error: message })).into_response()
+        let mut response = (status, Json(ErrorBody { error: message })).into_response();
+        if let Some(retry_after_secs) = retry_after_secs {
+            response.headers_mut().insert(
+                header::RETRY_AFTER,
+                HeaderValue::from_str(&retry_after_secs.to_string())
+                    .expect("an integer is always a valid Retry-After header value"),
+            );
+        }
+        response
     }
 }
 
@@ -114,6 +157,46 @@ mod tests {
         assert_eq!(
             body_json(response).await,
             serde_json::json!({"error": "invalid"})
+        );
+    }
+
+    #[tokio::test]
+    async fn forbidden_maps_to_403_with_the_message() {
+        let response = ApiError::Forbidden("not permitted".to_string()).into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({"error": "not permitted"})
+        );
+    }
+
+    #[tokio::test]
+    async fn too_many_requests_maps_to_429_with_retry_after() {
+        let response = ApiError::TooManyRequests {
+            message: "slow down".to_string(),
+            retry_after_secs: 17,
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "17");
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({"error": "slow down"})
+        );
+    }
+
+    #[tokio::test]
+    async fn global_capacity_maps_to_503_with_retry_after() {
+        let response = ApiError::GlobalCapacity {
+            message: "demo capacity exhausted".to_string(),
+            retry_after_secs: 3,
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "3");
+        assert_eq!(
+            body_json(response).await,
+            serde_json::json!({"error": "demo capacity exhausted"})
         );
     }
 
