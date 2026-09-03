@@ -493,22 +493,6 @@ export function NewRunPage({
           defaults" to return to the built-in defaults.
         </div>
       )}
-      {isDemo && (
-        <div className="mb-6 rounded-lg border-2 border-amber-700 bg-amber-950/50 px-5 py-4 text-sm text-amber-100">
-          <p>
-            <strong>Simulator-only demo.</strong> Choose a built-in DCS/PLC
-            template, process and controller type, and bounded relay and
-            simulator settings.
-          </p>
-          <p className="mt-2">
-            Start a tune to watch the synthetic PV/MV response and review the
-            calculated results. The demo never connects to plant equipment or
-            writes PID values, and its results must not be used on a live
-            control loop.
-          </p>
-        </div>
-      )}
-
       {!isDemo && (draftLoadError || draftSaveError) && (
         <div className="mb-4 space-y-2">
           {draftLoadError && <ErrorBanner message={draftLoadError} />}

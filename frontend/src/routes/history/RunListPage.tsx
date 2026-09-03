@@ -83,21 +83,6 @@ export function RunListPage({
         }
       />
 
-      {isDemo && (
-        <div className="mb-6 rounded-lg border-2 border-amber-700 bg-amber-950/50 px-5 py-4 text-sm text-amber-100">
-          <strong>Simulator-only demo.</strong> Every tune and calculated result
-          is synthetic and isolated to this browser. Nothing on this page came
-          from plant equipment.
-          {capabilities.quotas && (
-            <>
-              {" "}
-              History retains up to{" "}
-              {capabilities.quotas.retained_runs_per_visitor} runs.
-            </>
-          )}
-        </div>
-      )}
-
       <div className="mb-4 flex flex-wrap gap-3">
         {!isDemo && (
           <select

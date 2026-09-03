@@ -425,7 +425,10 @@ test.describe("real HTTPS Demo mode", () => {
       await expect(page).toHaveURL(/\/runs\/new$/);
       await expect(
         page.getByText("Demo mode — Simulator only.", { exact: false }),
-      ).toBeVisible();
+      ).toHaveCount(1);
+      await expect(
+        page.getByText("Simulator-only demo.", { exact: false }),
+      ).toHaveCount(0);
       await expect(page.getByRole("link", { name: "Tune" })).toBeVisible();
       await expect(page.getByRole("link", { name: "History" })).toBeVisible();
       await expect(page.getByRole("link", { name: "Templates" })).toHaveCount(

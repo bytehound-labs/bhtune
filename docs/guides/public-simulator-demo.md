@@ -28,6 +28,8 @@ The Demo tune page is clearly labeled and keeps the controls that affect simulat
 visitors can choose a built-in template, process/controller type, relay and cycle settings,
 noise protection, and bounded simulator physics. Controls that require live equipment are
 omitted from the page rather than presented as no-op options.
+The interface presents the simulator boundary, history limit, and session lifetime in one
+persistent Demo notice rather than repeating the same warning on each page.
 
 Every run is stored with the stable display identity **Simulator demo**. It is not a plant tag
 and does not change the simulator driver's internal `Sim.PV` and `Sim.MV` tags.

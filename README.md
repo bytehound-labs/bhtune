@@ -60,6 +60,8 @@ settings while omitting controls that require live equipment. Full mode retains 
 OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing
 requests require the exact configured browser origin; non-loopback self-hosting therefore uses
 an HTTPS reverse proxy rather than direct HTTP access to the bound application port.
+The Demo interface presents this boundary, the history limit, and the session lifetime in one
+persistent notice.
 
 ## Getting started
 
