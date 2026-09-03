@@ -63,7 +63,7 @@ turning a demonstration into an unbounded workload:
 | Accepted starts per token and client IP | 6 per 10 minutes |
 | Retained terminal runs per visitor      |               10 |
 | Current Demo-owned run rows             |            5,000 |
-| Simulator poll interval                 |            50 ms |
+| Simulator poll interval                 |           200 ms |
 | Run timeout                             |       30 seconds |
 | JSON request body                       |           32 KiB |
 | SSE connections per visitor/global      |           2 / 32 |
@@ -88,8 +88,8 @@ contract:
 | Cycles to skip / count |   1 / 2 |                                 0–2 / 1–3 |
 | Noise protection       |     0 s |                                     0–3 s |
 | Process gain           |     1.0 |       magnitude 0.1–5.0; zero is rejected |
-| Time constant          |   0.1 s |                                  0.05–5 s |
-| Dead time              |  0.25 s |                                     0–2 s |
+| Time constant          |   0.5 s |                                  0.05–5 s |
+| Dead time              |   1.0 s |                                     0–2 s |
 | PV/MV range            |   0–100 | endpoints -1000–1000; ordered span 1–1000 |
 | Initial PV/MV          | 50 / 50 | within the corresponding configured range |
 | Measurement noise      |       0 |            0–5% of the configured PV span |

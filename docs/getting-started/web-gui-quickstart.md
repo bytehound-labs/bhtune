@@ -44,7 +44,7 @@ catalog. Demo run history, detail, streaming, cancellation, export, and deletion
 by the Demo form, with a fixed safe tag, bounded simulator ranges and timing values, and a
 controller direction that must provide negative feedback for the selected positive or negative
 process gain. The Demo defaults are a 0–100 PV/MV range with initial values of 50, gain 1.0,
-time constant 0.1 seconds, dead time 0.25 seconds, zero noise, relay amplitude 10%, one skipped
+time constant 0.5 seconds, dead time 1 second, zero noise, relay amplitude 10%, one skipped
 cycle, two counted cycles, and zero seconds of noise protection.
 
 Demo policy limits and simulator timing are fixed application-owned values rather than public

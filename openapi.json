@@ -1919,8 +1919,8 @@
             "type": "integer",
             "format": "int64",
             "description": "Simulator polling interval.",
-            "maximum": 50,
-            "minimum": 50
+            "maximum": 200,
+            "minimum": 200
           },
           "retained_runs_per_visitor": {
             "type": "integer",

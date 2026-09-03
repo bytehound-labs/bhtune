@@ -41,7 +41,7 @@ pub const MIN_OPC_RESTORE_TIMEOUT_SECS: u64 = 4;
 /// Fixed lifetime of an anonymous public Demo visitor session.
 pub const DEMO_SESSION_TTL_SECS: u64 = 86_400;
 /// Fixed simulator polling interval used by public Demo tunes.
-pub const DEMO_POLL_INTERVAL_MS: u64 = 50;
+pub const DEMO_POLL_INTERVAL_MS: u64 = 200;
 /// Fixed whole-run timeout used by public Demo tunes.
 pub const DEMO_RUN_TIMEOUT_SECS: u64 = 30;
 /// Maximum number of Demo tunes that may be active across all visitors.
@@ -138,9 +138,9 @@ pub const DEMO_NOISE_PROTECTION_SECS_DEFAULT: u32 = 0;
 /// Default simulator process gain used by the Demo form.
 pub const DEMO_SIM_GAIN_DEFAULT: f32 = 1.0;
 /// Default simulator time constant used by the Demo form.
-pub const DEMO_SIM_TAU_DEFAULT: f32 = 0.1;
+pub const DEMO_SIM_TAU_DEFAULT: f32 = 0.5;
 /// Default simulator dead time used by the Demo form.
-pub const DEMO_SIM_DEAD_TIME_DEFAULT: f32 = 0.25;
+pub const DEMO_SIM_DEAD_TIME_DEFAULT: f32 = 1.0;
 /// Default simulator noise amplitude used by the Demo form.
 pub const DEMO_SIM_NOISE_DEFAULT: f32 = 0.0;
 /// Default simulator random seed used by the Demo form.
@@ -170,8 +170,8 @@ pub struct DemoPolicy {
     #[cfg_attr(feature = "schemars", schemars(range(min = 86_400, max = 86_400)))]
     pub session_ttl_secs: u64,
     /// Simulator polling interval.
-    #[schema(minimum = 50, maximum = 50)]
-    #[cfg_attr(feature = "schemars", schemars(range(min = 50, max = 50)))]
+    #[schema(minimum = 200, maximum = 200)]
+    #[cfg_attr(feature = "schemars", schemars(range(min = 200, max = 200)))]
     pub poll_interval_ms: u64,
     /// Whole-run timeout.
     #[schema(minimum = 30, maximum = 30)]
@@ -376,8 +376,8 @@ pub struct DemoPolicyConfig {
     /// Anonymous visitor-session lifetime. Fixed at 86,400 seconds.
     #[cfg_attr(feature = "schemars", schemars(range(min = 86_400, max = 86_400)))]
     pub session_ttl_secs: Option<u64>,
-    /// Simulator polling interval. Fixed at 50 milliseconds.
-    #[cfg_attr(feature = "schemars", schemars(range(min = 50, max = 50)))]
+    /// Simulator polling interval. Fixed at 200 milliseconds.
+    #[cfg_attr(feature = "schemars", schemars(range(min = 200, max = 200)))]
     pub poll_interval_ms: Option<u64>,
     /// Whole-run timeout. Fixed at 30 seconds.
     #[cfg_attr(feature = "schemars", schemars(range(min = 30, max = 30)))]
@@ -3966,7 +3966,7 @@ rate_window_secs = 10
         let properties = schema["properties"].as_object().unwrap();
         let expected = [
             ("session_ttl_secs", 86_400_u64),
-            ("poll_interval_ms", 50),
+            ("poll_interval_ms", 200),
             ("run_timeout_secs", 30),
             ("max_active_runs_global", 8),
             ("max_active_runs_per_visitor", 1),

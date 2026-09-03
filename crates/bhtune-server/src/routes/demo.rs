@@ -1557,8 +1557,8 @@ mod tests {
         assert_eq!(parsed.cycles_count, Some(2));
         assert_eq!(parsed.noise_protection_secs, Some(0));
         assert_eq!(parsed.sim_gain, 1.0);
-        assert_eq!(parsed.sim_tau, 0.1);
-        assert_eq!(parsed.sim_dead_time, 0.25);
+        assert_eq!(parsed.sim_tau, 0.5);
+        assert_eq!(parsed.sim_dead_time, 1.0);
         assert_eq!(parsed.sim_noise, 0.0);
         assert_eq!(parsed.sim_seed, 0);
         assert_eq!(parsed.sim_initial_pv, 50.0);

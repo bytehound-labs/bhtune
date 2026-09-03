@@ -59,7 +59,7 @@ running tune keeps its captured values.
 
 ### Public Demo mode
 
-Demo mode is a separate, simulator-only server surface. Its 50 ms poll interval, 30-second
+Demo mode is a separate, simulator-only server surface. Its 200 ms poll interval, 30-second
 run timeout, request limits, quotas, session lifetime, and history caps are fixed
 application-owned safeguards. The optional `[demo]` configuration table can declare those
 values for deployment validation, but it cannot widen or otherwise override them. Demo runs

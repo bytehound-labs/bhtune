@@ -271,14 +271,14 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
           "minimum": 10
         },
         "poll_interval_ms": {
-          "description": "Simulator polling interval. Fixed at 50 milliseconds.",
+          "description": "Simulator polling interval. Fixed at 200 milliseconds.",
           "type": [
             "integer",
             "null"
           ],
           "format": "uint64",
-          "maximum": 50,
-          "minimum": 50
+          "maximum": 200,
+          "minimum": 200
         },
         "retained_runs_per_visitor": {
           "description": "Completed runs retained for one visitor. Fixed at 10.",

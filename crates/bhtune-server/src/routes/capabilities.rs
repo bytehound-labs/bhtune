@@ -450,10 +450,10 @@ mod tests {
             response.simulator.as_ref().unwrap().defaults.cycles_count,
             2
         );
-        assert_eq!(response.simulator.as_ref().unwrap().defaults.sim_tau, 0.1);
+        assert_eq!(response.simulator.as_ref().unwrap().defaults.sim_tau, 0.5);
         assert_eq!(
             response.simulator.as_ref().unwrap().defaults.sim_dead_time,
-            0.25
+            1.0
         );
         assert_eq!(
             response.simulator.as_ref().unwrap().defaults.direction,

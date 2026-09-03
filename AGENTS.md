@@ -1871,7 +1871,7 @@ weaken the public contract:
 | Control                                |           Fixed value |
 | -------------------------------------- | --------------------: |
 | Anonymous session lifetime             |        86,400 seconds |
-| Simulator poll interval                |                 50 ms |
+| Simulator poll interval                |                200 ms |
 | Whole-run timeout                      |            30 seconds |
 | Active runs globally / per visitor     |                 8 / 1 |
 | Accepted starts per token / client IP  | 6 / 6 per 600 seconds |
@@ -1885,7 +1885,7 @@ weaken the public contract:
 
 Demo accepts only bounded simulator requests. The curated defaults are Yokogawa CentumVP,
 Flow/PI, reverse action, relay amplitude 10%, cycles skip/count `1/2`, zero noise protection,
-simulator gain/time constant/dead time/noise/seed `1.0/0.1/0.25/0/0`, PV/MV ranges `0–100`,
+simulator gain/time constant/dead time/noise/seed `1.0/0.5/1.0/0/0`, PV/MV ranges `0–100`,
 and initial PV/MV `50`. Explicit values are bounded before the owned `prepare()` path: relay
 amplitude `1–20%`, skipped cycles `0–2`, counted cycles `1–3`, noise protection `0–3` seconds,
 gain magnitude `0.1–5.0` excluding zero, time constant `0.05–5` seconds, dead time `0–2`

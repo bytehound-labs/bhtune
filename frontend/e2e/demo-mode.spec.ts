@@ -42,7 +42,7 @@ const capabilities = {
   },
   demo_policy: {
     session_ttl_secs: 86_400,
-    poll_interval_ms: 50,
+    poll_interval_ms: 200,
     run_timeout_secs: 30,
     max_active_runs_global: 8,
     max_active_runs_per_visitor: 1,
@@ -77,15 +77,15 @@ const capabilities = {
       direction: "reverse",
       pv_range: { min: 0, max: 100, absolute_min: null },
       mv_range: { min: 0, max: 100, absolute_min: null },
-      poll_interval_ms: 50,
+      poll_interval_ms: 200,
       run_timeout_secs: 30,
       relay_amp: 10,
       cycles_skip: 1,
       cycles_count: 2,
       noise_protection_secs: 0,
       sim_gain: 1,
-      sim_tau: 0.1,
-      sim_dead_time: 0.25,
+      sim_tau: 0.5,
+      sim_dead_time: 1.0,
       sim_noise: 0,
       sim_seed: 0,
       sim_initial_pv: 50,
@@ -620,8 +620,8 @@ test.describe("Demo mode contract", () => {
       mv_range_low: 0,
       mv_range_high: 100,
       sim_gain: 1,
-      sim_tau: 0.1,
-      sim_dead_time: 0.25,
+      sim_tau: 0.5,
+      sim_dead_time: 1.0,
       sim_noise: 0,
       sim_seed: 0,
       sim_initial_pv: 50,
@@ -843,8 +843,8 @@ test.describe("Demo mode contract", () => {
       mv_range_low: 0,
       mv_range_high: 100,
       sim_gain: 1,
-      sim_tau: 0.1,
-      sim_dead_time: 0.25,
+      sim_tau: 0.5,
+      sim_dead_time: 1.0,
       sim_noise: 0,
       sim_seed: 0,
       sim_initial_pv: 50,
@@ -867,8 +867,8 @@ test.describe("Demo mode contract", () => {
     await page.goto("/runs/new");
 
     await expect(page.getByLabel("Template")).toHaveValue("Yokogawa CentumVP");
-    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.1");
-    await expect(page.getByLabel("Dead time (s)")).toHaveValue("0.25");
+    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.5");
+    await expect(page.getByLabel("Dead time (s)")).toHaveValue("1");
     await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
     expect(
       await page.evaluate(() =>
@@ -892,8 +892,8 @@ test.describe("Demo mode contract", () => {
     });
     await page.reload();
     await expect(page.getByLabel("Template")).toHaveValue("Yokogawa CentumVP");
-    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.1");
-    await expect(page.getByLabel("Dead time (s)")).toHaveValue("0.25");
+    await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.5");
+    await expect(page.getByLabel("Dead time (s)")).toHaveValue("1");
     await expect(page.getByLabel("Noise protection (s)")).toHaveValue("0");
     expect(
       await page.evaluate(() =>
