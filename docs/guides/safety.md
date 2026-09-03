@@ -57,6 +57,16 @@ four-second actuation-confirmation window. Simulator runs may use a shorter posi
 timeout. Configuration changes affect future tune preparations only; an already-prepared or
 running tune keeps its captured values.
 
+### Public Demo mode
+
+Demo mode is a separate, simulator-only server surface. Its 50 ms poll interval, 30-second
+run timeout, request limits, quotas, session lifetime, and history caps are fixed
+application-owned safeguards. The optional `[demo]` configuration table can declare those
+values for deployment validation, but it cannot widen or otherwise override them. Demo runs
+use the stable **Simulator demo** identity and never connect to OPC DA or write PID constants.
+See the [public simulator demo guide](public-simulator-demo.md) for the complete boundary and
+self-hosting requirements.
+
 ## Timing and host responsiveness
 
 Live OPC DA runs measure MRFT time with a monotonic clock paired to the run's UTC start
@@ -194,6 +204,11 @@ so a rejected MV write doesn't also prevent the mode from being put back. `bhtun
 <run-id>` (or the run detail screen) reports the restore outcome as one of two states:
 **confirmed**, or **incomplete** — naming exactly which step(s) failed so you know what to check
 by hand. An incomplete restore exits with code `6`, distinct from a normal abort.
+
+Preparation records the run before writing its effective timing, quality policy, connection,
+and other provenance metadata. If one of those follow-up writes fails, BHTune immediately
+marks the row **failed** instead of leaving it permanently **running**. If the terminal update
+itself cannot be persisted, the row is removed as a fallback and the failure is logged.
 
 ## PID write-back
 

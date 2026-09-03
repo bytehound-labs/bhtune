@@ -8,6 +8,7 @@ import {
   OUTCOME_LABELS,
   PROCESS_TYPE_LABELS,
 } from "../../lib/enumLabels";
+import type { AppCapabilities } from "../../api/capabilities";
 import {
   Badge,
   Button,
@@ -37,7 +38,12 @@ const outcomeTone = {
 
 const PAGE_SIZE = 50;
 
-export function RunListPage() {
+export function RunListPage({
+  capabilities,
+}: {
+  readonly capabilities: AppCapabilities;
+}) {
+  const isDemo = capabilities.mode === "demo";
   const [processType, setProcessType] = useState("");
   const [outcome, setOutcome] = useState("");
   const [driver, setDriver] = useState("");
@@ -52,7 +58,7 @@ export function RunListPage() {
     ...(outcome && { outcome: outcome as (typeof OUTCOMES)[number] }),
     ...(driver && { driver: driver as (typeof DRIVERS)[number] }),
   };
-  const runs = useRuns(filter);
+  const runs = useRuns(filter, true, isDemo ? "demo" : "full");
 
   function resetPageAnd(setter: (value: string) => void) {
     return (value: string) => {
@@ -65,7 +71,11 @@ export function RunListPage() {
     <div>
       <PageHeading
         title="History"
-        description="Review completed tunes and monitor active tunes."
+        description={
+          isDemo
+            ? "Review synthetic tunes created in this browser session."
+            : "Review completed tunes and monitor active tunes."
+        }
         actions={
           <Link to="/runs/new">
             <Button variant="primary">New tune</Button>
@@ -73,43 +83,64 @@ export function RunListPage() {
         }
       />
 
+      {isDemo && (
+        <div className="mb-6 rounded-lg border-2 border-amber-700 bg-amber-950/50 px-5 py-4 text-sm text-amber-100">
+          <strong>Simulator-only demo.</strong> Every tune and calculated result
+          is synthetic and isolated to this browser. Nothing on this page came
+          from plant equipment.
+          {capabilities.quotas && (
+            <>
+              {" "}
+              History retains up to{" "}
+              {capabilities.quotas.retained_runs_per_visitor} runs.
+            </>
+          )}
+        </div>
+      )}
+
       <div className="mb-4 flex flex-wrap gap-3">
-        <select
-          value={processType}
-          onChange={(e) => resetPageAnd(setProcessType)(e.target.value)}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
-        >
-          <option value="">All process types</option>
-          {PROCESS_TYPES.map((p) => (
-            <option key={p} value={p}>
-              {PROCESS_TYPE_LABELS[p]}
-            </option>
-          ))}
-        </select>
-        <select
-          value={outcome}
-          onChange={(e) => resetPageAnd(setOutcome)(e.target.value)}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
-        >
-          <option value="">All outcomes</option>
-          {OUTCOMES.map((o) => (
-            <option key={o} value={o}>
-              {OUTCOME_LABELS[o]}
-            </option>
-          ))}
-        </select>
-        <select
-          value={driver}
-          onChange={(e) => resetPageAnd(setDriver)(e.target.value)}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
-        >
-          <option value="">All drivers</option>
-          {DRIVERS.map((b) => (
-            <option key={b} value={b}>
-              {DRIVER_LABELS[b]}
-            </option>
-          ))}
-        </select>
+        {!isDemo && (
+          <select
+            value={processType}
+            onChange={(e) => resetPageAnd(setProcessType)(e.target.value)}
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
+          >
+            <option value="">All process types</option>
+            {PROCESS_TYPES.map((p) => (
+              <option key={p} value={p}>
+                {PROCESS_TYPE_LABELS[p]}
+              </option>
+            ))}
+          </select>
+        )}
+        {!isDemo && (
+          <select
+            value={outcome}
+            onChange={(e) => resetPageAnd(setOutcome)(e.target.value)}
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
+          >
+            <option value="">All outcomes</option>
+            {OUTCOMES.map((o) => (
+              <option key={o} value={o}>
+                {OUTCOME_LABELS[o]}
+              </option>
+            ))}
+          </select>
+        )}
+        {!isDemo && (
+          <select
+            value={driver}
+            onChange={(e) => resetPageAnd(setDriver)(e.target.value)}
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
+          >
+            <option value="">All drivers</option>
+            {DRIVERS.map((b) => (
+              <option key={b} value={b}>
+                {DRIVER_LABELS[b]}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       {runs.isPending && <LoadingState message="Loading runs…" />}
@@ -118,6 +149,7 @@ export function RunListPage() {
           message={userFacingErrorMessage(
             runs.error,
             "Unable to load tune history.",
+            isDemo,
           )}
         />
       )}
@@ -132,42 +164,54 @@ export function RunListPage() {
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="px-4 py-2 font-medium">ID</th>
-                  <th className="px-4 py-2 font-medium">Tag name</th>
+                  <th className="px-4 py-2 font-medium">
+                    {isDemo ? "Tune" : "Tag name"}
+                  </th>
                   <th className="px-4 py-2 font-medium">Process type</th>
                   <th className="px-4 py-2 font-medium">Outcome</th>
-                  <th className="px-4 py-2 font-medium">Driver</th>
+                  {!isDemo && <th className="px-4 py-2 font-medium">Driver</th>}
                   <th className="px-4 py-2 font-medium">Started</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {runs.data.runs.map((run) => (
-                  <tr key={run.id} className="hover:bg-slate-900/30">
-                    <td className="px-4 py-3 font-mono text-slate-400">
-                      <Link to={`/runs/${run.id}`} className="hover:underline">
-                        #{run.id}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 font-medium">
-                      <Link to={`/runs/${run.id}`} className="hover:underline">
-                        {run.tag_name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-slate-400">
-                      {PROCESS_TYPE_LABELS[run.process_type]}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone={outcomeTone[run.outcome]}>
-                        {OUTCOME_LABELS[run.outcome]}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-slate-400">
-                      {DRIVER_LABELS[run.driver]}
-                    </td>
-                    <td className="px-4 py-3 text-slate-400">
-                      {new Date(run.started_at).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
+                {runs.data.runs.map((run) => {
+                  return (
+                    <tr key={run.id} className="hover:bg-slate-900/30">
+                      <td className="px-4 py-3 font-mono text-slate-400">
+                        <Link
+                          to={`/runs/${run.id}`}
+                          className="hover:underline"
+                        >
+                          #{run.id}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 font-medium">
+                        <Link
+                          to={`/runs/${run.id}`}
+                          className="hover:underline"
+                        >
+                          {isDemo ? "Simulator demo" : run.tag_name}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 text-slate-400">
+                        {PROCESS_TYPE_LABELS[run.process_type]}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge tone={outcomeTone[run.outcome]}>
+                          {OUTCOME_LABELS[run.outcome]}
+                        </Badge>
+                      </td>
+                      {!isDemo && (
+                        <td className="px-4 py-3 text-slate-400">
+                          {DRIVER_LABELS[run.driver]}
+                        </td>
+                      )}
+                      <td className="px-4 py-3 text-slate-400">
+                        {new Date(run.started_at).toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

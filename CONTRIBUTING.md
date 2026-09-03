@@ -101,14 +101,20 @@ and validation rules rather than treating "latest" as an unconditional upgrade p
   Add tests for new code — including error branches and edge cases — in the same PR.
 - End-to-end browser tests live in `frontend/e2e/` (Playwright), driving a real
   `bhtune-server` running the simulator driver through the actual built UI — no mocked HTTP
-  layer. Run locally with:
+  layer for the real suites. The mocked Demo contract suite runs in the same Demo project.
+  Run the Full and Demo projects independently with:
 
   ```sh
   pnpm --filter bhtune-frontend run build   # builds frontend/dist/
   cargo build -p bhtune-server              # debug build serves dist/ live off disk
   npx --prefix frontend playwright install chromium   # first run only
-  pnpm --filter bhtune-frontend run test:e2e
+  PLAYWRIGHT_MODE=full pnpm --filter bhtune-frontend exec playwright test --project=full
+  PLAYWRIGHT_MODE=demo pnpm --filter bhtune-frontend exec playwright test --project=demo
   ```
+
+  The Demo project also requires `openssl` for its isolated loopback HTTPS certificate. Running
+  `pnpm --filter bhtune-frontend run test:e2e` without `PLAYWRIGHT_MODE` runs both projects and
+  starts both isolated test servers.
 
 ## CI
 

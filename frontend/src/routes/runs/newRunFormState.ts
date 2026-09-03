@@ -1,5 +1,6 @@
 import type { NewRunDraft, StartRunRequest } from "../../api/runs";
 import type { components } from "../../api/schema";
+import type { SimulatorCapabilities } from "../../api/capabilities";
 import { derivedTagPreview } from "../../lib/opcTags";
 import {
   DEFAULT_TAG_MAPPING_SOURCES,
@@ -23,6 +24,30 @@ export type ControllerType = components["schemas"]["ControllerType"];
 export type ResponseLevel = components["schemas"]["ResponseLevel"];
 type TagOverrides = components["schemas"]["TagOverrides"];
 export type TemplateResponse = components["schemas"]["TemplateResponse"];
+export type DemoStartRunRequest = Pick<
+  StartRunRequest,
+  | "driver"
+  | "template"
+  | "tagname"
+  | "process_type"
+  | "controller_type"
+  | "relay_amp"
+  | "cycles_skip"
+  | "cycles_count"
+  | "noise_protection_secs"
+  | "direction"
+  | "pv_range_high"
+  | "pv_range_low"
+  | "mv_range_high"
+  | "mv_range_low"
+  | "sim_gain"
+  | "sim_tau"
+  | "sim_dead_time"
+  | "sim_noise"
+  | "sim_seed"
+  | "sim_initial_pv"
+  | "sim_initial_mv"
+>;
 
 export const DRIVERS: readonly TuneDriver[] = ["simulator", "opcda"];
 export const PROCESS_TYPES: readonly ProcessType[] = [
@@ -92,6 +117,27 @@ export const TEMPERATURE_PROCESS_TYPES = new Set<ProcessType>([
   "temperature_mixing",
   "temperature_heat_exchange",
 ]);
+
+export function demoProcessDefaultsFor(
+  capabilities: SimulatorCapabilities,
+  _processType: ProcessType,
+): ProcessDefaults {
+  return {
+    cyclesSkip: capabilities.defaults.cycles_skip,
+    cyclesCount: capabilities.defaults.cycles_count,
+    noiseProtectionSecs: capabilities.defaults.noise_protection_secs,
+  };
+}
+
+export function demoControllerTypesFor(
+  capabilities: SimulatorCapabilities,
+  processType: ProcessType,
+): readonly ControllerType[] {
+  return (
+    capabilities.compatibility.find((item) => item.process_type === processType)
+      ?.controller_types ?? []
+  );
+}
 
 const TAG_PREVIEW_LABELS: Record<TagOverrideKey, string> = {
   processVariable: "Process variable (PV)",
@@ -217,6 +263,357 @@ export const initialForm: FormState = {
   writePid: "",
   yes: false,
 };
+
+/** Builds Demo form state exclusively from the server capability contract. */
+export function formFromDemoCapabilities(
+  capabilities: SimulatorCapabilities,
+): FormState {
+  const processType = capabilities.process_types[0];
+  const controllerType = processType
+    ? demoControllerTypesFor(capabilities, processType)[0]
+    : undefined;
+  const processDefaults = processType
+    ? demoProcessDefaultsFor(capabilities, processType)
+    : undefined;
+  if (!processType || !controllerType || !processDefaults) {
+    throw new Error(
+      "The server did not provide a complete Demo process/controller contract.",
+    );
+  }
+
+  return {
+    ...initialForm,
+    driver: "simulator",
+    template: capabilities.template,
+    tagname: capabilities.tag_name,
+    processType,
+    controllerType,
+    relayAmp: capabilities.defaults.relay_amp,
+    ...processDefaults,
+    simDirection: capabilities.defaults.direction,
+    simPvRangeHigh: capabilities.defaults.pv_range.max,
+    simPvRangeLow: capabilities.defaults.pv_range.min,
+    simMvRangeHigh: capabilities.defaults.mv_range.max,
+    simMvRangeLow: capabilities.defaults.mv_range.min,
+    simGain: capabilities.defaults.sim_gain,
+    simTau: capabilities.defaults.sim_tau,
+    simDeadTime: capabilities.defaults.sim_dead_time,
+    simNoise: capabilities.defaults.sim_noise,
+    simSeed: capabilities.defaults.sim_seed,
+    simInitialPv: capabilities.defaults.sim_initial_pv,
+    simInitialMv: capabilities.defaults.sim_initial_mv,
+  };
+}
+
+function recordRequest(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function requestNumber(
+  request: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = request[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function requestInteger(
+  request: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = requestNumber(request, key);
+  return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
+}
+
+function within(
+  value: number | undefined,
+  bounds: {
+    readonly min: number;
+    readonly max: number;
+    readonly absolute_min?: number | null;
+  },
+): value is number {
+  return (
+    value !== undefined &&
+    value >= bounds.min &&
+    value <= bounds.max &&
+    (bounds.absolute_min == null || Math.abs(value) >= bounds.absolute_min)
+  );
+}
+
+function demoNumber(
+  request: Record<string, unknown>,
+  key: string,
+  bounds: {
+    readonly min: number;
+    readonly max: number;
+    readonly absolute_min?: number | null;
+  },
+  fallback: number,
+): number {
+  const value = requestNumber(request, key);
+  return within(value, bounds) ? value : fallback;
+}
+
+function demoInteger(
+  request: Record<string, unknown>,
+  key: string,
+  bounds: {
+    readonly min: number;
+    readonly max: number;
+  },
+  fallback: number,
+): number {
+  const value = requestInteger(request, key);
+  return value !== undefined && value >= bounds.min && value <= bounds.max
+    ? value
+    : fallback;
+}
+
+function demoRange(
+  request: Record<string, unknown>,
+  lowKey: string,
+  highKey: string,
+  defaults: { readonly min: number; readonly max: number },
+  endpointBounds: { readonly min: number; readonly max: number },
+  spanBounds: { readonly min: number; readonly max: number },
+): { readonly min: number; readonly max: number } {
+  const low = requestNumber(request, lowKey);
+  const high = requestNumber(request, highKey);
+  if (
+    within(low, endpointBounds) &&
+    within(high, endpointBounds) &&
+    high > low &&
+    within(high - low, spanBounds)
+  ) {
+    return { min: low, max: high };
+  }
+  return defaults;
+}
+
+function demoInitialValue(
+  request: Record<string, unknown>,
+  key: string,
+  range: { readonly min: number; readonly max: number },
+  fallback: number,
+): number {
+  const value = requestNumber(request, key);
+  if (value !== undefined && value >= range.min && value <= range.max) {
+    return value;
+  }
+  return Math.min(range.max, Math.max(range.min, fallback));
+}
+
+/**
+ * Converts an untrusted payload into safe Demo form state. Demo hydration is deliberately a
+ * form operation, not a request shortcut: every value is checked against the server
+ * capability contract and the final submit still passes through `normalizeSimulatorRequest`.
+ */
+function formFromDemoInput(
+  request: unknown,
+  capabilities: SimulatorCapabilities,
+): FormState {
+  const source = recordRequest(request);
+  const defaults = formFromDemoCapabilities(capabilities);
+  const template =
+    typeof source.template === "string" &&
+    capabilities.templates.includes(source.template)
+      ? source.template
+      : defaults.template;
+  const processType =
+    typeof source.process_type === "string" &&
+    capabilities.process_types.includes(source.process_type as ProcessType)
+      ? (source.process_type as ProcessType)
+      : defaults.processType;
+  const controllerTypes = demoControllerTypesFor(capabilities, processType);
+  const controllerType =
+    typeof source.controller_type === "string" &&
+    controllerTypes.includes(source.controller_type as ControllerType)
+      ? (source.controller_type as ControllerType)
+      : controllerTypes[0];
+  const endpointBounds = capabilities.limits.range_endpoint;
+  const spanBounds = capabilities.limits.range_span;
+  const pvRange = demoRange(
+    source,
+    "pv_range_low",
+    "pv_range_high",
+    {
+      min: capabilities.defaults.pv_range.min,
+      max: capabilities.defaults.pv_range.max,
+    },
+    endpointBounds,
+    spanBounds,
+  );
+  const mvRange = demoRange(
+    source,
+    "mv_range_low",
+    "mv_range_high",
+    {
+      min: capabilities.defaults.mv_range.min,
+      max: capabilities.defaults.mv_range.max,
+    },
+    endpointBounds,
+    spanBounds,
+  );
+  const simGain = demoNumber(
+    source,
+    "sim_gain",
+    capabilities.limits.sim_gain,
+    capabilities.defaults.sim_gain,
+  );
+  const simNoise = Math.min(
+    demoNumber(
+      source,
+      "sim_noise",
+      {
+        min: 0,
+        max:
+          (pvRange.max - pvRange.min) *
+          capabilities.limits.max_noise_fraction_of_pv_span,
+      },
+      capabilities.defaults.sim_noise,
+    ),
+    (pvRange.max - pvRange.min) *
+      capabilities.limits.max_noise_fraction_of_pv_span,
+  );
+  const processDefaults = demoProcessDefaultsFor(capabilities, processType);
+
+  return {
+    ...defaults,
+    template,
+    processType,
+    controllerType,
+    relayAmp: demoNumber(
+      source,
+      "relay_amp",
+      capabilities.limits.relay_amp,
+      capabilities.defaults.relay_amp,
+    ),
+    ...processDefaults,
+    cyclesSkip: demoInteger(
+      source,
+      "cycles_skip",
+      capabilities.limits.cycles_skip,
+      capabilities.defaults.cycles_skip,
+    ),
+    cyclesCount: demoInteger(
+      source,
+      "cycles_count",
+      capabilities.limits.cycles_count,
+      capabilities.defaults.cycles_count,
+    ),
+    noiseProtectionSecs: demoInteger(
+      source,
+      "noise_protection_secs",
+      capabilities.limits.noise_protection_secs,
+      capabilities.defaults.noise_protection_secs,
+    ),
+    simDirection: simGain < 0 ? "direct" : "reverse",
+    simPvRangeLow: pvRange.min,
+    simPvRangeHigh: pvRange.max,
+    simMvRangeLow: mvRange.min,
+    simMvRangeHigh: mvRange.max,
+    simGain,
+    simTau: demoNumber(
+      source,
+      "sim_tau",
+      capabilities.limits.sim_tau,
+      capabilities.defaults.sim_tau,
+    ),
+    simDeadTime: demoNumber(
+      source,
+      "sim_dead_time",
+      capabilities.limits.sim_dead_time,
+      capabilities.defaults.sim_dead_time,
+    ),
+    simNoise,
+    simSeed: demoInteger(
+      source,
+      "sim_seed",
+      capabilities.limits.sim_seed,
+      capabilities.defaults.sim_seed,
+    ),
+    simInitialPv: demoInitialValue(
+      source,
+      "sim_initial_pv",
+      pvRange,
+      capabilities.defaults.sim_initial_pv,
+    ),
+    simInitialMv: demoInitialValue(
+      source,
+      "sim_initial_mv",
+      mvRange,
+      capabilities.defaults.sim_initial_mv,
+    ),
+  };
+}
+
+/**
+ * Converts a saved browser-local Demo draft into form state. Current drafts keep simulator
+ * ranges and direction under `source_*`; older drafts used the generic fields, which remain a
+ * fallback unless the draft explicitly came from the OPC DA driver.
+ */
+export function formFromDemoDraft(
+  draft: unknown,
+  capabilities: SimulatorCapabilities,
+): FormState {
+  const source = recordRequest(draft);
+  const legacyOpc =
+    source.source_driver === "opcda" ||
+    (source.source_driver === undefined && source.driver === "opcda");
+  const simulatorDraftValue = (
+    sourceKey: string,
+    legacyKey: string,
+  ): unknown => {
+    if (source[sourceKey] !== undefined) return source[sourceKey];
+    return legacyOpc ? undefined : source[legacyKey];
+  };
+  const simulatorScalarValue = (key: string): unknown =>
+    legacyOpc ? undefined : source[key];
+
+  return formFromDemoInput(
+    {
+      ...source,
+      direction: simulatorDraftValue("source_direction", "direction"),
+      pv_range_low: simulatorDraftValue("source_pv_range_low", "pv_range_low"),
+      pv_range_high: simulatorDraftValue(
+        "source_pv_range_high",
+        "pv_range_high",
+      ),
+      mv_range_low: simulatorDraftValue("source_mv_range_low", "mv_range_low"),
+      mv_range_high: simulatorDraftValue(
+        "source_mv_range_high",
+        "mv_range_high",
+      ),
+      sim_gain: simulatorScalarValue("sim_gain"),
+      sim_tau: simulatorScalarValue("sim_tau"),
+      sim_dead_time: simulatorScalarValue("sim_dead_time"),
+      sim_noise: simulatorScalarValue("sim_noise"),
+      sim_seed: simulatorScalarValue("sim_seed"),
+      sim_initial_pv: simulatorScalarValue("sim_initial_pv"),
+      sim_initial_mv: simulatorScalarValue("sim_initial_mv"),
+    },
+    capabilities,
+  );
+}
+
+/**
+ * Converts an untrusted duplicate payload into safe Demo form state. Demo duplication is
+ * deliberately a form operation, not a request shortcut: every value is checked against the
+ * server capability contract and the final submit still passes through
+ * `normalizeSimulatorRequest`.
+ */
+export function formFromDemoDuplicate(
+  request: unknown,
+  capabilities: SimulatorCapabilities,
+): FormState {
+  return formFromDemoInput(request, capabilities);
+}
 
 function toOptional(value: NumOrBlank): number | undefined {
   return value === "" ? undefined : value;
@@ -776,6 +1173,30 @@ export function draftFromForm(form: FormState): NewRunDraft {
   };
 }
 
+/** Serializes only fields visible and editable in Demo mode. */
+export function demoDraftFromForm(form: FormState): NewRunDraft {
+  return {
+    template: form.template,
+    process_type: form.processType,
+    controller_type: form.controllerType,
+    relay_amp: toNullable(form.relayAmp),
+    cycles_skip: toNullable(form.cyclesSkip),
+    cycles_count: toNullable(form.cyclesCount),
+    noise_protection_secs: toNullable(form.noiseProtectionSecs),
+    pv_range_high: toNullable(form.simPvRangeHigh),
+    pv_range_low: toNullable(form.simPvRangeLow),
+    mv_range_high: toNullable(form.simMvRangeHigh),
+    mv_range_low: toNullable(form.simMvRangeLow),
+    sim_gain: toNullable(form.simGain),
+    sim_tau: toNullable(form.simTau),
+    sim_dead_time: toNullable(form.simDeadTime),
+    sim_noise: toNullable(form.simNoise),
+    sim_seed: toNullable(form.simSeed),
+    sim_initial_pv: toNullable(form.simInitialPv),
+    sim_initial_mv: toNullable(form.simInitialMv),
+  };
+}
+
 type MappingValidation = {
   readonly source: ValueMappingSource;
   readonly fixedValue: NumOrBlank | ControllerDirection;
@@ -1005,4 +1426,184 @@ export function buildRequest(form: FormState): StartRunRequest | string {
     yes: form.yes,
     write_pid: form.writePid || undefined,
   };
+}
+
+function bounded(
+  value: number,
+  range: {
+    readonly min: number;
+    readonly max: number;
+    readonly absolute_min?: number | null;
+  },
+  label: string,
+): number | string {
+  if (!Number.isFinite(value) || value < range.min || value > range.max) {
+    return `${label} must be between ${range.min} and ${range.max}.`;
+  }
+  if (range.absolute_min != null && Math.abs(value) < range.absolute_min) {
+    return `${label} must be between ${range.min} and -${range.absolute_min}, or between ${range.absolute_min} and ${range.max}.`;
+  }
+  return value;
+}
+
+/**
+ * Produces the deliberately small request accepted by the public simulator. It does not
+ * forward stale OPC mappings, notes, write-back flags, or a user-edited tag from Full mode.
+ */
+export function normalizeSimulatorRequest(
+  form: FormState,
+  capabilities: SimulatorCapabilities,
+): DemoStartRunRequest | string {
+  const relayAmp = form.relayAmp === "" ? undefined : form.relayAmp;
+  const cyclesSkip = form.cyclesSkip === "" ? undefined : form.cyclesSkip;
+  const cyclesCount = form.cyclesCount === "" ? undefined : form.cyclesCount;
+  const noiseProtectionSecs =
+    form.noiseProtectionSecs === "" ? undefined : form.noiseProtectionSecs;
+  const numbers: readonly [
+    number | undefined,
+    { min: number; max: number },
+    string,
+  ][] = [
+    [relayAmp, capabilities.limits.relay_amp, "Relay amplitude"],
+    [cyclesSkip, capabilities.limits.cycles_skip, "Cycles to skip"],
+    [cyclesCount, capabilities.limits.cycles_count, "Cycles to count"],
+    [
+      noiseProtectionSecs,
+      capabilities.limits.noise_protection_secs,
+      "Noise protection",
+    ],
+    [
+      typeof form.simGain === "number" ? form.simGain : undefined,
+      capabilities.limits.sim_gain,
+      "Process gain",
+    ],
+    [
+      typeof form.simTau === "number" ? form.simTau : undefined,
+      capabilities.limits.sim_tau,
+      "Time constant",
+    ],
+    [
+      typeof form.simDeadTime === "number" ? form.simDeadTime : undefined,
+      capabilities.limits.sim_dead_time,
+      "Dead time",
+    ],
+    [
+      typeof form.simSeed === "number" ? form.simSeed : undefined,
+      capabilities.limits.sim_seed,
+      "RNG seed",
+    ],
+    [
+      form.simPvRangeLow === "" ? undefined : form.simPvRangeLow,
+      capabilities.limits.range_endpoint,
+      "PV range low",
+    ],
+    [
+      form.simPvRangeHigh === "" ? undefined : form.simPvRangeHigh,
+      capabilities.limits.range_endpoint,
+      "PV range high",
+    ],
+    [
+      form.simMvRangeLow === "" ? undefined : form.simMvRangeLow,
+      capabilities.limits.range_endpoint,
+      "MV range low",
+    ],
+    [
+      form.simMvRangeHigh === "" ? undefined : form.simMvRangeHigh,
+      capabilities.limits.range_endpoint,
+      "MV range high",
+    ],
+  ];
+  for (const [value, range, label] of numbers) {
+    if (value === undefined) return `${label} is required.`;
+    const error = bounded(value, range, label);
+    if (typeof error === "string") return error;
+  }
+  for (const [value, label] of [
+    [cyclesSkip, "Cycles to skip"],
+    [cyclesCount, "Cycles to count"],
+    [noiseProtectionSecs, "Noise protection"],
+  ] as const) {
+    if (!Number.isInteger(value)) {
+      return `${label} must be a whole number.`;
+    }
+  }
+  if (typeof form.simSeed !== "number" || !Number.isSafeInteger(form.simSeed)) {
+    return "RNG seed must be a whole number.";
+  }
+  if (!capabilities.templates.includes(form.template)) {
+    return "Choose a template supported by the Demo server.";
+  }
+  if (!capabilities.process_types.includes(form.processType)) {
+    return "Choose a process type supported by the Demo server.";
+  }
+  const controllerTypes = demoControllerTypesFor(
+    capabilities,
+    form.processType,
+  );
+  if (!controllerTypes.includes(form.controllerType)) {
+    return "Choose a controller type supported for this process.";
+  }
+  const pvRangeLow = form.simPvRangeLow as number;
+  const pvRangeHigh = form.simPvRangeHigh as number;
+  const mvRangeLow = form.simMvRangeLow as number;
+  const mvRangeHigh = form.simMvRangeHigh as number;
+  for (const [low, high, label] of [
+    [pvRangeLow, pvRangeHigh, "PV"],
+    [mvRangeLow, mvRangeHigh, "MV"],
+  ] as const) {
+    const span = high - low;
+    const spanError = bounded(
+      span,
+      capabilities.limits.range_span,
+      `${label} range span`,
+    );
+    if (typeof spanError === "string") return spanError;
+  }
+  const initialPv =
+    typeof form.simInitialPv === "number" ? form.simInitialPv : undefined;
+  const initialMv =
+    typeof form.simInitialMv === "number" ? form.simInitialMv : undefined;
+  const simNoise =
+    typeof form.simNoise === "number" ? form.simNoise : undefined;
+  if (initialPv === undefined) return "Initial PV is required.";
+  if (initialPv < pvRangeLow || initialPv > pvRangeHigh) {
+    return "Initial PV must be within the PV range.";
+  }
+  if (initialMv === undefined) return "Initial MV is required.";
+  if (initialMv < mvRangeLow || initialMv > mvRangeHigh) {
+    return "Initial MV must be within the MV range.";
+  }
+  if (simNoise === undefined) return "Measurement noise is required.";
+  const maxNoise =
+    (pvRangeHigh - pvRangeLow) *
+    capabilities.limits.max_noise_fraction_of_pv_span;
+  if (!Number.isFinite(simNoise) || simNoise < 0 || simNoise > maxNoise) {
+    return `Measurement noise must be between 0 and ${maxNoise} (${capabilities.limits.max_noise_fraction_of_pv_span * 100}% of the PV span).`;
+  }
+  const simGain = form.simGain as number;
+  const direction: ControllerDirection = simGain < 0 ? "direct" : "reverse";
+
+  return {
+    driver: "simulator",
+    template: form.template,
+    tagname: capabilities.tag_name,
+    process_type: form.processType,
+    controller_type: form.controllerType,
+    relay_amp: relayAmp as number,
+    cycles_skip: cyclesSkip,
+    cycles_count: cyclesCount,
+    noise_protection_secs: noiseProtectionSecs,
+    direction,
+    pv_range_high: pvRangeHigh,
+    pv_range_low: pvRangeLow,
+    mv_range_high: mvRangeHigh,
+    mv_range_low: mvRangeLow,
+    sim_gain: simGain,
+    sim_tau: form.simTau as number,
+    sim_dead_time: form.simDeadTime as number,
+    sim_noise: simNoise,
+    sim_seed: form.simSeed as number,
+    sim_initial_pv: initialPv,
+    sim_initial_mv: initialMv,
+  } satisfies DemoStartRunRequest;
 }

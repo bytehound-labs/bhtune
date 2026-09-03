@@ -1,5 +1,6 @@
 import type { SubmitEvent } from "react";
 import type { components } from "../../api/schema";
+import type { AppMode, SimulatorCapabilities } from "../../api/capabilities";
 import { OpcServerDiscovery } from "../../components/OpcServerDiscovery";
 import {
   Button,
@@ -20,6 +21,7 @@ import { LoopMappingEditor } from "./LoopMappingEditor";
 import {
   CONTROLLER_TYPES,
   DRIVERS,
+  demoControllerTypesFor,
   PROCESS_TYPES,
   RESPONSE_LEVELS,
   TEMPERATURE_PROCESS_TYPES,
@@ -45,6 +47,8 @@ type FormChange = <K extends keyof FormState>(
 ) => void;
 
 type NewRunFormProps = {
+  readonly mode: AppMode;
+  readonly simulatorCapabilities: SimulatorCapabilities | undefined;
   readonly form: FormState;
   readonly template: TemplateResponse | undefined;
   readonly templates: readonly TemplateResponse[] | undefined;
@@ -307,40 +311,70 @@ function testParameterFields({
 function simulatorParameterFields({
   form,
   onChange,
-}: Pick<NewRunFormProps, "form" | "onChange">) {
+  simulatorCapabilities,
+}: Pick<NewRunFormProps, "form" | "onChange" | "simulatorCapabilities">) {
   if (form.driver !== "simulator") return null;
 
+  const limits = simulatorCapabilities?.limits;
+  const pvSpan =
+    typeof form.simPvRangeHigh === "number" &&
+    typeof form.simPvRangeLow === "number"
+      ? form.simPvRangeHigh - form.simPvRangeLow
+      : undefined;
   return (
     <FormSection title="Simulator parameters" collapsible defaultOpen>
       <NumberField
         label="Process gain"
         value={form.simGain}
         onChange={(value) => onChange("simGain", value)}
+        min={limits?.sim_gain.min}
+        max={limits?.sim_gain.max}
         step="any"
+        hint={
+          limits?.sim_gain.absolute_min
+            ? `Allowed magnitude: ${limits.sim_gain.absolute_min}–${limits.sim_gain.max}; negative gain uses Direct action.`
+            : undefined
+        }
       />
       <NumberField
         label="Time constant τ (s)"
         value={form.simTau}
         onChange={(value) => onChange("simTau", value)}
+        min={limits?.sim_tau.min}
+        max={limits?.sim_tau.max}
         step="any"
       />
       <NumberField
         label="Dead time (s)"
         value={form.simDeadTime}
         onChange={(value) => onChange("simDeadTime", value)}
+        min={limits?.sim_dead_time.min}
+        max={limits?.sim_dead_time.max}
         step="any"
       />
       <NumberField
         label="Measurement noise"
         value={form.simNoise}
         onChange={(value) => onChange("simNoise", value)}
+        min={simulatorCapabilities ? 0 : undefined}
+        max={
+          limits && pvSpan !== undefined
+            ? Math.max(0, pvSpan * limits.max_noise_fraction_of_pv_span)
+            : undefined
+        }
         step="any"
+        hint={
+          limits
+            ? `At most ${limits.max_noise_fraction_of_pv_span * 100}% of the PV span.`
+            : undefined
+        }
       />
       <NumberField
         label="RNG seed"
         value={form.simSeed}
         onChange={(value) => onChange("simSeed", value)}
-        min={0}
+        min={limits?.sim_seed.min}
+        max={limits?.sim_seed.max}
         step={1}
         hint="Fixed seed = reproducible noise."
       />
@@ -349,15 +383,167 @@ function simulatorParameterFields({
         label="Initial PV"
         value={form.simInitialPv}
         onChange={(value) => onChange("simInitialPv", value)}
+        min={
+          simulatorCapabilities && typeof form.simPvRangeLow === "number"
+            ? form.simPvRangeLow
+            : undefined
+        }
+        max={
+          simulatorCapabilities && typeof form.simPvRangeHigh === "number"
+            ? form.simPvRangeHigh
+            : undefined
+        }
         step="any"
       />
       <NumberField
         label="Initial MV"
         value={form.simInitialMv}
         onChange={(value) => onChange("simInitialMv", value)}
+        min={
+          simulatorCapabilities && typeof form.simMvRangeLow === "number"
+            ? form.simMvRangeLow
+            : undefined
+        }
+        max={
+          simulatorCapabilities && typeof form.simMvRangeHigh === "number"
+            ? form.simMvRangeHigh
+            : undefined
+        }
         step="any"
       />
+      {limits && (
+        <>
+          <NumberField
+            label="PV range low"
+            value={form.simPvRangeLow}
+            onChange={(value) => onChange("simPvRangeLow", value)}
+            min={limits.range_endpoint.min}
+            max={limits.range_endpoint.max}
+            step="any"
+          />
+          <NumberField
+            label="PV range high"
+            value={form.simPvRangeHigh}
+            onChange={(value) => onChange("simPvRangeHigh", value)}
+            min={limits.range_endpoint.min}
+            max={limits.range_endpoint.max}
+            step="any"
+            hint={`PV span must be ${limits.range_span.min}–${limits.range_span.max}.`}
+          />
+          <NumberField
+            label="MV range low"
+            value={form.simMvRangeLow}
+            onChange={(value) => onChange("simMvRangeLow", value)}
+            min={limits.range_endpoint.min}
+            max={limits.range_endpoint.max}
+            step="any"
+          />
+          <NumberField
+            label="MV range high"
+            value={form.simMvRangeHigh}
+            onChange={(value) => onChange("simMvRangeHigh", value)}
+            min={limits.range_endpoint.min}
+            max={limits.range_endpoint.max}
+            step="any"
+            hint={`MV span must be ${limits.range_span.min}–${limits.range_span.max}.`}
+          />
+        </>
+      )}
     </FormSection>
+  );
+}
+
+function demoFields({
+  form,
+  onChange,
+  onProcessTypeChange,
+  simulatorCapabilities,
+}: Pick<
+  NewRunFormProps,
+  "form" | "onChange" | "onProcessTypeChange" | "simulatorCapabilities"
+>) {
+  if (!simulatorCapabilities) return null;
+  const processTypes = simulatorCapabilities.process_types;
+  const processType = processTypes.includes(form.processType)
+    ? form.processType
+    : processTypes[0];
+  const controllerTypes = processType
+    ? demoControllerTypesFor(simulatorCapabilities, processType)
+    : [];
+  const controllerType = controllerTypes.includes(form.controllerType)
+    ? form.controllerType
+    : controllerTypes[0];
+  return (
+    <>
+      <FormSection title="Demo tune settings" collapsible defaultOpen>
+        <SelectField
+          label="Template"
+          value={form.template}
+          onChange={(value) => onChange("template", value)}
+          options={simulatorCapabilities.templates}
+        />
+        <SelectField
+          label="Process type"
+          value={processType ?? ""}
+          onChange={onProcessTypeChange}
+          options={processTypes}
+          displayLabel={(value) => PROCESS_TYPE_LABELS[value]}
+        />
+        <SelectField
+          label="Controller type"
+          value={controllerType ?? ""}
+          onChange={(value) => onChange("controllerType", value)}
+          options={controllerTypes}
+          displayLabel={(value) => CONTROLLER_TYPE_LABELS[value]}
+        />
+        <NumberField
+          label="Relay amplitude (%)"
+          value={form.relayAmp}
+          onChange={(value) => onChange("relayAmp", value)}
+          min={simulatorCapabilities.limits.relay_amp.min}
+          max={simulatorCapabilities.limits.relay_amp.max}
+          step={0.1}
+          required
+          hint={`Allowed range: ${simulatorCapabilities.limits.relay_amp.min}–${simulatorCapabilities.limits.relay_amp.max}%.`}
+        />
+        <NumberField
+          label="Cycles to skip"
+          value={form.cyclesSkip}
+          onChange={(value) => onChange("cyclesSkip", value)}
+          min={simulatorCapabilities.limits.cycles_skip.min}
+          max={simulatorCapabilities.limits.cycles_skip.max}
+          step={1}
+          required
+        />
+        <NumberField
+          label="Cycles to count"
+          value={form.cyclesCount}
+          onChange={(value) => onChange("cyclesCount", value)}
+          min={simulatorCapabilities.limits.cycles_count.min}
+          max={simulatorCapabilities.limits.cycles_count.max}
+          step={1}
+          required
+          hint={`Demo limit: ${simulatorCapabilities.limits.cycles_count.max} cycles per run.`}
+        />
+        <NumberField
+          label="Noise protection (s)"
+          value={form.noiseProtectionSecs}
+          onChange={(value) => onChange("noiseProtectionSecs", value)}
+          min={simulatorCapabilities.limits.noise_protection_secs.min}
+          max={simulatorCapabilities.limits.noise_protection_secs.max}
+          step={1}
+          required
+        />
+        <p className="text-sm text-slate-400 sm:col-span-2">
+          The server fixes the tag identity and derives the negative-feedback
+          direction from process-gain sign. It uses{" "}
+          {simulatorCapabilities.defaults.poll_interval_ms} ms sampling and a{" "}
+          {simulatorCapabilities.defaults.run_timeout_secs}s run timeout. Demo
+          runs never connect to OPC DA or write PID values.
+        </p>
+      </FormSection>
+      {simulatorParameterFields({ form, onChange, simulatorCapabilities })}
+    </>
   );
 }
 
@@ -397,6 +583,8 @@ function automaticPidFields({
 }
 
 export function NewRunForm({
+  mode,
+  simulatorCapabilities,
   form,
   template,
   templates,
@@ -420,38 +608,53 @@ export function NewRunForm({
 }: NewRunFormProps) {
   return (
     <form onSubmit={onSubmit}>
-      {connectionFields({
-        form,
-        templates,
-        templatesPending,
-        onChange,
-        onTagNameChange,
-        onDriverChange,
-        onTemplateChange,
-        onOpenTagBrowser,
-      })}
-      {testParameterFields({
-        form,
-        onChange,
-        onProcessTypeChange,
-        onResetProcessDefaults,
-      })}
-      <FormSection title="Loop mapping" collapsible defaultOpen>
-        <LoopMappingEditor
-          state={form}
-          template={template}
-          onTagSourceChange={onTagSourceChange}
-          onTagChange={onTagChange}
-          onValueSourceChange={onValueSourceChange}
-          onValueTagChange={onValueTagChange}
-          onValueChange={onValueChange}
-          onResetTag={onResetTag}
-          onResetValue={onResetValue}
-          onResetAll={onResetAll}
-        />
-      </FormSection>
-      {simulatorParameterFields({ form, onChange })}
-      {automaticPidFields({ form, onChange })}
+      {mode === "demo" ? (
+        demoFields({
+          form,
+          onChange,
+          onProcessTypeChange,
+          simulatorCapabilities,
+        })
+      ) : (
+        <>
+          {connectionFields({
+            form,
+            templates,
+            templatesPending,
+            onChange,
+            onTagNameChange,
+            onDriverChange,
+            onTemplateChange,
+            onOpenTagBrowser,
+          })}
+          {testParameterFields({
+            form,
+            onChange,
+            onProcessTypeChange,
+            onResetProcessDefaults,
+          })}
+          <FormSection title="Loop mapping" collapsible defaultOpen>
+            <LoopMappingEditor
+              state={form}
+              template={template}
+              onTagSourceChange={onTagSourceChange}
+              onTagChange={onTagChange}
+              onValueSourceChange={onValueSourceChange}
+              onValueTagChange={onValueTagChange}
+              onValueChange={onValueChange}
+              onResetTag={onResetTag}
+              onResetValue={onResetValue}
+              onResetAll={onResetAll}
+            />
+          </FormSection>
+          {simulatorParameterFields({
+            form,
+            onChange,
+            simulatorCapabilities: undefined,
+          })}
+          {automaticPidFields({ form, onChange })}
+        </>
+      )}
     </form>
   );
 }

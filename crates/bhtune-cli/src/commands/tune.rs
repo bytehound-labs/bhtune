@@ -301,6 +301,20 @@ pub struct PreparedTune {
     allow_uncertain_quality: bool,
 }
 
+/// Prepare a simulator tune and bind its history to a demo session before the background
+/// execution is started. Live OPC DA preparation is intentionally rejected by this helper.
+pub async fn prepare_owned(
+    pool: &SqlitePool,
+    args: TuneArgs,
+    app_config: &crate::config::BhtuneConfig,
+    demo_session_id: i64,
+) -> anyhow::Result<PreparedTune> {
+    if args.driver != DriverKindArg::Simulator {
+        anyhow::bail!("demo sessions may only start simulator runs");
+    }
+    prepare_internal(pool, args, app_config, Some(demo_session_id)).await
+}
+
 impl PreparedTune {
     /// The `tune_runs` row id assigned to this run -- returned to an HTTP caller immediately
     /// (before the run has necessarily finished, or even started polling) so it can be used
@@ -368,8 +382,17 @@ struct RequestSnapshot<'a> {
 /// own function changes nothing about what runs or when -- only who else can call it.
 pub async fn prepare(
     pool: &SqlitePool,
+    args: TuneArgs,
+    app_config: &crate::config::BhtuneConfig,
+) -> anyhow::Result<PreparedTune> {
+    prepare_internal(pool, args, app_config, None).await
+}
+
+async fn prepare_internal(
+    pool: &SqlitePool,
     mut args: TuneArgs,
     app_config: &crate::config::BhtuneConfig,
+    demo_session_id: Option<i64>,
 ) -> anyhow::Result<PreparedTune> {
     // Fails before any driver/database I/O at all: an unattended write-back must be an
     // explicit, deliberate choice, not something a stray `--write-pid` without `--yes` can
@@ -457,8 +480,9 @@ pub async fn prepare(
 
     let time_anchor = RunTimeAnchor::now();
     let started_at = time_anchor.utc();
-    let run = TuneRunRow::start(
+    let run = TuneRunRow::start_with_demo_session(
         pool,
+        demo_session_id,
         None,
         &args.tagname,
         db_driver,
@@ -469,27 +493,35 @@ pub async fn prepare(
         started_at,
     )
     .await?;
-    TuneRunRow::record_effective_tuning(pool, run.id, timing.into()).await?;
-    TuneRunRow::record_allow_uncertain_quality(pool, run.id, allow_uncertain_quality).await?;
+    let metadata_result = async {
+        TuneRunRow::record_effective_tuning(pool, run.id, timing.into()).await?;
+        TuneRunRow::record_allow_uncertain_quality(pool, run.id, allow_uncertain_quality).await?;
 
-    // The *resolved, effective* connection this run actually used -- `None`/`None` for a
-    // non-opcda run even though `args.bridge_host` was just unconditionally resolved to a
-    // default above (a pre-existing, harmless quirk of that resolution call). Forcing both
-    // to `None` here is what makes a simulator/replay run correctly show "no connection"
-    // rather than an OPC DA gateway it never actually touched -- load-bearing for
-    // `history revert`'s connection safety fix.
-    let (opc_server, bridge_host) = if db_driver == TuneDriver::Opcda {
-        (args.server.as_deref(), args.bridge_host.as_deref())
-    } else {
-        (None, None)
-    };
-    TuneRunRow::record_connection(pool, run.id, opc_server, bridge_host, &request_json).await?;
-    let notes = args
-        .notes
-        .as_deref()
-        .map(str::trim)
-        .filter(|notes| !notes.is_empty());
-    TuneRunRow::update_notes(pool, run.id, notes).await?;
+        // The *resolved, effective* connection this run actually used -- `None`/`None` for a
+        // non-opcda run even though `args.bridge_host` was just unconditionally resolved to a
+        // default above (a pre-existing, harmless quirk of that resolution call). Forcing both
+        // to `None` here is what makes a simulator/replay run correctly show "no connection"
+        // rather than an OPC DA gateway it never actually touched -- load-bearing for
+        // `history revert`'s connection safety fix.
+        let (opc_server, bridge_host) = if db_driver == TuneDriver::Opcda {
+            (args.server.as_deref(), args.bridge_host.as_deref())
+        } else {
+            (None, None)
+        };
+        TuneRunRow::record_connection(pool, run.id, opc_server, bridge_host, &request_json).await?;
+        let notes = args
+            .notes
+            .as_deref()
+            .map(str::trim)
+            .filter(|notes| !notes.is_empty());
+        TuneRunRow::update_notes(pool, run.id, notes).await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    if let Err(error) = metadata_result {
+        finalize_preparation_failure(pool, run.id, &error.to_string()).await;
+        return Err(error);
+    }
 
     tracing::info!(
         run_id = run.id,
@@ -515,6 +547,23 @@ pub async fn prepare(
         write_pid,
         allow_uncertain_quality,
     })
+}
+
+async fn finalize_preparation_failure(pool: &SqlitePool, run_id: i64, reason: &str) {
+    if let Err(error) = TuneRunRow::fail(pool, run_id, Utc::now(), reason).await {
+        tracing::error!(
+            run_id,
+            error = %error,
+            "could not mark a failed preparation run terminal; attempting to delete it"
+        );
+        if let Err(delete_error) = TuneRunRow::delete(pool, run_id).await {
+            tracing::error!(
+                run_id,
+                error = %delete_error,
+                "could not remove a failed preparation run"
+            );
+        }
+    }
 }
 
 /// Runs an already-[`prepare`]d tune to completion -- the print-free counterpart to
@@ -5689,6 +5738,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_owned_rejects_a_non_simulator_before_creating_a_run() {
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+
+        let error = prepare_owned(&pool, args, &test_config(), 1)
+            .await
+            .err()
+            .expect("demo preparation must reject a non-simulator driver");
+
+        assert!(
+            error
+                .to_string()
+                .contains("demo sessions may only start simulator runs")
+        );
+        assert!(
+            TuneRunRow::list(
+                &pool,
+                &bhtune_db::models::TuneRunFilter::default(),
+                bhtune_db::models::Pagination::first(10),
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+            "the demo driver guard must run before the tune_runs insert"
+        );
+    }
+
+    #[tokio::test]
     async fn drive_completes_a_prepared_simulator_run() {
         let pool = seeded_pool().await;
         let prepared = prepare(&pool, fast_simulator_args(), &test_config())
@@ -9863,6 +9941,101 @@ mod tests {
             .is_empty(),
             "validation must run before the tune_runs insert"
         );
+    }
+
+    async fn assert_prepare_metadata_failure_is_terminal(column: &str) {
+        let pool = seeded_pool().await;
+        let trigger_name = format!("fail_{column}");
+        let trigger = format!(
+            "CREATE TRIGGER {trigger_name} \
+             BEFORE UPDATE OF {column} ON tune_runs
+             BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END"
+        );
+        sqlx::query(sqlx::AssertSqlSafe(trigger.as_str()))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let error = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .err()
+            .expect("the injected metadata failure should abort preparation");
+        assert!(error.to_string().contains("injected metadata failure"));
+
+        let runs = TuneRunRow::list(
+            &pool,
+            &bhtune_db::models::TuneRunFilter::default(),
+            bhtune_db::models::Pagination::first(10),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].outcome, bhtune_db::models::TuneOutcome::Failed);
+        assert!(
+            runs[0]
+                .failure_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("injected metadata failure"))
+        );
+    }
+
+    #[tokio::test]
+    async fn every_prepare_metadata_failure_marks_the_run_terminal() {
+        for column in [
+            "effective_tuning_json",
+            "allow_uncertain_quality",
+            "request_json",
+            "notes",
+        ] {
+            assert_prepare_metadata_failure_is_terminal(column).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_deletes_the_run_when_terminalization_also_fails() {
+        let pool = seeded_pool().await;
+        sqlx::query(
+            "CREATE TRIGGER fail_effective_tuning_update \
+             BEFORE UPDATE OF effective_tuning_json ON tune_runs
+             BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER fail_terminal_update \
+             BEFORE UPDATE OF outcome ON tune_runs
+             BEGIN SELECT RAISE(ABORT, 'injected terminalization failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let error = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .err()
+            .expect("the injected metadata failure should abort preparation");
+        assert!(error.to_string().contains("injected metadata failure"));
+
+        let runs = TuneRunRow::list(
+            &pool,
+            &bhtune_db::models::TuneRunFilter::default(),
+            bhtune_db::models::Pagination::first(10),
+        )
+        .await
+        .unwrap();
+        assert!(
+            runs.is_empty(),
+            "the row must be removed when its failed outcome cannot be persisted"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_preparation_failure_reports_a_failed_cleanup() {
+        let pool = seeded_pool().await;
+        pool.close().await;
+
+        finalize_preparation_failure(&pool, 1, "injected preparation failure").await;
     }
 
     #[tokio::test]

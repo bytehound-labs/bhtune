@@ -290,14 +290,12 @@ where
 
     let (ctrl_c, cancel_handle) = CtrlC::manual();
     let pool_for_task = state.pool.clone();
-    let active_run_for_task = state.active_run.clone();
     let task = async move {
         let mut ctrl_c = ctrl_c;
         // `drive()` already records every outcome (completion, abort, failure) to the
         // `tune_runs` row itself; this task has no caller left to report a `Result` to, so
         // its own `Err` is intentionally discarded here.
         let _ = drive(&pool_for_task, prepared, &mut ctrl_c).await;
-        active_run_for_task.release(run_id).await;
     };
 
     // The authoritative check: if this loses the race (a post-hoc write/revert reserved the
@@ -847,6 +845,7 @@ mod tests {
     use axum::http::Request;
     use bhtune_core::LoopConfig;
     use bhtune_db::models::{Pagination, TuneRunFilter};
+    use tokio::sync::oneshot;
     use tower::ServiceExt;
 
     /// A fast-converging simulator-backed request body, mirroring `bhtune-cli`'s own
@@ -928,6 +927,16 @@ mod tests {
         }
     }
 
+    async fn wait_until_inactive(state: &AppState, run_id: i64) {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while state.active_run.active_run_ids().await.contains(&run_id) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a terminal run should release its active-run registration");
+    }
+
     #[tokio::test]
     async fn wait_for_outcome_panics_after_an_injected_deadline() {
         let state = crate::test_support::in_memory_state().await;
@@ -939,6 +948,28 @@ mod tests {
 
         let panic = join.await.expect_err("a zero deadline should panic");
         assert!(panic.is_panic());
+    }
+
+    #[tokio::test]
+    async fn wait_until_inactive_observes_an_active_registration_before_release() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = 42;
+        let (_ctrl_c, cancel) = bhtune_cli::cancel::CtrlC::manual();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        state
+            .active_run
+            .start(run_id, cancel, async move {
+                finish_rx.await.unwrap();
+            })
+            .await
+            .unwrap();
+
+        let release = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            finish_tx.send(()).unwrap();
+        });
+        wait_until_inactive(&state, run_id).await;
+        release.await.unwrap();
     }
 
     #[tokio::test]
@@ -955,6 +986,9 @@ mod tests {
         let final_detail = wait_for_outcome(&state, run_id).await;
         assert_eq!(final_detail["outcome"], "completed");
         assert_eq!(final_detail["results"].as_array().unwrap().len(), 3);
+        wait_until_inactive(&state, run_id).await;
+        assert!(state.active_run.reserve(999).await.is_ok());
+        state.active_run.release(999).await;
     }
 
     #[tokio::test]
@@ -1452,6 +1486,7 @@ mod tests {
 
         let final_detail = wait_for_outcome(&state, run_id).await;
         assert_eq!(final_detail["outcome"], "aborted");
+        wait_until_inactive(&state, run_id).await;
     }
 
     #[tokio::test]

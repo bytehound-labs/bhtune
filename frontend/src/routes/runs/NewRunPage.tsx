@@ -27,7 +27,13 @@ import {
 import { NewRunForm } from "./NewRunForm";
 import {
   buildRequest,
+  demoControllerTypesFor,
+  demoDraftFromForm,
+  demoProcessDefaultsFor,
   draftFromForm,
+  formFromDemoCapabilities,
+  formFromDemoDraft,
+  formFromDemoDuplicate,
   formFromDraft,
   formFromRequest,
   applyTagNameChange,
@@ -38,8 +44,11 @@ import {
   type FormState,
   type ProcessType,
   type TuneDriver,
+  normalizeSimulatorRequest,
   TEMPERATURE_PROCESS_TYPES,
 } from "./newRunFormState";
+import type { AppCapabilities } from "../../api/capabilities";
+import { useDemoDraft } from "../../api/demoDraft";
 
 type DuplicateRunLocationState = {
   readonly duplicateRequest: StartRunRequest;
@@ -96,22 +105,43 @@ function isDuplicateRunState(
   );
 }
 
-export function NewRunPage() {
+export function NewRunPage({
+  capabilities,
+}: {
+  readonly capabilities: AppCapabilities;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
-  const templates = useTemplates();
-  const startRun = useStartRun();
-  const lastRunRequest = useLastRunRequest();
-  const runDraft = useRunDraft();
+  const isDemo = capabilities.mode === "demo";
+  const templates = useTemplates(!isDemo);
+  const startRun = useStartRun(isDemo ? "demo" : "full");
+  const lastRunRequest = useLastRunRequest(!isDemo);
+  const runDraft = useRunDraft(!isDemo);
+  const {
+    draft: demoDraftValue,
+    savedAt: demoDraftSavedAt,
+    save: saveDemoDraft,
+  } = useDemoDraft(isDemo);
   const saveRunDraft = useSaveRunDraft();
   const duplicateState = isDuplicateRunState(location.state)
     ? location.state
     : undefined;
+  const defaultPageForm =
+    isDemo && capabilities.simulator
+      ? formFromDemoCapabilities(capabilities.simulator)
+      : initialForm;
+  const initialPageForm = duplicateState
+    ? isDemo && capabilities.simulator
+      ? formFromDemoDuplicate(
+          duplicateState.duplicateRequest,
+          capabilities.simulator,
+        )
+      : formFromRequest(duplicateState.duplicateRequest)
+    : defaultPageForm;
 
-  const [form, setForm] = useState<FormState>(() =>
-    duplicateState
-      ? formFromRequest(duplicateState.duplicateRequest)
-      : initialForm,
+  const [form, setForm] = useState<FormState>(() => initialPageForm);
+  const demoDraftSnapshotRef = useRef(
+    JSON.stringify(demoDraftFromForm(initialPageForm)),
   );
   const [validationError, setValidationError] = useState<string | null>(null);
   const [prefillSource, setPrefillSource] = useState<PrefillSource | null>(
@@ -133,7 +163,28 @@ export function NewRunPage() {
   );
 
   useEffect(() => {
-    if (hydratedRef.current || duplicateState || runDraft.isPending) return;
+    if (isDemo) {
+      if (hydratedRef.current) return;
+      hydratedRef.current = true;
+      setHydrated(true);
+      if (demoDraftValue) {
+        const nextForm = capabilities.simulator
+          ? formFromDemoDraft(demoDraftValue, capabilities.simulator)
+          : defaultPageForm;
+        const sanitizedDraft = demoDraftFromForm(nextForm);
+        const serializedDraft = JSON.stringify(sanitizedDraft);
+        demoDraftSnapshotRef.current = serializedDraft;
+        if (JSON.stringify(demoDraftValue) !== serializedDraft) {
+          saveDemoDraft(sanitizedDraft, demoDraftSavedAt ?? Date.now());
+        }
+        setForm(nextForm);
+        setPrefillSource({ kind: "draft" });
+      }
+      return;
+    }
+    if (isDemo || hydratedRef.current || duplicateState || runDraft.isPending) {
+      return;
+    }
     if (runDraft.data === undefined && !runDraft.isError) return;
     if (
       (runDraft.data === null || runDraft.isError) &&
@@ -164,19 +215,35 @@ export function NewRunPage() {
       preserveBlankTemplateRef.current = false;
     }
   }, [
+    capabilities.simulator,
+    defaultPageForm,
     duplicateState,
-    lastRunRequest.data,
+    demoDraftSavedAt,
+    demoDraftValue,
+    isDemo,
     lastRunRequest.isPending,
+    lastRunRequest.data,
     runDraft.data,
     runDraft.error,
     runDraft.isError,
     runDraft.isPending,
+    saveDemoDraft,
   ]);
 
   useEffect(() => {
     if (!hydrated) return;
-    const payload = draftFromForm(form);
+    const payload = isDemo ? demoDraftFromForm(form) : draftFromForm(form);
+    const serializedDemoDraft = isDemo ? JSON.stringify(payload) : undefined;
+    if (isDemo && serializedDemoDraft === demoDraftSnapshotRef.current) {
+      return;
+    }
     const timer = window.setTimeout(() => {
+      if (isDemo) {
+        if (saveDemoDraft(payload)) {
+          demoDraftSnapshotRef.current = serializedDemoDraft!;
+        }
+        return;
+      }
       draftSaveChainRef.current = draftSaveChainRef.current
         .catch(() => undefined)
         .then(() => saveDraftAsync(payload))
@@ -191,7 +258,7 @@ export function NewRunPage() {
         });
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [form, hydrated, saveDraftAsync]);
+  }, [form, hydrated, isDemo, saveDemoDraft, saveDraftAsync]);
 
   useEffect(() => {
     if (duplicateState || !hydrated || preserveBlankTemplateRef.current) {
@@ -208,7 +275,7 @@ export function NewRunPage() {
   function resetToDefaults() {
     setPrefillSource(null);
     preserveBlankTemplateRef.current = false;
-    setForm(initialForm);
+    setForm(defaultPageForm);
   }
 
   function resetProcessDefaults() {
@@ -354,19 +421,30 @@ export function NewRunPage() {
   function setProcessType(value: ProcessType) {
     setForm((previous) => ({
       ...previous,
-      ...processDefaultsFor(value),
+      ...(isDemo && capabilities.simulator
+        ? demoProcessDefaultsFor(capabilities.simulator, value)
+        : processDefaultsFor(value)),
       processType: value,
       controllerType:
-        previous.controllerType === "pid" &&
-        !TEMPERATURE_PROCESS_TYPES.has(value)
-          ? "pi"
-          : previous.controllerType,
+        isDemo && capabilities.simulator
+          ? demoControllerTypesFor(capabilities.simulator, value).includes(
+              previous.controllerType,
+            )
+            ? previous.controllerType
+            : demoControllerTypesFor(capabilities.simulator, value)[0]
+          : previous.controllerType === "pid" &&
+              !TEMPERATURE_PROCESS_TYPES.has(value)
+            ? "pi"
+            : previous.controllerType,
     }));
   }
 
   function submitTune() {
     setValidationError(null);
-    const request = buildRequest(form);
+    const request =
+      isDemo && capabilities.simulator
+        ? normalizeSimulatorRequest(form, capabilities.simulator)
+        : buildRequest(form);
     if (typeof request === "string") {
       setValidationError(request);
       return;
@@ -384,8 +462,12 @@ export function NewRunPage() {
   return (
     <div>
       <PageHeading
-        title="New tune"
-        description="Configure and start a tune."
+        title={isDemo ? "BHTune Simulator Demo" : "New tune"}
+        description={
+          isDemo
+            ? "Choose a built-in template and bounded simulator settings, then watch a synthetic MRFT tune."
+            : "Configure and start a tune."
+        }
         actions={
           <>
             <Button
@@ -398,19 +480,36 @@ export function NewRunPage() {
             <Link to="/runs">
               <Button>Cancel</Button>
             </Link>
-            <Button onClick={resetToDefaults}>Reset to defaults</Button>
+            {!isDemo && (
+              <Button onClick={resetToDefaults}>Reset to defaults</Button>
+            )}
           </>
         }
       />
 
-      {prefillSource !== null && (
+      {!isDemo && prefillSource !== null && (
         <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
           {prefillMessage(prefillSource)} Change anything below, or "Reset to
           defaults" to return to the built-in defaults.
         </div>
       )}
+      {isDemo && (
+        <div className="mb-6 rounded-lg border-2 border-amber-700 bg-amber-950/50 px-5 py-4 text-sm text-amber-100">
+          <p>
+            <strong>Simulator-only demo.</strong> Choose a built-in DCS/PLC
+            template, process and controller type, and bounded relay and
+            simulator settings.
+          </p>
+          <p className="mt-2">
+            Start a tune to watch the synthetic PV/MV response and review the
+            calculated results. The demo never connects to plant equipment or
+            writes PID values, and its results must not be used on a live
+            control loop.
+          </p>
+        </div>
+      )}
 
-      {(draftLoadError || draftSaveError) && (
+      {!isDemo && (draftLoadError || draftSaveError) && (
         <div className="mb-4 space-y-2">
           {draftLoadError && <ErrorBanner message={draftLoadError} />}
           {draftSaveError && <ErrorBanner message={draftSaveError} />}
@@ -428,6 +527,7 @@ export function NewRunPage() {
             message={userFacingErrorMessage(
               startRun.error,
               "Unable to start the tune.",
+              isDemo,
             )}
           />
         </div>
@@ -444,6 +544,8 @@ export function NewRunPage() {
       )}
 
       <NewRunForm
+        mode={isDemo ? "demo" : "full"}
+        simulatorCapabilities={capabilities.simulator ?? undefined}
         form={form}
         template={activeTemplate}
         templates={templates.data}

@@ -42,9 +42,9 @@ pub struct RunAlreadyActive {
 impl ActiveRun {
     /// Registers `task` as a background tune, recording `cancel` so a later
     /// [`ActiveRun::cancel`] or [`ActiveRun::cancel_and_wait`] call can trigger it.
-    /// `task` must itself call [`ActiveRun::release`] when it finishes (however it finishes);
-    /// this method does not do that on the caller's behalf, since only the task itself knows
-    /// when its work is actually done.
+    /// The registration is released automatically after the task returns or panics. If
+    /// registration is rejected, `task` is dropped without being spawned, releasing anything
+    /// it captured (such as Demo concurrency permits).
     ///
     /// Multiple tune tasks may be registered at the same time. The only conflict is with an
     /// exclusive post-hoc write/revert reservation, which protects direct live-loop mutation.
@@ -61,7 +61,14 @@ impl ActiveRun {
         if guard.tasks.contains_key(&run_id) {
             return Err(RunAlreadyActive { run_id });
         }
-        let handle = tokio::spawn(task);
+        let task_handle = tokio::spawn(task);
+        let active = self.clone();
+        let handle = tokio::spawn(async move {
+            if let Err(error) = task_handle.await {
+                tracing::error!(run_id, %error, "tune task exited unexpectedly");
+            }
+            active.release(run_id).await;
+        });
         guard.tasks.insert(run_id, ActiveTask { cancel, handle });
         Ok(())
     }
@@ -114,9 +121,10 @@ impl ActiveRun {
         }
     }
 
-    /// Releases the tune registration or exclusive reservation for `run_id`. A no-op if the
-    /// id is not registered, which is expected when graceful shutdown has already taken the
-    /// registry's entries for cancellation and waiting.
+    /// Releases the tune registration or exclusive reservation for `run_id`. Spawned tune
+    /// registrations release themselves; direct callers use this for exclusive reservations.
+    /// A no-op if the id is not registered, which is expected when graceful shutdown has
+    /// already taken the registry's entries for cancellation and waiting.
     pub async fn release(&self, run_id: i64) {
         let mut guard = self.inner.lock().await;
         if guard.exclusive == Some(run_id) {
@@ -170,25 +178,43 @@ impl ActiveRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
     use std::time::Duration;
+    use tokio::sync::oneshot;
+
+    async fn wait_until_inactive(active: &ActiveRun, run_id: i64) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while active.active_run_ids().await.contains(&run_id) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the finished task should release its active-run registration");
+    }
 
     #[tokio::test]
-    async fn start_registers_and_runs_the_task() {
+    async fn start_registers_runs_and_releases_a_completed_task() {
         let active = ActiveRun::default();
         let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
         let ran = Arc::new(AtomicBool::new(false));
         let ran_clone = ran.clone();
+        let (finish_tx, finish_rx) = oneshot::channel();
         active
             .start(1, handle, async move {
                 ran_clone.store(true, Ordering::SeqCst);
+                finish_rx.await.unwrap();
             })
             .await
             .unwrap();
         assert_eq!(active.active_run_ids().await, vec![1]);
-        // Give the spawned task a chance to actually run.
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        finish_tx.send(()).unwrap();
+        wait_until_inactive(&active, 1).await;
         assert!(ran.load(Ordering::SeqCst));
+        assert!(active.reserve(2).await.is_ok());
+        active.release(2).await;
     }
 
     #[tokio::test]
@@ -280,6 +306,56 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, RunAlreadyActive { run_id: 1 });
+    }
+
+    #[tokio::test]
+    async fn rejected_start_drops_the_unscheduled_task_and_keeps_the_reservation() {
+        struct DropProbe(Arc<AtomicBool>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let active = ActiveRun::default();
+        active.reserve(1).await.unwrap();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let probe = DropProbe(dropped.clone());
+        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let mut task = std::future::poll_fn(move |_| {
+            let _ = &probe;
+            Poll::Pending
+        });
+        let waker = std::task::Waker::noop();
+        let mut context = Context::from_waker(waker);
+        assert!(Pin::new(&mut task).poll(&mut context).is_pending());
+
+        let err = active.start(2, handle, task).await.unwrap_err();
+
+        assert_eq!(err, RunAlreadyActive { run_id: 1 });
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(active.exclusive_id().await, Some(1));
+        assert!(active.active_run_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancel_and_wait_logs_an_unexpected_registration_task_failure() {
+        let active = ActiveRun::default();
+        let (_ctrl_c, cancel) = bhtune_cli::cancel::CtrlC::manual();
+        let handle = tokio::spawn(async {
+            panic!("simulated registration task failure");
+        });
+        active
+            .inner
+            .lock()
+            .await
+            .tasks
+            .insert(1, ActiveTask { cancel, handle });
+
+        active.cancel_and_wait(Duration::from_secs(1)).await;
+
+        assert!(active.active_run_ids().await.is_empty());
     }
 
     #[tokio::test]
@@ -486,5 +562,41 @@ mod tests {
 
         active.cancel_and_wait(Duration::from_secs(1)).await;
         assert!(active.active_run_ids().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_panicking_task_releases_its_registration_without_shutdown() {
+        let active = ActiveRun::default();
+        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        active
+            .start(1, handle, async {
+                panic!("simulated task failure");
+            })
+            .await
+            .unwrap();
+
+        wait_until_inactive(&active, 1).await;
+        assert!(active.reserve(2).await.is_ok());
+        active.release(2).await;
+    }
+
+    #[tokio::test]
+    async fn a_task_that_reaches_its_own_timeout_releases_its_registration() {
+        let active = ActiveRun::default();
+        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        active
+            .start(1, handle, async {
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(10), std::future::pending::<()>(),)
+                        .await
+                        .is_err()
+                );
+            })
+            .await
+            .unwrap();
+
+        wait_until_inactive(&active, 1).await;
+        assert!(active.reserve(2).await.is_ok());
+        active.release(2).await;
     }
 }

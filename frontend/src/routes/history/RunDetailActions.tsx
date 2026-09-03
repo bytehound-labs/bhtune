@@ -1,11 +1,14 @@
 import { Link } from "react-router";
 import { runExportUrl } from "../../api/runs";
 import type { StartRunRequest } from "../../api/runs";
+import type { CapabilityActions } from "../../api/capabilities";
 import { Button, PageHeading } from "../../components/ui";
 
 interface RunDetailActionsProps {
   readonly id: string | undefined;
   readonly runId: number;
+  readonly demo: boolean;
+  readonly actions: CapabilityActions;
   readonly isRunning: boolean;
   readonly hasSamples: boolean;
   readonly originalRequest?: StartRunRequest | null;
@@ -20,6 +23,8 @@ interface RunDetailActionsProps {
 export function RunDetailActions({
   id,
   runId,
+  demo,
+  actions,
   isRunning,
   hasSamples,
   originalRequest,
@@ -35,10 +40,10 @@ export function RunDetailActions({
 
   return (
     <PageHeading
-      title={`Tune #${id ?? ""}`}
+      title={demo ? `Simulator demo #${id ?? ""}` : `Tune #${id ?? ""}`}
       actions={
         <>
-          {isRunning && (
+          {isRunning && actions.cancel_run && (
             <Button
               variant="danger"
               disabled={cancelPending}
@@ -47,7 +52,7 @@ export function RunDetailActions({
               {cancelPending ? "Cancelling…" : "Cancel tune"}
             </Button>
           )}
-          {!isRunning && hasSamples && (
+          {!isRunning && hasSamples && actions.export_run && (
             <>
               <a href={runExportUrl(runId, "csv")} download>
                 <Button>Export CSV</Button>
@@ -57,7 +62,7 @@ export function RunDetailActions({
               </a>
             </>
           )}
-          {!isRunning && (
+          {!isRunning && actions.delete_run && (
             <Button
               variant="danger"
               disabled={deletePending}
@@ -74,7 +79,7 @@ export function RunDetailActions({
             Duplicate this run
           </Button>
           <Link to="/runs">
-            <Button>Back to tune history</Button>
+            <Button>{demo ? "Back to History" : "Back to tune history"}</Button>
           </Link>
         </>
       }

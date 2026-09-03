@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
 import { toApiError } from "../api/errors";
 import { useTheme } from "../useTheme";
+import type { AppCapabilities } from "../api/capabilities";
 
 /**
  * Polls the server liveness endpoint and exposes its state as a compact, hoverable indicator.
@@ -127,7 +128,11 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   }`;
 
 /** App-wide chrome: header nav + the health indicator, wrapping every route via `<Outlet/>`. */
-export function AppLayout() {
+export function AppLayout({
+  capabilities,
+}: {
+  readonly capabilities: AppCapabilities;
+}) {
   // `/runs/new` (the "Tune" nav item) is a descendant of `/runs`, so NavLink's default
   // prefix-based active matching would highlight "History" too whenever the user is
   // starting a new tune. Override History's active state to explicitly exclude that one
@@ -138,6 +143,12 @@ export function AppLayout() {
     (location.pathname.startsWith("/runs/") &&
       !location.pathname.startsWith("/runs/new"));
 
+  const isDemo = capabilities.mode === "demo";
+  const originMismatch =
+    isDemo &&
+    typeof window !== "undefined" &&
+    window.location.origin !== capabilities.security.allowed_origin;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/40">
@@ -145,21 +156,29 @@ export function AppLayout() {
           <div className="flex items-center gap-8">
             <span className="text-lg font-semibold tracking-tight">BHTune</span>
             <nav className="flex gap-2">
-              <NavLink to="/runs/new" className={navLinkClass}>
-                Tune
-              </NavLink>
-              <NavLink
-                to="/runs"
-                className={() => navLinkClass({ isActive: isHistoryActive })}
-              >
-                History
-              </NavLink>
-              <NavLink to="/templates" className={navLinkClass}>
-                Templates
-              </NavLink>
-              <NavLink to="/config" className={navLinkClass}>
-                Config
-              </NavLink>
+              {capabilities.actions.start_simulator_tune && (
+                <NavLink to="/runs/new" className={navLinkClass}>
+                  Tune
+                </NavLink>
+              )}
+              {capabilities.actions.list_history && (
+                <NavLink
+                  to="/runs"
+                  className={() => navLinkClass({ isActive: isHistoryActive })}
+                >
+                  History
+                </NavLink>
+              )}
+              {capabilities.actions.manage_templates && (
+                <NavLink to="/templates" className={navLinkClass}>
+                  Templates
+                </NavLink>
+              )}
+              {capabilities.actions.manage_config && (
+                <NavLink to="/config" className={navLinkClass}>
+                  Config
+                </NavLink>
+              )}
             </nav>
           </div>
           <div className="flex items-center gap-4">
@@ -168,6 +187,32 @@ export function AppLayout() {
           </div>
         </div>
       </header>
+      {isDemo && (
+        <div className="border-b-2 border-amber-700 bg-amber-950/70 px-6 py-3 text-center text-sm text-amber-100">
+          <strong>Demo mode — Simulator only.</strong> All measurements and PID
+          results are synthetic. No OPC connection or plant write is possible.
+          {capabilities.quotas &&
+            ` History retains up to ${capabilities.quotas.retained_runs_per_visitor} synthetic runs.`}
+          {capabilities.security.cookie &&
+            ` This browser session expires after ${Math.round(capabilities.security.cookie.max_age_secs / 3600)} hours.`}
+        </div>
+      )}
+      {originMismatch && (
+        <div
+          role="alert"
+          className="border-b border-red-800 bg-red-950/80 px-6 py-3 text-center text-sm text-red-200"
+        >
+          State-changing Demo actions are blocked at this address. Open the Demo
+          through{" "}
+          <a
+            href={capabilities.security.allowed_origin}
+            className="font-medium underline decoration-red-400 underline-offset-2"
+          >
+            {capabilities.security.allowed_origin}
+          </a>{" "}
+          instead.
+        </div>
+      )}
       <main className="mx-auto max-w-5xl px-6 py-8">
         <Outlet />
       </main>

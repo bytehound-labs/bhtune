@@ -32,6 +32,29 @@ remembered by the browser.
 The header also shows whether the BHTune HTTP service is reachable. Its status includes
 screen-reader text and a tooltip; a healthy server indicator does not test OPC DA connectivity.
 
+### Restricted Demo mode
+
+A server configured for Demo mode exposes a simulator-only browser experience. The frontend
+loads the server capability document before it queries run history or renders mode-sensitive
+routes. That request lazily sets the host-only anonymous Demo cookie but does not create a
+database row; storage begins only when the browser starts its first accepted tune. Config, OPC
+browsing, notes, and PID write-back are absent; templates are limited to the built-in read-only
+catalog. Demo run history, detail, streaming, cancellation, export, and deletion use the same
+`/api/runs` paths as Full mode. Starting a tune sends only the normalized simulator fields shown
+by the Demo form, with a fixed safe tag, bounded simulator ranges and timing values, and a
+controller direction that must provide negative feedback for the selected positive or negative
+process gain. The Demo defaults are a 0–100 PV/MV range with initial values of 50, gain 1.0,
+time constant 0.1 seconds, dead time 0.25 seconds, zero noise, relay amplitude 10%, one skipped
+cycle, two counted cycles, and zero seconds of noise protection.
+
+Demo policy limits and simulator timing are fixed application-owned values rather than public
+configuration controls; a deployment configuration may only declare the exact contract.
+Each run uses the stable **Simulator demo** identity. Demo history belongs to the anonymous browser session that created it. Another browser profile
+or private window cannot list or open those runs. The Demo form draft is stored only in that
+browser and expires 24 hours after its last edit. A usage-limit message advises waiting before
+retrying (`429`), while temporary service-capacity failures (`503`) advise retrying after a
+short pause. Full mode keeps the complete behavior described below.
+
 `bhtune-server` has no command-line flags of its own (unlike `bhtune`, it doesn't use `clap`
 yet). Every setting — including which port it binds — is resolved from a config file or
 environment variable, the same way the CLI resolves its own flags:
@@ -59,8 +82,10 @@ pnpm --filter bhtune-frontend run dev   # then, in another -- hot-reloads on sav
 The Vite development server binds all local interfaces and allows the `asus` hostname, so a
 second host on the trusted local network can open `http://asus:5173`. Frontend edits are
 deployed through hot module reload after each save; restart `bhtune-server` after Rust or API
-changes. The development server and API have no authentication, so do not expose them beyond
-a trusted network.
+changes. The proxy keeps browser API calls same-origin to the Vite page; Full mode accepts
+that development flow while continuing to reject cross-site browser mutations. The
+development server and API have no authentication, so do not expose them beyond a trusted
+network.
 
 ## Run a tune
 

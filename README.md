@@ -46,6 +46,21 @@ binaries exist yet (see [Installation](#installation)). The tuning engine's gold
 validation against a captured legacy trace is complete; [`AGENTS.md`](AGENTS.md) records the
 full phased implementation plan.
 
+The browser also supports a restricted **Demo mode** for public simulator deployments. It
+removes every live-plant route and navigation action, sends only normalized simulator inputs,
+keeps each anonymous browser session's runs private, and uses the normal `/api/runs` history,
+detail, stream, cancel, export, and delete paths with owner-scoped responses. The capability
+request lazily assigns the host-only Demo cookie without creating database state; a session row
+is created only when that browser starts its first accepted run. The browser-local form draft
+expires after 24 hours. Demo policy limits and simulator timing are fixed application-owned
+values; deployment configuration may repeat them for validation but cannot widen them. Demo
+runs use the stable identity **Simulator demo**, not an external plant tag. The Demo page lets
+visitors choose a built-in template, process/controller type, and bounded MRFT and simulator
+settings while omitting controls that require live equipment. Full mode retains the complete
+OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing
+requests require the exact configured browser origin; non-loopback self-hosting therefore uses
+an HTTPS reverse proxy rather than direct HTTP access to the bound application port.
+
 ## Getting started
 
 - [Installation](docs/getting-started/installation.md) — build from source.
@@ -53,6 +68,8 @@ full phased implementation plan.
   against the built-in simulator, no plant connection required.
 - [Web GUI quickstart](docs/getting-started/web-gui-quickstart.md) — the same tuning engine,
   driven from a browser.
+- [Public simulator demo](docs/guides/public-simulator-demo.md) — the restricted mode's
+  privacy, limits, deployment boundary, and self-hosting requirements.
 - [MRFT concepts](docs/guides/mrft-concepts.md) and [Safety](docs/guides/safety.md) — what the
   test actually does, and the guardrails around running it unattended against live equipment.
 
@@ -301,8 +318,25 @@ pnpm dev             # http://localhost:5173 or http://asus:5173 on the local ne
 
 The Vite development server binds to all local interfaces, allows the `asus` hostname, and
 proxies `/api/*` to the loopback `bhtune-server` on port `8787`. Frontend edits appear through
-hot module reload; restart `bhtune-server` after Rust or API changes. This development server
-has no authentication and should only be exposed on a trusted network.
+hot module reload; restart `bhtune-server` after Rust or API changes. The proxy keeps browser
+API calls same-origin to the Vite page; Full mode accepts that development flow while
+continuing to reject cross-site browser mutations. This development server has no
+authentication and should only be exposed on a trusted network.
+
+### Browser end-to-end tests
+
+The Playwright suite has separate Full and Demo projects. After building the server and
+frontend as above, run either project independently:
+
+```sh
+PLAYWRIGHT_MODE=full pnpm --filter bhtune-frontend exec playwright test --project=full
+PLAYWRIGHT_MODE=demo pnpm --filter bhtune-frontend exec playwright test --project=demo
+```
+
+The Demo project uses an isolated HTTPS proxy so Secure-cookie and reverse-proxy behavior are
+covered; it requires `openssl` in addition to the normal Rust, Node, and Playwright
+prerequisites. Omitting `PLAYWRIGHT_MODE` runs both projects and starts both isolated test
+servers.
 
 See [`frontend/README.md`](frontend/README.md) for details. The
 server shuts down gracefully on Ctrl+C (and on Unix, `SIGTERM`), draining in-flight requests
@@ -613,8 +647,10 @@ pnpm run check:dead-code
 ```
 
 The check examines unused files, dependencies, and exports, plus unresolved and unlisted
-imports. CI runs it on every pull request and push that changes the JavaScript/TypeScript
-workspace, its configuration, or the workflow that invokes it; it is not a weekly-only check.
+imports. The Full and Demo Playwright server/proxy launchers are explicit Knip entry points
+because Playwright invokes them outside the application's import graph. CI runs the check on
+every pull request and push that changes the JavaScript/TypeScript workspace, its configuration,
+or the workflow that invokes it; it is not a weekly-only check.
 
 SonarQube Cloud provides broader maintainability analysis for the Rust, TypeScript/TSX,
 documentation-site, and repository-script sources:

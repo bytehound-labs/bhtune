@@ -55,8 +55,18 @@ export function toApiError(error: unknown, response: Response): ApiError {
 export function userFacingErrorMessage(
   error: unknown,
   fallback: string,
+  demo = false,
 ): string {
   if (error instanceof ApiError) {
+    if (demo && error.status === 429) {
+      return "Demo usage limit reached. Wait a few minutes before retrying; repeated attempts will not reset the limit.";
+    }
+    if (demo && error.status === 503) {
+      return "The demo service is temporarily unavailable. Wait a moment and retry; if it continues, come back later.";
+    }
+    if (demo && error.status === 403) {
+      return "This Demo page is not using the configured browser URL. Open the Demo through its configured browser origin and try again.";
+    }
     if (error.status >= 500) {
       return "The server could not complete the request. Try again.";
     }

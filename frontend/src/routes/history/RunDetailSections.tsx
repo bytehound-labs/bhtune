@@ -47,8 +47,10 @@ export interface RunErrorItem {
 
 export function RunDetailErrors({
   errors,
+  demo = false,
 }: {
   readonly errors: readonly RunErrorItem[];
+  readonly demo?: boolean;
 }) {
   return (
     <>
@@ -56,7 +58,7 @@ export function RunDetailErrors({
         error ? (
           <ErrorBanner
             key={key}
-            message={userFacingErrorMessage(error, fallback)}
+            message={userFacingErrorMessage(error, fallback, demo)}
           />
         ) : null,
       )}
@@ -113,10 +115,19 @@ function TrendSection({
   );
 }
 
-function SummarySection({ run }: { readonly run: RunDetailResponse }) {
+function SummarySection({
+  run,
+  demo,
+}: {
+  readonly run: RunDetailResponse;
+  readonly demo: boolean;
+}) {
   return (
     <Section title="Summary" collapsible defaultOpen>
-      <Field label="Tag name" value={run.tag_name} />
+      <Field
+        label={demo ? "Tune" : "Tag name"}
+        value={demo ? "Simulator demo" : run.tag_name}
+      />
       <Field
         label="Outcome"
         value={
@@ -125,15 +136,20 @@ function SummarySection({ run }: { readonly run: RunDetailResponse }) {
           </Badge>
         }
       />
-      <Field label="Driver" value={DRIVER_LABELS[run.driver]} />
+      <Field
+        label="Driver"
+        value={demo ? "Simulator demo" : DRIVER_LABELS[run.driver]}
+      />
       <Field
         label="Template"
         value={
           <>
             {run.template_name}{" "}
-            <Badge tone={originTone[run.template_origin]}>
-              {run.template_origin}
-            </Badge>
+            {!demo && (
+              <Badge tone={originTone[run.template_origin]}>
+                {run.template_origin}
+              </Badge>
+            )}
           </>
         }
       />
@@ -477,6 +493,7 @@ function WriteErrors({ writes }: { readonly writes: readonly RunWrite[] }) {
 
 export function RunDetailContent({
   run,
+  demo,
   isRunning,
   stream,
   initialReadings,
@@ -499,6 +516,7 @@ export function RunDetailContent({
   onRevert,
 }: {
   readonly run: RunDetailResponse;
+  readonly demo: boolean;
   readonly isRunning: boolean;
   readonly stream: RunStreamState;
   readonly initialReadings: RunDetailResponse["initial_readings"];
@@ -526,6 +544,7 @@ export function RunDetailContent({
       {run.results.length > 0 && (
         <PidResultsPanel
           run={run}
+          demo={demo}
           eligibility={eligibility}
           writePending={writePending}
           writingResponseLevel={writingResponseLevel}
@@ -534,34 +553,39 @@ export function RunDetailContent({
         />
       )}
       <TrendSection points={trendPoints} pollIntervalMs={trendPollIntervalMs} />
-      <SummarySection run={run} />
-      <NotesSection
-        notes={notes}
-        notesDirty={notesDirty}
-        savePending={savePending}
-        clearPending={clearPending}
-        onNotesChange={onNotesChange}
-        onSave={onSaveNotes}
-        onClear={onClearNotes}
-      />
+      <SummarySection run={run} demo={demo} />
+      {!demo && (
+        <NotesSection
+          notes={notes}
+          notesDirty={notesDirty}
+          savePending={savePending}
+          clearPending={clearPending}
+          onNotesChange={onNotesChange}
+          onSave={onSaveNotes}
+          onClear={onClearNotes}
+        />
+      )}
       <ConfigurationSection run={run} />
       {initialReadings && <InitialReadingsSection readings={initialReadings} />}
       {run.results.length === 0 && (
         <PidResultsPanel
           run={run}
+          demo={demo}
           eligibility={eligibility}
           writePending={writePending}
           writingResponseLevel={writingResponseLevel}
           onWrite={onWrite}
         />
       )}
-      <WriteHistorySection
-        run={run}
-        eligibility={eligibility}
-        canRevertLastWrite={canRevertLastWrite}
-        revertPending={revertPending}
-        onRevert={onRevert}
-      />
+      {!demo && (
+        <WriteHistorySection
+          run={run}
+          eligibility={eligibility}
+          canRevertLastWrite={canRevertLastWrite}
+          revertPending={revertPending}
+          onRevert={onRevert}
+        />
+      )}
       <SamplingDiagnosticsSection timing={run.timing_metrics} />
       <p className="text-sm text-slate-500">
         {trendSamples.length} measurements{" "}
