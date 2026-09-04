@@ -793,8 +793,9 @@ paged `bhtune opc browse` (or explicit `--all` draining), live `bhtune opc searc
 `bhtune opc search-index status|search|refresh|control`; progress and warnings stay on stderr so
 JSON output remains machine-readable. CLI browse sessions remain open for continuation after a
 page is printed and are released with `bhtune opc close <session-id>`.
-If a completed gateway inventory reports a non-fatal diagnostic, the active index remains usable
-and the browser/CLI presents it as a warning; only the `failed` state is treated as an index error.
+If a completed gateway inventory reports a non-fatal diagnostic, the active index remains usable.
+The diagnostic remains available through the gateway/API and CLI, while the browser only shows an
+index error when the usable index state is `failed`.
 
 Indexed search is deliberately not a prerequisite for tag selection or tuning. When a server is
 unconfigured, still building its first generation, or has no usable index, the browser disables

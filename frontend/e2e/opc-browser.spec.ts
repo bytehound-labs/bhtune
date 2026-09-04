@@ -67,6 +67,7 @@ function searchIndexStatus(
     | "refreshing"
     | "failed" = "ready",
   configured = true,
+  lastError: string | null = null,
 ) {
   return {
     server: "Test.Server",
@@ -77,7 +78,7 @@ function searchIndexStatus(
     unique_item_count: 2,
     started_at: null,
     completed_at: "2024-01-15T10:23:45Z",
-    last_error: null,
+    last_error: lastError,
     database_bytes: 1024,
     organization: "hierarchical",
     source: "da2",
@@ -976,6 +977,64 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(
       page.getByText("Unable to refresh the tag index."),
     ).not.toBeVisible();
+  });
+
+  test("hides recovered inventory diagnostics when the index is ready", async ({
+    page,
+  }) => {
+    const diagnostic =
+      "1,779 non-navigable DA2 branches were skipped during inventory.";
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("ready", true, diagnostic)),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+
+    await expect(page.getByText("Index: ready")).toBeVisible();
+    await expect(
+      page.getByText(`Index warning: ${diagnostic}`, { exact: true }),
+    ).not.toBeVisible();
+  });
+
+  test("shows a diagnostic when the index has failed", async ({ page }) => {
+    const diagnostic = "the inventory database is unavailable";
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("failed", true, diagnostic)),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+
+    await expect(
+      page.getByText(`Index error: ${diagnostic}`, { exact: true }),
+    ).toBeVisible();
   });
 
   test("explains when the gateway has not enabled indexing for the server", async ({

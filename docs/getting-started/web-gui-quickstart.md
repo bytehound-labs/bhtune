@@ -137,8 +137,9 @@ a trusted network.
      Restart `opcda-bridge-gateway` after changing this allow-list. The gateway intentionally
      does not index every registered OPC DA server automatically. If indexing is not configured
      or is still building, the global search field is disabled, but the lazy tag tree, direct
-     ItemID entry in the form, live reads, and tune workflow remain available. Index status
-     messages are informational and do not block browsing.
+     ItemID entry in the form, live reads, and tune workflow remain available. Completed
+     non-fatal inventory diagnostics remain available through the gateway/API and diagnostic CLI;
+     the browser only shows a visible message for a failed index state.
 
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
