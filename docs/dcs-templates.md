@@ -124,8 +124,8 @@ final separator are preserved.
 
 {/* web-ui-screenshot: full-opc-tag-applied */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=291c5d4db318">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=291c5d4db318" alt="BHTune Loop mapping showing Area01.FIC101.PV after selecting Area01.FIC101.OUT" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=63c94c477223">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=63c94c477223" alt="BHTune Loop mapping showing Area01.FIC101.PV after selecting Area01.FIC101.OUT" />
   </a>
   <figcaption>Final-component replacement changes the selected `OUT` item to the active template's `PV` item while preserving the path.</figcaption>
 </figure>

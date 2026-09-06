@@ -83,8 +83,8 @@ not a second source of truth.
 
 {/* web-ui-screenshot: full-opc-tag-applied */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=291c5d4db318">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=291c5d4db318" alt="BHTune New Tune form showing Area01.FIC101.PV after selecting Area01.FIC101.OUT in the OPC browser" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=63c94c477223">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=63c94c477223" alt="BHTune New Tune form showing Area01.FIC101.PV after selecting Area01.FIC101.OUT in the OPC browser" />
   </a>
   <figcaption>After selection, the Tag name and Loop mapping preview show the template's PV suffix applied to the browsed path.</figcaption>
 </figure>
