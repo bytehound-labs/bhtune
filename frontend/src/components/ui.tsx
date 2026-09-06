@@ -10,13 +10,18 @@ export function PageHeading({
   title,
   description,
   actions,
+  documentationId,
 }: {
   readonly title: string;
   readonly description?: string;
   readonly actions?: ReactNode;
+  readonly documentationId?: string;
 }) {
   return (
-    <div className="mb-6 flex items-start justify-between gap-4">
+    <div
+      className="mb-6 flex items-start justify-between gap-4"
+      data-doc-section={documentationId}
+    >
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
         {description && (
@@ -81,12 +86,14 @@ export function CollapsibleSection({
   defaultOpen = true,
   trailing,
   className = "mb-6",
+  documentationId,
 }: {
   readonly title: string;
   readonly children: ReactNode;
   readonly defaultOpen?: boolean;
   readonly trailing?: ReactNode;
   readonly className?: string;
+  readonly documentationId?: string;
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
@@ -95,6 +102,7 @@ export function CollapsibleSection({
       className={`group ${className}`}
       open={isOpen}
       onToggle={(event) => setIsOpen(event.currentTarget.open)}
+      data-doc-section={documentationId}
     >
       <summary className="mb-3 flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
         <h2>{title}</h2>
@@ -172,11 +180,13 @@ export function Section({
   children,
   collapsible = false,
   defaultOpen = true,
+  documentationId,
 }: {
   readonly title: string;
   readonly children: ReactNode;
   readonly collapsible?: boolean;
   readonly defaultOpen?: boolean;
+  readonly documentationId?: string;
 }) {
   const content = (
     <Card>
@@ -188,14 +198,18 @@ export function Section({
 
   if (collapsible) {
     return (
-      <CollapsibleSection title={title} defaultOpen={defaultOpen}>
+      <CollapsibleSection
+        title={title}
+        defaultOpen={defaultOpen}
+        documentationId={documentationId}
+      >
         {content}
       </CollapsibleSection>
     );
   }
 
   return (
-    <section className="mb-6">
+    <section className="mb-6" data-doc-section={documentationId}>
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
         {title}
       </h2>
@@ -461,11 +475,13 @@ export function FormSection({
   children,
   collapsible = false,
   defaultOpen = false,
+  documentationId,
 }: {
   readonly title: string;
   readonly children: ReactNode;
   readonly collapsible?: boolean;
   readonly defaultOpen?: boolean;
+  readonly documentationId?: string;
 }) {
   const content = (
     <Card>
@@ -477,14 +493,18 @@ export function FormSection({
 
   if (collapsible) {
     return (
-      <CollapsibleSection title={title} defaultOpen={defaultOpen}>
+      <CollapsibleSection
+        title={title}
+        defaultOpen={defaultOpen}
+        documentationId={documentationId}
+      >
         {content}
       </CollapsibleSection>
     );
   }
 
   return (
-    <section className="mb-6">
+    <section className="mb-6" data-doc-section={documentationId}>
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
         {title}
       </h2>
@@ -508,12 +528,14 @@ export function Modal({
   children,
   widthClassName = "max-w-lg",
   dismissible = true,
+  documentationId,
 }: {
   readonly title: string;
   readonly onClose: () => void;
   readonly children: ReactNode;
   readonly widthClassName?: string;
   readonly dismissible?: boolean;
+  readonly documentationId?: string;
 }) {
   const titleId = useId();
 
@@ -534,7 +556,10 @@ export function Modal({
   }, []);
 
   return createPortal(
-    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4">
+    <div
+      className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4"
+      data-doc-section={documentationId}
+    >
       <button
         type="button"
         aria-label="Dismiss modal backdrop"

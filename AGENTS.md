@@ -296,9 +296,10 @@ Phase 9's two front-loaded,
 run-now items are also done: `docs-contract` (see
 "Documentation contract" above) and `docs-copilot-hook` — a paired `sessionStart`/`sessionEnd`
 Copilot CLI hook (`.github/hooks/docs-drift.json`) that warns when a session changed
-`crates/**` without touching any documentation surface, covering both a session's already-
-committed-and-pushed changes and anything still uncommitted (see `.github/hooks/README.md`
-for why it's a pair, not a single hook). `docs-generated-cli` is also done: a new
+Rust, user-visible `frontend/src/**`, or screenshot-documentation implementation change
+without touching any documentation surface, covering both a session's already-committed-and-
+pushed changes and anything still uncommitted (see `.github/hooks/README.md` for why it's a
+pair, not a single hook). `docs-generated-cli` is also done: a new
 `crates/bhtune-cli/examples/gen_docs.rs` regenerates the full CLI reference
 (`docs/reference/cli.md`, `clap-markdown`), one git/cargo-style man page per command and
 subcommand (`man/*.1`, `clap_mangen`, recursing `Command::get_subcommands()` rather than a
@@ -3463,11 +3464,14 @@ the published docs.
 
 ## `docs-agent-ci`: the AI docs agent
 
-`.github/workflows/docs-agent.yml` runs GitHub Copilot CLI headless on every PR touching
-`crates/**` and auto-commits narrative-prose documentation updates onto the PR branch — tier 2
-of the documentation contract (see "Documentation contract" above). Tier 1
-(`docs/reference/**`, generated) is already diff-gated by `checks.yml`; tier 3 (`AGENTS.md`) is
-explicitly off limits to this workflow.
+`.github/workflows/docs-agent.yml` captures deterministic Full/Demo Web UI screenshots on PRs
+touching `crates/**`, user-visible `frontend/src/**`, or screenshot tooling, then runs GitHub
+Copilot CLI headless and auto-commits narrative-prose documentation plus workflow-generated
+screenshot metadata onto same-repository PR branches — tier 2 of the documentation contract
+(see "Documentation contract" above). Fork PRs receive the candidate gallery without repository
+secrets; a maintainer-triggered run is required to apply text updates. Tier 1
+(`docs/reference/**`, generated) is already diff-gated by `checks.yml`; the screenshot lock is
+workflow-owned; tier 3 (`AGENTS.md`) is explicitly off limits to this workflow.
 
 **Guardrails, all load-bearing** (numbered comments in the workflow itself cross-reference
 these):
@@ -3479,11 +3483,13 @@ these):
    `COPILOT_GITHUB_TOKEN`, a personal PAT (see below), so GitHub attributes its push to that
    token's human owner — indistinguishable from that person pushing themselves. The commit
    author, independent of which token performed the push, is the only reliable signal. The
-   `paths: crates/**` trigger filter is a second, structural line of defense (the agent only
-   ever touches `docs/**`/`README.md`, which doesn't match that filter), but the explicit
-   author check doesn't rely on that alone.
-2. **Blast radius.** The agent may only touch `docs/**` (excluding the generated
-   `docs/reference/**`) and `README.md`. Enforced twice: a `--deny-tool 'write(AGENTS.md)'`
+   implementation-path trigger filter is a second, structural line of defense (the workflow-
+   owned commit only touches `docs/**`/`README.md` and the generated screenshot lock, which do
+   not match those implementation paths), but the explicit author check doesn't rely on that
+   alone.
+2. **Blast radius.** The agent may only touch `docs/**` (excluding generated references except
+   for the workflow-owned Web UI screenshot lock) and `README.md`; the screenshot capture is the
+   only workflow step allowed to update that lock. Enforced twice: a `--deny-tool 'write(AGENTS.md)'`
    flag blocks the one specific file that must never be auto-edited regardless of path-prefix
    ambiguity in the CLI's own tool-permission matching, and a post-run `git status --porcelain`
    check fails the job and discards every change if the diff touched anything outside the
@@ -3493,10 +3499,11 @@ these):
    it believes something here is stale, it says so in its final response instead, which gets
    posted as a PR comment for a human to act on or ignore.
 4. **Fork PRs.** `pull_request` runs from forks never receive repo secrets, so
-   `COPILOT_GITHUB_TOKEN` is absent and the job skips itself — the safe default. Deliberately
-   not "fixed" with `pull_request_target` (write permissions in the context of untrusted fork
-   code is a known privilege-escalation foot-gun). A `workflow_dispatch` path with a `pr_number`
-   input exists instead, for a maintainer who has already read the diff to run manually; since
+   `COPILOT_GITHUB_TOKEN` is absent and the Copilot prose step skips itself — the safe default.
+   The non-secret screenshot capture and review artifact still run. Deliberately not "fixed" with
+   `pull_request_target` (write permissions in the context of untrusted fork code is a known
+   privilege-escalation foot-gun). A `workflow_dispatch` path with a `pr_number` input exists
+   instead, for a maintainer who has already read the diff to apply text updates manually; since
    a fork PR's branch doesn't live in this repo, that path pushes to a new
    `docs-agent/pr-<n>-followup` branch here rather than trying to push back into the fork.
 5. **Auth.** `COPILOT_GITHUB_TOKEN` is a personal classic PAT (scopes include `copilot`, needed
@@ -3509,10 +3516,10 @@ these):
    `secrets.COPILOT_GITHUB_TOKEN`, so narrowing this later (a dedicated fine-grained PAT or App,
    if one is ever confirmed to support Copilot CLI auth) is a secret-rotation, not a workflow
    change.
-6. **Cost.** Each run consumes Copilot premium requests. The `crates/**` path filter keeps this
-   off PRs that can't have caused prose drift, and `--model` is pinned (`claude-sonnet-4.5`)
-   rather than left on auto-routing so a model upgrade never silently changes cost/behavior on
-   every future PR without a reviewed change here.
+6. **Cost.** Each same-repository run consumes Copilot premium requests. The implementation-path
+   filter keeps this off PRs that can't have caused prose drift or visual-documentation drift,
+   and `--model` is pinned (`claude-sonnet-4.5`) rather than left on auto-routing so a model
+   upgrade never silently changes cost/behavior on every future PR without a reviewed change here.
 
 **Validated locally** (flag parsing via a scratch-repo smoke test, then `actionlint` against
 the workflow file — it caught one real script-injection risk worth noting as a general
@@ -4231,12 +4238,12 @@ is process narrative that belongs in the commit message and PR description, not 
 reader opens to learn how the software behaves today.
 
 **Backstop, not a substitute.** `docs-copilot-hook` (a `sessionEnd` Copilot CLI hook, see
-`.github/hooks/README.md`) prints a cheap, non-blocking warning for the single most common
-miss — a session that changed `crates/**` without touching any documentation surface — but it
-is a safety net for an honest oversight, not a license to skip this step and let the hook catch
-it. It cannot judge whether documentation is actually _good_, and it has no way to catch drift
-in behavior that never touched `crates/**` at all (a `frontend/`-only or CI-workflow-only
-change with real user-visible impact, for instance).
+`.github/hooks/README.md`) prints a cheap, non-blocking warning for the common miss — a session
+that changed `crates/**`, user-visible `frontend/src/**`, or screenshot-documentation tooling
+without touching any documentation surface — but it is a safety net for an honest oversight,
+not a license to skip this step and let the hook catch it. It cannot judge whether documentation
+is actually _good_, and it has no way to catch drift in behavior that never touches one of those
+implementation paths.
 
 ## Knip dead-code analysis (`knip`, done)
 
@@ -4753,9 +4760,10 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
 9. **Documentation and release** — two prerequisites are already done, front-loaded ahead of
    the rest of this phase since they're cheap and are what actually prevents drift: a
    documentation contract in this file (`docs-contract`, see "Documentation contract" above)
-   and a paired `sessionStart`/`sessionEnd` Copilot CLI hook warning when a session changes
-   `crates/**` without touching any documentation surface (`docs-copilot-hook`, see
-   `.github/hooks/README.md`). `docs-generated-cli` is also done: the CLI reference, man
+   and a paired `sessionStart`/`sessionEnd` Copilot CLI hook warning when a session changes Rust,
+   user-visible frontend, or screenshot-documentation implementation files without touching any
+   documentation surface (`docs-copilot-hook`, see `.github/hooks/README.md`). `docs-generated-cli`
+   is also done: the CLI reference, man
    pages, shell completions, and `bhtune.toml`/template-catalog JSON Schema all regenerate
    from the real `clap`/`serde` definitions and are drift-gated in CI — see
    "`docs-generated-cli`: generating the CLI reference, man pages, completions, and config
@@ -4779,11 +4787,14 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `ghcr.io/bytehound-labs/bhtune` on every push to `main` (tagged `edge`) and every version
    tag (tagged with the version and `latest`), and build-only (no push) on every PR — see
    "`pkg-docker`: the Docker image" below for the full design. `docs-agent-ci` is also done:
-   `.github/workflows/docs-agent.yml` runs GitHub Copilot CLI headless on PRs touching
-   `crates/**` and auto-commits narrative-prose doc updates, guarded against infinite loops,
-   scope creep beyond `docs/**`+`README.md`, and fork PRs — see "`docs-agent-ci`: the AI docs
-   agent" above for the full guardrail design; not yet validated against a real PR with
-   genuine prose drift. `pkg-evaluate-others` is also done: `.deb`/`.rpm` packages (built
+   `.github/workflows/docs-agent.yml` captures deterministic Full/Demo Web UI screenshots on
+   relevant implementation PRs, uploads a candidate gallery (including fork PRs without
+   secrets), and auto-commits narrative-prose updates plus workflow-generated screenshot metadata
+   on same-repository PRs, guarded against infinite loops, generated-lock edits, scope creep
+   beyond `docs/**`+`README.md`, and fork PRs — see "`docs-agent-ci`: the AI docs agent" above
+   for the full guardrail design; the capture/lock path still needs validation against a real
+   non-trivial PR with genuine visual drift. `pkg-evaluate-others` is also done: `.deb`/`.rpm`
+   packages (built
    with `cargo-deb`/`cargo-generate-rpm` from the same asset set as the Docker image),
    `cargo-binstall` metadata on `bhtune-cli`, and a prepared-but-inert Homebrew formula —
    see "`pkg-evaluate-others`: the remaining distribution channels" above for the full

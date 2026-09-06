@@ -105,7 +105,7 @@ function TrendSection({
   readonly pollIntervalMs: number | null | undefined;
 }) {
   return (
-    <CollapsibleSection title="Trend">
+    <CollapsibleSection title="Trend" documentationId="run-detail.trend">
       {points.length === 0 ? (
         <p className="text-sm text-slate-500">No measurements recorded yet.</p>
       ) : (
@@ -123,7 +123,12 @@ function SummarySection({
   readonly demo: boolean;
 }) {
   return (
-    <Section title="Summary" collapsible defaultOpen>
+    <Section
+      title="Summary"
+      collapsible
+      defaultOpen
+      documentationId="run-detail.summary"
+    >
       <Field
         label={demo ? "Tune" : "Tag name"}
         value={demo ? "Simulator demo" : run.tag_name}
@@ -211,7 +216,7 @@ function NotesSection({
   readonly onClear: () => void;
 }) {
   return (
-    <CollapsibleSection title="Notes">
+    <CollapsibleSection title="Notes" documentationId="run-detail.notes">
       <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-5">
         <TextAreaField
           label="Run notes"
@@ -246,7 +251,12 @@ function NotesSection({
 
 function ConfigurationSection({ run }: { readonly run: RunDetailResponse }) {
   return (
-    <Section title="Test configuration" collapsible defaultOpen>
+    <Section
+      title="Test configuration"
+      collapsible
+      defaultOpen
+      documentationId="run-detail.test-configuration"
+    >
       <Field
         label="Process type"
         value={PROCESS_TYPE_LABELS[run.config.process_type]}
@@ -281,7 +291,12 @@ function InitialReadingsSection({
   readonly readings: NonNullable<RunDetailResponse["initial_readings"]>;
 }) {
   return (
-    <Section title="Initial readings" collapsible defaultOpen>
+    <Section
+      title="Initial readings"
+      collapsible
+      defaultOpen
+      documentationId="run-detail.initial-readings"
+    >
       <Field label="PV initial" value={formatNumber(readings.pv_ini)} />
       <Field label="MV initial" value={formatNumber(readings.mv_ini)} />
       <Field
@@ -323,7 +338,10 @@ function WriteHistorySection({
   readonly onRevert: (write: RunWrite) => void;
 }) {
   return (
-    <CollapsibleSection title="PID change history">
+    <CollapsibleSection
+      title="PID change history"
+      documentationId="run-detail.pid-history"
+    >
       {run.writes.length === 0 ? (
         <p className="text-sm text-slate-500">
           No PID settings were applied during this tune.

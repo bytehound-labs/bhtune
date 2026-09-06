@@ -1,0 +1,8 @@
+{
+  "label": "Web UI",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "Visual reference for the Full and Demo browser workflows."
+  }
+}

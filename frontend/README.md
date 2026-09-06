@@ -106,3 +106,24 @@ collapsed.
 | `pnpm run format:check` | Check formatting with Prettier (`pnpm exec prettier --write .` to fix). |
 | `pnpm run generate:api` | Regenerate `src/api/schema.d.ts` from `../openapi.json`.                |
 | `pnpm preview`          | Serve the production build locally, for a final check before deploying. |
+
+## Documentation screenshots
+
+The visual Web UI reference is generated from the production SPA with deterministic Playwright
+fixtures. Capture the Full and Demo scenarios from the repository root:
+
+```sh
+pnpm docs:screenshots
+pnpm docs:screenshots:validate
+pnpm docs:screenshots:gallery
+```
+
+The capture command builds candidates under `website/static/generated/web-ui/`, updates the
+text-only lock at `docs/reference/web-ui-screenshots.json`, and writes a review gallery to
+`frontend/test-results/docs-screenshots/index.html`. These PNGs are generated Pages assets and
+must not be committed. Screenshot scenarios should wait for the final visible state after every
+state-changing interaction before capturing, so the canonical image reflects settled React
+layout rather than an intermediate render. Use `pnpm docs:screenshots:check` for a no-write,
+CI-style drift check that leaves the text lock unchanged. When a user-visible route or modal
+changes, update the relevant visual guide prose and add or adjust a manifest scenario if an
+existing screenshot no longer covers the behavior.

@@ -41,6 +41,7 @@ export function RunDetailActions({
   return (
     <PageHeading
       title={demo ? `Simulator demo #${id ?? ""}` : `Tune #${id ?? ""}`}
+      documentationId="run-detail.page"
       actions={
         <>
           {isRunning && actions.cancel_run && (

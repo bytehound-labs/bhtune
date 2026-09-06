@@ -135,7 +135,12 @@ function connectionFields({
   const hasServer = form.server.trim().length > 0;
 
   return (
-    <FormSection title="Connection" collapsible defaultOpen>
+    <FormSection
+      title="Connection"
+      collapsible
+      defaultOpen
+      documentationId="new-tune.connection"
+    >
       <SelectField
         label="Driver"
         value={form.driver}
@@ -234,7 +239,12 @@ function testParameterFields({
   "form" | "onChange" | "onProcessTypeChange" | "onResetProcessDefaults"
 >) {
   return (
-    <FormSection title="Test parameters" collapsible defaultOpen>
+    <FormSection
+      title="Test parameters"
+      collapsible
+      defaultOpen
+      documentationId="new-tune.test-parameters"
+    >
       <SelectField
         label="Process type"
         value={form.processType}
@@ -487,7 +497,12 @@ function SimulatorRangeFields({
 function simulatorParameterFields(props: SimulatorParameterProps) {
   if (props.form.driver !== "simulator") return null;
   return (
-    <FormSection title="Simulator parameters" collapsible defaultOpen>
+    <FormSection
+      title="Simulator parameters"
+      collapsible
+      defaultOpen
+      documentationId="new-tune.simulator-parameters"
+    >
       <SimulatorProcessFields {...props} />
       <SimulatorInitialFields {...props} />
       <SimulatorRangeFields {...props} />
@@ -517,7 +532,12 @@ function demoFields({
     : controllerTypes[0];
   return (
     <>
-      <FormSection title="Demo tune settings" collapsible defaultOpen>
+      <FormSection
+        title="Demo tune settings"
+        collapsible
+        defaultOpen
+        documentationId="new-tune.demo-settings"
+      >
         <SelectField
           label="Template"
           value={form.template}
@@ -599,7 +619,12 @@ function automaticPidFields({
     : undefined;
 
   return (
-    <FormSection title="Automatic PID settings" collapsible defaultOpen>
+    <FormSection
+      title="Automatic PID settings"
+      collapsible
+      defaultOpen
+      documentationId="new-tune.automatic-pid"
+    >
       <SelectField
         label="Apply PID settings on completion"
         value={form.writePid}
@@ -675,7 +700,12 @@ export function NewRunForm({
             onProcessTypeChange,
             onResetProcessDefaults,
           })}
-          <FormSection title="Loop mapping" collapsible defaultOpen>
+          <FormSection
+            title="Loop mapping"
+            collapsible
+            defaultOpen
+            documentationId="new-tune.loop-mapping"
+          >
             <LoopMappingEditor
               state={form}
               template={template}

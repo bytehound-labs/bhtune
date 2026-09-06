@@ -15,7 +15,11 @@ export function SamplingDiagnosticsSection({
   const samplingAdequacy = timing.sampling_adequacy ?? "not_assessed";
 
   return (
-    <CollapsibleSection title="Sampling diagnostics" defaultOpen={false}>
+    <CollapsibleSection
+      title="Sampling diagnostics"
+      defaultOpen={false}
+      documentationId="run-detail.sampling-diagnostics"
+    >
       <div
         className="rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-3"
         aria-label="Sampling adequacy advisory"

@@ -71,6 +71,7 @@ export function RunListPage({
     <div>
       <PageHeading
         title="History"
+        documentationId="history.page"
         description={
           isDemo
             ? "Review synthetic tunes created in this browser session."

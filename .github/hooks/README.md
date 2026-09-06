@@ -6,13 +6,15 @@ CLI). JSON can't hold comments, so the rationale for what's here lives in this f
 See "Documentation contract" in [`AGENTS.md`](../../AGENTS.md) for the policy this hook backs
 up.
 
-## `docs-drift.json`: warn when `crates/**` changes without a docs change
+## `docs-drift.json`: warn when implementation changes without a docs change
 
 **What it does.** At the end of a session, prints a one-line warning to stderr if the session
-changed files under `crates/**` but none under `docs/**`, `README.md`, `AGENTS.md`, or
-`CONTRIBUTING.md`. It never blocks anything — `sessionEnd` hook output isn't consumed as a
-decision by the CLI at all (see the hooks reference's event table), so this can only inform,
-never fail a session or a command.
+changed Rust files, user-visible frontend files under `frontend/src/**`, the dedicated Web UI
+screenshot scenarios/configuration, or screenshot automation without touching `docs/**`,
+`README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `frontend/README.md`, or `website/README.md`.
+It never blocks anything — `sessionEnd` hook output isn't consumed as a decision by the CLI at
+all (see the hooks reference's event table), so this can only inform, never fail a session or a
+command.
 
 **Why it's a pair of hooks, not just one.** A `sessionEnd`-only hook can only see two things:
 the working tree's currently uncommitted changes, and repo history in general — it has no
@@ -62,4 +64,7 @@ echo '{"sessionId":"test-123","timestamp":0,"cwd":".","reason":"complete"}' \
   | bash .github/hooks/scripts/docs-drift-session-end.sh
 ```
 
-The second command should print the warning to stderr.
+The second command should print the warning to stderr. The same warning applies to a session
+that changes a user-visible `frontend/src/**` route or component without updating the visual
+Web UI guides, or changes screenshot tooling without updating the contributor/deployment
+instructions.
