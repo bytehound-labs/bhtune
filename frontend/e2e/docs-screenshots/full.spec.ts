@@ -122,39 +122,39 @@ test("full-pid-review", async ({ page }) => {
   await captureScenario(page, "full-pid-review");
 });
 
-test("full-template-list", async ({ page }) => {
-  await page.goto("/templates");
-  await settle(page);
-  await expect(page.getByRole("heading", { name: "Templates" })).toBeVisible();
-  await captureScenario(page, "full-template-list");
-});
+const templateScenarios = [
+  {
+    id: "full-template-list",
+    route: "/templates",
+    heading: "Templates",
+  },
+  {
+    id: "full-template-detail",
+    route: "/templates/Yokogawa%20CentumVP",
+    heading: "Yokogawa CentumVP",
+  },
+  {
+    id: "full-template-create",
+    route: "/templates/new",
+    heading: "New template",
+  },
+  {
+    id: "full-template-edit",
+    route: "/templates/Example%20Template/edit",
+    heading: "Edit Example Template",
+  },
+] as const;
 
-test("full-template-detail", async ({ page }) => {
-  await page.goto("/templates/Yokogawa%20CentumVP");
-  await settle(page);
-  await expect(
-    page.getByRole("heading", { name: "Yokogawa CentumVP" }),
-  ).toBeVisible();
-  await captureScenario(page, "full-template-detail");
-});
-
-test("full-template-create", async ({ page }) => {
-  await page.goto("/templates/new");
-  await settle(page);
-  await expect(
-    page.getByRole("heading", { name: "New template", exact: true }),
-  ).toBeVisible();
-  await captureScenario(page, "full-template-create");
-});
-
-test("full-template-edit", async ({ page }) => {
-  await page.goto("/templates/Example%20Template/edit");
-  await settle(page);
-  await expect(
-    page.getByRole("heading", { name: "Edit Example Template", exact: true }),
-  ).toBeVisible();
-  await captureScenario(page, "full-template-edit");
-});
+for (const scenario of templateScenarios) {
+  test(scenario.id, async ({ page }) => {
+    await page.goto(scenario.route);
+    await settle(page);
+    await expect(
+      page.getByRole("heading", { name: scenario.heading, exact: true }),
+    ).toBeVisible();
+    await captureScenario(page, scenario.id);
+  });
+}
 
 test("full-config", async ({ page }) => {
   await page.goto("/config");

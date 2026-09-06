@@ -123,6 +123,7 @@ text-only lock at `docs/reference/web-ui-screenshots.json`, and writes a review 
 `frontend/test-results/docs-screenshots/index.html`. These PNGs are generated Pages assets and
 must not be committed. Screenshot scenarios should wait for the final visible state after every
 state-changing interaction before capturing, so the canonical image reflects settled React
-layout rather than an intermediate render. When a user-visible route or modal changes, update
-the relevant visual guide prose and add or adjust a manifest scenario if an existing screenshot
-no longer covers the behavior.
+layout rather than an intermediate render. Use `pnpm docs:screenshots:check` for a no-write,
+CI-style drift check that leaves the text lock unchanged. When a user-visible route or modal
+changes, update the relevant visual guide prose and add or adjust a manifest scenario if an
+existing screenshot no longer covers the behavior.

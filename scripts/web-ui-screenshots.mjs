@@ -7,7 +7,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -20,6 +19,8 @@ const screenshotDir = resolve(root, "website/static/generated/web-ui");
 const galleryDir = resolve(root, "frontend/test-results/docs-screenshots");
 const galleryScreenshotsDir = join(galleryDir, "screenshots");
 const pagesBaseUrl = "https://bytehound-labs.github.io/bhtune/generated/web-ui";
+const publishedScreenshotUrlPattern =
+  /https:\/\/bytehound-labs\.github\.io\/bhtune\/generated\/web-ui\/([a-z0-9-]+\.png)(?:\?v=[0-9a-f]+)?/g;
 const binaryExtensions = /\.(?:png|jpe?g|gif|webp|mp4|webm|mov)$/i;
 
 const command = process.argv[2] ?? "capture";
@@ -117,28 +118,26 @@ function sourceDocumentationSectionIds() {
 }
 
 function rewriteDocumentationLinks(manifest) {
+  const scenariosByOutput = new Map(
+    manifest.scenarios.map((scenario) => [scenario.output, scenario]),
+  );
+
   for (const path of markdownFiles()) {
     const absolutePath = resolve(root, path);
     if (!existsSync(absolutePath)) continue;
-    let content = readFileSync(absolutePath, "utf8");
-    for (const scenario of manifest.scenarios) {
-      const base = `${pagesBaseUrl}/${scenario.output}`;
-      const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const urlPattern = new RegExp(`${escaped}(?:\\?v=[0-9a-f]+)?`, "g");
-      content = content.replace(
-        urlPattern,
-        publicUrl(scenario.output, scenario.sha256),
-      );
-    }
-    writeFileSync(absolutePath, content);
+    const content = readFileSync(absolutePath, "utf8");
+    const updated = content.replace(
+      publishedScreenshotUrlPattern,
+      (match, output) => {
+        const scenario = scenariosByOutput.get(output);
+        return scenario ? publicUrl(scenario.output, scenario.sha256) : match;
+      },
+    );
+    writeFileSync(absolutePath, updated);
   }
 }
 
-function validateManifest(manifest, { requireHashes = true } = {}) {
-  const errors = [];
-  const ids = new Set();
-  const outputs = new Set();
-
+function validateManifestShape(manifest, errors) {
   if (manifest.schemaVersion !== 1) {
     errors.push(
       `unsupported manifest schemaVersion: ${manifest.schemaVersion}`,
@@ -146,11 +145,14 @@ function validateManifest(manifest, { requireHashes = true } = {}) {
   }
   if (!Array.isArray(manifest.scenarios) || manifest.scenarios.length === 0) {
     errors.push("manifest has no scenarios");
-    return errors;
+    return null;
   }
+  return manifest.scenarios;
+}
 
+function validateSectionCoverage(scenarios, errors) {
   const manifestSectionIds = new Set(
-    manifest.scenarios.flatMap((scenario) => scenario.coveredSections ?? []),
+    scenarios.flatMap((scenario) => scenario.coveredSections ?? []),
   );
   const sourceSectionIds = sourceDocumentationSectionIds();
   for (const id of sourceSectionIds) {
@@ -167,96 +169,116 @@ function validateManifest(manifest, { requireHashes = true } = {}) {
       );
     }
   }
+}
 
-  for (const scenario of manifest.scenarios) {
-    if (ids.has(scenario.id))
-      errors.push(`duplicate scenario id: ${scenario.id}`);
-    ids.add(scenario.id);
+function validateScenarioMetadata(scenario, ids, outputs, errors) {
+  if (ids.has(scenario.id)) {
+    errors.push(`duplicate scenario id: ${scenario.id}`);
+  }
+  ids.add(scenario.id);
 
-    if (!/^[a-z0-9-]+\.png$/.test(scenario.output)) {
-      errors.push(
-        `${scenario.id} has an unsafe output filename: ${scenario.output}`,
-      );
-    }
-    if (outputs.has(scenario.output)) {
-      errors.push(`duplicate screenshot output: ${scenario.output}`);
-    }
-    outputs.add(scenario.output);
+  if (!/^[a-z0-9-]+\.png$/.test(scenario.output)) {
+    errors.push(
+      `${scenario.id} has an unsafe output filename: ${scenario.output}`,
+    );
+  }
+  if (outputs.has(scenario.output)) {
+    errors.push(`duplicate screenshot output: ${scenario.output}`);
+  }
+  outputs.add(scenario.output);
 
-    if (
-      !Array.isArray(scenario.coveredSections) ||
-      scenario.coveredSections.length === 0
-    ) {
-      errors.push(`${scenario.id} has no covered UI sections`);
-    }
-    if (
-      !Array.isArray(scenario.documentation) ||
-      scenario.documentation.length === 0
-    ) {
-      errors.push(`${scenario.id} has no documentation references`);
-    }
+  if (
+    !Array.isArray(scenario.coveredSections) ||
+    scenario.coveredSections.length === 0
+  ) {
+    errors.push(`${scenario.id} has no covered UI sections`);
+  }
+  if (
+    !Array.isArray(scenario.documentation) ||
+    scenario.documentation.length === 0
+  ) {
+    errors.push(`${scenario.id} has no documentation references`);
+  }
+}
 
-    const path = join(screenshotDir, scenario.output);
-    if (!existsSync(path)) {
-      errors.push(
-        `${scenario.id} is missing generated output: ${scenario.output}`,
-      );
-      continue;
-    }
-
-    try {
-      const dimensions = pngDimensions(path);
-      const actualHash = sha256(path);
-      if (requireHashes && scenario.sha256 !== actualHash) {
-        errors.push(
-          `${scenario.id} hash mismatch: manifest ${scenario.sha256 ?? "<missing>"} != ${actualHash}`,
-        );
-      }
-      if (requireHashes && scenario.width !== dimensions.width) {
-        errors.push(
-          `${scenario.id} width mismatch: manifest ${scenario.width ?? "<missing>"} != ${dimensions.width}`,
-        );
-      }
-      if (requireHashes && scenario.height !== dimensions.height) {
-        errors.push(
-          `${scenario.id} height mismatch: manifest ${scenario.height ?? "<missing>"} != ${dimensions.height}`,
-        );
-      }
-      if (
-        requireHashes &&
-        scenario.publicUrl !== publicUrl(scenario.output, actualHash)
-      ) {
-        errors.push(`${scenario.id} has a stale publicUrl`);
-      }
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : String(error));
-    }
+function validateScenarioImage(scenario, requireHashes, errors) {
+  const path = join(screenshotDir, scenario.output);
+  if (!existsSync(path)) {
+    errors.push(
+      `${scenario.id} is missing generated output: ${scenario.output}`,
+    );
+    return;
   }
 
-  if (existsSync(screenshotDir)) {
-    for (const entry of readdirSync(screenshotDir)) {
-      if (entry.endsWith(".png") && !outputs.has(entry)) {
-        errors.push(`unexpected generated screenshot: ${entry}`);
-      }
+  try {
+    const dimensions = pngDimensions(path);
+    const actualHash = sha256(path);
+    if (requireHashes && scenario.sha256 !== actualHash) {
+      errors.push(
+        `${scenario.id} hash mismatch: manifest ${scenario.sha256 ?? "<missing>"} != ${actualHash}`,
+      );
+    }
+    if (requireHashes && scenario.width !== dimensions.width) {
+      errors.push(
+        `${scenario.id} width mismatch: manifest ${scenario.width ?? "<missing>"} != ${dimensions.width}`,
+      );
+    }
+    if (requireHashes && scenario.height !== dimensions.height) {
+      errors.push(
+        `${scenario.id} height mismatch: manifest ${scenario.height ?? "<missing>"} != ${dimensions.height}`,
+      );
+    }
+    if (
+      requireHashes &&
+      scenario.publicUrl !== publicUrl(scenario.output, actualHash)
+    ) {
+      errors.push(`${scenario.id} has a stale publicUrl`);
+    }
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function validateScenarioImages(scenarios, requireHashes, errors) {
+  const ids = new Set();
+  const outputs = new Set();
+  for (const scenario of scenarios) {
+    validateScenarioMetadata(scenario, ids, outputs, errors);
+    validateScenarioImage(scenario, requireHashes, errors);
+  }
+  return outputs;
+}
+
+function validateGeneratedOutputs(outputs, errors) {
+  if (!existsSync(screenshotDir)) return;
+  for (const entry of readdirSync(screenshotDir)) {
+    if (entry.endsWith(".png") && !outputs.has(entry)) {
+      errors.push(`unexpected generated screenshot: ${entry}`);
     }
   }
+}
 
+function validateDocumentationMarkers(scenarios, requireHashes, errors) {
   const referencedIds = new Set();
+  const scenarioById = new Map(
+    scenarios.map((scenario) => [scenario.id, scenario]),
+  );
+  const markerPattern =
+    /(?:<!--\s*web-ui-screenshot:\s*([a-z0-9-]+)\s*-->|{\/\*\s*web-ui-screenshot:\s*([a-z0-9-]+)\s*\*\/})/g;
+
   for (const path of markdownFiles()) {
     const absolutePath = resolve(root, path);
     if (!existsSync(absolutePath)) continue;
     const content = readFileSync(absolutePath, "utf8");
-    const markerPattern =
-      /(?:<!--\s*web-ui-screenshot:\s*([a-z0-9-]+)\s*-->|{\/\*\s*web-ui-screenshot:\s*([a-z0-9-]+)\s*\*\/})/g;
     for (const match of content.matchAll(markerPattern)) {
       const id = match[1] ?? match[2];
-      const scenario = manifest.scenarios.find((item) => item.id === id);
+      const scenario = scenarioById.get(id);
       if (!scenario) {
         errors.push(`${path} references unknown screenshot scenario: ${id}`);
         continue;
       }
       referencedIds.add(id);
-      if (!scenario.documentation.includes(path)) {
+      if (!(scenario.documentation ?? []).includes(path)) {
         errors.push(
           `${path} is not listed in ${id}'s documentation references`,
         );
@@ -270,14 +292,17 @@ function validateManifest(manifest, { requireHashes = true } = {}) {
       }
     }
   }
+  return referencedIds;
+}
 
-  for (const scenario of manifest.scenarios) {
+function validateDocumentationReferences(scenarios, referencedIds, errors) {
+  for (const scenario of scenarios) {
     if (!referencedIds.has(scenario.id)) {
       errors.push(
         `screenshot scenario has no documentation marker: ${scenario.id}`,
       );
     }
-    for (const path of scenario.documentation) {
+    for (const path of scenario.documentation ?? []) {
       const absolutePath = resolve(root, path);
       if (!existsSync(absolutePath)) {
         errors.push(
@@ -286,12 +311,58 @@ function validateManifest(manifest, { requireHashes = true } = {}) {
       }
     }
   }
+}
 
+function validateManifest(manifest, { requireHashes = true } = {}) {
+  const errors = [];
+  const scenarios = validateManifestShape(manifest, errors);
+  if (!scenarios) return errors;
+
+  validateSectionCoverage(scenarios, errors);
+  const outputs = validateScenarioImages(scenarios, requireHashes, errors);
+  validateGeneratedOutputs(outputs, errors);
+  const referencedIds = validateDocumentationMarkers(
+    scenarios,
+    requireHashes,
+    errors,
+  );
+  validateDocumentationReferences(scenarios, referencedIds, errors);
   return errors;
 }
 
+function trustedGitExecutable() {
+  const candidates =
+    process.platform === "win32"
+      ? [
+          resolve(
+            process.env.ProgramW6432 ?? "C:\\Program Files",
+            "Git",
+            "cmd",
+            "git.exe",
+          ),
+          resolve(
+            process.env.ProgramFiles ?? "C:\\Program Files",
+            "Git",
+            "cmd",
+            "git.exe",
+          ),
+          resolve(
+            process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+            "Git",
+            "cmd",
+            "git.exe",
+          ),
+        ]
+      : ["/usr/bin/git", "/usr/local/bin/git", "/bin/git"];
+  const executable = candidates.find((candidate) => existsSync(candidate));
+  if (!executable) {
+    throw new Error("could not find Git in a trusted system location");
+  }
+  return executable;
+}
+
 function rejectTrackedBinaries() {
-  const tracked = execFileSync("git", ["ls-files", "-z"], {
+  const tracked = execFileSync(trustedGitExecutable(), ["ls-files", "-z"], {
     cwd: root,
     encoding: "buffer",
   })
