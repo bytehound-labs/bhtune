@@ -121,6 +121,8 @@ pnpm docs:screenshots:gallery
 The capture command builds candidates under `website/static/generated/web-ui/`, updates the
 text-only lock at `docs/reference/web-ui-screenshots.json`, and writes a review gallery to
 `frontend/test-results/docs-screenshots/index.html`. These PNGs are generated Pages assets and
-must not be committed. When a user-visible route or modal changes, update the relevant visual
-guide prose and add or adjust a manifest scenario if an existing screenshot no longer covers
-the behavior.
+must not be committed. Screenshot scenarios should wait for the final visible state after every
+state-changing interaction before capturing, so the canonical image reflects settled React
+layout rather than an intermediate render. When a user-visible route or modal changes, update
+the relevant visual guide prose and add or adjust a manifest scenario if an existing screenshot
+no longer covers the behavior.

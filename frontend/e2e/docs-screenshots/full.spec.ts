@@ -87,6 +87,7 @@ test("full-opc-tag-applied", async ({ page }) => {
   await page.getByRole("button", { name: "Select tag" }).click();
   await expect(page.getByLabel("Tag name")).toHaveValue("Area01.FIC101.PV");
   await page.getByText("Loop mapping", { exact: true }).click();
+  await settle(page);
   await captureScenario(page, "full-opc-tag-applied");
 });
 
