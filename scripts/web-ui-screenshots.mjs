@@ -258,6 +258,59 @@ function validateGeneratedOutputs(outputs, errors) {
   }
 }
 
+function validateDocumentationMatch(
+  path,
+  content,
+  match,
+  scenarioById,
+  requireHashes,
+  referencedIds,
+  errors,
+) {
+  const id = match[1] ?? match[2];
+  const scenario = scenarioById.get(id);
+  if (!scenario) {
+    errors.push(`${path} references unknown screenshot scenario: ${id}`);
+    return;
+  }
+
+  referencedIds.add(id);
+  if (!(scenario.documentation ?? []).includes(path)) {
+    errors.push(`${path} is not listed in ${id}'s documentation references`);
+  }
+  const expectedUrl =
+    requireHashes && scenario.sha256
+      ? publicUrl(scenario.output, scenario.sha256)
+      : `${pagesBaseUrl}/${scenario.output}`;
+  if (!content.includes(expectedUrl)) {
+    errors.push(`${path} has no image URL for screenshot scenario ${id}`);
+  }
+}
+
+function validateDocumentationFile(
+  path,
+  markerPattern,
+  scenarioById,
+  requireHashes,
+  referencedIds,
+  errors,
+) {
+  const absolutePath = resolve(root, path);
+  if (!existsSync(absolutePath)) return;
+  const content = readFileSync(absolutePath, "utf8");
+  for (const match of content.matchAll(markerPattern)) {
+    validateDocumentationMatch(
+      path,
+      content,
+      match,
+      scenarioById,
+      requireHashes,
+      referencedIds,
+      errors,
+    );
+  }
+}
+
 function validateDocumentationMarkers(scenarios, requireHashes, errors) {
   const referencedIds = new Set();
   const scenarioById = new Map(
@@ -267,30 +320,14 @@ function validateDocumentationMarkers(scenarios, requireHashes, errors) {
     /(?:<!--\s*web-ui-screenshot:\s*([a-z0-9-]+)\s*-->|{\/\*\s*web-ui-screenshot:\s*([a-z0-9-]+)\s*\*\/})/g;
 
   for (const path of markdownFiles()) {
-    const absolutePath = resolve(root, path);
-    if (!existsSync(absolutePath)) continue;
-    const content = readFileSync(absolutePath, "utf8");
-    for (const match of content.matchAll(markerPattern)) {
-      const id = match[1] ?? match[2];
-      const scenario = scenarioById.get(id);
-      if (!scenario) {
-        errors.push(`${path} references unknown screenshot scenario: ${id}`);
-        continue;
-      }
-      referencedIds.add(id);
-      if (!(scenario.documentation ?? []).includes(path)) {
-        errors.push(
-          `${path} is not listed in ${id}'s documentation references`,
-        );
-      }
-      const expectedUrl =
-        requireHashes && scenario.sha256
-          ? publicUrl(scenario.output, scenario.sha256)
-          : `${pagesBaseUrl}/${scenario.output}`;
-      if (!content.includes(expectedUrl)) {
-        errors.push(`${path} has no image URL for screenshot scenario ${id}`);
-      }
-    }
+    validateDocumentationFile(
+      path,
+      markerPattern,
+      scenarioById,
+      requireHashes,
+      referencedIds,
+      errors,
+    );
   }
   return referencedIds;
 }
@@ -335,19 +372,20 @@ function trustedGitExecutable() {
     process.platform === "win32"
       ? [
           resolve(
-            process.env.ProgramW6432 ?? "C:\\Program Files",
+            process.env.ProgramW6432 ?? String.raw`C:\Program Files`,
             "Git",
             "cmd",
             "git.exe",
           ),
           resolve(
-            process.env.ProgramFiles ?? "C:\\Program Files",
+            process.env.ProgramFiles ?? String.raw`C:\Program Files`,
             "Git",
             "cmd",
             "git.exe",
           ),
           resolve(
-            process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)",
+            process.env["ProgramFiles(x86)"] ??
+              String.raw`C:\Program Files (x86)`,
             "Git",
             "cmd",
             "git.exe",
