@@ -499,6 +499,7 @@ export function NewRunPage({
     <div>
       <PageHeading
         title={isDemo ? "BHTune Simulator Demo" : "New tune"}
+        documentationId="new-tune.page"
         description={
           isDemo
             ? "Choose a built-in template and bounded simulator settings, then watch a synthetic MRFT tune."

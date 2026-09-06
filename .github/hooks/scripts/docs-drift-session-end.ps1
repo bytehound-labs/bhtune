@@ -1,7 +1,8 @@
 # Copilot CLI sessionEnd hook (PowerShell / Windows). Warns (stderr only -- sessionEnd hook
 # output isn't otherwise processed by the CLI, so this can inform but never block) when a
-# session touched crates/** without touching any documentation surface (docs/**, README.md,
-# AGENTS.md, CONTRIBUTING.md). See "Documentation contract" in AGENTS.md and
+# session touched Rust, user-visible frontend, or screenshot-documentation implementation files
+# without touching any documentation surface (docs/**, README.md, AGENTS.md, CONTRIBUTING.md,
+# frontend/README.md, website/README.md). See "Documentation contract" in AGENTS.md and
 # .github/hooks/README.md for the full design, including why this pairs with a sessionStart
 # hook rather than standing alone -- in short, by sessionEnd this project's own workflow has
 # usually already committed and pushed, so looking only at the uncommitted working tree would
@@ -58,16 +59,34 @@ if ($statusLines) {
 
 $changedFiles = @($committedFiles) + @($uncommittedFiles)
 
-$touchedCrates = $false
+$touchedImplementation = $false
 $touchedDocs = $false
 foreach ($f in $changedFiles) {
     if ([string]::IsNullOrEmpty($f)) { continue }
-    if ($f -like 'crates/*' -or $f -like 'crates\*') { $touchedCrates = $true }
-    if ($f -like 'docs/*' -or $f -like 'docs\*' -or $f -eq 'README.md' -or $f -eq 'AGENTS.md' -or $f -eq 'CONTRIBUTING.md') { $touchedDocs = $true }
+    if (
+        $f -like 'crates/*' -or $f -like 'crates\*' -or
+        $f -like 'frontend/src/*' -or $f -like 'frontend/src\*' -or
+        $f -like 'frontend/e2e/docs-screenshots/*' -or
+        $f -like 'frontend/e2e/docs-screenshots\*' -or
+        $f -eq 'frontend/playwright.docs.config.ts' -or
+        $f -eq 'scripts/web-ui-screenshots.mjs' -or
+        $f -eq 'docs/reference/web-ui-screenshots.json' -or
+        $f -eq 'package.json' -or
+        $f -eq 'pnpm-lock.yaml' -or
+        $f -eq 'pnpm-workspace.yaml' -or
+        $f -eq '.github/workflows/docs-agent.yml' -or
+        $f -eq '.github/workflows/docs-deploy.yml'
+    ) { $touchedImplementation = $true }
+    if (
+        $f -like 'docs/*' -or $f -like 'docs\*' -or
+        $f -eq 'README.md' -or $f -eq 'AGENTS.md' -or $f -eq 'CONTRIBUTING.md' -or
+        $f -eq 'frontend/README.md' -or $f -eq 'frontend\README.md' -or
+        $f -eq 'website/README.md' -or $f -eq 'website\README.md'
+    ) { $touchedDocs = $true }
 }
 
-if ($touchedCrates -and -not $touchedDocs) {
-    [Console]::Error.WriteLine('bhtune docs-drift hook: this session changed files under crates/** but none under docs/**, README.md, AGENTS.md, or CONTRIBUTING.md. If user-visible behavior changed, update the docs before starting the next task (see "Documentation contract" in AGENTS.md).')
+if ($touchedImplementation -and -not $touchedDocs) {
+    [Console]::Error.WriteLine('bhtune docs-drift hook: this session changed Rust, user-visible frontend, or screenshot-documentation implementation files but none under docs/**, README.md, AGENTS.md, CONTRIBUTING.md, frontend/README.md, or website/README.md. If user-visible behavior changed, update the docs before starting the next task (see "Documentation contract" in AGENTS.md).')
 }
 
 exit 0

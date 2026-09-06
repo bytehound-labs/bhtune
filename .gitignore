@@ -36,6 +36,9 @@ frontend/playwright-report/
 frontend/test-results/
 frontend/blob-report/
 
+# Generated GitHub Pages screenshot assets (text-only lock lives in docs/reference/)
+website/static/generated/web-ui/
+
 # SQLite databases used by local/manual testing (never commit real data)
 *.db
 *.db-shm

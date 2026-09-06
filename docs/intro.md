@@ -27,7 +27,8 @@ DCS/PLC family.
 - **Has two faces, one engine.** A headless CLI for scheduled/scripted tuning and a
   browser-based web GUI for interactive use, both built on the same tuning engine and the same
   SQLite database — see [CLI quickstart](getting-started/cli-quickstart.md) and
-  [Web GUI quickstart](getting-started/web-gui-quickstart.md).
+  [Web GUI quickstart](getting-started/web-gui-quickstart.md), plus the
+  [Web UI visual reference](guides/web-ui/overview.md).
 - **Stores everything in a plain, open SQLite database.** No encryption, no usage gating, no
   license dongle — just a single database file anyone can inspect with any SQLite tool.
 - **Is built to be extended.** OPC DA is the primary, supported driver for v1. The tag I/O
@@ -42,10 +43,18 @@ to open-loop step testing.
 
 ## Where to go next
 
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=85eebd59def9">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=85eebd59def9" alt="BHTune New Tune screen in Full mode with the Simulator driver selected" />
+  </a>
+  <figcaption>The browser starts on the New Tune screen; the visual reference covers the complete Full and Demo workflow.</figcaption>
+</figure>
+
 - New to BHTune? Start with [Installation](getting-started/installation.md), then either the
   [CLI quickstart](getting-started/cli-quickstart.md) or the
   [Web GUI quickstart](getting-started/web-gui-quickstart.md) — both walk through a real tune
-  against the built-in simulator, no plant connection required.
+  against the built-in simulator, no plant connection required. For screen-by-screen coverage,
+  continue to the [Web UI visual reference](guides/web-ui/overview.md).
 - Tuning against a real DCS/PLC? See [DCS/PLC templates](dcs-templates.md) for the tag-mapping
   system, and [Safety](guides/safety.md) for what BHTune does — and refuses to do — around a
   live, running process.

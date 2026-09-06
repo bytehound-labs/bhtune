@@ -75,6 +75,7 @@ export function OpcServerDiscovery({
           title="Browse OPC DA servers"
           onClose={() => setOpen(false)}
           widthClassName="max-w-lg"
+          documentationId="new-tune.opc-server-discovery"
         >
           {serverContent}
         </Modal>

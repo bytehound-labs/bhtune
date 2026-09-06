@@ -32,6 +32,9 @@ remembered by the browser.
 The header also shows whether the BHTune HTTP service is reachable. Its status includes
 screen-reader text and a tooltip; a healthy server indicator does not test OPC DA connectivity.
 
+For a visual tour of every Full and Demo page, see the
+[Web UI visual reference](../guides/web-ui/overview.md).
+
 ### Restricted Demo mode
 
 A server configured for Demo mode exposes a simulator-only browser experience. The frontend
@@ -138,6 +141,9 @@ network.
      replaced by the active template's process-variable suffix into the Tag name field. Changing
      templates likewise replaces the final component with the new template's process-variable
      suffix, regardless of what the previous component was, preserving the rest of the tag path.
+     For example, browsing `Area01.FIC101.OUT` with a template whose
+     `process_variable_suffix` is `PV` produces `Area01.FIC101.PV`: BHTune replaces the final
+     component after the last `.`, `!`, or `/` rather than blindly appending `.PV`.
      Clicking **Select tag** performs a fresh read of the original selected item (before suffix
      replacement) and proceeds immediately only for `Good` OPC quality; `Uncertain` or `Bad`
      quality opens a warning with choices to select a different tag or proceed anyway. Proceeding

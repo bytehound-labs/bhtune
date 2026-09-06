@@ -39,6 +39,7 @@ export function PidResultsPanel({
     <CollapsibleSection
       title="Calculated results"
       defaultOpen
+      documentationId="run-detail.calculated-results"
       className={
         promoted
           ? "mb-8 rounded-xl border border-emerald-800/70 bg-gradient-to-br from-emerald-950/40 via-slate-950/20 to-slate-900/40 p-5 shadow-lg shadow-emerald-950/20"

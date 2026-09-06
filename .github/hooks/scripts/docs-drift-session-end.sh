@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Copilot CLI sessionEnd hook. Warns (stderr only -- sessionEnd hook output isn't otherwise
-# processed by the CLI, so this can inform but never block) when a session touched crates/**
-# without touching any documentation surface (docs/**, README.md, AGENTS.md, CONTRIBUTING.md).
+# processed by the CLI, so this can inform but never block) when a session touched Rust,
+# user-visible frontend, or screenshot-documentation implementation files without touching any
+# documentation surface (docs/**, README.md, AGENTS.md, CONTRIBUTING.md, frontend/README.md,
+# website/README.md).
 # See "Documentation contract" in AGENTS.md and .github/hooks/README.md for the full design,
 # including why this pairs with a sessionStart hook rather than standing alone -- in short,
 # by sessionEnd this project's own workflow has usually already committed and pushed, so
@@ -43,20 +45,34 @@ UNCOMMITTED_FILES="$(git status --porcelain --untracked-files=all 2>/dev/null | 
 
 CHANGED_FILES="$(printf '%s\n%s\n' "$COMMITTED_FILES" "$UNCOMMITTED_FILES")"
 
-TOUCHED_CRATES=0
+TOUCHED_IMPLEMENTATION=0
 TOUCHED_DOCS=0
 while IFS= read -r f; do
 	[ -z "$f" ] && continue
 	case "$f" in
-	crates/*) TOUCHED_CRATES=1 ;;
+	crates/* | \
+		frontend/src/* | \
+		frontend/e2e/docs-screenshots/* | \
+		frontend/playwright.docs.config.ts | \
+		scripts/web-ui-screenshots.mjs | \
+		docs/reference/web-ui-screenshots.json | \
+		package.json | \
+		pnpm-lock.yaml | \
+		pnpm-workspace.yaml | \
+		.github/workflows/docs-agent.yml | \
+		.github/workflows/docs-deploy.yml)
+		TOUCHED_IMPLEMENTATION=1
+		;;
 	esac
 	case "$f" in
-	docs/* | README.md | AGENTS.md | CONTRIBUTING.md) TOUCHED_DOCS=1 ;;
+	docs/* | README.md | AGENTS.md | CONTRIBUTING.md | frontend/README.md | website/README.md)
+		TOUCHED_DOCS=1
+		;;
 	esac
 done <<<"$CHANGED_FILES"
 
-if [ "$TOUCHED_CRATES" -eq 1 ] && [ "$TOUCHED_DOCS" -eq 0 ]; then
-	echo 'bhtune docs-drift hook: this session changed files under crates/** but none under docs/**, README.md, AGENTS.md, or CONTRIBUTING.md. If user-visible behavior changed, update the docs before starting the next task (see "Documentation contract" in AGENTS.md).' >&2
+if [ "$TOUCHED_IMPLEMENTATION" -eq 1 ] && [ "$TOUCHED_DOCS" -eq 0 ]; then
+	echo 'bhtune docs-drift hook: this session changed Rust, user-visible frontend, or screenshot-documentation implementation files but none under docs/**, README.md, AGENTS.md, CONTRIBUTING.md, frontend/README.md, or website/README.md. If user-visible behavior changed, update the docs before starting the next task (see "Documentation contract" in AGENTS.md).' >&2
 fi
 
 exit 0

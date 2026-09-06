@@ -635,6 +635,7 @@ export function OpcTagBrowserModal({
       }
       onClose={onClose}
       widthClassName="max-w-2xl"
+      documentationId="new-tune.opc-tag-browser"
     >
       <BrowserContent
         opcServer={opcServer}

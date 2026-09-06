@@ -56,6 +56,7 @@ export function TemplateEditPage() {
     <div>
       <PageHeading
         title={`Edit ${name}`}
+        documentationId="templates.edit-page"
         description="Renaming isn't supported here — delete and recreate the template instead."
         actions={
           <Link to={`/templates/${encodeURIComponent(name)}`}>

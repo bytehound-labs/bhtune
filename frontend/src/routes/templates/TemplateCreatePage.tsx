@@ -35,6 +35,7 @@ export function TemplateCreatePage() {
     <div>
       <PageHeading
         title="New template"
+        documentationId="templates.create-page"
         description="Creates a user-owned template."
         actions={
           <Link to="/templates">

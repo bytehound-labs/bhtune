@@ -34,6 +34,47 @@ persistent Demo notice rather than repeating the same warning on each page.
 Every run is stored with the stable display identity **Simulator demo**. It is not a plant tag
 and does not change the simulator driver's internal `Sim.PV` and `Sim.MV` tags.
 
+## Visual workflow
+
+The visual Web UI reference explains the shared shell and Full-mode screens in detail. These
+four Demo captures show the restricted path end to end; the operational and security
+requirements below remain authoritative if images are unavailable.
+
+{/* web-ui-screenshot: demo-tune */}
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=decc2d674e23">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=decc2d674e23" alt="BHTune Demo simulator tune form with the fixed policy notice and bounded fields" />
+  </a>
+  <figcaption>The Demo form exposes bounded simulator controls and makes live-plant features unavailable.</figcaption>
+</figure>
+
+{/* web-ui-screenshot: demo-history */}
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=9f52853999bb">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=9f52853999bb" alt="BHTune Demo visitor history list showing simulator runs for the current session" />
+  </a>
+  <figcaption>History belongs to the current anonymous browser session and is owner-scoped by the server.</figcaption>
+</figure>
+
+{/* web-ui-screenshot: demo-run-live */}
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=6c3365c1f253">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=6c3365c1f253" alt="BHTune Demo live simulator run with a streaming PV and MV trend" />
+  </a>
+  <figcaption>The Demo trend uses the same live stream and cancel workflow as Full mode, without plant access.</figcaption>
+</figure>
+
+{/* web-ui-screenshot: demo-run-complete */}
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=a750a358b87e">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=a750a358b87e" alt="BHTune Demo completed simulator run detail with calculated results and diagnostics" />
+  </a>
+  <figcaption>Completed Demo runs retain results, samples, and diagnostics for the current visitor.</figcaption>
+</figure>
+
+See [Web UI overview](web-ui/overview.md) and [Runs and history](web-ui/runs-and-history.md)
+for the shared navigation and run-detail behavior.
+
 ## Privacy and identity
 
 The demo uses an opaque, host-only `__Host-bhtune_demo_session` cookie to separate visitors.

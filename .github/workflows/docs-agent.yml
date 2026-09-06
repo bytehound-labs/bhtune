@@ -1,11 +1,14 @@
 name: Docs agent
 
 # Tier 2 of the documentation contract (see AGENTS.md "Documentation contract"): this workflow
-# handles narrative prose only. Tier 1 (docs/reference/**, the OpenAPI spec, man pages,
-# completions) is mechanically generated and already diff-gated by checks.yml. AGENTS.md is
-# explicitly off limits -- this workflow may never auto-commit to it.
+# handles narrative prose and coordinates the generated Web UI screenshot lock. Tier 1
+# (docs/reference/**, the OpenAPI spec, man pages, completions) is mechanically generated and
+# already diff-gated by checks.yml. AGENTS.md is explicitly off limits -- this workflow may
+# never auto-commit to it.
 #
-# It runs GitHub Copilot CLI headless and auto-commits prose updates onto the PR branch. Every
+# It runs the deterministic screenshot capture before GitHub Copilot CLI, then auto-commits
+# narrative updates and screenshot metadata together on same-repository PRs. Screenshot PNGs
+# remain generated-only review artifacts; the agent never edits their lock by hand. Every
 # guardrail below is load-bearing -- read the comment before changing it. See the
 # `docs-agent-ci` entry in AGENTS.md for the full design rationale.
 
@@ -13,6 +16,13 @@ on:
   pull_request:
     paths:
       - "crates/**"
+      - "frontend/src/**"
+      - "frontend/e2e/docs-screenshots/**"
+      - "frontend/playwright.docs.config.ts"
+      - "scripts/web-ui-screenshots.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
   workflow_dispatch:
     inputs:
       pr_number:
@@ -57,10 +67,11 @@ jobs:
           # COPILOT_GITHUB_TOKEN, a personal PAT, so GitHub attributes that push to its human
           # owner, not to a distinct bot identity -- indistinguishable from that person pushing
           # themselves. The git commit author (independent of which token performed the push)
-          # is the only reliable signal here. The `paths: crates/**` filter above is a second,
-          # structural line of defense: the agent only ever touches docs/**/README.md, which
-          # doesn't match that filter, so its own push mostly wouldn't retrigger this workflow
-          # even without this check -- but don't rely on that alone.
+          # is the only reliable signal here. The path filter above is a second, structural
+          # line of defense: the workflow-owned commit only touches docs/README.md and the
+          # generated screenshot lock, none of which matches the implementation paths above,
+          # so its own push does not normally retrigger this workflow -- but don't rely on that
+          # alone.
           author_email="$(git log -1 --pretty=format:'%ae')"
           if [ "$author_email" = "bhtune-docs-agent@users.noreply.github.com" ]; then
             echo "Last commit was made by the docs agent itself -- skipping to avoid a loop."
@@ -74,7 +85,7 @@ jobs:
     needs: guard
     if: needs.guard.outputs.proceed == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: write
       pull-requests: write
@@ -97,13 +108,56 @@ jobs:
           fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # zizmor: ignore[artipacked]
-        if: steps.token-check.outputs.has_token == 'true'
         with:
           ref: ${{ needs.guard.outputs.ref }}
           # COPILOT_GITHUB_TOKEN authenticates Copilot CLI, but is not necessarily a GitHub
           # repository token. Use the workflow token for checkout/push, whose permissions are
           # declared on this job.
           token: ${{ github.token }}
+
+      # Screenshot capture is deliberately before the token-gated Copilot steps. Fork PRs do
+      # not receive COPILOT_GITHUB_TOKEN, but they can still receive a deterministic candidate
+      # gallery and a stale-lock report without any repository secret.
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
+        with:
+          tool: protoc
+
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Build frontend
+        run: pnpm --filter bhtune-frontend run build
+
+      - name: Build bhtune-server
+        run: cargo build --locked -p bhtune-server
+
+      - name: Install Playwright browser
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Generate candidate screenshots and lock metadata
+        run: pnpm docs:screenshots
+
+      - name: Upload Web UI screenshot review gallery
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: web-ui-screenshot-review
+          path: |
+            frontend/test-results/docs-screenshots/
+            website/static/generated/web-ui/
+            docs/reference/web-ui-screenshots.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Save generated screenshot lock
+        run: cp docs/reference/web-ui-screenshots.json /tmp/web-ui-screenshots.generated.json
 
       - name: Install GitHub Copilot CLI
         if: steps.token-check.outputs.has_token == 'true'
@@ -130,19 +184,20 @@ jobs:
           # silently changes behavior/cost on every future PR without a reviewed change here.
 
       - name: Enforce blast radius
-        if: steps.token-check.outputs.has_token == 'true'
         run: |
-          # GUARDRAIL 2 (blast radius): restrict to docs/** (excluding the generated
-          # docs/reference/**) and README.md. A wrong-but-plausible edit to source code is far
+          # GUARDRAIL 2 (blast radius): screenshot generation may update only the one
+          # workflow-owned lock plus narrative docs. The Copilot agent itself is still told to
+          # edit only narrative docs/README.md, and the generated lock is compared byte-for-byte
+          # below so it cannot be hand-edited. A wrong-but-plausible edit to source code is far
           # more damaging than a wrong paragraph, so any other touched path -- including
           # AGENTS.md, belt-and-suspenders alongside the --deny-tool above -- fails the job and
-          # discards every change the agent made.
+          # discards every change.
           changed="$(git status --porcelain=v1 | awk '{print $2}')"
           bad=""
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              docs/reference/*) bad="$bad$f"$'\n' ;;
+              docs/reference/web-ui-screenshots.json) ;;
               docs/*) ;;
               README.md) ;;
               *) bad="$bad$f"$'\n' ;;
@@ -154,6 +209,23 @@ jobs:
             git checkout -- .
             git clean -fd
             exit 1
+          fi
+
+      - name: Protect generated screenshot lock
+        if: steps.token-check.outputs.has_token == 'true'
+        run: |
+          if ! cmp -s docs/reference/web-ui-screenshots.json /tmp/web-ui-screenshots.generated.json; then
+            echo "::error::The docs agent modified the generated Web UI screenshot lock."
+            git checkout -- docs/reference/web-ui-screenshots.json
+            exit 1
+          fi
+
+      - name: Report fork screenshot drift
+        if: steps.token-check.outputs.has_token != 'true'
+        run: |
+          if ! git diff --quiet -- docs/reference/web-ui-screenshots.json; then
+            echo "::warning::Generated Web UI screenshot metadata differs from the fork PR."
+            echo "The candidate gallery is available as the web-ui-screenshot-review artifact."
           fi
 
       - name: Commit and push
