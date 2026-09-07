@@ -18,6 +18,7 @@ EXPECTED_PATHS = {
     "package.json",
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
+    ".woodpecker.yml",
 }
 
 

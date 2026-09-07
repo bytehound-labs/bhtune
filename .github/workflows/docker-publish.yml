@@ -27,6 +27,7 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/docker-publish.yml"
+      - ".woodpecker.yml"
   pull_request:
     branches: [main]
     paths:
@@ -40,6 +41,7 @@ on:
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/docker-publish.yml"
+      - ".woodpecker.yml"
   workflow_dispatch:
 
 concurrency:

@@ -18,6 +18,7 @@ when:
         - "package.json"
         - "pnpm-lock.yaml"
         - "pnpm-workspace.yaml"
+        - ".woodpecker.yml"
 
 steps:
   deploy:
