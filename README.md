@@ -66,7 +66,9 @@ The browser fails closed when the capability document is missing or malformed; i
 widens the Demo surface from incomplete server metadata.
 The fixed Demo defaults use a 200 ms simulator poll interval, a 0.5-second time constant, and
 1 second of dead time. The Demo interface presents this boundary, the history limit, and the
-session lifetime in one persistent notice.
+session lifetime in one persistent notice. Self-hosted image promotion uses an immutable
+digest and requires GitHub's signed build provenance to match the BHTune repository, the
+main-branch Docker workflow, the triggering commit, and the image digest before rollout.
 
 ## Getting started
 
