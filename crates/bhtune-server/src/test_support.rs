@@ -349,6 +349,23 @@ pub(crate) mod mock_bridge {
         use opcda_bridge_proto::bridge::{BrowseRequest, SearchEvent, SearchRequest};
 
         #[tokio::test]
+        async fn gateway_info_returns_the_configured_response() {
+            let service = MockBridgeService {
+                gateway_info_response: GetGatewayInfoResponse {
+                    application_version: "test-gateway".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let response = service
+                .get_gateway_info(Request::new(GetGatewayInfoRequest::default()))
+                .await
+                .unwrap();
+
+            assert_eq!(response.into_inner().application_version, "test-gateway");
+        }
+
+        #[tokio::test]
         async fn browse_returns_the_configured_page() {
             let service = MockBridgeService {
                 browse_response: BrowsePage {

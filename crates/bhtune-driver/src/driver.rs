@@ -330,6 +330,18 @@ mod tests {
             })
         ));
         assert!(matches!(
+            driver.set_search_index_auto_refresh(false).await,
+            Err(DriverError::Unsupported {
+                operation: "indexed-search auto-refresh"
+            })
+        ));
+        assert!(matches!(
+            driver.delete_search_index().await,
+            Err(DriverError::Unsupported {
+                operation: "indexed-search delete"
+            })
+        ));
+        assert!(matches!(
             driver
                 .search_index(crate::types::SearchIndexRequest::new(
                     "PV",

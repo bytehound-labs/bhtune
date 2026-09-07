@@ -329,6 +329,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gateway_info_returns_the_configured_response() {
+        let service = MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "test-gateway".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let response = service
+            .get_gateway_info(Request::new(GetGatewayInfoRequest::default()))
+            .await
+            .unwrap();
+        assert_eq!(response.into_inner().application_version, "test-gateway");
+    }
+
+    #[tokio::test]
     async fn search_stream_sender_handles_a_dropped_receiver() {
         let service = MockBridgeService {
             search_events: vec![SearchEvent::default()],

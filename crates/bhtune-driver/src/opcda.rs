@@ -1546,6 +1546,22 @@ mod smoke_tests {
     }
 
     #[tokio::test]
+    async fn mock_gateway_info_returns_the_configured_response() {
+        let service = MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "test-gateway".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let response = service
+            .get_gateway_info(Request::new(GetGatewayInfoRequest::default()))
+            .await
+            .unwrap();
+        assert_eq!(response.into_inner().application_version, "test-gateway");
+    }
+
+    #[tokio::test]
     async fn driver_trait_maps_close_browse_rpc_errors() {
         let host = start_mock_server(MockBridgeService {
             close_error: Some(Status::internal("close failed")),

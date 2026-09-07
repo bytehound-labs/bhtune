@@ -1017,6 +1017,12 @@ mod tests {
             .unwrap()
     }
 
+    async fn delete_request(app: axum::Router, path: &str) -> axum::http::Response<Body> {
+        app.oneshot(Request::delete(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
     fn proto_index_status(state: ProtoSearchIndexState) -> ProtoSearchIndexStatus {
         ProtoSearchIndexStatus {
             server: "Sim.Server".to_string(),
@@ -1385,6 +1391,41 @@ mod tests {
                 action: opcda_bridge_proto::bridge::SearchIndexControlAction::Resume as i32,
             }]
         );
+
+        let auto_refresh_app =
+            crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+        let response = post(
+            auto_refresh_app,
+            "/api/opc/search-index/auto-refresh?enabled=false",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["state"], "refreshing");
+
+        let delete_app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+        let response =
+            delete_request(delete_app, "/api/opc/search-index?opc_server=Sim.Server").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["state"], "refreshing");
+
+        assert_eq!(
+            control_requests.lock().unwrap().as_slice(),
+            &[
+                opcda_bridge_proto::bridge::ControlSearchIndexRequest {
+                    server: "Sim.Server".to_string(),
+                    action: opcda_bridge_proto::bridge::SearchIndexControlAction::Resume as i32,
+                },
+                opcda_bridge_proto::bridge::ControlSearchIndexRequest {
+                    server: "Sim.Server".to_string(),
+                    action: opcda_bridge_proto::bridge::SearchIndexControlAction::DisableAutoRefresh
+                        as i32,
+                },
+                opcda_bridge_proto::bridge::ControlSearchIndexRequest {
+                    server: "Sim.Server".to_string(),
+                    action: opcda_bridge_proto::bridge::SearchIndexControlAction::Delete as i32,
+                },
+            ]
+        );
     }
 
     #[tokio::test]
@@ -1452,11 +1493,23 @@ mod tests {
                 "control the OPC namespace index",
                 true,
             ),
+            (
+                "/api/opc/search-index/auto-refresh?enabled=false&opc_server=Sim.Server",
+                "set OPC namespace index auto-refresh",
+                true,
+            ),
+            (
+                "/api/opc/search-index?opc_server=Sim.Server",
+                "delete the OPC namespace index",
+                false,
+            ),
         ];
 
         for (path, operation, is_post) in paths {
             let app = crate::build_router(state_with(Some(&host), None).await);
-            let response = if is_post {
+            let response = if path.starts_with("/api/opc/search-index?") {
+                delete_request(app, path).await
+            } else if is_post {
                 post(app, path).await
             } else {
                 get(app, path).await
