@@ -128,16 +128,17 @@
       "route": "/runs",
       "state": "filtered-history",
       "output": "full-history.png",
+      "capture": "content-fit",
       "coveredSections": [
         "history.page"
       ],
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "605d1685ff56fb33ac1233cad572d6f8370ebd8c578fc6216c735bc63a0e4ef5",
+      "sha256": "7a297945e8b4c6f212300c452e36a3cd09eba0347c22ed96e64db70a8a36d3dd",
       "width": 1440,
-      "height": 1100,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=605d1685ff56"
+      "height": 480,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=7a297945e8b4"
     },
     {
       "id": "full-run-live",
@@ -214,16 +215,17 @@
       "route": "/templates",
       "state": "list",
       "output": "full-template-list.png",
+      "capture": "content-fit",
       "coveredSections": [
         "templates.list-page"
       ],
       "documentation": [
         "docs/guides/web-ui/templates-and-configuration.md"
       ],
-      "sha256": "52c1bb74fc284522c46a4277e337547e46c9555e5911cabafd0e2d18b5f3f3f6",
+      "sha256": "82b9ba2f284075ba7ef9d80188620ef0d5e95384e6d7986cfd21fabf23c09209",
       "width": 1440,
-      "height": 1100,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=52c1bb74fc28"
+      "height": 514,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=82b9ba2f2840"
     },
     {
       "id": "full-template-detail",
@@ -326,8 +328,7 @@
       ],
       "documentation": [
         "docs/guides/web-ui/overview.md",
-        "docs/guides/public-simulator-demo.md",
-        "docs/guides/web-ui/starting-a-tune.md"
+        "docs/guides/public-simulator-demo.md"
       ],
       "sha256": "017fd39ffaf0d5b6d57195506df93572d9806b36312ffc943de863650f544b9c",
       "width": 1440,
@@ -341,6 +342,7 @@
       "route": "/runs",
       "state": "visitor-history",
       "output": "demo-history.png",
+      "capture": "content-fit",
       "coveredSections": [
         "history.page"
       ],
@@ -348,10 +350,10 @@
         "docs/guides/public-simulator-demo.md",
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "fc4cccc4d4adc5737617c753b75c6c4c293e8e13ee0d8975e49351724236efa6",
+      "sha256": "13ae4427d5d063d7a8f08c4b7fe1f494dcd1adaf04b6fd82ee1dad01888c34ca",
       "width": 1440,
-      "height": 1100,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=fc4cccc4d4ad"
+      "height": 486,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=13ae4427d5d0"
     },
     {
       "id": "demo-run-live",

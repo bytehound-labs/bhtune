@@ -66,6 +66,8 @@ Generated screenshots are served under
 `https://bytehound-labs.github.io/bhtune/generated/web-ui/`. They are intentionally not tracked
 in Git: the Pages deployment regenerates the complete set atomically, while the manifest keeps
 the reviewed hashes, dimensions, section coverage, and cache-busted URLs.
+Short scenarios use a content-derived crop; long forms and live workflows retain their full-page
+captures.
 
 Use `pnpm run build` + `pnpm run serve` for a local site preview. Use
 `pnpm docs:screenshots:gallery` to inspect the candidate images without rebuilding the site.

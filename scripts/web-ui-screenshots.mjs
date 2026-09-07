@@ -199,6 +199,14 @@ function validateScenarioMetadata(scenario, ids, outputs, errors) {
   ) {
     errors.push(`${scenario.id} has no documentation references`);
   }
+  if (
+    scenario.capture !== undefined &&
+    !["full-page", "content-fit"].includes(scenario.capture)
+  ) {
+    errors.push(
+      `${scenario.id} has an unsupported capture mode: ${scenario.capture}`,
+    );
+  }
 }
 
 function validateScenarioImage(scenario, requireHashes, errors) {

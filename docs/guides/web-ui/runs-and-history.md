@@ -12,8 +12,8 @@ readings, and PID audit information.
 
 {/* web-ui-screenshot: full-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=605d1685ff56">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=605d1685ff56" alt="BHTune Full mode History page with filterable tune-run rows" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=7a297945e8b4">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=7a297945e8b4" alt="BHTune Full mode History page with filterable tune-run rows" />
   </a>
   <figcaption>History provides filterable, paginated access to stored runs; open a row for its complete detail and audit trail.</figcaption>
 </figure>
@@ -23,8 +23,8 @@ profile receives the same `404` for another session's run ID.
 
 {/* web-ui-screenshot: demo-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=fc4cccc4d4ad">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=fc4cccc4d4ad" alt="BHTune Demo mode visitor-private History page" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=13ae4427d5d0">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=13ae4427d5d0" alt="BHTune Demo mode visitor-private History page" />
   </a>
   <figcaption>Demo history uses the same list shape while the server scopes every row to the current anonymous session.</figcaption>
 </figure>

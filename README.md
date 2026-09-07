@@ -75,6 +75,8 @@ session lifetime in one persistent notice.
   driven from a browser.
 - [Web UI visual reference](docs/guides/web-ui/overview.md) — screenshots and task-focused
   explanations for Full and Demo pages, OPC browsing, runs, templates, and configuration.
+  Short-page screenshots are cropped automatically to their rendered content; long workflows
+  retain full-page captures.
 - [Public simulator demo](docs/guides/public-simulator-demo.md) — the restricted mode's
   privacy, limits, deployment boundary, and self-hosting requirements.
 - [MRFT concepts](docs/guides/mrft-concepts.md) and [Safety](docs/guides/safety.md) — what the

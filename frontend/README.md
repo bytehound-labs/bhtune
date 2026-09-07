@@ -127,3 +127,8 @@ layout rather than an intermediate render. Use `pnpm docs:screenshots:check` for
 CI-style drift check that leaves the text lock unchanged. When a user-visible route or modal
 changes, update the relevant visual guide prose and add or adjust a manifest scenario if an
 existing screenshot no longer covers the behavior.
+
+The canonical viewport remains fixed at 1440x1100 for stable responsive rendering. Short pages
+can opt into the manifest's `content-fit` capture mode; the capture helper measures the rendered
+content root and crops the generated image automatically, using only a shared margin and minimum
+height rather than a page-specific pixel height. Long pages continue to use full-page captures.

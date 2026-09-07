@@ -16,8 +16,8 @@ place.
 
 {/* web-ui-screenshot: full-template-list */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=52c1bb74fc28">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=52c1bb74fc28" alt="BHTune Templates page listing available DCS and PLC templates" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=82b9ba2f2840">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=82b9ba2f2840" alt="BHTune Templates page listing available DCS and PLC templates" />
   </a>
   <figcaption>The template list identifies the available mapping catalog and its ownership origin.</figcaption>
 </figure>
