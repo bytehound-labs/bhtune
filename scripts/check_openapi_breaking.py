@@ -17,13 +17,14 @@ from typing import Any
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 RUNS_PATH = "/api/runs"
+OPC_BROWSE_PATH = "/api/opc/browse"
 
 # This is the deliberate pre-v1 migration from path-derived browsing to opaque,
 # session-aware browse navigation. Keep the allowance tied to this exact parameter
 # and operation so unrelated parameter removals remain breaking.
 INTENTIONAL_REMOVED_PARAMETERS = frozenset(
     {
-        ("GET", "/api/opc/browse", "query", "path"),
+        ("GET", OPC_BROWSE_PATH, "query", "path"),
     }
 )
 
@@ -515,8 +516,8 @@ def find_breaking_changes(old: dict[str, Any], new: dict[str, Any]) -> list[str]
     old_schemas = old.get("components", {}).get("schemas", {})
     new_schemas = new.get("components", {}).get("schemas", {})
     old_browse_parameters = (
-        old_paths.get("/api/opc/browse", {}).get("get", {}).get("parameters", [])
-        if isinstance(old_paths.get("/api/opc/browse"), dict)
+        old_paths.get(OPC_BROWSE_PATH, {}).get("get", {}).get("parameters", [])
+        if isinstance(old_paths.get(OPC_BROWSE_PATH), dict)
         else []
     )
     old_browse_parameter_keys = {
@@ -528,7 +529,7 @@ def find_breaking_changes(old: dict[str, Any], new: dict[str, Any]) -> list[str]
         INTENTIONAL_REMOVED_COMPONENT_SCHEMAS
         if (
             ("query", "path") in old_browse_parameter_keys
-            and "/api/opc/browse" in new_paths
+            and OPC_BROWSE_PATH in new_paths
         )
         else frozenset()
     )

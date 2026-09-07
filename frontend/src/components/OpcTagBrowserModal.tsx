@@ -143,28 +143,33 @@ function matchPath(match: OpcIndexedSearchMatchResponse): string {
   return [...match.breadcrumbs, match.display_name].join(" / ");
 }
 
-function highlightedText(text: string, query: string): ReactNode {
-  const terms = [
-    ...new Set(query.toLocaleLowerCase().split(/\s+/).filter(Boolean)),
-  ];
-  if (terms.length === 0) return text;
+type TextRange = [number, number];
 
+function searchTerms(query: string): string[] {
+  return [...new Set(query.toLocaleLowerCase().split(/\s+/).filter(Boolean))];
+}
+
+function findTextRanges(text: string, terms: string[]): TextRange[] {
   const lowerText = text.toLocaleLowerCase();
-  const ranges: Array<[number, number]> = [];
-  for (const term of terms) {
-    let from = 0;
-    while (from < lowerText.length) {
-      const start = lowerText.indexOf(term, from);
-      if (start < 0) break;
-      ranges.push([start, start + term.length]);
-      from = start + term.length;
-    }
-  }
-  if (ranges.length === 0) return text;
+  return terms.flatMap((term) => findRangesForTerm(lowerText, term));
+}
 
-  ranges.sort(([a], [b]) => a - b);
-  const merged: Array<[number, number]> = [];
-  for (const [start, end] of ranges) {
+function findRangesForTerm(lowerText: string, term: string): TextRange[] {
+  const ranges: TextRange[] = [];
+  let from = 0;
+  while (from < lowerText.length) {
+    const start = lowerText.indexOf(term, from);
+    if (start < 0) break;
+    ranges.push([start, start + term.length]);
+    from = start + term.length;
+  }
+  return ranges;
+}
+
+function mergeTextRanges(ranges: TextRange[]): TextRange[] {
+  const sorted = [...ranges].sort(([a], [b]) => a - b);
+  const merged: TextRange[] = [];
+  for (const [start, end] of sorted) {
     const previous = merged.at(-1);
     if (previous && start <= previous[1]) {
       previous[1] = Math.max(previous[1], end);
@@ -172,10 +177,16 @@ function highlightedText(text: string, query: string): ReactNode {
       merged.push([start, end]);
     }
   }
+  return merged;
+}
 
+function renderHighlightedParts(
+  text: string,
+  ranges: TextRange[],
+): ReactNode[] {
   const parts: ReactNode[] = [];
   let cursor = 0;
-  for (const [start, end] of merged) {
+  for (const [start, end] of ranges) {
     if (start > cursor) {
       parts.push(text.slice(cursor, start));
     }
@@ -191,6 +202,270 @@ function highlightedText(text: string, query: string): ReactNode {
   }
   if (cursor < text.length) parts.push(text.slice(cursor));
   return parts;
+}
+
+function highlightedText(text: string, query: string): ReactNode {
+  const terms = searchTerms(query);
+  if (terms.length === 0) return text;
+  const ranges = mergeTextRanges(findTextRanges(text, terms));
+  return ranges.length === 0 ? text : renderHighlightedParts(text, ranges);
+}
+
+function indexUnavailableMessage(
+  status: OpcSearchIndexStatusResponse | undefined,
+  error: unknown,
+): string {
+  const suffix = " Lazy browse and direct ItemID entry remain available.";
+  if (error) {
+    return `Global search is unavailable: ${userFacingErrorMessage(
+      error,
+      "the gateway index status could not be read.",
+    )}${suffix}`;
+  }
+  if (!status) {
+    return `Global search is unavailable until the gateway index status is available.${suffix}`;
+  }
+  switch (status.state) {
+    case "partial":
+      return `Global search will be available when the gateway finishes building the index.${suffix}`;
+    case "failed":
+      return `Global search is unavailable because the gateway has no complete index.${suffix}`;
+    case "deleting":
+      return `The tag index is being deleted. Build a new index when deletion finishes.${suffix}`;
+    default:
+      return `Global search is unavailable until the gateway has a complete index.${suffix}`;
+  }
+}
+
+function noSearchMatchesMessage(
+  status: OpcSearchIndexStatusResponse | undefined,
+  indexSearchAvailable: boolean,
+  unavailableMessage: string,
+): string {
+  if (!indexSearchAvailable) return unavailableMessage;
+  switch (status?.state) {
+    case "partial":
+      return "The tag index is still building; no complete no-match result is available yet.";
+    case "not_indexed":
+      return "The tag index has not been built. Build it to enable global search.";
+    case "failed":
+      return "The tag index failed to build. Retry it after resolving the gateway error.";
+    case "deleting":
+      return "The tag index is being deleted. Wait for deletion to finish before building a new index.";
+    default:
+      return "No matching tags.";
+  }
+}
+
+function indexBuildButtonLabel(
+  isPending: boolean,
+  indexSearchAvailable: boolean,
+  state: OpcSearchIndexStatusResponse["state"] | undefined,
+): string {
+  if (isPending) return "Building…";
+  if (indexSearchAvailable) return "Refresh index";
+  if (state === "failed") return "Retry build";
+  return "Build index";
+}
+
+function autoRefreshButtonLabel(isPending: boolean, enabled: boolean): string {
+  if (isPending) return "Saving…";
+  return enabled ? "Disable auto-refresh" : "Enable auto-refresh";
+}
+
+function selectionReadButtonLabel(
+  selectionCheckPending: boolean,
+  readPending: boolean,
+): string {
+  if (selectionCheckPending) return "Checking…";
+  if (readPending) return "Reading…";
+  return "Read selected tag";
+}
+
+function autoRefreshErrorMessage(enabled: boolean): string {
+  if (enabled) return "Unable to enable automatic index refresh.";
+  return "Unable to disable automatic index refresh.";
+}
+
+function nextSearchIndex(
+  previous: number,
+  direction: 1 | -1,
+  resultCount: number,
+): number {
+  let start = previous;
+  if (previous < 0) {
+    start = direction > 0 ? 0 : resultCount - 1;
+  }
+  return (start + direction + resultCount) % resultCount;
+}
+
+function handleTreeNodeDoubleClick(
+  node: OpcTagNodeResponse,
+  onToggle: (node: OpcTagNodeResponse) => void,
+  onConfirm: (node: OpcTagNodeResponse) => void,
+): void {
+  if (nodeCanExpand(node)) {
+    onToggle(node);
+    return;
+  }
+  if (nodeItemId(node)) {
+    onConfirm(node);
+    return;
+  }
+  onToggle(node);
+}
+
+type TreeLevelProps = Readonly<{
+  parentNodeKey: string | null;
+  depth: number;
+  scopeState: Record<string, ScopeState>;
+  expanded: Set<string>;
+  onToggle: (node: OpcTagNodeResponse) => void;
+  onSelect: (node: OpcTagNodeResponse) => void;
+  onConfirm: (node: OpcTagNodeResponse) => void;
+  onLoadMore: (parentNodeKey: string | null) => void;
+  onRetry: (parentNodeKey: string | null) => void;
+  selectedNode: SelectedNode | null;
+  selectedNodeRef: RefObject<HTMLButtonElement | null>;
+  disabled: boolean;
+}>;
+
+type TreeNodeRowProps = Readonly<{
+  node: OpcTagNodeResponse;
+  depth: number;
+  expanded: Set<string>;
+  onToggle: (node: OpcTagNodeResponse) => void;
+  onSelect: (node: OpcTagNodeResponse) => void;
+  onConfirm: (node: OpcTagNodeResponse) => void;
+  scopeState: Record<string, ScopeState>;
+  onLoadMore: (parentNodeKey: string | null) => void;
+  onRetry: (parentNodeKey: string | null) => void;
+  selectedNode: SelectedNode | null;
+  selectedNodeRef: RefObject<HTMLButtonElement | null>;
+  disabled: boolean;
+}>;
+
+function TreeNodeRow({
+  node,
+  depth,
+  expanded,
+  onToggle,
+  onSelect,
+  onConfirm,
+  scopeState,
+  onLoadMore,
+  onRetry,
+  selectedNode,
+  selectedNodeRef,
+  disabled,
+}: TreeNodeRowProps) {
+  const isBranch = nodeCanExpand(node);
+  const itemId = nodeItemId(node);
+  const isSelected = selectedNode?.nodeKey === node.node_key;
+  const isExpanded = expanded.has(node.node_key);
+  const expandLabel = isExpanded ? "Collapse" : "Expand";
+  const expandGlyph = isExpanded ? "▾" : "▸";
+  const rowClassName = `flex items-center gap-1.5 rounded px-1 py-1 text-sm hover:bg-slate-800 ${
+    isSelected ? "bg-slate-800" : ""
+  }`;
+  const itemButtonRef = isSelected ? selectedNodeRef : undefined;
+  const itemButtonDisabled = disabled || (!itemId && !isBranch);
+  const itemButtonTitle = itemId ?? node.display_name;
+  const kindLabel = nodeKindLabel(node);
+
+  function selectOrToggle() {
+    if (itemId) {
+      onSelect(node);
+      return;
+    }
+    onToggle(node);
+  }
+
+  return (
+    <div key={node.node_key}>
+      <div
+        className={rowClassName}
+        style={{ paddingLeft: `${depth * INDENT_PX}px` }}
+      >
+        {isBranch ? (
+          <button
+            type="button"
+            onClick={() => onToggle(node)}
+            disabled={disabled}
+            aria-label={expandLabel}
+            className="w-4 shrink-0 text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {expandGlyph}
+          </button>
+        ) : (
+          <span className="w-4 shrink-0" />
+        )}
+        <button
+          type="button"
+          onClick={selectOrToggle}
+          onDoubleClick={() =>
+            handleTreeNodeDoubleClick(node, onToggle, onConfirm)
+          }
+          ref={itemButtonRef}
+          disabled={itemButtonDisabled}
+          title={itemButtonTitle}
+          className="flex-1 truncate text-left font-mono text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {node.display_name}
+        </button>
+        {kindLabel && (
+          <span className="shrink-0 text-xs text-slate-500">{kindLabel}</span>
+        )}
+      </div>
+      {isBranch && isExpanded && (
+        <TreeLevel
+          parentNodeKey={node.node_key}
+          depth={depth + 1}
+          scopeState={scopeState}
+          expanded={expanded}
+          onToggle={onToggle}
+          onSelect={onSelect}
+          onConfirm={onConfirm}
+          onLoadMore={onLoadMore}
+          onRetry={onRetry}
+          selectedNode={selectedNode}
+          selectedNodeRef={selectedNodeRef}
+          disabled={disabled}
+        />
+      )}
+    </div>
+  );
+}
+
+function TreeLevelError({
+  depth,
+  message,
+  onRetry,
+  parentNodeKey,
+  disabled,
+}: Readonly<{
+  depth: number;
+  message: string | undefined;
+  onRetry: (parentNodeKey: string | null) => void;
+  parentNodeKey: string | null;
+  disabled: boolean;
+}>) {
+  return (
+    <div
+      className="flex items-center gap-2 py-1 text-xs text-red-400"
+      style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
+    >
+      <span>{message}</span>
+      <button
+        type="button"
+        onClick={() => onRetry(parentNodeKey)}
+        disabled={disabled}
+        className="text-blue-300 underline hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        Retry
+      </button>
+    </div>
+  );
 }
 
 /** One tree level -- renders one browsed scope and recurses into whichever branch nodes are
@@ -209,20 +484,7 @@ function TreeLevel({
   selectedNode,
   selectedNodeRef,
   disabled,
-}: {
-  parentNodeKey: string | null;
-  depth: number;
-  scopeState: Record<string, ScopeState>;
-  expanded: Set<string>;
-  onToggle: (node: OpcTagNodeResponse) => void;
-  onSelect: (node: OpcTagNodeResponse) => void;
-  onConfirm: (node: OpcTagNodeResponse) => void;
-  onLoadMore: (parentNodeKey: string | null) => void;
-  onRetry: (parentNodeKey: string | null) => void;
-  selectedNode: SelectedNode | null;
-  selectedNodeRef: RefObject<HTMLButtonElement | null>;
-  disabled: boolean;
-}) {
+}: TreeLevelProps) {
   const state = scopeState[scopeKey(parentNodeKey)];
   if (!state) return null;
 
@@ -238,20 +500,13 @@ function TreeLevel({
   }
   if (state.status === "error" && state.nodes.length === 0) {
     return (
-      <div
-        className="flex items-center gap-2 py-1 text-xs text-red-400"
-        style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
-      >
-        <span>{state.message}</span>
-        <button
-          type="button"
-          onClick={() => onRetry(parentNodeKey)}
-          disabled={disabled}
-          className="text-blue-300 underline hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Retry
-        </button>
-      </div>
+      <TreeLevelError
+        depth={depth}
+        message={state.message}
+        onRetry={onRetry}
+        parentNodeKey={parentNodeKey}
+        disabled={disabled}
+      />
     );
   }
   if (state.nodes.length === 0) {
@@ -275,90 +530,31 @@ function TreeLevel({
           {state.warning}
         </div>
       )}
-      {state.nodes.map((node) => {
-        const isBranch = nodeCanExpand(node);
-        const itemId = nodeItemId(node);
-        const isSelected = selectedNode?.nodeKey === node.node_key;
-        return (
-          <div key={node.node_key}>
-            <div
-              className={`flex items-center gap-1.5 rounded px-1 py-1 text-sm hover:bg-slate-800 ${
-                isSelected ? "bg-slate-800" : ""
-              }`}
-              style={{ paddingLeft: `${depth * INDENT_PX}px` }}
-            >
-              {isBranch ? (
-                <button
-                  type="button"
-                  onClick={() => onToggle(node)}
-                  disabled={disabled}
-                  aria-label={
-                    expanded.has(node.node_key) ? "Collapse" : "Expand"
-                  }
-                  className="w-4 shrink-0 text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {expanded.has(node.node_key) ? "▾" : "▸"}
-                </button>
-              ) : (
-                <span className="w-4 shrink-0" />
-              )}
-              <button
-                type="button"
-                onClick={() => (itemId ? onSelect(node) : onToggle(node))}
-                onDoubleClick={() =>
-                  isBranch
-                    ? onToggle(node)
-                    : itemId
-                      ? onConfirm(node)
-                      : onToggle(node)
-                }
-                ref={isSelected ? selectedNodeRef : undefined}
-                disabled={disabled || (!itemId && !isBranch)}
-                title={itemId ?? node.display_name}
-                className="flex-1 truncate text-left font-mono text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {node.display_name}
-              </button>
-              {nodeKindLabel(node) && (
-                <span className="shrink-0 text-xs text-slate-500">
-                  {nodeKindLabel(node)}
-                </span>
-              )}
-            </div>
-            {isBranch && expanded.has(node.node_key) && (
-              <TreeLevel
-                parentNodeKey={node.node_key}
-                depth={depth + 1}
-                scopeState={scopeState}
-                expanded={expanded}
-                onToggle={onToggle}
-                onSelect={onSelect}
-                onConfirm={onConfirm}
-                onLoadMore={onLoadMore}
-                onRetry={onRetry}
-                selectedNode={selectedNode}
-                selectedNodeRef={selectedNodeRef}
-                disabled={disabled}
-              />
-            )}
-          </div>
-        );
-      })}
+      {state.nodes.map((node) => (
+        <TreeNodeRow
+          key={node.node_key}
+          node={node}
+          depth={depth}
+          expanded={expanded}
+          onToggle={onToggle}
+          onSelect={onSelect}
+          onConfirm={onConfirm}
+          scopeState={scopeState}
+          onLoadMore={onLoadMore}
+          onRetry={onRetry}
+          selectedNode={selectedNode}
+          selectedNodeRef={selectedNodeRef}
+          disabled={disabled}
+        />
+      ))}
       {state.status === "error" && state.nodes.length > 0 && (
-        <div
-          className="flex items-center gap-2 py-1 text-xs text-red-400"
-          style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
-        >
-          <span>{state.message}</span>
-          <button
-            type="button"
-            onClick={() => onRetry(parentNodeKey)}
-            disabled={disabled}
-            className="text-blue-300 underline hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Retry
-          </button>
-        </div>
+        <TreeLevelError
+          depth={depth}
+          message={state.message}
+          onRetry={onRetry}
+          parentNodeKey={parentNodeKey}
+          disabled={disabled}
+        />
       )}
       {!state.complete && state.nextPageToken && (
         <button
@@ -371,6 +567,407 @@ function TreeLevel({
           {state.status === "loading-more" ? "Loading more…" : "Load more"}
         </button>
       )}
+    </>
+  );
+}
+
+type QualityWarningPanelProps = Readonly<{
+  warning: QualityWarning;
+  onChooseDifferent: () => void;
+  onProceed: () => void;
+}>;
+
+function QualityWarningPanel({
+  warning,
+  onChooseDifferent,
+  onProceed,
+}: QualityWarningPanelProps) {
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-amber-800 bg-amber-950/50 p-3 text-sm text-amber-200">
+        <p className="font-medium">This tag returned a non-Good OPC quality.</p>
+        <p className="mt-2">
+          The live value for{" "}
+          <span className="font-mono">{warning.selectedTag}</span> was{" "}
+          <span className="font-mono">{warning.reading.value}</span> with
+          quality{" "}
+          <Badge tone={SAMPLE_QUALITY_TONE[warning.reading.quality]}>
+            {SAMPLE_QUALITY_LABELS[warning.reading.quality]}
+          </Badge>
+          .
+        </p>
+        <p className="mt-2">
+          Non-Good values may be stale or invalid. Choose another tag, or
+          proceed anyway if you understand the risk.
+        </p>
+        <p className="mt-2">
+          Proceeding only selects this item for the form; a tune still requires
+          trustworthy quality for its live readings.
+        </p>
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button onClick={onChooseDifferent}>Choose a different tag</Button>
+        <Button variant="primary" onClick={onProceed}>
+          Proceed anyway
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type IndexControlsProps = Readonly<{
+  opcServer: string;
+  indexStatus: OpcSearchIndexStatusResponse | undefined;
+  indexStateLabel: string | null;
+  indexSearchAvailable: boolean;
+  indexUnavailableMessage: string;
+  refreshPending: boolean;
+  controlPending: boolean;
+  autoRefreshPending: boolean;
+  deletePending: boolean;
+  onRefresh: () => void;
+  onCancel: () => void;
+  onSetAutoRefresh: (enabled: boolean) => void;
+  onDelete: () => void;
+}>;
+
+function IndexControls({
+  opcServer,
+  indexStatus,
+  indexStateLabel,
+  indexSearchAvailable,
+  indexUnavailableMessage,
+  refreshPending,
+  controlPending,
+  autoRefreshPending,
+  deletePending,
+  onRefresh,
+  onCancel,
+  onSetAutoRefresh,
+  onDelete,
+}: IndexControlsProps) {
+  const canCancelBuild =
+    indexStatus?.state === "partial" || indexStatus?.state === "refreshing";
+  const canDelete =
+    indexStatus &&
+    (indexStatus.active_generation > 0 || indexStatus.state === "failed");
+  const deleteDisabled =
+    deletePending ||
+    refreshPending ||
+    indexStatus?.state === "partial" ||
+    indexStatus?.state === "refreshing";
+
+  return (
+    <div className="mb-3 space-y-2">
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          disabled={
+            refreshPending ||
+            !opcServer ||
+            indexStatus?.state === "partial" ||
+            indexStatus?.state === "refreshing" ||
+            indexStatus?.state === "deleting"
+          }
+          onClick={onRefresh}
+        >
+          {indexBuildButtonLabel(
+            refreshPending,
+            indexSearchAvailable,
+            indexStatus?.state,
+          )}
+        </Button>
+        {canCancelBuild && (
+          <Button type="button" disabled={controlPending} onClick={onCancel}>
+            {controlPending ? "Cancelling…" : "Cancel build"}
+          </Button>
+        )}
+        {indexStatus?.state === "deleting" && (
+          <output className="text-xs text-amber-300">
+            Deleting the tag index… browse and direct reads remain available.
+          </output>
+        )}
+        {canDelete && (
+          <>
+            {indexStatus.active_generation > 0 && (
+              <Button
+                type="button"
+                disabled={autoRefreshPending || deletePending}
+                onClick={() =>
+                  onSetAutoRefresh(!indexStatus.auto_refresh_enabled)
+                }
+              >
+                {autoRefreshButtonLabel(
+                  autoRefreshPending,
+                  indexStatus.auto_refresh_enabled,
+                )}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="danger"
+              disabled={deleteDisabled}
+              onClick={onDelete}
+            >
+              {deletePending ? "Deleting…" : "Delete index"}
+            </Button>
+          </>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+        {indexStateLabel && (
+          <span className="text-slate-400">
+            Index: {indexStateLabel.toLocaleLowerCase()}
+          </span>
+        )}
+        {indexStatus?.progress && (
+          <span>
+            {indexStatus.progress.entries_seen.toLocaleString()} entries{" · "}
+            {indexStatus.progress.items_per_second.toFixed(0)} items/s
+          </span>
+        )}
+        {indexStatus?.scheduler.next_refresh_at && (
+          <span
+            title={
+              formatExactTime(indexStatus.scheduler.next_refresh_at) ??
+              undefined
+            }
+          >
+            Next refresh:{" "}
+            {formatTimeUntil(indexStatus.scheduler.next_refresh_at)}
+          </span>
+        )}
+        {indexStatus && indexStatus.active_generation > 0 && (
+          <span>
+            Auto-refresh:{" "}
+            {indexStatus.auto_refresh_enabled ? "enabled" : "disabled"}
+          </span>
+        )}
+      </div>
+      {indexStatus?.state === "failed" && indexStatus.last_error && (
+        <output className="text-xs text-red-300">
+          Index error: {indexStatus.last_error}
+        </output>
+      )}
+      {!indexSearchAvailable && (
+        <output className="text-xs text-slate-400">
+          {indexUnavailableMessage}
+        </output>
+      )}
+    </div>
+  );
+}
+
+type IndexedSearchResultsProps = Readonly<{
+  searchError: string | null;
+  searchMatches: OpcIndexedSearchMatchResponse[];
+  searchResponse: OpcSearchIndexResponse | null;
+  searchQuery: string;
+  indexStatus: OpcSearchIndexStatusResponse | undefined;
+  indexSearchAvailable: boolean;
+  indexUnavailableMessage: string;
+  searchPending: boolean;
+  busy: boolean;
+  activeSearchIndex: number;
+  onResultRef: (index: number, element: HTMLButtonElement | null) => void;
+  onHover: (index: number) => void;
+  onSelect: (match: OpcIndexedSearchMatchResponse) => void;
+  onConfirm: (match: OpcIndexedSearchMatchResponse) => void;
+}>;
+
+function IndexedSearchResults({
+  searchError,
+  searchMatches,
+  searchResponse,
+  searchQuery,
+  indexStatus,
+  indexSearchAvailable,
+  indexUnavailableMessage,
+  searchPending,
+  busy,
+  activeSearchIndex,
+  onResultRef,
+  onHover,
+  onSelect,
+  onConfirm,
+}: IndexedSearchResultsProps) {
+  const query = searchQuery.trim();
+  const shouldRender =
+    Boolean(searchError) ||
+    searchMatches.length > 0 ||
+    query.length >= 2 ||
+    Boolean(indexStatus?.progress);
+  if (!shouldRender) return null;
+
+  return (
+    <div className="mb-3 max-h-56 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
+      {searchError && <ErrorBanner message={searchError} />}
+      {searchPending && (
+        <p className="mb-2 text-xs text-slate-400">
+          Searching… previous results remain visible until the new query
+          completes.
+        </p>
+      )}
+      {searchMatches.length > 0 && (
+        <div
+          role="listbox"
+          aria-label="OPC tag search results"
+          className="space-y-1"
+        >
+          {searchMatches.map((match, index) => {
+            const path = matchPath(match);
+            const active = index === activeSearchIndex;
+            return (
+              <button
+                key={match.item_id}
+                id={`opc-search-result-${index}`}
+                ref={(element) => onResultRef(index, element)}
+                role="option"
+                aria-selected={active}
+                type="button"
+                disabled={busy}
+                onMouseEnter={() => onHover(index)}
+                onClick={() => onSelect(match)}
+                onDoubleClick={() => onConfirm(match)}
+                title={match.item_id}
+                className={`block w-full rounded px-2 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
+                  active
+                    ? "bg-blue-950/70 text-blue-100"
+                    : "text-slate-300 hover:bg-slate-800"
+                }`}
+              >
+                <span className="block truncate font-mono">
+                  {highlightedText(match.item_id, searchQuery)}
+                </span>
+                <span className="block truncate text-slate-500">
+                  {highlightedText(path, searchQuery)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {searchResponse?.has_more && (
+        <p className="mt-2 text-xs text-slate-400">
+          50+ matches — keep typing to narrow.
+        </p>
+      )}
+      {!searchPending &&
+        !searchError &&
+        query.length >= 2 &&
+        searchMatches.length === 0 && (
+          <p className="text-xs text-slate-400">
+            {noSearchMatchesMessage(
+              indexStatus,
+              indexSearchAvailable,
+              indexUnavailableMessage,
+            )}
+          </p>
+        )}
+    </div>
+  );
+}
+
+type TestConnectionState = ReturnType<typeof useTestOpcConnection>;
+
+type SelectedTagPanelProps = Readonly<{
+  selectedTag: string | null;
+  busy: boolean;
+  selectionCheckPending: boolean;
+  selectionReadError: string | null;
+  testConnection: TestConnectionState;
+  onRead: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}>;
+
+function SelectedTagPanel({
+  selectedTag,
+  busy,
+  selectionCheckPending,
+  selectionReadError,
+  testConnection,
+  onRead,
+  onCancel,
+  onConfirm,
+}: SelectedTagPanelProps) {
+  return (
+    <div className="mt-4 min-h-[10rem] rounded-md border border-slate-700 bg-slate-900 p-3">
+      {!selectedTag && (
+        <p className="text-sm text-slate-400">
+          Select a tag to test its live value and quality.
+        </p>
+      )}
+      {selectedTag && (
+        <>
+          <p className="text-sm text-slate-200">
+            Selected: <span className="font-mono">{selectedTag}</span>
+          </p>
+          <p className="mt-1 text-xs text-slate-500">
+            Select tag applies the active template&apos;s process-variable
+            suffix. Review or override the rest of the mapping in the collapsed
+            section on the main tune form.
+          </p>
+
+          <div className="mt-3 flex items-center gap-2">
+            <Button disabled={busy} onClick={onRead}>
+              {selectionReadButtonLabel(
+                selectionCheckPending,
+                testConnection.isPending,
+              )}
+            </Button>
+            {testConnection.isSuccess && testConnection.data && (
+              <span className="text-xs text-slate-300">
+                {testConnection.data.value}{" "}
+                <Badge tone={SAMPLE_QUALITY_TONE[testConnection.data.quality]}>
+                  {SAMPLE_QUALITY_LABELS[testConnection.data.quality]}
+                </Badge>
+              </span>
+            )}
+            {testConnection.isError && !selectionReadError && (
+              <span className="text-xs text-red-400">
+                {userFacingErrorMessage(
+                  testConnection.error,
+                  "Unable to read the selected tag.",
+                )}
+              </span>
+            )}
+            {selectionReadError && <ErrorBanner message={selectionReadError} />}
+          </div>
+
+          <div className="mt-3 flex justify-end gap-2">
+            <Button onClick={onCancel}>Cancel</Button>
+            <Button variant="primary" disabled={busy} onClick={onConfirm}>
+              {selectionCheckPending ? "Checking…" : "Select tag"}
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+type TagBrowserContentProps = Readonly<{
+  indexControls: IndexControlsProps;
+  searchResults: IndexedSearchResultsProps;
+  tree: TreeLevelProps;
+  selectedTagPanel: SelectedTagPanelProps;
+}>;
+
+function TagBrowserContent({
+  indexControls,
+  searchResults,
+  tree,
+  selectedTagPanel,
+}: TagBrowserContentProps) {
+  return (
+    <>
+      <IndexControls {...indexControls} />
+      <IndexedSearchResults {...searchResults} />
+      <div className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
+        <TreeLevel {...tree} />
+      </div>
+      <SelectedTagPanel {...selectedTagPanel} />
     </>
   );
 }
@@ -392,14 +989,14 @@ export function OpcTagBrowserModal({
   initialTag,
   onClose,
   onSelect,
-}: {
+}: Readonly<{
   bridgeHost: string;
   opcServer: string;
   template: TemplateResponse | undefined;
   initialTag: string;
   onClose: () => void;
   onSelect: (tag: string) => void;
-}) {
+}>) {
   const { fetchPage, clearCache } = useOpcBrowseFetcher(bridgeHost, opcServer);
   const closeBrowseSession = useCloseOpcBrowseSession();
   const indexedSearch = useOpcIndexedSearch();
@@ -441,20 +1038,10 @@ export function OpcTagBrowserModal({
   const indexStatus = searchIndexStatus.data ?? searchResponse?.status;
   const indexStateLabel = searchStateLabel(indexStatus);
   const indexSearchAvailable = hasUsableIndex(indexStatus);
-  const indexUnavailableMessage = searchIndexStatus.error
-    ? `Global search is unavailable: ${userFacingErrorMessage(
-        searchIndexStatus.error,
-        "the gateway index status could not be read.",
-      )} Lazy browse and direct ItemID entry remain available.`
-    : !indexStatus
-      ? "Global search is unavailable until the gateway index status is available. Lazy browse and direct ItemID entry remain available."
-      : indexStatus.state === "partial"
-        ? "Global search will be available when the gateway finishes building the index. Lazy browse and direct ItemID entry remain available."
-        : indexStatus.state === "failed"
-          ? "Global search is unavailable because the gateway has no complete index. Lazy browse and direct ItemID entry remain available."
-          : indexStatus.state === "deleting"
-            ? "The tag index is being deleted. Build a new index when deletion finishes. Lazy browse and direct ItemID entry remain available."
-            : "Global search is unavailable until the gateway has a complete index. Lazy browse and direct ItemID entry remain available.";
+  const unavailableMessage = indexUnavailableMessage(
+    indexStatus,
+    searchIndexStatus.error,
+  );
 
   useEffect(() => {
     scopeStateRef.current = scopeState;
@@ -749,9 +1336,10 @@ export function OpcTagBrowserModal({
   }
 
   function applyTag(tag: string) {
-    const pvTag = template
-      ? (deriveTag(tag, template.process_variable_suffix) ?? tag)
-      : tag;
+    let pvTag = tag;
+    if (template) {
+      pvTag = deriveTag(tag, template.process_variable_suffix) ?? tag;
+    }
     disposeBrowse();
     onSelect(pvTag);
     onClose();
@@ -898,17 +1486,9 @@ export function OpcTagBrowserModal({
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const direction = event.key === "ArrowDown" ? 1 : -1;
-      setActiveSearchIndex((previous) => {
-        const start =
-          previous < 0
-            ? direction > 0
-              ? 0
-              : searchMatches.length - 1
-            : previous;
-        return (
-          (start + direction + searchMatches.length) % searchMatches.length
-        );
-      });
+      setActiveSearchIndex((previous) =>
+        nextSearchIndex(previous, direction, searchMatches.length),
+      );
     } else if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       setActiveSearchIndex(event.key === "Home" ? 0 : searchMatches.length - 1);
@@ -951,12 +1531,7 @@ export function OpcTagBrowserModal({
       await searchIndexStatus.refetch();
     } catch (err) {
       setSearchError(
-        userFacingErrorMessage(
-          err,
-          enabled
-            ? "Unable to enable automatic index refresh."
-            : "Unable to disable automatic index refresh.",
-        ),
+        userFacingErrorMessage(err, autoRefreshErrorMessage(enabled)),
       );
     }
   }
@@ -1016,383 +1591,145 @@ export function OpcTagBrowserModal({
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [indexStatus?.state]);
 
+  function confirmNode(node: OpcTagNodeResponse) {
+    const itemId = nodeItemId(node);
+    if (itemId) void confirmTag(itemId);
+  }
+
+  function closeFromSelection() {
+    disposeBrowse();
+    onClose();
+  }
+
+  function proceedWithQualityWarning() {
+    const tag = qualityWarning?.selectedTag;
+    if (!tag) return;
+    setQualityWarning(null);
+    applyTag(tag);
+  }
+
+  const modalTitle = qualityWarning
+    ? "OPC quality warning"
+    : `Browse tags on ${opcServer || "(no server)"}`;
+  let modalContent: ReactNode;
+  if (qualityWarning) {
+    modalContent = (
+      <QualityWarningPanel
+        warning={qualityWarning}
+        onChooseDifferent={() => setQualityWarning(null)}
+        onProceed={proceedWithQualityWarning}
+      />
+    );
+  } else if (!opcServer) {
+    modalContent = (
+      <p className="text-sm text-slate-400">
+        Enter an OPC DA server ProgID above before browsing its tags.
+      </p>
+    );
+  } else {
+    modalContent = (
+      <>
+        <div className="mb-3 flex gap-2">
+          <label className="sr-only" htmlFor="opc-tag-search">
+            Search OPC tags
+          </label>
+          <input
+            id="opc-tag-search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            disabled={!indexSearchAvailable}
+            placeholder={
+              indexSearchAvailable
+                ? "Type at least 2 characters to search tags"
+                : "Global search unavailable — browse below or enter an ItemID"
+            }
+            aria-activedescendant={
+              activeSearchIndex >= 0
+                ? `opc-search-result-${activeSearchIndex}`
+                : undefined
+            }
+            className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+          />
+          {indexedSearch.isPending && (
+            <Button type="button" onClick={cancelActiveSearch}>
+              Cancel
+            </Button>
+          )}
+        </div>
+        <TagBrowserContent
+          indexControls={{
+            opcServer,
+            indexStatus,
+            indexStateLabel,
+            indexSearchAvailable,
+            indexUnavailableMessage: unavailableMessage,
+            refreshPending: refreshSearchIndex.isPending,
+            controlPending: controlSearchIndex.isPending,
+            autoRefreshPending: setAutoRefreshMutation.isPending,
+            deletePending: deleteSearchIndex.isPending,
+            onRefresh: () => void refreshIndex(),
+            onCancel: () => void cancelIndexBuild(),
+            onSetAutoRefresh: (enabled) => void setAutoRefresh(enabled),
+            onDelete: () => void deleteIndex(),
+          }}
+          searchResults={{
+            searchError,
+            searchMatches,
+            searchResponse,
+            searchQuery,
+            indexStatus,
+            indexSearchAvailable,
+            indexUnavailableMessage: unavailableMessage,
+            searchPending: indexedSearch.isPending,
+            busy,
+            activeSearchIndex,
+            onResultRef: (index, element) => {
+              searchResultRefs.current[index] = element;
+            },
+            onHover: setActiveSearchIndex,
+            onSelect: chooseSearchMatch,
+            onConfirm: (match) => void confirmTag(match.item_id),
+          }}
+          tree={{
+            parentNodeKey: null,
+            depth: 0,
+            scopeState,
+            expanded,
+            onToggle: toggle,
+            onSelect: selectNode,
+            onConfirm: confirmNode,
+            onLoadMore: loadMore,
+            onRetry: retryBrowse,
+            selectedNode,
+            selectedNodeRef,
+            disabled: busy,
+          }}
+          selectedTagPanel={{
+            selectedTag,
+            busy,
+            selectionCheckPending,
+            selectionReadError,
+            testConnection,
+            onRead: readSelectedTag,
+            onCancel: closeFromSelection,
+            onConfirm: () => {
+              if (selectedTag) void confirmTag(selectedTag);
+            },
+          }}
+        />
+      </>
+    );
+  }
+
   return (
     <Modal
-      title={
-        qualityWarning
-          ? "OPC quality warning"
-          : `Browse tags on ${opcServer || "(no server)"}`
-      }
-      onClose={() => {
-        disposeBrowse();
-        onClose();
-      }}
+      title={modalTitle}
+      onClose={closeFromSelection}
       widthClassName="max-w-2xl"
       documentationId="new-tune.opc-tag-browser"
     >
-      {qualityWarning ? (
-        <div className="space-y-4">
-          <div className="rounded-md border border-amber-800 bg-amber-950/50 p-3 text-sm text-amber-200">
-            <p className="font-medium">
-              This tag returned a non-Good OPC quality.
-            </p>
-            <p className="mt-2">
-              The live value for{" "}
-              <span className="font-mono">{qualityWarning.selectedTag}</span>{" "}
-              was{" "}
-              <span className="font-mono">{qualityWarning.reading.value}</span>{" "}
-              with quality{" "}
-              <Badge tone={SAMPLE_QUALITY_TONE[qualityWarning.reading.quality]}>
-                {SAMPLE_QUALITY_LABELS[qualityWarning.reading.quality]}
-              </Badge>
-              .
-            </p>
-            <p className="mt-2">
-              Non-Good values may be stale or invalid. Choose another tag, or
-              proceed anyway if you understand the risk.
-            </p>
-            <p className="mt-2">
-              Proceeding only selects this item for the form; a tune still
-              requires trustworthy quality for its live readings.
-            </p>
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button onClick={() => setQualityWarning(null)}>
-              Choose a different tag
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                const tag = qualityWarning.selectedTag;
-                setQualityWarning(null);
-                applyTag(tag);
-              }}
-            >
-              Proceed anyway
-            </Button>
-          </div>
-        </div>
-      ) : !opcServer ? (
-        <p className="text-sm text-slate-400">
-          Enter an OPC DA server ProgID above before browsing its tags.
-        </p>
-      ) : (
-        <>
-          <div className="mb-3 space-y-2">
-            <div className="flex gap-2">
-              <label className="sr-only" htmlFor="opc-tag-search">
-                Search OPC tags
-              </label>
-              <input
-                id="opc-tag-search"
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                onKeyDown={handleSearchKeyDown}
-                disabled={!indexSearchAvailable}
-                placeholder={
-                  indexSearchAvailable
-                    ? "Type at least 2 characters to search tags"
-                    : "Global search unavailable — browse below or enter an ItemID"
-                }
-                aria-activedescendant={
-                  activeSearchIndex >= 0
-                    ? `opc-search-result-${activeSearchIndex}`
-                    : undefined
-                }
-                className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
-              />
-              {indexedSearch.isPending && (
-                <Button type="button" onClick={cancelActiveSearch}>
-                  Cancel
-                </Button>
-              )}
-              <Button
-                type="button"
-                disabled={
-                  refreshSearchIndex.isPending ||
-                  !opcServer ||
-                  indexStatus?.state === "partial" ||
-                  indexStatus?.state === "refreshing" ||
-                  indexStatus?.state === "deleting"
-                }
-                onClick={() => void refreshIndex()}
-              >
-                {refreshSearchIndex.isPending
-                  ? "Building…"
-                  : indexSearchAvailable
-                    ? "Refresh index"
-                    : indexStatus?.state === "failed"
-                      ? "Retry build"
-                      : "Build index"}
-              </Button>
-              {(indexStatus?.state === "partial" ||
-                indexStatus?.state === "refreshing") && (
-                <Button
-                  type="button"
-                  disabled={controlSearchIndex.isPending}
-                  onClick={() => void cancelIndexBuild()}
-                >
-                  {controlSearchIndex.isPending
-                    ? "Cancelling…"
-                    : "Cancel build"}
-                </Button>
-              )}
-              {indexStatus?.state === "deleting" && (
-                <span role="status" className="text-xs text-amber-300">
-                  Deleting the tag index… browse and direct reads remain
-                  available.
-                </span>
-              )}
-              {indexStatus &&
-                (indexStatus.active_generation > 0 ||
-                  indexStatus.state === "failed") && (
-                  <>
-                    {indexStatus.active_generation > 0 && (
-                      <Button
-                        type="button"
-                        disabled={
-                          setAutoRefreshMutation.isPending ||
-                          deleteSearchIndex.isPending
-                        }
-                        onClick={() =>
-                          void setAutoRefresh(!indexStatus.auto_refresh_enabled)
-                        }
-                      >
-                        {setAutoRefreshMutation.isPending
-                          ? "Saving…"
-                          : indexStatus.auto_refresh_enabled
-                            ? "Disable auto-refresh"
-                            : "Enable auto-refresh"}
-                      </Button>
-                    )}
-                    <Button
-                      type="button"
-                      variant="danger"
-                      disabled={
-                        deleteSearchIndex.isPending ||
-                        refreshSearchIndex.isPending ||
-                        indexStatus.state === "partial" ||
-                        indexStatus.state === "refreshing"
-                      }
-                      onClick={() => void deleteIndex()}
-                    >
-                      {deleteSearchIndex.isPending
-                        ? "Deleting…"
-                        : "Delete index"}
-                    </Button>
-                  </>
-                )}
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-              {indexStateLabel && (
-                <span className="text-slate-400">
-                  Index: {indexStateLabel.toLocaleLowerCase()}
-                </span>
-              )}
-              {indexStatus?.progress && (
-                <span>
-                  {indexStatus.progress.entries_seen.toLocaleString()} entries
-                  {" · "}
-                  {indexStatus.progress.items_per_second.toFixed(0)} items/s
-                </span>
-              )}
-              {indexStatus?.scheduler.next_refresh_at && (
-                <span
-                  title={
-                    formatExactTime(indexStatus.scheduler.next_refresh_at) ??
-                    undefined
-                  }
-                >
-                  Next refresh:{" "}
-                  {formatTimeUntil(indexStatus.scheduler.next_refresh_at)}
-                </span>
-              )}
-              {indexStatus && indexStatus.active_generation > 0 && (
-                <span>
-                  Auto-refresh:{" "}
-                  {indexStatus.auto_refresh_enabled ? "enabled" : "disabled"}
-                </span>
-              )}
-            </div>
-            {indexStatus?.state === "failed" && indexStatus.last_error && (
-              <p role="status" className="text-xs text-red-300">
-                Index error: {indexStatus.last_error}
-              </p>
-            )}
-            {!indexSearchAvailable && (
-              <p role="status" className="text-xs text-slate-400">
-                {indexUnavailableMessage}
-              </p>
-            )}
-          </div>
-          {(searchError ||
-            searchMatches.length > 0 ||
-            searchQuery.trim().length >= 2 ||
-            indexStatus?.progress) && (
-            <div className="mb-3 max-h-56 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
-              {searchError && <ErrorBanner message={searchError} />}
-              {indexedSearch.isPending && (
-                <p className="mb-2 text-xs text-slate-400">
-                  Searching… previous results remain visible until the new query
-                  completes.
-                </p>
-              )}
-              {searchMatches.length > 0 && (
-                <div
-                  role="listbox"
-                  aria-label="OPC tag search results"
-                  className="space-y-1"
-                >
-                  {searchMatches.map((match, index) => {
-                    const path = matchPath(match);
-                    const active = index === activeSearchIndex;
-                    return (
-                      <button
-                        key={match.item_id}
-                        id={`opc-search-result-${index}`}
-                        ref={(element) => {
-                          searchResultRefs.current[index] = element;
-                        }}
-                        role="option"
-                        aria-selected={active}
-                        type="button"
-                        disabled={busy}
-                        onMouseEnter={() => setActiveSearchIndex(index)}
-                        onClick={() => chooseSearchMatch(match)}
-                        onDoubleClick={() => void confirmTag(match.item_id)}
-                        title={match.item_id}
-                        className={`block w-full rounded px-2 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
-                          active
-                            ? "bg-blue-950/70 text-blue-100"
-                            : "text-slate-300 hover:bg-slate-800"
-                        }`}
-                      >
-                        <span className="block truncate font-mono">
-                          {highlightedText(match.item_id, searchQuery)}
-                        </span>
-                        <span className="block truncate text-slate-500">
-                          {highlightedText(path, searchQuery)}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {searchResponse?.has_more && (
-                <p className="mt-2 text-xs text-slate-400">
-                  50+ matches — keep typing to narrow.
-                </p>
-              )}
-              {!indexedSearch.isPending &&
-                !searchError &&
-                searchQuery.trim().length >= 2 &&
-                searchMatches.length === 0 && (
-                  <p className="text-xs text-slate-400">
-                    {!indexSearchAvailable
-                      ? indexUnavailableMessage
-                      : indexStatus?.state === "partial"
-                        ? "The tag index is still building; no complete no-match result is available yet."
-                        : indexStatus?.state === "not_indexed"
-                          ? "The tag index has not been built. Build it to enable global search."
-                          : indexStatus?.state === "failed"
-                            ? "The tag index failed to build. Retry it after resolving the gateway error."
-                            : indexStatus?.state === "deleting"
-                              ? "The tag index is being deleted. Wait for deletion to finish before building a new index."
-                              : "No matching tags."}
-                  </p>
-                )}
-            </div>
-          )}
-
-          <div className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
-            <TreeLevel
-              parentNodeKey={null}
-              depth={0}
-              scopeState={scopeState}
-              expanded={expanded}
-              onToggle={toggle}
-              onSelect={selectNode}
-              onConfirm={(node) => {
-                const itemId = nodeItemId(node);
-                if (itemId) void confirmTag(itemId);
-              }}
-              onLoadMore={loadMore}
-              onRetry={retryBrowse}
-              selectedNode={selectedNode}
-              selectedNodeRef={selectedNodeRef}
-              disabled={busy}
-            />
-          </div>
-
-          <div className="mt-4 min-h-[10rem] rounded-md border border-slate-700 bg-slate-900 p-3">
-            {!selectedTag ? (
-              <p className="text-sm text-slate-400">
-                Select a tag to test its live value and quality.
-              </p>
-            ) : (
-              <>
-                <p className="text-sm text-slate-200">
-                  Selected: <span className="font-mono">{selectedTag}</span>
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Select tag applies the active template&apos;s process-variable
-                  suffix. Review or override the rest of the mapping in the
-                  collapsed section on the main tune form.
-                </p>
-
-                <div className="mt-3 flex items-center gap-2">
-                  <Button disabled={busy} onClick={readSelectedTag}>
-                    {selectionCheckPending
-                      ? "Checking…"
-                      : testConnection.isPending
-                        ? "Reading…"
-                        : "Read selected tag"}
-                  </Button>
-                  {testConnection.isSuccess && (
-                    <span className="text-xs text-slate-300">
-                      {testConnection.data.value}{" "}
-                      <Badge
-                        tone={SAMPLE_QUALITY_TONE[testConnection.data.quality]}
-                      >
-                        {SAMPLE_QUALITY_LABELS[testConnection.data.quality]}
-                      </Badge>
-                    </span>
-                  )}
-                  {testConnection.isError && !selectionReadError && (
-                    <span className="text-xs text-red-400">
-                      {userFacingErrorMessage(
-                        testConnection.error,
-                        "Unable to read the selected tag.",
-                      )}
-                    </span>
-                  )}
-                  {selectionReadError && (
-                    <ErrorBanner message={selectionReadError} />
-                  )}
-                </div>
-
-                <div className="mt-3 flex justify-end gap-2">
-                  <Button
-                    onClick={() => {
-                      disposeBrowse();
-                      onClose();
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="primary"
-                    disabled={busy}
-                    onClick={() => void confirmTag(selectedTag)}
-                  >
-                    {selectionCheckPending ? "Checking…" : "Select tag"}
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
+      {modalContent}
     </Modal>
   );
 }

@@ -985,7 +985,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         query,
         mode: url.searchParams.get("match_mode") ?? "",
       });
-      if (query === "fc") await page.waitForTimeout(300);
+      if (query === "fc") await slowPrefixSearch;
       const matches =
         query === "fcs"
           ? [
@@ -1017,13 +1017,17 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       });
     });
 
+    let releaseSlowPrefixSearch: (() => void) | undefined;
+    const slowPrefixSearch = new Promise<void>((resolve) => {
+      releaseSlowPrefixSearch = resolve;
+    });
+
     await page.getByRole("button", { name: "Browse tags" }).click();
     const search = page.getByLabel("Search OPC tags");
     await expect(page.getByText("Smart contains search")).toHaveCount(0);
     await expect(page.getByText("results stay on the gateway")).toHaveCount(0);
     await search.fill("f");
-    await page.waitForTimeout(250);
-    expect(queries).toEqual([]);
+    await expect.poll(() => queries.length).toBe(0);
 
     await search.fill("fc");
     await expect
@@ -1050,6 +1054,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       "FCS0202!204FI00510.Inp_PV",
     );
     expect(readTags).toEqual([selectedItemId]);
+    releaseSlowPrefixSearch?.();
   });
 
   test("confirms an indexed search result on double-click", async ({

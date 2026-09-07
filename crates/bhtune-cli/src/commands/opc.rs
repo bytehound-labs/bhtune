@@ -348,11 +348,7 @@ async fn browse_with_output(
     options: BrowseOptions,
     output: OutputFormat,
 ) -> anyhow::Result<()> {
-    if (options.parent_node_key.is_some() || options.page_token.is_some())
-        && options.session_id.is_none()
-    {
-        anyhow::bail!("--session-id is required with --parent-node-key or --page-token");
-    }
+    validate_browse_options(&options)?;
 
     let driver = OpcDaDriver::connect(bridge_host, server).await?;
     let first_request = BrowsePageRequest {
@@ -372,22 +368,48 @@ async fn browse_with_output(
         options.all,
     )
     .await?;
-    if output == OutputFormat::Json {
-        if pages.len() == 1 {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json_browse_page(&pages[0]))?
-            );
-        } else {
-            let response = BrowsePagesOutput {
-                session_id: session,
-                pages: pages.iter().map(json_browse_page).collect(),
-                complete: pages.last().is_some_and(|page| page.complete),
-            };
-            println!("{}", serde_json::to_string_pretty(&response)?);
-        }
-        return Ok(());
+    render_browse_pages(&pages, &session, output)
+}
+
+fn validate_browse_options(options: &BrowseOptions) -> anyhow::Result<()> {
+    if (options.parent_node_key.is_some() || options.page_token.is_some())
+        && options.session_id.is_none()
+    {
+        anyhow::bail!("--session-id is required with --parent-node-key or --page-token");
     }
+    Ok(())
+}
+
+fn render_browse_pages(
+    pages: &[BrowsePage],
+    session_id: &str,
+    output: OutputFormat,
+) -> anyhow::Result<()> {
+    if output == OutputFormat::Json {
+        return render_browse_json(pages, session_id);
+    }
+    render_browse_table(pages);
+    Ok(())
+}
+
+fn render_browse_json(pages: &[BrowsePage], session_id: &str) -> anyhow::Result<()> {
+    if pages.len() == 1 {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_browse_page(&pages[0]))?
+        );
+    } else {
+        let response = BrowsePagesOutput {
+            session_id: session_id.to_owned(),
+            pages: pages.iter().map(json_browse_page).collect(),
+            complete: pages.last().is_some_and(|page| page.complete),
+        };
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    }
+    Ok(())
+}
+
+fn render_browse_table(pages: &[BrowsePage]) {
     for (index, page) in pages.iter().enumerate() {
         if pages.len() > 1 {
             println!("Page {}:", index + 1);
@@ -413,7 +435,6 @@ async fn browse_with_output(
             println!("More pages available (next token: {token}).");
         }
     }
-    Ok(())
 }
 
 async fn close_with_output(
