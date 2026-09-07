@@ -163,6 +163,9 @@ healthy local backend is a proxy or network incident, not a reason to discard he
 application state. The deployment pipeline verifies the signed build provenance certificate
 and image subject against the BHTune repository, the main-branch Docker workflow, the triggering
 commit, and the resolved image digest before it invokes the host rollout wrapper.
+The deployment runner downloads a pinned, checksum-verified GitHub CLI release for this
+verification instead of relying on the older distribution-package version in its Alpine base
+image; this keeps Sigstore trust-root support reproducible across runner updates.
 The Docker workflow and Woodpecker deployment definition are both image-triggering paths:
 changing either one publishes a matching immutable commit image before deployment, preventing
 a deployment-only fix from being stranded without a corresponding GHCR artifact.
