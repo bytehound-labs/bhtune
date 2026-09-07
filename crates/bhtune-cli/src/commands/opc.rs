@@ -434,7 +434,7 @@ async fn close_with_output(
             }))?
         );
     } else {
-        println!("Closed browse session '{session_id}'.");
+        println!("Browse session closed successfully.");
     }
     Ok(())
 }

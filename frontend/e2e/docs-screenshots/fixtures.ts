@@ -480,21 +480,52 @@ const runSummary = (run: RunSummarySource) => ({
   notes: run.notes,
 });
 
-const browseRoot = [
-  { tag: "Area01", is_branch: true },
-  { tag: "Area02", is_branch: true },
-];
+const browseNode = (
+  nodeKey: string,
+  displayName: string,
+  kind: "branch" | "item",
+  itemId: string | null = null,
+) => ({
+  node_key: nodeKey,
+  display_name: displayName,
+  kind,
+  item_id: itemId,
+});
 
-const browseArea = [
-  { tag: "Area01.FIC101", is_branch: true },
-  { tag: "Area01.PIC201", is_branch: true },
-];
+const browsePage = (nodes: ReturnType<typeof browseNode>[]) => ({
+  session_id: "docs-session",
+  nodes,
+  next_page_token: null,
+  complete: true,
+  organization: "hierarchical",
+  source: "da2",
+  warning: null,
+});
 
-const browseLoop = [
-  { tag: "Area01.FIC101.PV", is_branch: false },
-  { tag: "Area01.FIC101.OUT", is_branch: false },
-  { tag: "Area01.FIC101.SP", is_branch: false },
-];
+const searchIndexStatus = {
+  server: "Yokogawa.Example",
+  state: "not_indexed",
+  active_generation: 0,
+  auto_refresh_enabled: false,
+  database_bytes: 0,
+  entry_count: 0,
+  unique_item_count: 0,
+  organization: "hierarchical",
+  source: "da2",
+  scheduler: {
+    circuit_open: false,
+    consecutive_failures: 0,
+    last_attempt_at: null,
+    last_success_at: null,
+    last_success_duration_ms: null,
+    next_refresh_at: null,
+    retry_after: null,
+  },
+  progress: null,
+  started_at: null,
+  completed_at: null,
+  last_error: null,
+};
 
 async function json(page: Page, pattern: string, value: unknown) {
   await page.route(pattern, (route) =>
@@ -561,17 +592,44 @@ export async function installFullRoutes(page: Page) {
   await json(page, "**/api/opc/servers*", {
     servers: ["Yokogawa.Example", "Kepware.KEPServerEX.V6"],
   });
+  await json(page, "**/api/opc/search-index/status*", searchIndexStatus);
   await page.route("**/api/opc/browse*", (route) => {
     const url = new URL(route.request().url());
-    const path = url.searchParams.get("path") ?? "";
+    const parentNodeKey = url.searchParams.get("parent_node_key");
     const nodes =
-      path === "" ? browseRoot : path === "Area01" ? browseArea : browseLoop;
+      parentNodeKey === "area01"
+        ? [
+            browseNode("fic101", "Area01.FIC101", "branch"),
+            browseNode("pic201", "Area01.PIC201", "branch"),
+          ]
+        : parentNodeKey === "fic101"
+          ? [
+              browseNode("pv", "Area01.FIC101.PV", "item", "Area01.FIC101.PV"),
+              browseNode(
+                "out",
+                "Area01.FIC101.OUT",
+                "item",
+                "Area01.FIC101.OUT",
+              ),
+              browseNode("sp", "Area01.FIC101.SP", "item", "Area01.FIC101.SP"),
+            ]
+          : [
+              browseNode("area01", "Area01", "branch"),
+              browseNode("area02", "Area02", "branch"),
+            ];
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ nodes }),
+      body: JSON.stringify(browsePage(nodes)),
     });
   });
+  await page.route("**/api/opc/browse/sessions/*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ closed: true }),
+    }),
+  );
   await json(page, "**/api/opc/read*", {
     tag: "Area01.FIC101.OUT",
     value: "42.5",

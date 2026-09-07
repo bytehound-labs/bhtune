@@ -44,7 +44,7 @@ ENV RUSTUP_TOOLCHAIN=1.98.1
 # (libsqlite3-sys) compiles a C amalgamation via the `cc` crate at build time, which this
 # `slim` base image -- unlike the default `rust` image -- doesn't include by default.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends protobuf-compiler build-essential \
+    && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

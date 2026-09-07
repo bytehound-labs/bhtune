@@ -18,8 +18,8 @@ does not test an OPC DA gateway or prove that a controller is reachable.
 
 {/* web-ui-screenshot: full-tune-simulator */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=13982ceeafce">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=13982ceeafce" alt="BHTune Full mode New Tune page with the Simulator driver selected" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=85eebd59def9">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=85eebd59def9" alt="BHTune Full mode New Tune page with the Simulator driver selected" />
   </a>
   <figcaption>The New Tune page is the default landing screen. Simulator-only runs keep the form layout stable and disable controls that require live OPC DA equipment.</figcaption>
 </figure>
@@ -45,8 +45,8 @@ system or a route-level substitute for the server's Demo enforcement.
 
 {/* web-ui-screenshot: demo-tune */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=017fd39ffaf0">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=017fd39ffaf0" alt="BHTune Demo mode simulator tune form with the persistent Demo policy notice" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=decc2d674e23">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=decc2d674e23" alt="BHTune Demo mode simulator tune form with the persistent Demo policy notice" />
   </a>
   <figcaption>Demo mode keeps simulator controls visible while omitting live-plant actions. The persistent notice states the boundary, history limit, and session lifetime.</figcaption>
 </figure>
