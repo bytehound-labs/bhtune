@@ -26,7 +26,7 @@ steps:
       BHTUNE_GITHUB_TOKEN:
         from_secret: BHTUNE_GITHUB_TOKEN
       BHTUNE_APP1_SSH_PRIVATE_KEY:
-        from_secret: BHTUNE_APP1_SSH_PRIVATE_KEY
+        from_secret: APP1_SSH_PRIVATE_KEY
       BHTUNE_APP1_KNOWN_HOSTS:
         from_secret: BHTUNE_APP1_KNOWN_HOSTS
     commands:
@@ -113,7 +113,7 @@ steps:
           -o BatchMode=yes \
           -o ForwardAgent=no \
           -o ClearAllForwardings=yes \
-          bhtune-demo-deploy@192.168.0.241 \
+          mike@192.168.0.241 \
           /home/mike/git/FrontEnd/bhtune-demo/deploy.sh "$image_repo@$digest"
         SCRIPT
 
