@@ -17,6 +17,21 @@ from typing import Any
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
 RUNS_PATH = "/api/runs"
+OPC_BROWSE_PATH = "/api/opc/browse"
+
+# This is the deliberate pre-v1 migration from path-derived browsing to opaque,
+# session-aware browse navigation. Keep the allowance tied to this exact parameter
+# and operation so unrelated parameter removals remain breaking.
+INTENTIONAL_REMOVED_PARAMETERS = frozenset(
+    {
+        ("GET", OPC_BROWSE_PATH, "query", "path"),
+    }
+)
+
+# The old browse response schema was replaced by the session-aware node shape as
+# part of the same pre-v1 migration. Keep this exact schema name allowlisted only
+# when the baseline still contains the old browse path parameter.
+INTENTIONAL_REMOVED_COMPONENT_SCHEMAS = frozenset({"OpcTagNodeResponse"})
 
 # These are deliberate pre-v1 removals: the per-tune quality switch and timing
 # settings moved to the TOML-backed global configuration page. Keep this allowlist
@@ -244,12 +259,15 @@ def _parameters_break(
     old_parameters: Iterable[dict[str, Any]],
     new_parameters: Iterable[dict[str, Any]],
     location: str,
+    allowed_removed_parameters: frozenset[tuple[str, str]] = frozenset(),
 ) -> list[str]:
     old_by_key = {(item.get("in"), item.get("name")): item for item in old_parameters}
     new_by_key = {(item.get("in"), item.get("name")): item for item in new_parameters}
     errors: list[str] = []
     for key, old_parameter in old_by_key.items():
         if key not in new_by_key:
+            if key in allowed_removed_parameters:
+                continue
             errors.append(f"{location}: parameter {key!r} was removed")
             continue
         new_parameter = new_by_key[key]
@@ -339,8 +357,18 @@ def _security_breaks(old: dict[str, Any], new: dict[str, Any], location: str) ->
     return []
 
 
-def _operation_breaks(old: dict[str, Any], new: dict[str, Any], location: str) -> list[str]:
-    errors = _parameters_break(old.get("parameters", []), new.get("parameters", []), location)
+def _operation_breaks(
+    old: dict[str, Any],
+    new: dict[str, Any],
+    location: str,
+    allowed_removed_parameters: frozenset[tuple[str, str]] = frozenset(),
+) -> list[str]:
+    errors = _parameters_break(
+        old.get("parameters", []),
+        new.get("parameters", []),
+        location,
+        allowed_removed_parameters,
+    )
     errors.extend(_request_body_breaks(old.get("requestBody"), new.get("requestBody"), location))
     errors.extend(_response_breaks(old.get("responses", {}), new.get("responses", {}), location))
     errors.extend(_security_breaks(old, new, location))
@@ -400,7 +428,21 @@ def _method_breaks(
         if method not in new_item:
             errors.append(f"{location}: operation was removed")
             continue
-        errors.extend(_operation_breaks(old_item[method], new_item[method], location))
+        allowed_removed_parameters = frozenset(
+            (parameter_in, parameter_name)
+            for allowed_method, allowed_path, parameter_in, parameter_name in (
+                INTENTIONAL_REMOVED_PARAMETERS
+            )
+            if f"{allowed_method} {allowed_path}" == location
+        )
+        errors.extend(
+            _operation_breaks(
+                old_item[method],
+                new_item[method],
+                location,
+                allowed_removed_parameters,
+            )
+        )
     return errors
 
 
@@ -425,8 +467,11 @@ def _component_break(
     new_schemas: dict[str, Any],
     request_allowances: dict[str, frozenset[str]],
     response_nullable_allowances: dict[str, frozenset[str]],
+    removed_schema_allowances: frozenset[str],
 ) -> list[str]:
     if name not in new_schemas:
+        if name in removed_schema_allowances:
+            return []
         return [f"component schema {name!r} was removed"]
     new_schema = new_schemas[name]
     if not isinstance(old_schema, dict) or not isinstance(new_schema, dict):
@@ -446,6 +491,7 @@ def _component_breaks(
     new_schemas: dict[str, Any],
     request_allowances: dict[str, frozenset[str]],
     response_nullable_allowances: dict[str, frozenset[str]],
+    removed_schema_allowances: frozenset[str],
 ) -> list[str]:
     errors: list[str] = []
     for name, old_schema in old_schemas.items():
@@ -456,6 +502,7 @@ def _component_breaks(
                 new_schemas,
                 request_allowances,
                 response_nullable_allowances,
+                removed_schema_allowances,
             )
         )
     return errors
@@ -468,6 +515,24 @@ def find_breaking_changes(old: dict[str, Any], new: dict[str, Any]) -> list[str]
 
     old_schemas = old.get("components", {}).get("schemas", {})
     new_schemas = new.get("components", {}).get("schemas", {})
+    old_browse_parameters = (
+        old_paths.get(OPC_BROWSE_PATH, {}).get("get", {}).get("parameters", [])
+        if isinstance(old_paths.get(OPC_BROWSE_PATH), dict)
+        else []
+    )
+    old_browse_parameter_keys = {
+        (parameter.get("in"), parameter.get("name"))
+        for parameter in old_browse_parameters
+        if isinstance(parameter, dict)
+    }
+    removed_schema_allowances = (
+        INTENTIONAL_REMOVED_COMPONENT_SCHEMAS
+        if (
+            ("query", "path") in old_browse_parameter_keys
+            and OPC_BROWSE_PATH in new_paths
+        )
+        else frozenset()
+    )
     response_nullable_allowances = {
         name: properties
         for name, properties in INTENTIONAL_NULLABLE_RESPONSE_PROPERTIES.items()
@@ -479,6 +544,7 @@ def find_breaking_changes(old: dict[str, Any], new: dict[str, Any]) -> list[str]
             new_schemas,
             _component_request_allowances(old_paths),
             response_nullable_allowances,
+            removed_schema_allowances,
         )
     )
     return errors

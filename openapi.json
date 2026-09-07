@@ -143,8 +143,7 @@
         "tags": [
           "opc"
         ],
-        "summary": "List the tags/branches directly under one tree level of an OPC DA server.",
-        "description": "`GET /api/opc/browse` -- one level at a time (not a recursive dump of the whole tree),\nmatching `Driver::browse`'s own contract; the GUI's tag-tree modal calls this again for\neach branch the user expands. Requires `opc_server` (from the query or config) since,\nunlike `GET /api/opc/servers`, browsing needs a specific server to connect to.",
+        "summary": "List one bounded page of immediate children. A missing `session_id` opens a new session and\nlists its root; all later calls round-trip the returned opaque session/node/token values.",
         "operationId": "browse",
         "parameters": [
           {
@@ -164,12 +163,45 @@
             }
           },
           {
-            "name": "path",
+            "name": "session_id",
             "in": "query",
-            "description": "The tree level to list; an absent or empty path lists the top level, matching\n`Driver::browse`'s own \"empty string for the top level\" convention.",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "parent_node_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -185,7 +217,113 @@
             }
           },
           "400": {
-            "description": "No OPC server was specified (and none is configured), or the gateway/browse call could not be reached in time.",
+            "description": "No OPC server was specified, the browse state is invalid, or the gateway could not be reached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/browse/sessions/{session_id}": {
+      "delete": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "close_browse_session",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "Opaque bridge browse-session ID.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcCloseBrowseSessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The browse session could not be closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/capabilities": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "summary": "Report browse capabilities for one OPC DA server.",
+        "operationId": "capabilities",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcCapabilitiesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The bridge or OPC server could not be reached.",
             "content": {
               "application/json": {
                 "schema": {
@@ -245,6 +383,444 @@
           },
           "400": {
             "description": "No tag or OPC server was specified (and none is configured), or the gateway/read call could not be reached in time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "search",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "match_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_node_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "include_branches",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream of match, progress, and completed events."
+          },
+          "400": {
+            "description": "The search request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index": {
+      "delete": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "delete_search_index",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The delete request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/auto-refresh": {
+      "post": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "set_search_index_auto_refresh",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "enabled",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The auto-refresh request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/control": {
+      "post": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "control_search_index",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The control action or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/refresh": {
+      "post": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "refresh_search_index",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The refresh request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/search": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "search_index",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "match_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The indexed-search request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/status": {
+      "get": {
+        "tags": [
+          "opc"
+        ],
+        "summary": "Return the persistent namespace-index status for one OPC DA server.",
+        "operationId": "search_index_status",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The bridge or OPC server could not be reached.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3065,18 +3641,271 @@
           }
         }
       },
-      "OpcBrowseResponse": {
+      "OpcBrowseNodeKind": {
+        "type": "string",
+        "enum": [
+          "unspecified",
+          "branch",
+          "item",
+          "branch_and_item"
+        ]
+      },
+      "OpcBrowseNodeResponse": {
         "type": "object",
-        "description": "Response body of `GET /api/opc/browse`.",
+        "description": "One node returned by `GET /api/opc/browse`. `node_key` and `item_id` must remain separate:\nthe former is an opaque navigation key, while the latter is the exact selectable OPC DA\nItemID and may contain namespace punctuation with no relationship to hierarchy.",
         "required": [
-          "nodes"
+          "node_key",
+          "display_name",
+          "kind"
         ],
         "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OpcBrowseNodeKind"
+          },
+          "node_key": {
+            "type": "string"
+          }
+        }
+      },
+      "OpcBrowseResponse": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "nodes",
+          "complete",
+          "organization",
+          "source"
+        ],
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "next_page_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "nodes": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/OpcTagNodeResponse"
+              "$ref": "#/components/schemas/OpcBrowseNodeResponse"
             }
+          },
+          "organization": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "warning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OpcCapabilitiesResponse": {
+        "type": "object",
+        "required": [
+          "application_version",
+          "protocol_version",
+          "max_page_size",
+          "supports_browse_sessions",
+          "supports_search",
+          "organization",
+          "source",
+          "supports_indexed_search",
+          "indexed_search_protocol_version",
+          "max_indexed_search_results",
+          "search_index_state"
+        ],
+        "properties": {
+          "application_version": {
+            "type": "string"
+          },
+          "indexed_search_protocol_version": {
+            "type": "string"
+          },
+          "max_indexed_search_results": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_page_size": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "organization": {
+            "type": "string"
+          },
+          "protocol_version": {
+            "type": "string"
+          },
+          "search_index_state": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "supports_browse_sessions": {
+            "type": "boolean"
+          },
+          "supports_indexed_search": {
+            "type": "boolean"
+          },
+          "supports_search": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OpcCloseBrowseSessionResponse": {
+        "type": "object",
+        "required": [
+          "closed"
+        ],
+        "properties": {
+          "closed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OpcIndexSchedulerResponse": {
+        "type": "object",
+        "required": [
+          "consecutive_failures",
+          "circuit_open"
+        ],
+        "properties": {
+          "circuit_open": {
+            "type": "boolean"
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_success_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "next_refresh_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retry_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "OpcIndexedSearchMatchResponse": {
+        "type": "object",
+        "required": [
+          "item_id",
+          "display_name",
+          "kind",
+          "breadcrumbs"
+        ],
+        "properties": {
+          "breadcrumbs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OpcBrowseNodeKind"
+          }
+        }
+      },
+      "OpcIndexedSearchProgressResponse": {
+        "type": "object",
+        "required": [
+          "branches_visited",
+          "entries_seen",
+          "unique_items",
+          "active_time_ms",
+          "paused_time_ms",
+          "items_per_second"
+        ],
+        "properties": {
+          "active_time_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "branches_visited": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "entries_seen": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "estimated_remaining_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "items_per_second": {
+            "type": "number",
+            "format": "double"
+          },
+          "paused_time_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unique_items": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -3108,6 +3937,111 @@
           }
         }
       },
+      "OpcSearchIndexResponse": {
+        "type": "object",
+        "required": [
+          "matches",
+          "has_more",
+          "status"
+        ],
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpcIndexedSearchMatchResponse"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+          }
+        }
+      },
+      "OpcSearchIndexStatusResponse": {
+        "type": "object",
+        "required": [
+          "server",
+          "state",
+          "auto_refresh_enabled",
+          "active_generation",
+          "entry_count",
+          "unique_item_count",
+          "database_bytes",
+          "organization",
+          "source",
+          "scheduler"
+        ],
+        "properties": {
+          "active_generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "auto_refresh_enabled": {
+            "type": "boolean"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "database_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "entry_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organization": {
+            "type": "string"
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OpcIndexedSearchProgressResponse"
+              }
+            ]
+          },
+          "scheduler": {
+            "$ref": "#/components/schemas/OpcIndexSchedulerResponse"
+          },
+          "server": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "unique_item_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "OpcServersResponse": {
         "type": "object",
         "description": "Response body of `GET /api/opc/servers`.",
@@ -3120,22 +4054,6 @@
             "items": {
               "type": "string"
             }
-          }
-        }
-      },
-      "OpcTagNodeResponse": {
-        "type": "object",
-        "description": "One node of `GET /api/opc/browse`'s `nodes` array -- a plain HTTP-facing projection of\n[`bhtune_driver::TagNode`], per this workspace's DTO-decoupling convention (`bhtune-driver`\ntypes deliberately don't derive `Serialize`/`ToSchema`; every JSON-facing consumer builds\nits own projection instead).",
-        "required": [
-          "tag",
-          "is_branch"
-        ],
-        "properties": {
-          "is_branch": {
-            "type": "boolean"
-          },
-          "tag": {
-            "type": "string"
           }
         }
       },
@@ -4446,7 +5364,7 @@
     },
     {
       "name": "opc",
-      "description": "Read-only OPC DA server/tag diagnostics: server discovery, tag-tree browsing, and single-tag reads"
+      "description": "OPC DA server/tag diagnostics and gateway-owned namespace search"
     }
   ]
 }

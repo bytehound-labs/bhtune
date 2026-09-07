@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/bytehound-labs/bhtune/actions/workflows/checks.yml/badge.svg)](https://github.com/bytehound-labs/bhtune/actions/workflows/checks.yml)
 [![codecov](https://codecov.io/gh/bytehound-labs/bhtune/branch/main/graph/badge.svg?token=)](https://codecov.io/gh/bytehound-labs/bhtune)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=bytehound-labs_bhtune&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=bytehound-labs_bhtune)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Docs](https://img.shields.io/badge/docs-bytehound--labs.github.io%2Fbhtune-blue.svg)](https://bytehound-labs.github.io/bhtune/)
@@ -42,9 +41,11 @@ against the built-in simulator with no setup at all, or against a real OPC DA lo
 [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) — including calculating PID
 constants, writing them back with confirmation and rollback, and recording full run history.
 See [Getting started](#getting-started) below to try it. No versioned release or prebuilt
-binaries exist yet (see [Installation](#installation)). The tuning engine's golden-master
-validation against a captured legacy trace is complete; [`AGENTS.md`](AGENTS.md) records the
-full phased implementation plan.
+binaries exist yet (see [Installation](#installation)). One captured golden trace validates
+the MRFT port end to end; additional legacy trace capture is intentionally deferred. Track
+release progress and remaining work via the
+[issues](https://github.com/bytehound-labs/bhtune/issues) and
+[`AGENTS.md`](AGENTS.md), which records the full phased implementation plan.
 
 The browser also supports a restricted **Demo mode** for public simulator deployments. It
 removes every live-plant route and navigation action, sends only normalized simulator inputs,
@@ -52,7 +53,8 @@ keeps each anonymous browser session's runs private, and uses the normal `/api/r
 detail, stream, cancel, export, and delete paths with owner-scoped responses. The capability
 request lazily assigns the host-only Demo cookie without creating database state; a session row
 is created only when that browser starts its first accepted run. The browser-local form draft
-expires after 24 hours. Demo policy limits and simulator timing are fixed application-owned
+expires after 24 hours, and each browser session may start up to 10 Demo runs. Demo policy
+limits and simulator timing are fixed application-owned
 values; deployment configuration may repeat them for validation but cannot widen them. Demo
 runs use the stable identity **Simulator demo**, not an external plant tag. The Demo page lets
 visitors choose a built-in template, process/controller type, and bounded MRFT and simulator
@@ -91,13 +93,13 @@ drift from what's in this repo.
 
 A Cargo workspace of small, single-purpose crates:
 
-| Crate           | Role                                                                                                                                                                                                 |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bhtune-core`   | Pure domain logic: the MRFT state machine, tuning math, and data model. No I/O, no async, no clock reads — this is what makes deterministic, replayable testing possible.                            |
-| `bhtune-driver` | The `Driver` trait (`read`/`write`/`browse`) and its implementations: OPC DA (via `opcda-bridge`), an in-process process simulator, and a golden-trace replay driver used for regression validation. |
-| `bhtune-db`     | SQLite persistence (`sqlx`, WAL mode): DCS/PLC templates, loops, tune runs, samples, and results.                                                                                                    |
-| `bhtune-cli`    | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                      |
-| `bhtune-server` | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                           |
+| Crate           | Role                                                                                                                                                                                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`   | Pure domain logic: the MRFT state machine, tuning math, and data model. No I/O, no async, no clock reads — this is what makes deterministic, replayable testing possible.                                                    |
+| `bhtune-driver` | The `Driver` trait (`read`/`write`/capabilities/paged browse/search) and its implementations: OPC DA (via `opcda-bridge`), an in-process process simulator, and a golden-trace replay driver used for regression validation. |
+| `bhtune-db`     | SQLite persistence (`sqlx`, WAL mode): DCS/PLC templates, loops, tune runs, samples, and results.                                                                                                                            |
+| `bhtune-cli`    | The headless `bhtune` binary — scriptable tuning for schedules and automation, no GUI required.                                                                                                                              |
+| `bhtune-server` | The web GUI adapter: an Axum HTTP API plus the embedded React SPA, served from one binary.                                                                                                                                   |
 
 The frontend (`bhtune-frontend`: React + TypeScript + Vite + Tailwind CSS, for `bhtune-server`)
 lives under `frontend/` — a pnpm workspace package, kept separate from the Cargo workspace. See
@@ -118,24 +120,49 @@ library from crates.io:
 
 ```toml
 [dependencies]
-opcda-bridge = "0.2"
+opcda-bridge = "0.5"
 ```
 
 The library communicates with the separate Windows-side
 [`opcda-bridge-gateway`](https://crates.io/crates/opcda-bridge-gateway) process over the network.
-`bhtune-driver` uses the published `opcda-bridge` crate for its `OpcDaDriver` implementation.
+BHTune requires gateway 0.5.0 or newer for the session-aware browse and UI-managed persistent indexed-search
+contract.
+The dependency is kept local to `bhtune-driver`; all other crates use the protocol-neutral
+`Driver` trait.
 
 The web form's **Browse servers** button opens an on-demand picker for the OPC DA servers
-registered on the gateway. Its tag browser expands one namespace level at a time, reuses
-already-loaded levels, and supports both dotted and slash-separated OPC item IDs. The first
-node is selected automatically when the tree loads, and the selection panel remains in place
-while browsing. With a template selected, confirming a tag selection replaces its final
-component with that template's process-variable suffix before writing the value into the Tag
-name field. Use a
-gateway release with recursive hierarchical browsing for servers that expose branch names
-through `OPC_FLAT` without returning their descendants.
-Both browser dialogs expose accessible dialog semantics and can be closed with their Close
-button, the backdrop, or Escape.
+registered on the gateway. Its tag browser opens a bounded browse session, loads one page of
+immediate children at a time, and provides **Load more** for incomplete pages. The gateway
+returns opaque navigation keys and exact ItemIDs; BHTune never reconstructs hierarchy by
+splitting `.`, `!`, or `/`, which is essential for namespaces such as
+`FCS0201!204FI00510.PV`. Double-clicking a browsed leaf or indexed-search result confirms it;
+double-clicking any expandable node expands or collapses it. Nodes that are both branches and
+items remain both expandable and selectable.
+
+The browser also exposes gateway capabilities and persistent indexed namespace search. Warm
+searches are bounded unary requests against the gateway-owned index, with ranked matches,
+breadcrumbs, exact ItemIDs, `has_more`, and explicit index state/progress. Search never downloads
+the complete namespace into the browser and never falls back to the slow live traversal search.
+Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled servers
+and performs no automatic indexing; use **Build index** in the tag browser to opt the selected
+ProgID in. The gateway validates the ProgID against its current server list, persists the
+enrollment in its index database, and starts the first build immediately. After a successful
+build, automatic refresh is enabled by default and follows the gateway's configurable
+seven-day policy. The browser can refresh immediately, retry a failed first build, disable or
+re-enable future automatic refreshes, and delete the selected index without editing gateway TOML.
+Deletion is coordinated asynchronously: the browser shows `deleting` while gateway cleanup runs
+and returns to `not indexed` when the data and enrollment have been removed.
+When automatic refresh is enabled, the next scheduled refresh is shown as a relative days-and-hours
+countdown; the exact scheduled time is available by hovering over it.
+Disabling automatic refresh retains the existing searchable data. Without a usable index, the
+global search box is disabled with a compact status message, while lazy tree browsing, direct
+ItemID entry, live reads, and tuning remain available. The browser reports enrollment or build
+failures without treating them as browse failures.
+Browse sessions are closed when the modal exits, and reopening it reveals and scrolls to the saved
+selection when the gateway can resolve its path.
+
+With a template selected, confirming a tag selection replaces its final component with that
+template's process-variable suffix before writing the value into the Tag name field.
 Changing templates replaces a tag's final component with the new template's process-variable
 suffix, regardless of what the previous component was, while preserving the tag path.
 Confirming a tag selection performs a fresh read of the original item selected in the browser
@@ -146,6 +173,15 @@ page controls whether `Uncertain` readings are accepted during tuning; `Bad` is 
 Reopening the browser automatically expands the available path to the current Tag name, selects
 that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
 level.
+The diagnostic CLI exposes the bounded operations through `bhtune opc servers`, `browse`, and
+live `search`; `bhtune opc search-index status|search|refresh|control` manages and queries the
+persistent index. Both search interfaces require a positive result limit. `bhtune opc browse
+--all` explicitly drains continuation pages instead of
+silently downloading an entire namespace. A browse session remains available for continuation
+after the command exits; release it explicitly with `bhtune opc close <session-id>`.
+An index can remain usable after a completed inventory reports a non-fatal gateway diagnostic.
+The diagnostic remains available through the gateway/API and diagnostic CLI; the browser only
+shows an index error when the usable index state is `failed`.
 
 For a concrete example, selecting `Area01.FIC101.OUT` with a template whose PV suffix is `PV`
 sets the Tag name to `Area01.FIC101.PV`. BHTune reads the original `OUT` item first for OPC
@@ -159,8 +195,7 @@ adjust the effective mapping. Every row shows its effective value and source. Ta
 or **Fixed value**. Switching to a custom tag starts from the
 template-derived value; fixed direction/range values must be entered explicitly. Per-row
 **Reset** actions return to template/live values, and **Reset all mapping overrides** restores
-every row. Each mapping row is presented as a labeled group, and its source choices are exposed
-as an accessible pressed-button set.
+every row.
 The selected source and values are retained in the saved draft. Simulator direction and ranges
 are stored separately from OPC fixed overrides, so changing drivers cannot turn simulator
 settings into live OPC overrides.
@@ -179,8 +214,8 @@ all three values, and **Reset process defaults** restores them without changing 
 settings. These are process-type defaults, not DCS/PLC template settings; CLI and HTTP callers
 may omit them to use the same server-side defaults.
 
-In **Simulator** mode, the form disables the OPC DA connection, tag, quality, timeout, and
-automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
+In **Simulator** mode, the form disables the OPC DA connection, tag, quality, operation/restore
+timeout, and automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
 template remains selectable: the simulator ignores its tag mappings, but its PID type and unit
 conventions still format the calculated results (for example, Yokogawa uses proportional band
 while the other built-in templates use gain). PV/MV ranges and controller direction remain
@@ -287,14 +322,11 @@ cargo run --bin bhtune-server
 ```
 
 Binds `127.0.0.1:8787` by default (see the `bind` setting below) and exposes a JSON HTTP API —
-`GET /api/health` (including the running application version). The GUI header presents this
-health state with an accessible text label. `GET`/`POST /api/templates`
+`GET /api/health` (including the running application version); `GET`/`POST /api/templates`
 and `GET`/`PUT`/`DELETE /api/templates/{name}`;
 `GET /api/runs`/`GET /api/runs/{id}`/`DELETE /api/runs/{id}` for run history,
 `GET /api/runs/{id}/export` for CSV/JSON sample export, `GET /api/runs/{id}/stream` for a live
-Server-Sent Events feed of an in-progress run (initial readings are sent as soon as they are
-recorded, before per-tick samples; independent OPC DA startup tags are collected in one
-batched read, while mode-dependent setpoint reads remain conditional), `GET`/`PUT /api/runs/draft` for the
+per-tick Server-Sent Events feed of an in-progress run, `GET`/`PUT /api/runs/draft` for the
 app-wide autosaved New tune form draft (all fields except Notes), and
 `GET /api/runs/last-request` for the newest run's settings as a one-time fallback when no draft
 exists. A missing draft is a normal first-use state and quietly falls back to the newest run or
@@ -304,9 +336,11 @@ built-in defaults; `POST /api/runs`/
 `PUT`/`DELETE /api/runs/{id}/notes` to edit or clear operator notes while a run is active or
 after it finishes. Multiple tune runs can execute concurrently; PID writes and reverts remain
 exclusive so they cannot overlap an active tune;
-and `GET /api/opc/servers`/`GET /api/opc/browse`/`GET /api/opc/read` for read-only OPC DA
-server discovery, tag-tree browsing, and a live single-tag read — using the same SQLite
-database and config precedence as the CLI. The full API contract is described by an OpenAPI
+and `GET /api/opc/servers`/`GET /api/opc/capabilities`/`GET /api/opc/browse`/
+`GET /api/opc/read` plus the indexed-search status/search/refresh/control endpoints for
+read-only OPC DA discovery, tag-tree browsing, live single-tag reads, and gateway index
+management — using the same SQLite database and config precedence as the CLI. The full API contract
+is described by an OpenAPI
 3.1 document, served as raw JSON at `GET /api/openapi.json` and as interactive documentation
 at `/api/docs`
 (a [Scalar](https://scalar.com/) UI — try it in a browser, or point any OpenAPI-aware tool at
@@ -418,13 +452,13 @@ JSON Schema (also covers one DCS/PLC template catalog entry — see below).
 The five operational tune timing and safety values are global TOML settings under `[tuning]`;
 they have no per-run CLI or HTTP override. Missing keys use these built-in defaults:
 
-| Setting                  | TOML key                      |  Default | Validation                                   |
-| ------------------------ | ----------------------------- | -------: | -------------------------------------------- |
-| MRFT delay padding       | `tuning.mrft_delay_secs`      |    `0` s | `0..=3600`                                   |
-| Poll interval            | `tuning.poll_interval_ms`     | `800` ms | at least `1`                                 |
-| Whole-run timeout        | `tuning.timeout_secs`         | `3600` s | at least `1`                                 |
-| Driver-operation timeout | `tuning.op_timeout_secs`      |   `30` s | at least `1`                                 |
-| Restore timeout          | `tuning.restore_timeout_secs` |   `30` s | at least `1`; OPC DA requires at least `4` s |
+| Setting                  | TOML key                      |  Default | Validation                                                                                               |
+| ------------------------ | ----------------------------- | -------: | -------------------------------------------------------------------------------------------------------- |
+| MRFT delay padding       | `tuning.mrft_delay_secs`      |    `0` s | `0..=3600`                                                                                               |
+| Poll interval            | `tuning.poll_interval_ms`     | `800` ms | at least `1`                                                                                             |
+| Whole-run timeout        | `tuning.timeout_secs`         | `3600` s | at least `1`                                                                                             |
+| Driver-operation timeout | `tuning.op_timeout_secs`      |   `30` s | at least `1`                                                                                             |
+| Restore timeout          | `tuning.restore_timeout_secs` |   `30` s | initial budget must be at least `1`; OPC DA requires at least `4` s, then may extend for MV confirmation |
 
 The web GUI's **Config** page reads and updates the global quality, retention, and tuning
 settings in the selected TOML file. It reports whether each tuning value comes from the file or
@@ -548,11 +582,14 @@ language, including exactly what happens on the first and second Ctrl+C:
   deadline.
   The fresh read started at that deadline has its own one-second bound, so a stalled MV read
   cannot consume the full per-operation timeout and leave the run waiting indefinitely.
-- **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) bounds putting the loop
-  back afterwards, independently of `[tuning].timeout_secs`. If the restore can't be confirmed
-  within that time, or a _second_ Ctrl+C arrives while it's in progress, the process prints which
-  tag and value to check by hand and exits `6` — distinct from `2`, since "aborted and restored"
-  and "aborted, restore abandoned" call for very different responses.
+- **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) is the initial budget for
+  putting the loop back afterwards, independently of `[tuning].timeout_secs`. When the
+  authoritative MV restore write is accepted near the end of that budget, BHTune extends the
+  effective deadline as needed to preserve the complete four-second MV confirmation window; the
+  remaining restore steps use that same effective deadline. If the restore still can't be
+  confirmed, or a _second_ Ctrl+C arrives while it's in progress, the process prints which tag
+  and value to check by hand and exits `6` — distinct from `2`, since "aborted and restored" and
+  "aborted, restore abandoned" call for very different responses.
 - **Restoration is guaranteed on every exit path and never gives up early** — a run only ever
   mutates a loop after switching it to manual, and _any_ way that run can end (a clean
   completion, an abort, or an error partway through setup) always attempts to put back exactly
@@ -604,29 +641,17 @@ way.
 
 BHTune's tuning engine is validated by golden-master replay: recorded input/output traces are
 replayed through the engine and the results are asserted to match exactly, so future changes can
-never silently alter tuning behavior. The captured legacy trace replays tick-for-tick and
-result-for-result through the Rust engine (`crates/bhtune-core/tests/golden_replay.rs`) —
-proving the port behaviorally matches the original, not just arguing that it should. The full v1
-feature checklist — what's required, what's deferred, and what's deliberately not planned — lives at
+never silently alter tuning behavior. The first real trace, captured from the legacy application
+against a simulated process, replays tick-for-tick and result-for-result through the Rust engine
+(`crates/bhtune-core/tests/golden_replay.rs`) — proving the port behaviorally matches the
+original, not just arguing that it should. The full v1 feature checklist — what's required, what's
+deferred, and what's deliberately not planned — lives at
 [`docs/internal/v1-checklist.md`](docs/internal/v1-checklist.md).
-
-The production CLI also has a numeric simulator regression
-(`crates/bhtune-cli/tests/e2e_simulator.rs`). It launches the real `bhtune` binary, completes
-Flow/PI, Temperature (Heat Exchange)/PID, and Level/P tunes, then compares every persisted
-Kp/Ti/Td and template-converted P/I/D value with reviewed baselines. The simulator advances its
-FOPDT process and MRFT timestamps by the same fixed poll step, so scheduler load may lengthen the
-test's wall-clock runtime but cannot change its calculated values. The browser E2E remains focused
-on server/UI delivery rather than duplicating this numeric oracle. Simulator tests that
-intentionally add MRFT padding retain a generous real-time safety budget so a loaded CI host does
-not abort deterministic logical-time coverage.
 
 The repository also validates high-risk boundaries and delivery artifacts automatically:
 
 - `proptest` covers configuration, template catalogs, bridge payload mappings, and template
   imports; standalone `cargo-fuzz` targets cover the same parsers with arbitrary byte streams.
-- The developer-only golden-trace converter accepts input and output paths only inside the
-  repository checkout, keeping captured logs and generated fixtures within the documented
-  `tests/golden/` tree.
 - Pull requests compare the generated `openapi.json` with the base branch and reject removed
   operations, response shapes, enum values, or newly required request fields. The pre-v1 checked
   result migration has one explicit response allowance: the six numeric `ResultResponse` fields

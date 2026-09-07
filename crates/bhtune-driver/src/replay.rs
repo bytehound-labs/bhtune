@@ -24,7 +24,10 @@ use serde::Deserialize;
 use crate::{
     driver::Driver,
     error::{DriverError, DriverResult},
-    types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome},
+    types::{
+        BrowsePage, BrowsePageRequest, DriverCapabilities, Quality, SearchEvent, SearchRequest,
+        TagId, TagValue, TagWrite, WriteOutcome,
+    },
 };
 
 /// One recorded `(time, PV)` sample from a captured trace -- the two fields
@@ -274,9 +277,27 @@ impl Driver for ReplayDriver {
         Ok(WriteOutcome::success())
     }
 
-    async fn browse(&self, _path: &str) -> DriverResult<Vec<TagNode>> {
+    async fn capabilities(&self) -> DriverResult<DriverCapabilities> {
+        Err(DriverError::Unsupported {
+            operation: "capabilities",
+        })
+    }
+
+    async fn browse(&self, _request: BrowsePageRequest) -> DriverResult<BrowsePage> {
         Err(DriverError::Unsupported {
             operation: "browse",
+        })
+    }
+
+    async fn close_browse_session(&self, _session_id: &str) -> DriverResult<()> {
+        Err(DriverError::Unsupported {
+            operation: "browse-session close",
+        })
+    }
+
+    async fn search(&self, _request: SearchRequest) -> DriverResult<Vec<SearchEvent>> {
+        Err(DriverError::Unsupported {
+            operation: "search",
         })
     }
 }
@@ -312,6 +333,45 @@ mod tests {
             DriverError::Operation(source) => source.downcast::<ReplayTraceExhausted>().unwrap(),
             other => panic!("expected DriverError::Operation, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn unsupported_namespace_operations_are_reported() {
+        let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
+        assert!(matches!(
+            driver.capabilities().await,
+            Err(DriverError::Unsupported {
+                operation: "capabilities"
+            })
+        ));
+        assert!(matches!(
+            driver.browse(BrowsePageRequest::root(1)).await,
+            Err(DriverError::Unsupported {
+                operation: "browse"
+            })
+        ));
+        assert!(matches!(
+            driver.close_browse_session("s").await,
+            Err(DriverError::Unsupported {
+                operation: "browse-session close"
+            })
+        ));
+        assert!(matches!(
+            driver
+                .search(SearchRequest {
+                    query: "PV".into(),
+                    match_mode: crate::types::SearchMatchMode::Exact,
+                    session_id: None,
+                    scope_node_key: None,
+                    max_results: 1,
+                    include_branches: false,
+                    refresh: false,
+                })
+                .await,
+            Err(DriverError::Unsupported {
+                operation: "search"
+            })
+        ));
     }
 
     // --- construction / basic read-back ---------------------------------------------------
@@ -461,7 +521,10 @@ mod tests {
     #[tokio::test]
     async fn browse_is_unsupported() {
         let driver = ReplayDriver::new("PV", "MV", samples(), 0.0);
-        let err = driver.browse("/").await.unwrap_err();
+        let err = driver
+            .browse(BrowsePageRequest::root(20))
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             DriverError::Unsupported {

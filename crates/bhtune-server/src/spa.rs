@@ -1,5 +1,5 @@
 //! Serves the built React SPA (`frontend/dist/`) as [`crate::build_router`]'s fallback --
-//! i.e. every request that doesn't match one of the `/api/*` routes merged ahead of it.
+//! i.e. every request that doesn't match one of the declared routes merged ahead of it.
 //! Complements `frontend/vite.config.ts`'s dev-mode proxy: that config sends `/api/*` from
 //! the Vite dev server to a locally running `bhtune-server` for hot-reload development; this
 //! module is the production/single-binary side, where `bhtune-server` itself serves the SPA
@@ -59,6 +59,8 @@ impl AssetSource for EmbeddedAssetSource {
 ///
 /// - A path matching an embedded file exactly (`/assets/index-<hash>.js`) serves that file's
 ///   real bytes with its real MIME type.
+/// - An unmatched `/api` path returns a JSON 404 rather than the SPA shell. This keeps a
+///   stale or incompatible server from masquerading as a successful API response.
 /// - Anything else falls back to `index.html`, so React Router's client-side routes
 ///   (`/runs/1`, `/templates/new`, ...) resolve on a direct navigation or hard refresh, not
 ///   only after client-side navigation from `/` -- **except** a path whose last segment
@@ -77,6 +79,17 @@ async fn static_handler_with_built_state(uri: Uri, frontend_is_built: bool) -> R
 }
 
 async fn static_handler_with_source<S: AssetSource>(uri: Uri, frontend_is_built: bool) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if path == "api" || path.starts_with("api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(crate::error::ErrorBody {
+                error: format!("API route not found: /{path}"),
+            }),
+        )
+            .into_response();
+    }
+
     if !frontend_is_built {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -87,7 +100,6 @@ async fn static_handler_with_source<S: AssetSource>(uri: Uri, frontend_is_built:
             .into_response();
     }
 
-    let path = uri.path().trim_start_matches('/');
     if path.is_empty() {
         return serve_index::<S>();
     }
@@ -260,6 +272,24 @@ mod tests {
     async fn a_missing_path_with_a_file_extension_is_a_real_404() {
         let response = get_fixture::<FixtureAssets>("/assets/does-not-exist.js").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_api_path_returns_a_json_404() {
+        let response = static_handler(Uri::from_static("/api/does-not-exist")).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/json"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "API route not found: /api/does-not-exist");
     }
 
     #[tokio::test]

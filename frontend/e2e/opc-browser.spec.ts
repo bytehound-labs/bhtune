@@ -29,6 +29,94 @@ function mappingRow(page: Page, label: string) {
   return loopMapping(page).getByRole("group", { name: label, exact: true });
 }
 
+function browseNode(
+  nodeKey: string,
+  displayName: string,
+  kind: "branch" | "item" | "branch_and_item",
+  itemId?: string,
+) {
+  return {
+    node_key: nodeKey,
+    display_name: displayName,
+    kind,
+    item_id: itemId ?? null,
+  };
+}
+
+function browsePage(
+  nodes: ReturnType<typeof browseNode>[],
+  options: { nextPageToken?: string | null; complete?: boolean } = {},
+) {
+  return {
+    session_id: "session-1",
+    nodes,
+    next_page_token: options.nextPageToken ?? null,
+    complete: options.complete ?? true,
+    organization: "hierarchical",
+    source: "da2",
+    warning: null,
+  };
+}
+
+function searchIndexStatus(
+  state:
+    | "not_indexed"
+    | "partial"
+    | "ready"
+    | "stale"
+    | "refreshing"
+    | "deleting"
+    | "failed" = "ready",
+  autoRefreshEnabled = true,
+  lastError: string | null = null,
+) {
+  return {
+    server: "Test.Server",
+    state,
+    auto_refresh_enabled: autoRefreshEnabled,
+    active_generation: state === "not_indexed" || state === "deleting" ? 0 : 1,
+    entry_count: state === "deleting" ? 0 : 2,
+    unique_item_count: state === "deleting" ? 0 : 2,
+    started_at: null,
+    completed_at: "2024-01-15T10:23:45Z",
+    last_error: lastError,
+    database_bytes: 1024,
+    organization: "hierarchical",
+    source: "da2",
+    progress: null,
+    scheduler: {
+      next_refresh_at: autoRefreshEnabled
+        ? String(Date.now() + 7 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000)
+        : null,
+      last_attempt_at: "2024-01-15T10:23:45Z",
+      last_success_at: "2024-01-15T10:23:45Z",
+      last_success_duration_ms: 1234,
+      retry_after: null,
+      consecutive_failures: 0,
+      circuit_open: false,
+    },
+  };
+}
+
+function indexedSearchResponse(
+  matches: {
+    item_id: string;
+    display_name: string;
+    kind: "item" | "branch" | "branch_and_item";
+    breadcrumbs: string[];
+  }[],
+  options: {
+    hasMore?: boolean;
+    state?: Parameters<typeof searchIndexStatus>[0];
+  } = {},
+) {
+  return {
+    matches,
+    has_more: options.hasMore ?? false,
+    status: searchIndexStatus(options.state),
+  };
+}
+
 test.describe("OPC DA server discovery and tag browser (no gateway present)", () => {
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/runs/draft", async (route) => {
@@ -46,8 +134,129 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         });
       }
     });
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus()),
+      });
+    });
+
     await page.goto("/runs/new");
     await page.getByLabel("Driver").selectOption("opcda");
+  });
+
+  test("builds, disables, and deletes a server index", async ({ page }) => {
+    let status = searchIndexStatus("not_indexed", false);
+    let deletionPolls = 0;
+    await page.getByLabel("OPC DA server ProgID").fill("Test.Server");
+
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      if (status.state === "deleting") {
+        deletionPolls += 1;
+        if (deletionPolls >= 2) {
+          status = searchIndexStatus("not_indexed", false);
+        }
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(status),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+    await page.route("**/api/opc/search-index/refresh**", async (route) => {
+      status = searchIndexStatus("ready", true);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(status),
+      });
+    });
+    await page.route(
+      "**/api/opc/search-index/auto-refresh**",
+      async (route) => {
+        const url = new URL(route.request().url());
+        const enabled = url.searchParams.get("enabled") === "true";
+        status = searchIndexStatus("ready", enabled);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(status),
+        });
+      },
+    );
+    await page.route("**/api/opc/search-index**", async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.fallback();
+        return;
+      }
+      deletionPolls = 0;
+      status = searchIndexStatus("deleting", false);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(status),
+      });
+    });
+    page.on("dialog", (dialog) => void dialog.accept());
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(
+      page.getByRole("button", { name: "Build index", exact: true }),
+    ).toBeVisible();
+
+    await page
+      .getByRole("button", { name: "Build index", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "Refresh index", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Auto-refresh: enabled")).toBeVisible();
+    await expect(
+      page.getByText("Next refresh: in 7 days 2 hours"),
+    ).toBeVisible();
+
+    await page
+      .getByRole("button", { name: "Disable auto-refresh", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", {
+        name: "Enable auto-refresh",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByText("Auto-refresh: disabled")).toBeVisible();
+    await expect(page.getByText("Next refresh:")).toHaveCount(0);
+
+    await page
+      .getByRole("button", { name: "Delete index", exact: true })
+      .click();
+    await expect(page.getByText("Index: deleting")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Deleting the tag index… browse and direct reads remain available.",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Build index", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Build index", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Build index", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Delete index", exact: true }),
+    ).toHaveCount(0);
   });
 
   test("orders the OPC DA connection fields before notes", async ({ page }) => {
@@ -499,25 +708,15 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     });
     await page.route("**/api/opc/browse**", async (route) => {
       const url = new URL(route.request().url());
-      const path = url.searchParams.get("path");
+      const parentNodeKey = url.searchParams.get("parent_node_key");
       const nodes =
-        path === "Simulink.Device1._System"
-          ? [
-              {
-                tag: originalTag,
-                is_branch: false,
-              },
-            ]
-          : [
-              {
-                tag: "Simulink.Device1._System",
-                is_branch: true,
-              },
-            ];
+        parentNodeKey === "system"
+          ? [browseNode("demand-poll", originalTag, "item", originalTag)]
+          : [browseNode("system", "Simulink.Device1._System", "branch")];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ nodes }),
+        body: JSON.stringify(browsePage(nodes)),
       });
     });
 
@@ -526,7 +725,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       page.getByRole("button", { name: "Simulink.Device1._System" }),
     ).toBeVisible();
     await expect(
-      page.getByText("Selected: Simulink.Device1._System"),
+      page.getByText("Select a tag to test its live value and quality."),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Expand" }).click();
@@ -576,6 +775,90 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     expect(readTags).toEqual([originalTag, originalTag]);
   });
 
+  test("loads additional pages, expands branch-and-item nodes, and closes the session", async ({
+    page,
+  }) => {
+    const selectedItemId = "Unit1.LIC101.PV";
+    const readTags: string[] = [];
+    const closePaths: string[] = [];
+    await page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox")
+      .selectOption("Yokogawa CentumVP");
+    await page
+      .getByLabel("OPC DA server ProgID")
+      .fill("Matrikon.OPC.Simulation");
+
+    await page.route("**/api/opc/read**", async (route) => {
+      const url = new URL(route.request().url());
+      readTags.push(url.searchParams.get("tag") ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: selectedItemId,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      if (route.request().method() === "DELETE") {
+        const url = new URL(route.request().url());
+        closePaths.push(url.pathname);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ closed: true }),
+        });
+        return;
+      }
+      const url = new URL(route.request().url());
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      const pageToken = url.searchParams.get("page_token");
+      const nodes =
+        parentNodeKey === "loop"
+          ? [browseNode("sv", "SV", "item", "Unit1.LIC101.SV")]
+          : pageToken === "root-next"
+            ? [
+                browseNode(
+                  "loop",
+                  "Unit1.LIC101",
+                  "branch_and_item",
+                  selectedItemId,
+                ),
+              ]
+            : [browseNode("first", "First", "item", "First.PV")];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          browsePage(nodes, {
+            nextPageToken: pageToken ? null : "root-next",
+            complete: Boolean(pageToken || parentNodeKey),
+          }),
+        ),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(page.getByRole("button", { name: "First" })).toBeVisible();
+    await page.getByRole("button", { name: "Load more" }).click();
+    await page.getByRole("button", { name: "Unit1.LIC101" }).dblclick();
+    await expect(page.getByText(`Selected: ${selectedItemId}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Collapse" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "SV" })).toBeVisible();
+    await page.getByRole("button", { name: "Select tag" }).click();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(selectedItemId);
+    expect(readTags).toEqual([selectedItemId]);
+    await expect
+      .poll(() => closePaths)
+      .toEqual(["/api/opc/browse/sessions/session-1"]);
+  });
+
   test("reopens the browser at the previously selected tag", async ({
     page,
   }) => {
@@ -602,23 +885,43 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         }),
       });
     });
-    await page.route("**/api/opc/browse**", async (route) => {
-      const url = new URL(route.request().url());
-      const path = url.searchParams.get("path");
-      const fillerNodes = Array.from({ length: 30 }, (_, index) => ({
-        tag: `Filler${index}`,
-        is_branch: false,
-      }));
-      const nodes =
-        path === "Simulink"
-          ? [{ tag: "Simulink._Statistics", is_branch: true }]
-          : path === "Simulink._Statistics"
-            ? [{ tag: originalTag, is_branch: false }]
-            : [...fillerNodes, { tag: "Simulink", is_branch: true }];
+    await page.route("**/api/opc/search-index/search**", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ nodes }),
+        body: JSON.stringify(
+          indexedSearchResponse([
+            {
+              item_id: originalTag,
+              display_name: originalTag,
+              kind: "item",
+              breadcrumbs: ["Simulink", "Simulink._Statistics"],
+            },
+          ]),
+        ),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      const url = new URL(route.request().url());
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      const fillerNodes = Array.from({ length: 30 }, (_, index) =>
+        browseNode(
+          `filler-${index}`,
+          `Filler${index}`,
+          "item",
+          `Filler${index}`,
+        ),
+      );
+      const nodes =
+        parentNodeKey === "simulink"
+          ? [browseNode("statistics", "Simulink._Statistics", "branch")]
+          : parentNodeKey === "statistics"
+            ? [browseNode("pv", originalTag, "item", originalTag)]
+            : [...fillerNodes, browseNode("simulink", "Simulink", "branch")];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage(nodes)),
       });
     });
 
@@ -641,6 +944,464 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .poll(() => treeViewport.evaluate((element) => element.scrollTop))
       .toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: "Collapse" })).toHaveCount(2);
+  });
+
+  test("provides debounced indexed search with keyboard selection and exact ItemIDs", async ({
+    page,
+  }) => {
+    const queries: Array<{ query: string; mode: string }> = [];
+    const selectedItemId = "FCS0202!204FI00510.PV";
+    const readTags: string[] = [];
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          browsePage([browseNode("root", "FCS0201", "branch")]),
+        ),
+      });
+    });
+    await page.route("**/api/opc/read**", async (route) => {
+      const url = new URL(route.request().url());
+      readTags.push(url.searchParams.get("tag") ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: selectedItemId,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/search-index/search**", async (route) => {
+      const url = new URL(route.request().url());
+      const query = url.searchParams.get("query") ?? "";
+      queries.push({
+        query,
+        mode: url.searchParams.get("match_mode") ?? "",
+      });
+      if (query === "fc") await slowPrefixSearch;
+      const matches =
+        query === "fcs"
+          ? [
+              {
+                item_id: "FCS0201!204FI00510.PV",
+                display_name: "204FI00510.PV",
+                kind: "item" as const,
+                breadcrumbs: ["FCS0201"],
+              },
+              {
+                item_id: selectedItemId,
+                display_name: "204FI00510.PV",
+                kind: "item" as const,
+                breadcrumbs: ["FCS0202"],
+              },
+            ]
+          : [
+              {
+                item_id: "FCS0201!204FI00510.PV",
+                display_name: "204FI00510.PV",
+                kind: "item" as const,
+                breadcrumbs: ["FCS0201"],
+              },
+            ];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(indexedSearchResponse(matches)),
+      });
+    });
+
+    let releaseSlowPrefixSearch: (() => void) | undefined;
+    const slowPrefixSearch = new Promise<void>((resolve) => {
+      releaseSlowPrefixSearch = resolve;
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    const search = page.getByLabel("Search OPC tags");
+    await expect(page.getByText("Smart contains search")).toHaveCount(0);
+    await expect(page.getByText("results stay on the gateway")).toHaveCount(0);
+    await search.fill("f");
+    await expect.poll(() => queries.length).toBe(0);
+
+    await search.fill("fc");
+    await expect
+      .poll(() => queries.some(({ query }) => query === "fc"))
+      .toBe(true);
+    await search.fill("fcs");
+    await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(2);
+    expect(queries).toEqual(
+      expect.arrayContaining([
+        { query: "fc", mode: "prefix" },
+        { query: "fcs", mode: "contains" },
+      ]),
+    );
+    expect(queries.some(({ query }) => query === "f")).toBe(false);
+
+    await search.press("ArrowDown");
+    await search.press("Enter");
+    await expect(
+      page.getByText(`Selected: ${selectedItemId}`, { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Select tag" }).click();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(
+      "FCS0202!204FI00510.Inp_PV",
+    );
+    expect(readTags).toEqual([selectedItemId]);
+    releaseSlowPrefixSearch?.();
+  });
+
+  test("confirms an indexed search result on double-click", async ({
+    page,
+  }) => {
+    const selectedItemId = "FCS0202!204FI00510.PV";
+    const readTags: string[] = [];
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+    await page.route("**/api/opc/read**", async (route) => {
+      const url = new URL(route.request().url());
+      readTags.push(url.searchParams.get("tag") ?? "");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: selectedItemId,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/search-index/search**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          indexedSearchResponse([
+            {
+              item_id: selectedItemId,
+              display_name: "204FI00510.PV",
+              kind: "item",
+              breadcrumbs: ["FCS0202"],
+            },
+          ]),
+        ),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    const search = page.getByLabel("Search OPC tags");
+    await search.fill("fcs");
+    const result = page.locator(`button[title="${selectedItemId}"]`);
+    await expect(result).toBeVisible();
+    await result.dblclick();
+
+    await expect(page.getByLabel("Tag name")).toHaveValue(
+      "FCS0202!204FI00510.Inp_PV",
+    );
+    await expect(
+      page.getByRole("heading", {
+        name: "Browse tags on Yokogawa.CSHIS_OPC.1",
+      }),
+    ).toHaveCount(0);
+    expect(readTags).toEqual([selectedItemId]);
+  });
+
+  test("refreshes the indexed namespace without turning status into an error", async ({
+    page,
+  }) => {
+    let statusCalls = 0;
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      statusCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          searchIndexStatus(
+            statusCalls < 2
+              ? "ready"
+              : statusCalls === 2
+                ? "refreshing"
+                : "ready",
+          ),
+        ),
+      });
+    });
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+    await page.route(/search-index\/refresh/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("refreshing")),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await page.getByRole("button", { name: "Refresh index" }).click();
+    await expect(page.getByText("Index: refreshing")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Refresh index" }),
+    ).toBeDisabled();
+    await expect(page.getByText("Index: ready")).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(
+      page.getByRole("button", { name: "Refresh index" }),
+    ).toBeEnabled();
+    await expect(
+      page.getByText("Unable to refresh the tag index."),
+    ).not.toBeVisible();
+  });
+
+  test("hides recovered inventory diagnostics when the index is ready", async ({
+    page,
+  }) => {
+    const diagnostic =
+      "1,779 non-navigable DA2 branches were skipped during inventory.";
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("ready", true, diagnostic)),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+
+    await expect(page.getByText("Index: ready")).toBeVisible();
+    await expect(
+      page.getByText(`Index warning: ${diagnostic}`, { exact: true }),
+    ).not.toBeVisible();
+  });
+
+  test("shows a diagnostic when the index has failed", async ({ page }) => {
+    const diagnostic = "the inventory database is unavailable";
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("failed", true, diagnostic)),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+
+    await expect(
+      page.getByText(`Index error: ${diagnostic}`, { exact: true }),
+    ).toBeVisible();
+  });
+
+  test("offers a first build when the server has no index", async ({
+    page,
+  }) => {
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("not_indexed", false)),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+
+    await expect(
+      page.getByText(
+        "Global search is unavailable until the gateway has a complete index. Lazy browse and direct ItemID entry remain available.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Build index" }),
+    ).toBeEnabled();
+  });
+
+  test("keeps lazy browse usable without an index and retries a failed level", async ({
+    page,
+  }) => {
+    const selectedItemId = "FCS0201!204FI00510.PV";
+    let childBrowseAttempts = 0;
+    let indexedSearchRequests = 0;
+
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("not_indexed", false)),
+      });
+    });
+    page.on("request", (request) => {
+      if (request.url().includes("/api/opc/search-index/search")) {
+        indexedSearchRequests += 1;
+      }
+    });
+    await page.route("**/api/opc/read**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: selectedItemId,
+          value: "42.0",
+          quality: "good",
+          timestamp: null,
+        }),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      if (route.request().method() === "DELETE") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ closed: true }),
+        });
+        return;
+      }
+      const url = new URL(route.request().url());
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      if (parentNodeKey === "fcs0201") {
+        childBrowseAttempts += 1;
+        if (childBrowseAttempts === 1) {
+          await route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "temporary browse failure" }),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(
+            browsePage([
+              browseNode("pv", selectedItemId, "item", selectedItemId),
+            ]),
+          ),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          browsePage([browseNode("fcs0201", "FCS0201", "branch")]),
+        ),
+      });
+    });
+
+    await page
+      .locator("label")
+      .filter({ hasText: /^Template/ })
+      .getByRole("combobox")
+      .selectOption("Yokogawa CentumVP");
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+
+    await expect(page.getByLabel("Search OPC tags")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "FCS0201" })).toBeVisible();
+    await page.getByRole("button", { name: "Expand" }).click();
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect(
+      page.getByRole("button", { name: selectedItemId }),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: selectedItemId }).click();
+    await page.getByRole("button", { name: "Select tag" }).click();
+    await expect(page.getByLabel("Tag name")).toHaveValue(selectedItemId);
+    expect(indexedSearchRequests).toBe(0);
+  });
+
+  test("surfaces a refresh failure without relying on gateway error text", async ({
+    page,
+  }) => {
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("ready")),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage([])),
+      });
+    });
+    await page.route(/search-index\/refresh/, async (route) => {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error:
+            "refresh the OPC namespace index: the server is not enrolled for indexing",
+        }),
+      });
+    });
+
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await page.getByRole("button", { name: "Refresh index" }).click();
+
+    await expect(
+      page.getByText("Unable to refresh the tag index.", { exact: true }),
+    ).toBeVisible();
   });
 
   test("warns before selecting a tag whose OPC quality is not Good", async ({
@@ -671,15 +1432,15 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     });
     await page.route("**/api/opc/browse**", async (route) => {
       const url = new URL(route.request().url());
-      const path = url.searchParams.get("path");
+      const parentNodeKey = url.searchParams.get("parent_node_key");
       const nodes =
-        path === "Simulink.Device1._System"
-          ? [{ tag: originalTag, is_branch: false }]
-          : [{ tag: "Simulink.Device1._System", is_branch: true }];
+        parentNodeKey === "system"
+          ? [browseNode("demand-poll", originalTag, "item", originalTag)]
+          : [browseNode("system", "Simulink.Device1._System", "branch")];
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ nodes }),
+        body: JSON.stringify(browsePage(nodes)),
       });
     });
 

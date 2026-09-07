@@ -61,13 +61,43 @@ export interface paths {
       cookie?: never;
     };
     /**
-     * List the tags/branches directly under one tree level of an OPC DA server.
-     * @description `GET /api/opc/browse` -- one level at a time (not a recursive dump of the whole tree),
-     *     matching `Driver::browse`'s own contract; the GUI's tag-tree modal calls this again for
-     *     each branch the user expands. Requires `opc_server` (from the query or config) since,
-     *     unlike `GET /api/opc/servers`, browsing needs a specific server to connect to.
+     * List one bounded page of immediate children. A missing `session_id` opens a new session and
+     *     lists its root; all later calls round-trip the returned opaque session/node/token values.
      */
     get: operations["browse"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/browse/sessions/{session_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["close_browse_session"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/capabilities": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Report browse capabilities for one OPC DA server. */
+    get: operations["capabilities"];
     put?: never;
     post?: never;
     delete?: never;
@@ -92,6 +122,119 @@ export interface paths {
      *     gets rather than failing on `Uncertain`/`Bad`, matching `bhtune opc read`'s own behavior.
      */
     get: operations["read"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["search"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["delete_search_index"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/auto-refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["set_search_index_auto_refresh"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/control": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["control_search_index"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["refresh_search_index"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/search": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["search_index"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Return the persistent namespace-index status for one OPC DA server. */
+    get: operations["search_index_status"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1103,9 +1246,78 @@ export interface components {
       write_pid?: null | components["schemas"]["ResponseLevel"];
       yes?: boolean | null;
     };
-    /** @description Response body of `GET /api/opc/browse`. */
+    /** @enum {string} */
+    OpcBrowseNodeKind: "unspecified" | "branch" | "item" | "branch_and_item";
+    /**
+     * @description One node returned by `GET /api/opc/browse`. `node_key` and `item_id` must remain separate:
+     *     the former is an opaque navigation key, while the latter is the exact selectable OPC DA
+     *     ItemID and may contain namespace punctuation with no relationship to hierarchy.
+     */
+    OpcBrowseNodeResponse: {
+      display_name: string;
+      item_id?: string | null;
+      kind: components["schemas"]["OpcBrowseNodeKind"];
+      node_key: string;
+    };
     OpcBrowseResponse: {
-      nodes: components["schemas"]["OpcTagNodeResponse"][];
+      complete: boolean;
+      next_page_token?: string | null;
+      nodes: components["schemas"]["OpcBrowseNodeResponse"][];
+      organization: string;
+      session_id: string;
+      source: string;
+      warning?: string | null;
+    };
+    OpcCapabilitiesResponse: {
+      application_version: string;
+      indexed_search_protocol_version: string;
+      /** Format: int32 */
+      max_indexed_search_results: number;
+      /** Format: int32 */
+      max_page_size: number;
+      organization: string;
+      protocol_version: string;
+      search_index_state: string;
+      source: string;
+      supports_browse_sessions: boolean;
+      supports_indexed_search: boolean;
+      supports_search: boolean;
+    };
+    OpcCloseBrowseSessionResponse: {
+      closed: boolean;
+    };
+    OpcIndexSchedulerResponse: {
+      circuit_open: boolean;
+      /** Format: int32 */
+      consecutive_failures: number;
+      last_attempt_at?: string | null;
+      last_success_at?: string | null;
+      /** Format: int64 */
+      last_success_duration_ms?: number | null;
+      next_refresh_at?: string | null;
+      retry_after?: string | null;
+    };
+    OpcIndexedSearchMatchResponse: {
+      breadcrumbs: string[];
+      display_name: string;
+      item_id: string;
+      kind: components["schemas"]["OpcBrowseNodeKind"];
+    };
+    OpcIndexedSearchProgressResponse: {
+      /** Format: int64 */
+      active_time_ms: number;
+      /** Format: int64 */
+      branches_visited: number;
+      /** Format: int64 */
+      entries_seen: number;
+      /** Format: int64 */
+      estimated_remaining_ms?: number | null;
+      /** Format: double */
+      items_per_second: number;
+      /** Format: int64 */
+      paused_time_ms: number;
+      /** Format: int64 */
+      unique_items: number;
     };
     /**
      * @description Response body of `GET /api/opc/read`.
@@ -1131,19 +1343,35 @@ export interface components {
       timestamp?: string | null;
       value: string;
     };
+    OpcSearchIndexResponse: {
+      has_more: boolean;
+      matches: components["schemas"]["OpcIndexedSearchMatchResponse"][];
+      status: components["schemas"]["OpcSearchIndexStatusResponse"];
+    };
+    OpcSearchIndexStatusResponse: {
+      /** Format: int64 */
+      active_generation: number;
+      auto_refresh_enabled: boolean;
+      completed_at?: string | null;
+      /** Format: int64 */
+      database_bytes: number;
+      /** Format: int64 */
+      entry_count: number;
+      last_error?: string | null;
+      organization: string;
+      progress?:
+        null | components["schemas"]["OpcIndexedSearchProgressResponse"];
+      scheduler: components["schemas"]["OpcIndexSchedulerResponse"];
+      server: string;
+      source: string;
+      started_at?: string | null;
+      state: string;
+      /** Format: int64 */
+      unique_item_count: number;
+    };
     /** @description Response body of `GET /api/opc/servers`. */
     OpcServersResponse: {
       servers: string[];
-    };
-    /**
-     * @description One node of `GET /api/opc/browse`'s `nodes` array -- a plain HTTP-facing projection of
-     *     [`bhtune_driver::TagNode`], per this workspace's DTO-decoupling convention (`bhtune-driver`
-     *     types deliberately don't derive `Serialize`/`ToSchema`; every JSON-facing consumer builds
-     *     its own projection instead).
-     */
-    OpcTagNodeResponse: {
-      is_branch: boolean;
-      tag: string;
     };
     /**
      * @description A run's snapshotted PID constant tag names, present only when all three were configured.
@@ -1874,11 +2102,11 @@ export interface operations {
       query?: {
         bridge_host?: string;
         opc_server?: string;
-        /**
-         * @description The tree level to list; an absent or empty path lists the top level, matching
-         *     `Driver::browse`'s own "empty string for the top level" convention.
-         */
-        path?: string;
+        session_id?: string;
+        parent_node_key?: string;
+        page_token?: string;
+        page_size?: number;
+        refresh?: boolean;
       };
       header?: never;
       path?: never;
@@ -1894,7 +2122,72 @@ export interface operations {
           "application/json": components["schemas"]["OpcBrowseResponse"];
         };
       };
-      /** @description No OPC server was specified (and none is configured), or the gateway/browse call could not be reached in time. */
+      /** @description No OPC server was specified, the browse state is invalid, or the gateway could not be reached. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  close_browse_session: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+      };
+      header?: never;
+      path: {
+        /** @description Opaque bridge browse-session ID. */
+        session_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcCloseBrowseSessionResponse"];
+        };
+      };
+      /** @description The browse session could not be closed. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  capabilities: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcCapabilitiesResponse"];
+        };
+      };
+      /** @description The bridge or OPC server could not be reached. */
       400: {
         headers: {
           [name: string]: unknown;
@@ -1931,6 +2224,235 @@ export interface operations {
         };
       };
       /** @description No tag or OPC server was specified (and none is configured), or the gateway/read call could not be reached in time. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  search: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        query: string;
+        match_mode?: string;
+        session_id?: string;
+        scope_node_key?: string;
+        max_results?: number;
+        include_branches?: boolean;
+        refresh?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description SSE stream of match, progress, and completed events. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description The search request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  delete_search_index: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The delete request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  set_search_index_auto_refresh: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        enabled: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The auto-refresh request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  control_search_index: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        action: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The control action or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  refresh_search_index: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+        force?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The refresh request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  search_index: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        query: string;
+        match_mode?: string;
+        max_results?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexResponse"];
+        };
+      };
+      /** @description The indexed-search request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  search_index_status: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The bridge or OPC server could not be reached. */
       400: {
         headers: {
           [name: string]: unknown;

@@ -46,7 +46,16 @@ use crate::routes::{capabilities, config, draft, health, history, opc, runs, str
         runs::revert_run,
         stream::stream_run,
         opc::servers,
+        opc::capabilities,
         opc::browse,
+        opc::close_browse_session,
+        opc::search,
+        opc::search_index_status,
+        opc::search_index,
+        opc::refresh_search_index,
+        opc::set_search_index_auto_refresh,
+        opc::control_search_index,
+        opc::delete_search_index,
         opc::read,
     ),
     components(schemas(
@@ -79,8 +88,16 @@ use crate::routes::{capabilities, config, draft, health, history, opc, runs, str
         runs::WriteRunRequest,
         stream::RunStreamDone,
         opc::OpcServersResponse,
-        opc::OpcTagNodeResponse,
+        opc::OpcCapabilitiesResponse,
+        opc::OpcBrowseNodeKind,
+        opc::OpcBrowseNodeResponse,
         opc::OpcBrowseResponse,
+        opc::OpcCloseBrowseSessionResponse,
+        opc::OpcIndexedSearchProgressResponse,
+        opc::OpcIndexSchedulerResponse,
+        opc::OpcSearchIndexStatusResponse,
+        opc::OpcIndexedSearchMatchResponse,
+        opc::OpcSearchIndexResponse,
         opc::OpcReadResponse,
         capabilities::CapabilitiesResponse,
         capabilities::CapabilityActions,
@@ -101,7 +118,7 @@ use crate::routes::{capabilities, config, draft, health, history, opc, runs, str
         (name = "templates", description = "DCS/PLC template catalog (built-in, community-catalog, and user-created)"),
         (name = "runs", description = "Start, cancel, and browse the history of tune runs"),
         (name = "config", description = "Global TOML-backed configuration"),
-        (name = "opc", description = "Read-only OPC DA server/tag diagnostics: server discovery, tag-tree browsing, and single-tag reads"),
+        (name = "opc", description = "OPC DA server/tag diagnostics and gateway-owned namespace search"),
     ),
 )]
 pub struct ApiDoc;
@@ -122,5 +139,61 @@ mod tests {
         let spec = ApiDoc::openapi();
         let json = spec.to_json().expect("spec must serialize to JSON");
         assert!(json.contains("\"title\":\"BHTune API\""));
+    }
+
+    #[test]
+    fn generated_spec_includes_indexed_search_routes_and_schemas() {
+        let spec = ApiDoc::openapi();
+        let document: serde_json::Value =
+            serde_json::from_str(&spec.to_json().expect("spec must serialize to JSON"))
+                .expect("generated spec must be valid JSON");
+
+        for (path, method) in [
+            ("/api/opc/search-index/status", "get"),
+            ("/api/opc/search-index/search", "get"),
+            ("/api/opc/search-index/refresh", "post"),
+            ("/api/opc/search-index/auto-refresh", "post"),
+            ("/api/opc/search-index/control", "post"),
+            ("/api/opc/search-index", "delete"),
+        ] {
+            assert!(
+                document["paths"][path][method].is_object(),
+                "missing {method} {path}"
+            );
+        }
+
+        for schema in [
+            "OpcIndexedSearchProgressResponse",
+            "OpcSearchIndexStatusResponse",
+            "OpcIndexSchedulerResponse",
+            "OpcIndexedSearchMatchResponse",
+            "OpcSearchIndexResponse",
+        ] {
+            assert!(
+                document["components"]["schemas"][schema].is_object(),
+                "missing schema {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn indexed_and_progressive_search_limits_require_positive_values() {
+        let spec = ApiDoc::openapi();
+        let value = serde_json::to_value(spec).expect("spec must serialize to a JSON value");
+
+        for path in ["/api/opc/search", "/api/opc/search-index/search"] {
+            assert_eq!(
+                value["paths"][path]["get"]["parameters"]
+                    .as_array()
+                    .and_then(|parameters| {
+                        parameters
+                            .iter()
+                            .find(|parameter| parameter["name"] == "max_results")
+                    })
+                    .and_then(|parameter| parameter.pointer("/schema/minimum")),
+                Some(&serde_json::json!(1)),
+                "{path} must document a positive max_results minimum"
+            );
+        }
     }
 }

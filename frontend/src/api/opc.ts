@@ -1,10 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 import { apiClient } from "./client";
 import { toApiError } from "./errors";
 import type { components } from "./schema";
 
-export type OpcTagNodeResponse = components["schemas"]["OpcTagNodeResponse"];
+export type OpcTagNodeResponse = components["schemas"]["OpcBrowseNodeResponse"];
+export type OpcBrowseResponse = components["schemas"]["OpcBrowseResponse"];
 export type OpcReadResponse = components["schemas"]["OpcReadResponse"];
+export type OpcSearchIndexStatusResponse =
+  components["schemas"]["OpcSearchIndexStatusResponse"];
+export type OpcIndexedSearchMatchResponse =
+  components["schemas"]["OpcIndexedSearchMatchResponse"];
+export type OpcSearchIndexResponse =
+  components["schemas"]["OpcSearchIndexResponse"];
+export type OpcSearchMatchMode = "exact" | "prefix" | "contains";
+
+export interface OpcBrowsePageRequest {
+  sessionId?: string;
+  parentNodeKey?: string;
+  pageToken?: string;
+  pageSize?: number;
+  refresh?: boolean;
+}
 
 /**
  * `GET /api/opc/servers` -- lists every OPC DA server registered on the bridge gateway's own
@@ -31,38 +48,298 @@ export function useOpcServers(bridgeHost: string, enabled: boolean) {
 }
 
 /**
- * Fetches (and caches, through the query client) one level of `GET /api/opc/browse`'s tag
- * tree. Not a `useQuery` itself: the tag-tree browser modal expands an unbounded, user-driven
- * set of `path`s as branches are clicked open one at a time, which doesn't fit a single fixed
- * hook call the way a normal list/detail fetch does. Still routed through
- * `queryClient.fetchQuery` rather than a bare `apiClient` call, so re-expanding an
- * already-visited branch within the cache's `staleTime` is free and this stays consistent
- * with the rest of the app's "TanStack Query is the only data-fetching/caching layer"
- * convention (see `App.tsx`'s routing comment).
+ * Fetches one bounded page from `GET /api/opc/browse`. The gateway owns opaque browse
+ * session, node, and page-token values; callers only round-trip them, never reconstruct
+ * paths from display text or OPC punctuation.
  */
 export function useOpcBrowseFetcher(bridgeHost: string, opcServer: string) {
   const queryClient = useQueryClient();
-  return (path: string) =>
-    queryClient.fetchQuery({
-      queryKey: ["opc", "browse", bridgeHost, opcServer, path],
-      queryFn: async () => {
-        const { data, error, response } = await apiClient.GET(
-          "/api/opc/browse",
-          {
-            params: {
-              query: {
-                bridge_host: bridgeHost || undefined,
-                opc_server: opcServer || undefined,
-                path: path || undefined,
+  const fetchPage = useCallback(
+    (request: OpcBrowsePageRequest = {}) =>
+      queryClient.fetchQuery({
+        queryKey: ["opc", "browse", bridgeHost, opcServer, request],
+        queryFn: async ({ signal }) => {
+          const { data, error, response } = await apiClient.GET(
+            "/api/opc/browse",
+            {
+              params: {
+                query: {
+                  bridge_host: bridgeHost || undefined,
+                  opc_server: opcServer || undefined,
+                  session_id: request.sessionId,
+                  parent_node_key: request.parentNodeKey,
+                  page_token: request.pageToken,
+                  page_size: request.pageSize,
+                  refresh: request.refresh || undefined,
+                },
+                signal,
               },
             },
+          );
+          if (error) throw toApiError(error, response);
+          return data;
+        },
+        retry: false,
+        staleTime: 30_000,
+      }),
+    [bridgeHost, opcServer, queryClient],
+  );
+  const clearCache = useCallback(() => {
+    const cacheKeyPrefix = ["opc", "browse", bridgeHost, opcServer] as const;
+    void queryClient.cancelQueries({ queryKey: cacheKeyPrefix });
+    queryClient.removeQueries({ queryKey: cacheKeyPrefix });
+  }, [bridgeHost, opcServer, queryClient]);
+  return { fetchPage, clearCache };
+}
+
+/** `DELETE /api/opc/browse/sessions/{session_id}` -- releases an open gateway browse session. */
+export function useCloseOpcBrowseSession() {
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      sessionId: string;
+    }) => {
+      const { error, response } = await apiClient.DELETE(
+        "/api/opc/browse/sessions/{session_id}",
+        {
+          params: {
+            path: { session_id: params.sessionId },
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+            },
           },
-        );
-        if (error) throw toApiError(error, response);
-        return data.nodes;
-      },
-      staleTime: 30_000,
-    });
+        },
+      );
+      if (error) throw toApiError(error, response);
+    },
+  });
+}
+
+/** `GET /api/opc/search-index/status` -- returns persistent namespace-index readiness. */
+export function useOpcSearchIndexStatus(
+  bridgeHost: string,
+  opcServer: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["opc", "search-index", "status", bridgeHost, opcServer],
+    queryFn: async () => {
+      const { data, error, response } = await apiClient.GET(
+        "/api/opc/search-index/status",
+        {
+          params: {
+            query: {
+              bridge_host: bridgeHost || undefined,
+              opc_server: opcServer || undefined,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    enabled,
+    retry: false,
+    staleTime: 5_000,
+  });
+}
+
+/** `GET /api/opc/search-index/search` -- fast unary fzf-style namespace search. */
+export function useOpcIndexedSearch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      query: string;
+      matchMode: OpcSearchMatchMode;
+      maxResults?: number;
+      signal?: AbortSignal;
+    }) => {
+      const { data, error, response } = await apiClient.GET(
+        "/api/opc/search-index/search",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              query: params.query,
+              match_mode: params.matchMode,
+              max_results: params.maxResults,
+            },
+            signal: params.signal,
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data.status,
+      );
+    },
+  });
+}
+
+/** `POST /api/opc/search-index/refresh` -- starts or coalesces an index refresh. */
+export function useRefreshOpcSearchIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      force?: boolean;
+    }) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/opc/search-index/refresh",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              force: params.force,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
+    },
+  });
+}
+
+/** `POST /api/opc/search-index/auto-refresh` -- enables or disables scheduled refreshes. */
+export function useSetOpcSearchIndexAutoRefresh() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      enabled: boolean;
+    }) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/opc/search-index/auto-refresh",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              enabled: params.enabled,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
+    },
+  });
+}
+
+/** `POST /api/opc/search-index/control` -- controls an active build. */
+export function useControlOpcSearchIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      action: "pause" | "resume" | "cancel";
+    }) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/opc/search-index/control",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              action: params.action,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
+    },
+  });
+}
+
+/** `DELETE /api/opc/search-index` -- removes index data and per-server enrollment. */
+export function useDeleteOpcSearchIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { bridgeHost: string; opcServer: string }) => {
+      const { data, error, response } = await apiClient.DELETE(
+        "/api/opc/search-index",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
+    },
+  });
 }
 
 /**

@@ -95,10 +95,10 @@
         "docs/guides/web-ui/starting-a-tune.md",
         "docs/dcs-templates.md"
       ],
-      "sha256": "12cac28094d869bac86fc4d92656b2e65ab0f3df1597120bc8b22895611a20ba",
+      "sha256": "025053ef43a42a4a384763202b6ece2c99c60c819c3749a56109fde0bc17e0b2",
       "width": 1440,
       "height": 1607,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=12cac28094d8"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=025053ef43a4"
     },
     {
       "id": "full-opc-tag-applied",

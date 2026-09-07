@@ -7,6 +7,7 @@ from check_openapi_breaking import find_breaking_changes
 JSON_CONTENT_TYPE = "application/json"
 RUNS_PATH = "/api/runs"
 OTHER_PATH = "/api/other"
+OPC_BROWSE_PATH = "/api/opc/browse"
 TIMING_FIELDS = (
     "mrft_delay",
     "poll_interval_ms",
@@ -170,6 +171,40 @@ def spec_with_result_response(*, nullable=False, include_unrelated=False, other_
     }
 
 
+def spec_with_browse_contract(*, current=False, remove_unrelated_parameter=False):
+    if current:
+        parameters = [
+            {"name": "bridge_host", "in": "query", "required": False},
+            {"name": "opc_server", "in": "query", "required": False},
+            {"name": "session_id", "in": "query", "required": False},
+        ]
+        schemas = {
+            "OpcBrowseNodeResponse": {
+                "type": "object",
+                "properties": {"node_key": {"type": "string"}},
+            }
+        }
+    else:
+        parameters = [
+            {"name": "bridge_host", "in": "query", "required": False},
+            {"name": "opc_server", "in": "query", "required": False},
+            {"name": "path", "in": "query", "required": False},
+        ]
+        if remove_unrelated_parameter:
+            parameters.append({"name": "page_size", "in": "query", "required": False})
+        schemas = {
+            "OpcTagNodeResponse": {
+                "type": "object",
+                "properties": {"tag": {"type": "string"}},
+            }
+        }
+    return {
+        "openapi": "3.1.0",
+        "paths": {OPC_BROWSE_PATH: {"get": {"parameters": parameters, "responses": {}}}},
+        "components": {"schemas": schemas},
+    }
+
+
 class OpenApiBreakingTests(unittest.TestCase):
     def test_identical_specs_are_compatible(self):
         self.assertEqual(find_breaking_changes(spec(), spec()), [])
@@ -255,6 +290,33 @@ class OpenApiBreakingTests(unittest.TestCase):
             spec_with_result_response(nullable=True, other_schema=True),
         )
         self.assertTrue(any("schema type changed" in error for error in errors))
+
+    def test_session_aware_browse_migration_is_allowlisted(self):
+        self.assertEqual(
+            find_breaking_changes(
+                spec_with_browse_contract(),
+                spec_with_browse_contract(current=True),
+            ),
+            [],
+        )
+
+    def test_browse_allowance_does_not_hide_unrelated_parameter_removal(self):
+        old = spec_with_browse_contract(remove_unrelated_parameter=True)
+        new = spec_with_browse_contract(current=True)
+        errors = find_breaking_changes(old, new)
+        self.assertTrue(
+            any("parameter" in error and "page_size" in error and "was removed" in error for error in errors)
+        )
+
+    def test_browse_allowance_does_not_hide_unrelated_component_removal(self):
+        old = spec_with_browse_contract()
+        old["components"]["schemas"]["OtherSchema"] = {
+            "type": "object",
+            "properties": {},
+        }
+        new = spec_with_browse_contract(current=True)
+        errors = find_breaking_changes(old, new)
+        self.assertTrue(any("OtherSchema" in error for error in errors))
 
 
 if __name__ == "__main__":

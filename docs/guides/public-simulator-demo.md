@@ -102,6 +102,7 @@ turning a demonstration into an unbounded workload:
 | Active runs per visitor                 |                1 |
 | Active runs globally                    |                8 |
 | Accepted starts per token and client IP | 6 per 10 minutes |
+| Accepted runs per browser session       |               10 |
 | Retained terminal runs per visitor      |               10 |
 | Current Demo-owned run rows             |            5,000 |
 | Simulator poll interval                 |           200 ms |

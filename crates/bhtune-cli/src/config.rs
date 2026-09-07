@@ -400,6 +400,8 @@ pub struct DemoPolicyConfig {
     /// Completed runs retained for one visitor. Fixed at 10.
     #[cfg_attr(feature = "schemars", schemars(range(min = 10, max = 10)))]
     pub retained_runs_per_visitor: Option<u32>,
+    /// Runs retained for one session. Fixed at 10.
+    #[cfg_attr(feature = "schemars", schemars(range(min = 10, max = 10)))]
     pub max_runs_per_session: Option<u32>,
     /// Current Demo-owned `tune_runs` row limit across all visitors. Fixed at 5,000.
     #[cfg_attr(feature = "schemars", schemars(range(min = 5_000, max = 5_000)))]

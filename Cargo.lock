@@ -288,6 +288,7 @@ dependencies = [
  "bhtune-driver",
  "chrono",
  "clap",
+ "futures-core",
  "http-body-util",
  "libc",
  "opcda-bridge-proto",
@@ -1422,11 +1423,12 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opcda-bridge"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f400c7527d7477dfeedf9d0d6a6e046df43194e2ee50291d2765804ad42c549b"
+checksum = "b3b83e5f927fb24c1d67b3fdb3f99e8cb145987ee84bea4c3ad60f0404cc8158"
 dependencies = [
  "opcda-bridge-proto",
+ "serde",
  "thiserror",
  "tonic",
  "tonic-prost",
@@ -1434,11 +1436,12 @@ dependencies = [
 
 [[package]]
 name = "opcda-bridge-proto"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75adc531d2df768474ff9e98251e03c8f0df3c24e19047e50d3a8ac84b8eaff"
+checksum = "afd7b2f5e77b409ebfc19ffc195ac4de76b80fadafadce8a2a1a6b3f64230a7e"
 dependencies = [
  "prost",
+ "toml",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",

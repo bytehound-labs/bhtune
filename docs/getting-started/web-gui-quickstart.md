@@ -136,14 +136,18 @@ network.
      values. Simulator direction and ranges are kept separately from OPC fixed overrides. The
      browser itself stays focused on browsing and testing the selected PV tag. It offers a
      **Read selected tag** action showing a live value
-     and its quality. Double-clicking a leaf selects it; double-clicking a branch expands or
-     collapses it. Selecting **Select tag** writes the selected tag with its final component
-     replaced by the active template's process-variable suffix into the Tag name field. Changing
-     templates likewise replaces the final component with the new template's process-variable
-     suffix, regardless of what the previous component was, preserving the rest of the tag path.
+
+     and its quality. Double-clicking a browsed leaf or indexed-search result selects it; double-clicking
+     any expandable node, including a branch-and-item node, expands or collapses it. Selecting **Select tag** writes
+     the selected tag with its final component replaced by the active template's process-variable
+     suffix into the Tag name field. Changing templates likewise replaces the final component
+     with the new template's process-variable suffix, regardless of what the previous component
+     was, preserving the rest of the tag path.
+
      For example, browsing `Area01.FIC101.OUT` with a template whose
      `process_variable_suffix` is `PV` produces `Area01.FIC101.PV`: BHTune replaces the final
      component after the last `.`, `!`, or `/` rather than blindly appending `.PV`.
+
      Clicking **Select tag** performs a fresh read of the original selected item (before suffix
      replacement) and proceeds immediately only for `Good` OPC quality; `Uncertain` or `Bad`
      quality opens a warning with choices to select a different tag or proceed anyway. Proceeding
@@ -156,6 +160,22 @@ network.
      they are accepted by default, while `Bad` quality is always rejected.
      Reopening the browser expands the available path to the current Tag name, selects that node,
      and scrolls it into view; an unavailable tag falls back to the root level.
+     Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled
+     servers and does not index every registered OPC DA server automatically. Use **Build index**
+     in the tag browser to enroll the selected ProgID and start its first build; no gateway TOML
+     edit or restart is required. After the first successful build, the gateway automatically
+     refreshes the index according to its configurable seven-day policy. The browser also
+     provides **Refresh now**, **Retry build**, **Disable auto-refresh**, **Enable auto-refresh**,
+     and **Delete index** actions. Disabling automatic refresh keeps the existing index and
+     searchable data; deleting it shows a temporary `deleting` state while the gateway removes
+     the index and enrollment, then leaves ordinary browse,
+     direct ItemID entry, live reads, and tuning available. If indexing is not enrolled or is
+     still building, the global search field is disabled, but the lazy tag tree and other
+     operations remain available. Completed non-fatal inventory diagnostics remain available
+     through the gateway/API and diagnostic CLI; the browser shows a visible message for a failed
+     index state. When automatic refresh is enabled, the next scheduled refresh appears as a
+     relative days-and-hours countdown, with the exact scheduled time available on hover.
+
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail
      page while the run is active or after it finishes.

@@ -213,12 +213,14 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
           "minimum": 32768
         },
         "max_runs_per_session": {
+          "description": "Runs retained for one session. Fixed at 10.",
           "type": [
             "integer",
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "maximum": 10,
+          "minimum": 10
         },
         "max_sse_global": {
           "description": "Simultaneous Demo SSE streams across all visitors. Fixed at 32.",

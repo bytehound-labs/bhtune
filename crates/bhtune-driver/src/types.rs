@@ -1,6 +1,7 @@
 //! Plain data types moved across the [`crate::Driver`] trait boundary.
 
 use chrono::{DateTime, Utc};
+use std::fmt;
 
 /// An identifier for one tag/item a [`crate::Driver`] knows how to read or write. For OPC
 /// DA this is the fully-qualified item name (e.g. `"Area1.LIC101.PV"`, matching
@@ -106,17 +107,397 @@ impl WriteOutcome {
     }
 }
 
-/// One node in a [`crate::Driver::browse`] result: either a leaf tag (readable/writable
-/// directly) or a branch (has further children to browse into).
+/// How the OPC server organizes its namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NamespaceOrganization {
+    Unspecified,
+    Flat,
+    Hierarchical,
+}
+
+/// Native or configured strategy that produced browse results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BrowseSource {
+    Unspecified,
+    Da3,
+    Da2,
+    Flat,
+    Derived,
+}
+
+/// Whether a browse node is expandable, selectable as an OPC item, or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BrowseNodeKind {
+    Unspecified,
+    Branch,
+    Item,
+    BranchAndItem,
+}
+
+impl BrowseNodeKind {
+    pub fn is_branch(self) -> bool {
+        matches!(self, Self::Branch | Self::BranchAndItem)
+    }
+
+    pub fn is_item(self) -> bool {
+        matches!(self, Self::Item | Self::BranchAndItem)
+    }
+}
+
+/// Gateway and namespace features reported for one OPC server.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TagNode {
-    pub tag: TagId,
-    pub is_branch: bool,
+pub struct DriverCapabilities {
+    pub application_version: String,
+    pub protocol_version: String,
+    pub max_page_size: u32,
+    pub supports_browse_sessions: bool,
+    pub supports_search: bool,
+    pub organization: NamespaceOrganization,
+    pub source: BrowseSource,
+    pub supports_indexed_search: bool,
+    pub indexed_search_protocol_version: String,
+    pub max_indexed_search_results: u32,
+    pub search_index_state: SearchIndexState,
+}
+
+/// One child returned by a browse page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowseNode {
+    /// Opaque navigation identity. Round-trip it unchanged when expanding.
+    pub node_key: String,
+    /// One local label suitable for display.
+    pub display_name: String,
+    pub kind: BrowseNodeKind,
+    /// Exact OPC DA ItemID, present only for selectable nodes.
+    pub item_id: Option<String>,
+}
+
+/// One bounded page of immediate children and its continuation metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowsePage {
+    pub session_id: String,
+    pub nodes: Vec<BrowseNode>,
+    pub next_page_token: Option<String>,
+    pub complete: bool,
+    pub organization: NamespaceOrganization,
+    pub source: BrowseSource,
+    pub warning: Option<String>,
+}
+
+/// Parameters for one browse-page request. The connected driver supplies its configured
+/// OPC server; callers only provide session/navigation state returned by earlier pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowsePageRequest {
+    pub session_id: Option<String>,
+    pub parent_node_key: Option<String>,
+    pub page_token: Option<String>,
+    pub page_size: u32,
+    pub refresh: bool,
+}
+
+impl BrowsePageRequest {
+    /// Open a new browse session and request its root page.
+    pub fn root(page_size: u32) -> Self {
+        Self {
+            session_id: None,
+            parent_node_key: None,
+            page_token: None,
+            page_size,
+            refresh: false,
+        }
+    }
+
+    /// Request the first page beneath an already-discovered branch.
+    pub fn children(
+        session_id: impl Into<String>,
+        parent_node_key: impl Into<String>,
+        page_size: u32,
+    ) -> Self {
+        Self {
+            session_id: Some(session_id.into()),
+            parent_node_key: Some(parent_node_key.into()),
+            page_token: None,
+            page_size,
+            refresh: false,
+        }
+    }
+
+    /// Request the next page for a root or child browse.
+    pub fn next(
+        session_id: impl Into<String>,
+        parent_node_key: Option<String>,
+        page_token: impl Into<String>,
+        page_size: u32,
+    ) -> Self {
+        Self {
+            session_id: Some(session_id.into()),
+            parent_node_key,
+            page_token: Some(page_token.into()),
+            page_size,
+            refresh: false,
+        }
+    }
+
+    pub fn with_refresh(mut self, refresh: bool) -> Self {
+        self.refresh = refresh;
+        self
+    }
+}
+
+/// Match behavior for namespace search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchMatchMode {
+    Exact,
+    Prefix,
+    Contains,
+}
+
+/// Readiness of a gateway-owned persistent namespace index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchIndexState {
+    Unspecified,
+    NotIndexed,
+    Partial,
+    Ready,
+    Stale,
+    Refreshing,
+    Promoting,
+    Failed,
+    Deleting,
+}
+
+impl SearchIndexState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::NotIndexed => "not_indexed",
+            Self::Partial => "partial",
+            Self::Ready => "ready",
+            Self::Stale => "stale",
+            Self::Refreshing => "refreshing",
+            Self::Promoting => "promoting",
+            Self::Failed => "failed",
+            Self::Deleting => "deleting",
+        }
+    }
+}
+
+impl fmt::Display for SearchIndexState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Operator action applied to an active namespace-index build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SearchIndexControlAction {
+    Pause,
+    Resume,
+    Cancel,
+}
+
+/// Parameters for one persistent-index query. The connected driver supplies its configured
+/// OPC DA server, just as it does for [`SearchRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchIndexRequest {
+    pub query: String,
+    pub match_mode: SearchMatchMode,
+    pub max_results: u32,
+}
+
+impl SearchIndexRequest {
+    pub fn new(query: impl Into<String>, match_mode: SearchMatchMode, max_results: u32) -> Self {
+        Self {
+            query: query.into(),
+            match_mode,
+            max_results,
+        }
+    }
+}
+
+/// Progress reported for a running persistent namespace inventory.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexedSearchProgress {
+    pub branches_visited: u64,
+    pub entries_seen: u64,
+    pub unique_items: u64,
+    pub active_time_ms: u64,
+    pub paused_time_ms: u64,
+    pub items_per_second: f64,
+    pub estimated_remaining_ms: Option<u64>,
+}
+
+/// Persistent namespace-index state and build metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchIndexStatus {
+    pub server: String,
+    pub state: SearchIndexState,
+    pub auto_refresh_enabled: bool,
+    pub active_generation: u64,
+    pub entry_count: u64,
+    pub unique_item_count: u64,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub last_error: Option<String>,
+    pub database_bytes: u64,
+    pub organization: NamespaceOrganization,
+    pub source: BrowseSource,
+    pub progress: Option<IndexedSearchProgress>,
+    pub scheduler: IndexSchedulerDiagnostics,
+}
+
+/// Scheduler and retry information for a persistent namespace index.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexSchedulerDiagnostics {
+    pub next_refresh_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_success_duration_ms: Option<u64>,
+    pub retry_after: Option<String>,
+    pub consecutive_failures: u32,
+    pub circuit_open: bool,
+}
+
+/// One selectable result from the persistent namespace index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedSearchMatch {
+    pub item_id: String,
+    pub display_name: String,
+    pub kind: BrowseNodeKind,
+    pub breadcrumbs: Vec<String>,
+}
+
+/// Ranked persistent-index matches plus snapshot readiness metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchIndexResponse {
+    pub matches: Vec<IndexedSearchMatch>,
+    pub has_more: bool,
+    pub status: SearchIndexStatus,
+}
+
+/// Parameters for a bounded namespace search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRequest {
+    pub query: String,
+    pub match_mode: SearchMatchMode,
+    pub session_id: Option<String>,
+    pub scope_node_key: Option<String>,
+    pub max_results: u32,
+    pub include_branches: bool,
+    pub refresh: bool,
+}
+
+impl SearchRequest {
+    pub fn new(query: impl Into<String>, match_mode: SearchMatchMode, max_results: u32) -> Self {
+        Self {
+            query: query.into(),
+            match_mode,
+            session_id: None,
+            scope_node_key: None,
+            max_results,
+            include_branches: false,
+            refresh: false,
+        }
+    }
+}
+
+/// One navigation step associated with a search match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowseBreadcrumb {
+    pub node_key: String,
+    pub display_name: String,
+}
+
+/// A progressively emitted namespace-search result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMatch {
+    pub node: BrowseNode,
+    pub breadcrumbs: Vec<BrowseBreadcrumb>,
+}
+
+/// Progress emitted while a namespace search is still running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchProgress {
+    pub visited_nodes: u32,
+    pub matches: u32,
+    pub partial: bool,
+}
+
+/// Terminal search metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchCompleted {
+    pub complete: bool,
+    pub cancelled: bool,
+    pub truncated: bool,
+    pub warning: Option<String>,
+}
+
+/// One event from the driver's namespace-search stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchEvent {
+    Match(SearchMatch),
+    Progress(SearchProgress),
+    Completed(SearchCompleted),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_index_state_strings_cover_all_wire_states() {
+        let states = [
+            (SearchIndexState::Unspecified, "unspecified"),
+            (SearchIndexState::NotIndexed, "not_indexed"),
+            (SearchIndexState::Partial, "partial"),
+            (SearchIndexState::Ready, "ready"),
+            (SearchIndexState::Stale, "stale"),
+            (SearchIndexState::Refreshing, "refreshing"),
+            (SearchIndexState::Promoting, "promoting"),
+            (SearchIndexState::Failed, "failed"),
+            (SearchIndexState::Deleting, "deleting"),
+        ];
+
+        for (state, expected) in states {
+            assert_eq!(state.as_str(), expected);
+            assert_eq!(state.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn browse_page_request_builders_preserve_navigation_and_refresh_state() {
+        assert_eq!(
+            BrowsePageRequest::root(25),
+            BrowsePageRequest {
+                session_id: None,
+                parent_node_key: None,
+                page_token: None,
+                page_size: 25,
+                refresh: false,
+            }
+        );
+        assert_eq!(
+            BrowsePageRequest::children("session", "parent", 10),
+            BrowsePageRequest {
+                session_id: Some("session".into()),
+                parent_node_key: Some("parent".into()),
+                page_token: None,
+                page_size: 10,
+                refresh: false,
+            }
+        );
+        assert_eq!(
+            BrowsePageRequest::next("session", Some("parent".into()), "token", 5)
+                .with_refresh(true),
+            BrowsePageRequest {
+                session_id: Some("session".into()),
+                parent_node_key: Some("parent".into()),
+                page_token: Some("token".into()),
+                page_size: 5,
+                refresh: true,
+            }
+        );
+    }
 
     #[test]
     fn only_good_quality_is_trustworthy() {

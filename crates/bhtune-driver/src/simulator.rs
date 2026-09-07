@@ -22,7 +22,10 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 use crate::{
     driver::Driver,
     error::{DriverError, DriverResult},
-    types::{Quality, TagId, TagNode, TagValue, TagWrite, WriteOutcome},
+    types::{
+        BrowsePage, BrowsePageRequest, DriverCapabilities, Quality, SearchEvent, SearchRequest,
+        TagId, TagValue, TagWrite, WriteOutcome,
+    },
 };
 
 /// Configuration for a [`FopdtProcess`]: the classic three parameters process control
@@ -364,9 +367,27 @@ impl Driver for SimulatorDriver {
         Ok(WriteOutcome::success())
     }
 
-    async fn browse(&self, _path: &str) -> DriverResult<Vec<TagNode>> {
+    async fn capabilities(&self) -> DriverResult<DriverCapabilities> {
+        Err(DriverError::Unsupported {
+            operation: "capabilities",
+        })
+    }
+
+    async fn browse(&self, _request: BrowsePageRequest) -> DriverResult<BrowsePage> {
         Err(DriverError::Unsupported {
             operation: "browse",
+        })
+    }
+
+    async fn close_browse_session(&self, _session_id: &str) -> DriverResult<()> {
+        Err(DriverError::Unsupported {
+            operation: "browse-session close",
+        })
+    }
+
+    async fn search(&self, _request: SearchRequest) -> DriverResult<Vec<SearchEvent>> {
+        Err(DriverError::Unsupported {
+            operation: "search",
         })
     }
 }
@@ -443,6 +464,52 @@ mod tests {
         let mut process = FopdtProcess::new(config, 10.0, 10.0, 0);
         process.set_mv(20.0);
         assert!(process.step() > 10.1);
+    }
+
+    #[tokio::test]
+    async fn unsupported_namespace_operations_are_reported() {
+        let driver = SimulatorDriver::new(
+            "PV",
+            "MV",
+            FopdtConfig::new(1.0, 2.0, 0.0, 1.0),
+            0.0,
+            0.0,
+            1,
+        );
+        assert!(matches!(
+            driver.capabilities().await,
+            Err(DriverError::Unsupported {
+                operation: "capabilities"
+            })
+        ));
+        assert!(matches!(
+            driver.browse(BrowsePageRequest::root(1)).await,
+            Err(DriverError::Unsupported {
+                operation: "browse"
+            })
+        ));
+        assert!(matches!(
+            driver.close_browse_session("s").await,
+            Err(DriverError::Unsupported {
+                operation: "browse-session close"
+            })
+        ));
+        assert!(matches!(
+            driver
+                .search(SearchRequest {
+                    query: "PV".into(),
+                    match_mode: crate::types::SearchMatchMode::Exact,
+                    session_id: None,
+                    scope_node_key: None,
+                    max_results: 1,
+                    include_branches: false,
+                    refresh: false,
+                })
+                .await,
+            Err(DriverError::Unsupported {
+                operation: "search"
+            })
+        ));
     }
 
     #[test]
@@ -804,7 +871,10 @@ mod tests {
     #[tokio::test]
     async fn browse_is_unsupported() {
         let driver = driver();
-        let err = driver.browse("").await.unwrap_err();
+        let err = driver
+            .browse(BrowsePageRequest::root(20))
+            .await
+            .unwrap_err();
         assert!(matches!(
             err,
             DriverError::Unsupported {

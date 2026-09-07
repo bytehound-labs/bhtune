@@ -1,0 +1,32 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc-search-index-control 1  "bhtune-opc-search-index-control "
+.SH NAME
+bhtune\-opc\-search\-index\-control \- Pause, resume, or cancel a persistent namespace\-index build
+.SH SYNOPSIS
+\fBbhtune\-opc\-search\-index\-control\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIACTION\fR>
+.SH DESCRIPTION
+Pause, resume, or cancel a persistent namespace\-index build
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+
+.TP
+\fB\-\-server\fR \fI<SERVER>\fR
+
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIACTION\fR>
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+pause
+.IP \(bu 2
+resume
+.IP \(bu 2
+cancel
+.RE
