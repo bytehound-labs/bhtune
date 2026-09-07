@@ -30,7 +30,13 @@ COPY frontend/ frontend/
 RUN pnpm --filter bhtune-frontend run build
 
 # ---- Rust builder -----------------------------------------------------------------------
-FROM rust:1-slim-bookworm AS builder
+# Pin the base image and compiler so Docker builds use the same Rust version as CI. The
+# official 1.98.1 slim image is not published yet, so install that compiler in the pinned
+# 1.98.0 base image instead of relying on the moving `rust:1` tag.
+FROM rust:1.98.0-slim-bookworm@sha256:1469a27c125cb5a3aebfa4f4e4665d935b02fb72cc093b2c974b3d740e43f157 AS builder
+
+RUN rustup toolchain install 1.98.1 --profile minimal --no-self-update
+ENV RUSTUP_TOOLCHAIN=1.98.1
 
 # protobuf-compiler: opcda-bridge-proto compiles bridge.proto via tonic-build at build time
 # (matches checks.yml/release.yml's `taiki-e/install-action` protoc step -- a real, non-dev

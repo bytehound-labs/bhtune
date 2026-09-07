@@ -36,6 +36,9 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 
 ## Code style
 
+- Use Rust's `stable` toolchain for local development to match the regular validation, coverage,
+  SonarQube, and release jobs. The MSRV job separately checks Rust 1.94.0; on rustup-managed
+  hosts, run `rustup update stable` if the selected toolchain is older.
 - Format Rust with `cargo fmt --all` (default rustfmt settings) before committing.
 - Lint with `cargo clippy --workspace --all-targets --all-features -- -D warnings`; fix every
   warning or justify an explicit `#[allow(...)]` with a comment.

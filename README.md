@@ -253,6 +253,10 @@ by [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge)'s gRPC codeg
 script — see [Installation](docs/getting-started/installation.md#prerequisites) for
 per-platform install commands):
 
+Use the `stable` Rust toolchain for local builds to match the regular validation, coverage,
+SonarQube, and release jobs. CI separately checks the Rust 1.94.0 MSRV; on rustup-managed hosts,
+`rustup update stable` refreshes an older selected toolchain.
+
 ```sh
 git clone https://github.com/bytehound-labs/bhtune.git
 cd bhtune
