@@ -44,6 +44,9 @@ Skip to [Prerequisites](#prerequisites) below to build from source instead.
 
 - A Rust toolchain supporting the 2024 edition (Rust 1.94 or newer — this is BHTune's declared
   MSRV, verified in CI).
+- Use the `stable` Rust toolchain for local builds to match the regular CI jobs. CI separately
+  checks Rust 1.94.0 as the MSRV; on rustup-managed hosts, `rustup update stable` refreshes an
+  older selected toolchain.
 - The Protocol Buffers compiler, `protoc`, on `PATH` — needed transitively by
   [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge)'s gRPC codegen build
   script. On Windows, `choco install protoc` is the most reliable option (`winget` can fail

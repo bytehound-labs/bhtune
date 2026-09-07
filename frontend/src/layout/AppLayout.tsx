@@ -213,7 +213,7 @@ export function AppLayout({
           instead.
         </div>
       )}
-      <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="mx-auto max-w-5xl px-6 py-8" data-doc-screenshot-content>
         <Outlet />
       </main>
     </div>

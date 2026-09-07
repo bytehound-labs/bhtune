@@ -73,6 +73,10 @@ session lifetime in one persistent notice.
   against the built-in simulator, no plant connection required.
 - [Web GUI quickstart](docs/getting-started/web-gui-quickstart.md) — the same tuning engine,
   driven from a browser.
+- [Web UI visual reference](docs/guides/web-ui/overview.md) — screenshots and task-focused
+  explanations for Full and Demo pages, OPC browsing, runs, templates, and configuration.
+  Short-page screenshots are cropped automatically to their rendered content; long workflows
+  retain full-page captures.
 - [Public simulator demo](docs/guides/public-simulator-demo.md) — the restricted mode's
   privacy, limits, deployment boundary, and self-hosting requirements.
 - [MRFT concepts](docs/guides/mrft-concepts.md) and [Safety](docs/guides/safety.md) — what the
@@ -142,6 +146,12 @@ page controls whether `Uncertain` readings are accepted during tuning; `Bad` is 
 Reopening the browser automatically expands the available path to the current Tag name, selects
 that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
 level.
+
+For a concrete example, selecting `Area01.FIC101.OUT` with a template whose PV suffix is `PV`
+sets the Tag name to `Area01.FIC101.PV`. BHTune reads the original `OUT` item first for OPC
+quality, then replaces everything after the final `.`, `!`, or `/`; it does not blindly append
+`.PV`. The [Web UI visual reference](docs/guides/web-ui/starting-a-tune.md#template-suffix-replacement)
+shows the browser and resulting Loop mapping.
 
 The New tune form's collapsible **Loop mapping** section is the single place to inspect and
 adjust the effective mapping. Every row shows its effective value and source. Tag mappings use
@@ -242,6 +252,10 @@ MSRV, verified in CI) and the Protocol Buffers compiler `protoc` on `PATH` (need
 by [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge)'s gRPC codegen build
 script — see [Installation](docs/getting-started/installation.md#prerequisites) for
 per-platform install commands):
+
+Use the `stable` Rust toolchain for local builds to match the regular validation, coverage,
+SonarQube, and release jobs. CI separately checks the Rust 1.94.0 MSRV; on rustup-managed hosts,
+`rustup update stable` refreshes an older selected toolchain.
 
 ```sh
 git clone https://github.com/bytehound-labs/bhtune.git

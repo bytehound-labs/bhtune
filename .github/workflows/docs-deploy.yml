@@ -2,11 +2,10 @@ name: Deploy docs site
 
 # Publishes website/ (built against ../docs, plus the generated Rust API reference under
 # /api/ -- see docs-api-rustdoc) to GitHub Pages at https://bytehound-labs.github.io/bhtune/.
-# Path-filtered so unrelated pushes to main don't redeploy an unchanged site. `crates/**` is
-# included because it changes the rustdoc content even when no Markdown changes; `checks.yml`'s
-# `website` job already builds and lints the Docusaurus site (without rustdoc, via a
-# `pathname://` link that isn't broken-link-checked -- see docs/reference/api.md) on every PR;
-# this workflow only ever runs on main, once a docs or code change has actually merged.
+# Path-filtered so unrelated pushes to main don't redeploy an unchanged site. `crates/**` and
+# `frontend/**` are included because they can change published Rustdoc or the generated Web UI
+# screenshots even when no Markdown changes; `checks.yml` validates the same generated assets
+# on pull requests. This workflow only ever runs on main, once a docs or code change has merged.
 on:
   push:
     branches: [main]
@@ -14,8 +13,13 @@ on:
       - "docs/**"
       - "website/**"
       - "crates/**"
+      - "frontend/**"
+      - "scripts/web-ui-screenshots.mjs"
+      - "package.json"
       - "Cargo.toml"
+      - "Cargo.lock"
       - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/docs-deploy.yml"
   workflow_dispatch:
 
@@ -31,7 +35,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -44,6 +48,14 @@ jobs:
       - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
         with:
           tool: protoc
+
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Build frontend
+        run: pnpm --filter bhtune-frontend run build
 
       - name: Generate the Rust API reference (rustdoc)
         # `--no-deps` publishes only this workspace's own crates, not every dependency's
@@ -80,10 +92,15 @@ jobs:
             echo '<p><a href="../reference/api/">Back to the annotated reference</a></p>'
           } >website/static/api/index.html
 
-      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
-        with:
-          runtime: node@lts
-          cache: true
+      - name: Build bhtune-server
+        run: cargo build --locked -p bhtune-server
+
+      - name: Install Playwright browser
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Generate and validate Web UI screenshots
+        run: pnpm docs:screenshots:check
 
       - name: Build site
         run: pnpm --filter bhtune-website run build
