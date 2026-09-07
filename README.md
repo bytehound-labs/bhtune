@@ -69,6 +69,9 @@ The fixed Demo defaults use a 200 ms simulator poll interval, a 0.5-second time 
 session lifetime in one persistent notice. Self-hosted image promotion uses an immutable
 digest and requires GitHub's signed build provenance to match the BHTune repository, the
 main-branch Docker workflow, the triggering commit, and the image digest before rollout.
+Changes to the image-promotion or Woodpecker deployment definitions also produce a matching
+immutable image, so the deployment job always runs against the configuration that was
+reviewed for that commit.
 
 ## Getting started
 
