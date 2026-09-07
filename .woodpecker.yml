@@ -34,14 +34,14 @@ steps:
       - |
         bash -euo pipefail <<'SCRIPT'
         image_repo='ghcr.io/bytehound-labs/bhtune'
-        expected_sha="${CI_COMMIT_SHA:?CI_COMMIT_SHA is required}"
+        expected_sha="$CI_COMMIT_SHA"
 
         if ! printf '%s\n' "$expected_sha" | grep -Eq '^[0-9a-f]{40}$'; then
           printf 'error: CI_COMMIT_SHA is not a full lowercase commit SHA\n' >&2
           exit 1
         fi
 
-        image_tag="sha-${expected_sha}"
+        image_tag="sha-$expected_sha"
         registry_token="$(curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
           "https://ghcr.io/token?service=ghcr.io&scope=repository:bytehound-labs/bhtune:pull" |
           jq -er '.token')"
@@ -52,7 +52,7 @@ steps:
           > "$registry_curl_config"
         chmod 600 "$registry_curl_config"
         registry_token_deadline=$((SECONDS + 240))
-        manifest_url="https://ghcr.io/v2/bytehound-labs/bhtune/manifests/${image_tag}"
+        manifest_url="https://ghcr.io/v2/bytehound-labs/bhtune/manifests/$image_tag"
         deadline=$((SECONDS + 2100))
         digest=''
 
@@ -94,7 +94,7 @@ steps:
 
         printf 'Resolved %s to %s\n' "$image_tag" "$digest"
         export GH_TOKEN="$BHTUNE_GITHUB_TOKEN"
-        gh attestation verify "oci://${image_repo}@${digest}" \
+        gh attestation verify "oci://$image_repo@$digest" \
           --repo bytehound-labs/bhtune \
           --signer-workflow bytehound-labs/bhtune/.github/workflows/docker-publish.yml \
           --source-ref refs/heads/main \
