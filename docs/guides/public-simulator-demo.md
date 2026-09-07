@@ -160,7 +160,9 @@ Use an immutable container digest for deployment rather than a mutable tag. Keep
 previous-image reference and a timestamped database backup so a failed migration or local
 health check can restore both the executable and its data. A public ingress failure with a
 healthy local backend is a proxy or network incident, not a reason to discard healthy
-application state.
+application state. The deployment pipeline verifies the signed build provenance certificate
+and image subject against the BHTune repository, the main-branch Docker workflow, the triggering
+commit, and the resolved image digest before it invokes the host rollout wrapper.
 
 ## Security boundary
 

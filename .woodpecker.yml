@@ -35,6 +35,9 @@ steps:
         bash -euo pipefail <<'SCRIPT'
         image_repo='ghcr.io/bytehound-labs/bhtune'
         expected_sha="$CI_COMMIT_SHA"
+        expected_repo='bytehound-labs/bhtune'
+        expected_ref='refs/heads/main'
+        expected_workflow='https://github.com/bytehound-labs/bhtune/.github/workflows/docker-publish.yml@refs/heads/main'
 
         if ! printf '%s\n' "$expected_sha" | grep -Eq '^[0-9a-f]{40}$'; then
           printf 'error: CI_COMMIT_SHA is not a full lowercase commit SHA\n' >&2
@@ -94,11 +97,33 @@ steps:
 
         printf 'Resolved %s to %s\n' "$image_tag" "$digest"
         export GH_TOKEN="$BHTUNE_GITHUB_TOKEN"
-        gh attestation verify "oci://$image_repo@$digest" \
-          --repo bytehound-labs/bhtune \
-          --signer-workflow bytehound-labs/bhtune/.github/workflows/docker-publish.yml \
-          --source-ref refs/heads/main \
-          --source-digest "$expected_sha"
+        attestation_json="$(
+          gh attestation verify "oci://$image_repo@$digest" \
+            --repo "$expected_repo" \
+            --cert-identity "$expected_workflow" \
+            --format json
+        )"
+        if ! printf '%s\n' "$attestation_json" | jq -e \
+          --arg image "$image_repo" \
+          --arg digest "${digest#sha256:}" \
+          --arg repo "$expected_repo" \
+          --arg ref "$expected_ref" \
+          --arg sha "$expected_sha" \
+          --arg workflow "$expected_workflow" \
+          'any(.[];
+            (.verificationResult.signature.certificate.subjectAlternativeName == $workflow) and
+            (.verificationResult.signature.certificate.githubWorkflowRepository == $repo) and
+            (.verificationResult.signature.certificate.githubWorkflowRef == $ref) and
+            (.verificationResult.signature.certificate.githubWorkflowSHA == $sha) and
+            (.verificationResult.signature.certificate.sourceRepositoryURI == ("https://github.com/" + $repo)) and
+            (.verificationResult.signature.certificate.sourceRepositoryRef == $ref) and
+            (.verificationResult.signature.certificate.sourceRepositoryDigest == $sha) and
+            (any(.verificationResult.statement.subject[]?;
+              (.name == $image) and (.digest.sha256 == $digest)))
+          )' >/dev/null; then
+          printf 'error: image attestation does not match the expected repository, workflow, ref, commit, and digest\n' >&2
+          exit 1
+        fi
 
         printf '%s\n' "$BHTUNE_APP1_SSH_PRIVATE_KEY" > "$work_dir/id_ed25519"
         printf '%s\n' "$BHTUNE_APP1_KNOWN_HOSTS" > "$work_dir/known_hosts"
