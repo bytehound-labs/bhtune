@@ -53,7 +53,8 @@ keeps each anonymous browser session's runs private, and uses the normal `/api/r
 detail, stream, cancel, export, and delete paths with owner-scoped responses. The capability
 request lazily assigns the host-only Demo cookie without creating database state; a session row
 is created only when that browser starts its first accepted run. The browser-local form draft
-expires after 24 hours. Demo policy limits and simulator timing are fixed application-owned
+expires after 24 hours, and each browser session may start up to 10 Demo runs. Demo policy
+limits and simulator timing are fixed application-owned
 values; deployment configuration may repeat them for validation but cannot widen them. Demo
 runs use the stable identity **Simulator demo**, not an external plant tag. The Demo page lets
 visitors choose a built-in template, process/controller type, and bounded MRFT and simulator
