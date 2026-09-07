@@ -328,8 +328,7 @@
       ],
       "documentation": [
         "docs/guides/web-ui/overview.md",
-        "docs/guides/public-simulator-demo.md",
-        "docs/guides/web-ui/starting-a-tune.md"
+        "docs/guides/public-simulator-demo.md"
       ],
       "sha256": "017fd39ffaf0d5b6d57195506df93572d9806b36312ffc943de863650f544b9c",
       "width": 1440,
