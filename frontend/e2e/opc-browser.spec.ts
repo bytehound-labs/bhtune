@@ -65,6 +65,7 @@ function searchIndexStatus(
     | "ready"
     | "stale"
     | "refreshing"
+    | "deleting"
     | "failed" = "ready",
   autoRefreshEnabled = true,
   lastError: string | null = null,
@@ -73,9 +74,9 @@ function searchIndexStatus(
     server: "Test.Server",
     state,
     auto_refresh_enabled: autoRefreshEnabled,
-    active_generation: state === "not_indexed" ? 0 : 1,
-    entry_count: 2,
-    unique_item_count: 2,
+    active_generation: state === "not_indexed" || state === "deleting" ? 0 : 1,
+    entry_count: state === "deleting" ? 0 : 2,
+    unique_item_count: state === "deleting" ? 0 : 2,
     started_at: null,
     completed_at: "2024-01-15T10:23:45Z",
     last_error: lastError,
@@ -147,10 +148,17 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
 
   test("builds, disables, and deletes a server index", async ({ page }) => {
     let status = searchIndexStatus("not_indexed", false);
+    let deletionPolls = 0;
     await page.getByLabel("OPC DA server ProgID").fill("Test.Server");
 
     await page.unroute("**/api/opc/search-index/status**");
     await page.route("**/api/opc/search-index/status**", async (route) => {
+      if (status.state === "deleting") {
+        deletionPolls += 1;
+        if (deletionPolls >= 2) {
+          status = searchIndexStatus("not_indexed", false);
+        }
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -190,7 +198,8 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         await route.fallback();
         return;
       }
-      status = searchIndexStatus("not_indexed", false);
+      deletionPolls = 0;
+      status = searchIndexStatus("deleting", false);
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -230,9 +239,21 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page
       .getByRole("button", { name: "Delete index", exact: true })
       .click();
+    await expect(page.getByText("Index: deleting")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Deleting the tag index… browse and direct reads remain available.",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Build index", exact: true }),
+    ).toBeDisabled();
     await expect(
       page.getByRole("button", { name: "Build index", exact: true }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Build index", exact: true }),
+    ).toBeEnabled();
     await expect(
       page.getByRole("button", { name: "Delete index", exact: true }),
     ).toHaveCount(0);

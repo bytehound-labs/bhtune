@@ -263,6 +263,7 @@ pub enum SearchIndexState {
     Refreshing,
     Promoting,
     Failed,
+    Deleting,
 }
 
 impl SearchIndexState {
@@ -276,6 +277,7 @@ impl SearchIndexState {
             Self::Refreshing => "refreshing",
             Self::Promoting => "promoting",
             Self::Failed => "failed",
+            Self::Deleting => "deleting",
         }
     }
 }
@@ -441,6 +443,26 @@ pub enum SearchEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_index_state_strings_cover_all_wire_states() {
+        let states = [
+            (SearchIndexState::Unspecified, "unspecified"),
+            (SearchIndexState::NotIndexed, "not_indexed"),
+            (SearchIndexState::Partial, "partial"),
+            (SearchIndexState::Ready, "ready"),
+            (SearchIndexState::Stale, "stale"),
+            (SearchIndexState::Refreshing, "refreshing"),
+            (SearchIndexState::Promoting, "promoting"),
+            (SearchIndexState::Failed, "failed"),
+            (SearchIndexState::Deleting, "deleting"),
+        ];
+
+        for (state, expected) in states {
+            assert_eq!(state.as_str(), expected);
+            assert_eq!(state.to_string(), expected);
+        }
+    }
 
     #[test]
     fn browse_page_request_builders_preserve_navigation_and_refresh_state() {

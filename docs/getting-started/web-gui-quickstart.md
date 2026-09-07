@@ -167,7 +167,8 @@ network.
      refreshes the index according to its configurable seven-day policy. The browser also
      provides **Refresh now**, **Retry build**, **Disable auto-refresh**, **Enable auto-refresh**,
      and **Delete index** actions. Disabling automatic refresh keeps the existing index and
-     searchable data; deleting it removes the index and enrollment while leaving ordinary browse,
+     searchable data; deleting it shows a temporary `deleting` state while the gateway removes
+     the index and enrollment, then leaves ordinary browse,
      direct ItemID entry, live reads, and tuning available. If indexing is not enrolled or is
      still building, the global search field is disabled, but the lazy tag tree and other
      operations remain available. Completed non-fatal inventory diagnostics remain available

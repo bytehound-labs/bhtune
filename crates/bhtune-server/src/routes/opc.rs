@@ -1021,7 +1021,7 @@ mod tests {
         ProtoSearchIndexStatus {
             server: "Sim.Server".to_string(),
             state: state as i32,
-            auto_refresh_enabled: true,
+            configured: true,
             active_generation: 7,
             entry_count: 12_345,
             unique_item_count: 9_876,

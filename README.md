@@ -149,6 +149,8 @@ enrollment in its index database, and starts the first build immediately. After 
 build, automatic refresh is enabled by default and follows the gateway's configurable
 seven-day policy. The browser can refresh immediately, retry a failed first build, disable or
 re-enable future automatic refreshes, and delete the selected index without editing gateway TOML.
+Deletion is coordinated asynchronously: the browser shows `deleting` while gateway cleanup runs
+and returns to `not indexed` when the data and enrollment have been removed.
 When automatic refresh is enabled, the next scheduled refresh is shown as a relative days-and-hours
 countdown; the exact scheduled time is available by hovering over it.
 Disabling automatic refresh retains the existing searchable data. Without a usable index, the

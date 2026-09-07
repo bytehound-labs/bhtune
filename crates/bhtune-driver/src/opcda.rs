@@ -415,6 +415,7 @@ pub fn search_index_state_from_bridge(state: opcda_bridge::SearchIndexState) -> 
         opcda_bridge::SearchIndexState::Refreshing => SearchIndexState::Refreshing,
         opcda_bridge::SearchIndexState::Promoting => SearchIndexState::Promoting,
         opcda_bridge::SearchIndexState::Failed => SearchIndexState::Failed,
+        opcda_bridge::SearchIndexState::Deleting => SearchIndexState::Deleting,
     }
 }
 
@@ -627,7 +628,8 @@ fn map_bridge_error_for(err: opcda_bridge::Error, operation: &'static str) -> Dr
             DriverError::BrowseStateInvalid
         }
         opcda_bridge::Error::UnknownIndexServer { .. }
-        | opcda_bridge::Error::IndexNotEnrolled { .. } => DriverError::IndexOperationRejected {
+        | opcda_bridge::Error::IndexNotEnrolled { .. }
+        | opcda_bridge::Error::IndexDeleting { .. } => DriverError::IndexOperationRejected {
             message: err.to_string(),
         },
         opcda_bridge::Error::IncompatibleGateway { .. } => {
@@ -853,6 +855,10 @@ mod tests {
             (
                 opcda_bridge::SearchIndexState::Failed,
                 SearchIndexState::Failed,
+            ),
+            (
+                opcda_bridge::SearchIndexState::Deleting,
+                SearchIndexState::Deleting,
             ),
         ] {
             assert_eq!(search_index_state_from_bridge(wire), expected);
@@ -1373,7 +1379,7 @@ mod smoke_tests {
             search_index_status_response: ProtoSearchIndexStatus {
                 server: "S1".into(),
                 state: ProtoSearchIndexState::Ready as i32,
-                auto_refresh_enabled: true,
+                configured: true,
                 active_generation: 7,
                 entry_count: 2,
                 unique_item_count: 2,
@@ -1392,7 +1398,7 @@ mod smoke_tests {
                 status: Some(ProtoSearchIndexStatus {
                     server: "S1".into(),
                     state: ProtoSearchIndexState::Ready as i32,
-                    auto_refresh_enabled: true,
+                    configured: true,
                     active_generation: 7,
                     entry_count: 2,
                     unique_item_count: 2,
@@ -1408,6 +1414,9 @@ mod smoke_tests {
         let status = driver.search_index_status().await.unwrap();
         assert_eq!(status.state, SearchIndexState::Ready);
         assert_eq!(status.active_generation, 7);
+        driver.set_search_index_auto_refresh(false).await.unwrap();
+        driver.set_search_index_auto_refresh(true).await.unwrap();
+        driver.delete_search_index().await.unwrap();
         let response = driver
             .search_index_query(SearchIndexRequest::new(
                 "FCS0201!204FI00510",
@@ -1508,6 +1517,16 @@ mod smoke_tests {
         );
         assert!(
             <OpcDaDriver as Driver>::refresh_search_index(&driver, false)
+                .await
+                .is_ok()
+        );
+        assert!(
+            <OpcDaDriver as Driver>::set_search_index_auto_refresh(&driver, false)
+                .await
+                .is_ok()
+        );
+        assert!(
+            <OpcDaDriver as Driver>::delete_search_index(&driver)
                 .await
                 .is_ok()
         );

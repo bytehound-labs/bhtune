@@ -1120,7 +1120,7 @@ mod tests {
         let status = ProtoSearchIndexStatus {
             server: "Sim.Server".into(),
             state: ProtoSearchIndexState::Partial as i32,
-            auto_refresh_enabled: true,
+            configured: true,
             active_generation: 2,
             entry_count: 3,
             unique_item_count: 2,

@@ -112,6 +112,8 @@ function searchStateLabel(status: OpcSearchIndexStatusResponse | undefined) {
       return "Refreshing";
     case "failed":
       return "Failed";
+    case "deleting":
+      return "Deleting";
     default:
       return status.state;
   }
@@ -124,7 +126,8 @@ function hasUsableIndex(
     !status ||
     status.active_generation < 1 ||
     status.state === "partial" ||
-    status.state === "not_indexed"
+    status.state === "not_indexed" ||
+    status.state === "deleting"
   ) {
     return false;
   }
@@ -449,7 +452,9 @@ export function OpcTagBrowserModal({
         ? "Global search will be available when the gateway finishes building the index. Lazy browse and direct ItemID entry remain available."
         : indexStatus.state === "failed"
           ? "Global search is unavailable because the gateway has no complete index. Lazy browse and direct ItemID entry remain available."
-          : "Global search is unavailable until the gateway has a complete index. Lazy browse and direct ItemID entry remain available.";
+          : indexStatus.state === "deleting"
+            ? "The tag index is being deleted. Build a new index when deletion finishes. Lazy browse and direct ItemID entry remain available."
+            : "Global search is unavailable until the gateway has a complete index. Lazy browse and direct ItemID entry remain available.";
 
   useEffect(() => {
     scopeStateRef.current = scopeState;
@@ -706,6 +711,15 @@ export function OpcTagBrowserModal({
     setSearchError(null);
     setActiveSearchIndex(-1);
   }, [bridgeHost, opcServer]);
+
+  useEffect(() => {
+    if (indexStatus?.state !== "deleting") return;
+    searchAbortRef.current?.abort();
+    setSearchMatches([]);
+    setSearchResponse(null);
+    setSearchError(null);
+    setActiveSearchIndex(-1);
+  }, [indexStatus?.state]);
 
   useEffect(() => {
     selectedNodeRef.current?.scrollIntoView({ block: "nearest" });
@@ -988,7 +1002,8 @@ export function OpcTagBrowserModal({
   useEffect(() => {
     if (
       indexStatus?.state !== "partial" &&
-      indexStatus?.state !== "refreshing"
+      indexStatus?.state !== "refreshing" &&
+      indexStatus?.state !== "deleting"
     ) {
       return;
     }
@@ -1097,7 +1112,8 @@ export function OpcTagBrowserModal({
                   refreshSearchIndex.isPending ||
                   !opcServer ||
                   indexStatus?.state === "partial" ||
-                  indexStatus?.state === "refreshing"
+                  indexStatus?.state === "refreshing" ||
+                  indexStatus?.state === "deleting"
                 }
                 onClick={() => void refreshIndex()}
               >
@@ -1120,6 +1136,12 @@ export function OpcTagBrowserModal({
                     ? "Cancelling…"
                     : "Cancel build"}
                 </Button>
+              )}
+              {indexStatus?.state === "deleting" && (
+                <span role="status" className="text-xs text-amber-300">
+                  Deleting the tag index… browse and direct reads remain
+                  available.
+                </span>
               )}
               {indexStatus &&
                 (indexStatus.active_generation > 0 ||
@@ -1274,7 +1296,9 @@ export function OpcTagBrowserModal({
                           ? "The tag index has not been built. Build it to enable global search."
                           : indexStatus?.state === "failed"
                             ? "The tag index failed to build. Retry it after resolving the gateway error."
-                            : "No matching tags."}
+                            : indexStatus?.state === "deleting"
+                              ? "The tag index is being deleted. Wait for deletion to finish before building a new index."
+                              : "No matching tags."}
                   </p>
                 )}
             </div>
