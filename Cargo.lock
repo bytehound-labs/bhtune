@@ -1424,6 +1424,8 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "opcda-bridge"
 version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3b83e5f927fb24c1d67b3fdb3f99e8cb145987ee84bea4c3ad60f0404cc8158"
 dependencies = [
  "opcda-bridge-proto",
  "serde",
@@ -1435,6 +1437,8 @@ dependencies = [
 [[package]]
 name = "opcda-bridge-proto"
 version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "afd7b2f5e77b409ebfc19ffc195ac4de76b80fadafadce8a2a1a6b3f64230a7e"
 dependencies = [
  "prost",
  "toml",

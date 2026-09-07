@@ -72,9 +72,3 @@ utoipa = { version = "5", default-features = false, features = ["macros"] }
 # Property tests exercise the same parser boundaries that the standalone libFuzzer targets
 # under `fuzz/` cover continuously in dedicated fuzzing jobs.
 proptest = "1"
-
-# Temporary local validation override while the breaking 0.5 bridge release is developed.
-# Remove before publishing this branch; consumers must resolve the crates.io release.
-[patch.crates-io]
-opcda-bridge = { path = "../../OpenSource/opcda-bridge/crates/opcda-bridge" }
-opcda-bridge-proto = { path = "../../OpenSource/opcda-bridge/crates/opcda-bridge-proto" }
