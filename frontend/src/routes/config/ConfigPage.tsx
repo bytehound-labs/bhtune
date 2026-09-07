@@ -273,6 +273,7 @@ export function ConfigPage() {
     <div>
       <PageHeading
         title="Configuration"
+        documentationId="config.page"
         description="Global policies used by every tune and by history maintenance."
       />
 
@@ -302,7 +303,10 @@ export function ConfigPage() {
           </div>
         )}
 
-        <FormSection title="OPC quality policy">
+        <FormSection
+          title="OPC quality policy"
+          documentationId="config.opc-quality-policy"
+        >
           <CheckboxField
             label="Allow Uncertain quality"
             checked={displayedForm.allowUncertainQuality}
@@ -311,7 +315,10 @@ export function ConfigPage() {
           />
         </FormSection>
 
-        <FormSection title="History retention">
+        <FormSection
+          title="History retention"
+          documentationId="config.history-retention"
+        >
           <div>
             <span className="text-xs uppercase tracking-wide text-slate-500">
               Retain completed runs
@@ -363,7 +370,10 @@ export function ConfigPage() {
           />
         </FormSection>
 
-        <FormSection title="Tune timing and safety">
+        <FormSection
+          title="Tune timing and safety"
+          documentationId="config.tune-timing-safety"
+        >
           <p className="text-sm text-slate-400">
             These settings apply to future tunes. Changes do not alter runs that
             are already prepared or in progress.
@@ -462,7 +472,7 @@ export function ConfigPage() {
       </form>
 
       <div className="mt-8 space-y-4">
-        <section>
+        <section data-doc-section="config.guidance">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
             Configuration guidance
           </h2>

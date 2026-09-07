@@ -14,6 +14,7 @@ pub mod error;
 pub mod openapi;
 pub mod routes;
 pub mod run;
+pub mod security;
 pub mod service;
 mod spa;
 pub mod state;
@@ -42,22 +43,37 @@ pub use state::AppState;
 /// fallback (axum panics if two merged routers each declare one), so this is the only place
 /// `.fallback` is called.
 pub fn build_router(state: AppState) -> axum::Router {
-    axum::Router::new()
-        .merge(routes::health::router())
-        .merge(routes::templates::router())
-        .merge(routes::history::router())
-        .merge(routes::runs::router())
-        .merge(routes::draft::router())
-        .merge(routes::config::router())
-        .merge(routes::stream::router())
-        .merge(routes::opc::router())
-        .route("/api/openapi.json", axum::routing::get(openapi_json))
-        .merge(utoipa_scalar::Scalar::with_url(
-            "/api/docs",
-            openapi::ApiDoc::openapi(),
+    let mode = state.mode;
+    let policy = state.demo_policy;
+    let router = if mode == bhtune_cli::config::ServerMode::Demo {
+        axum::Router::new()
+            .merge(routes::health::router())
+            .merge(routes::capabilities::router())
+            .merge(routes::demo::router(policy))
+    } else {
+        axum::Router::new()
+            .merge(routes::health::router())
+            .merge(routes::capabilities::router())
+            .merge(routes::templates::router())
+            .merge(routes::history::router())
+            .merge(routes::runs::router())
+            .merge(routes::draft::router())
+            .merge(routes::config::router())
+            .merge(routes::stream::router())
+            .merge(routes::opc::router())
+            .route("/api/openapi.json", axum::routing::get(openapi_json))
+            .merge(utoipa_scalar::Scalar::with_url(
+                "/api/docs",
+                openapi::ApiDoc::openapi(),
+            ))
+    };
+    router
+        .fallback(spa::static_handler)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            security::origin_and_security_headers,
         ))
         .with_state(state)
-        .fallback(spa::static_handler)
 }
 
 async fn openapi_json() -> axum::Json<utoipa::openapi::OpenApi> {

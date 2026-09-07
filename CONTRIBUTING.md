@@ -101,14 +101,20 @@ and validation rules rather than treating "latest" as an unconditional upgrade p
   Add tests for new code — including error branches and edge cases — in the same PR.
 - End-to-end browser tests live in `frontend/e2e/` (Playwright), driving a real
   `bhtune-server` running the simulator driver through the actual built UI — no mocked HTTP
-  layer. Run locally with:
+  layer for the real suites. The mocked Demo contract suite runs in the same Demo project.
+  Run the Full and Demo projects independently with:
 
   ```sh
   pnpm --filter bhtune-frontend run build   # builds frontend/dist/
   cargo build -p bhtune-server              # debug build serves dist/ live off disk
   npx --prefix frontend playwright install chromium   # first run only
-  pnpm --filter bhtune-frontend run test:e2e
+  PLAYWRIGHT_MODE=full pnpm --filter bhtune-frontend exec playwright test --project=full
+  PLAYWRIGHT_MODE=demo pnpm --filter bhtune-frontend exec playwright test --project=demo
   ```
+
+  The Demo project also requires `openssl` for its isolated loopback HTTPS certificate. Running
+  `pnpm --filter bhtune-frontend run test:e2e` without `PLAYWRIGHT_MODE` runs both projects and
+  starts both isolated test servers.
 
 ## CI
 
@@ -162,8 +168,40 @@ behavior — a new CLI flag, config key, HTTP endpoint, default value, or safety
 whichever of `README.md`, `AGENTS.md`, and `docs/` describes the area you're changing; see
 "Documentation contract" in `AGENTS.md` for the full policy. If you use Copilot CLI against
 this repo, `.github/hooks/docs-drift.json` prints a one-line reminder at the end of a session
-that changed `crates/**` without touching any documentation surface — a safety net, not a
-substitute for doing this deliberately.
+that changed `crates/**` or user-visible `frontend/src/**` without touching any documentation
+surface — a safety net, not a substitute for doing this deliberately.
+
+### Web UI screenshots
+
+The browser documentation uses deterministic Playwright screenshots generated from the real
+Full and Demo SPA. Screenshot PNGs are generated assets and must never be committed to Git.
+The text-only lock at `docs/reference/web-ui-screenshots.json` records scenario coverage,
+dimensions, hashes, and Pages URLs.
+
+Run the capture and lock update after a UI change:
+
+```sh
+pnpm docs:screenshots
+pnpm docs:screenshots:validate
+pnpm docs:screenshots:gallery
+```
+
+`docs:screenshots` runs the Full and Demo capture suites serially, updates the text lock, and
+creates the local review gallery at `frontend/test-results/docs-screenshots/index.html`.
+`docs:screenshots:check` regenerates candidates without changing the lock and fails when the
+canonical screenshots drift. The generated Pages directory is ignored locally; the Pages
+deployment workflow recreates it from the merged commit.
+
+The validator also compares every static `documentationId`/`data-doc-section` marker in
+`frontend/src/` with the manifest, so a newly marked UI section fails validation until it has
+an associated screenshot scenario.
+
+Add a new scenario when a new route, major section, modal, or safety-relevant state is not
+clearly represented by an existing capture. Give the image meaningful alt text and a caption,
+keep all operational instructions in prose, and link the screenshot to its full-size Pages URL.
+The viewport stays fixed for deterministic layout; use `capture: "content-fit"` for short pages
+whose rendered content does not fill the viewport. Its height is computed automatically from the
+shared content root, so do not add per-page screenshot heights.
 
 ## Pull requests
 

@@ -6,7 +6,11 @@
   "packageManager": "pnpm@11.22.0",
   "scripts": {
     "check:dead-code": "knip --no-progress",
-    "check:licenses": "node scripts/check-frontend-licenses.mjs"
+    "check:licenses": "node scripts/check-frontend-licenses.mjs",
+    "docs:screenshots": "node scripts/web-ui-screenshots.mjs capture --update-lock",
+    "docs:screenshots:check": "node scripts/web-ui-screenshots.mjs capture",
+    "docs:screenshots:gallery": "node scripts/web-ui-screenshots.mjs gallery",
+    "docs:screenshots:validate": "node scripts/web-ui-screenshots.mjs validate"
   },
   "devDependencies": {
     "knip": "6.32.3",

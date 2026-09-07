@@ -9,9 +9,10 @@ const templatesKey = ["templates"] as const;
 const templateKey = (name: string) => ["templates", name] as const;
 
 /** `GET /api/templates` — every stored template, ordered by name. */
-export function useTemplates() {
+export function useTemplates(enabled = true) {
   return useQuery({
     queryKey: templatesKey,
+    enabled,
     queryFn: async () => {
       const { data, error, response } = await apiClient.GET("/api/templates");
       if (error) throw toApiError(error, response);
@@ -21,7 +22,7 @@ export function useTemplates() {
 }
 
 /** `GET /api/templates/{name}` — one template's full detail. */
-export function useTemplate(name: string) {
+export function useTemplate(name: string, enabled = true) {
   return useQuery({
     queryKey: templateKey(name),
     queryFn: async () => {
@@ -34,7 +35,7 @@ export function useTemplate(name: string) {
       if (error) throw toApiError(error, response);
       return data;
     },
-    enabled: name.length > 0,
+    enabled: enabled && name.length > 0,
   });
 }
 

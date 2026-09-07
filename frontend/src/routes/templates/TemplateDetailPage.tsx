@@ -36,6 +36,7 @@ export function TemplateDetailPage() {
     <div>
       <PageHeading
         title={name}
+        documentationId="templates.detail-page"
         description={
           isUserOwned
             ? "User-owned template — editable."
@@ -94,7 +95,7 @@ export function TemplateDetailPage() {
 
       {template.isSuccess && (
         <>
-          <Section title="Identity">
+          <Section title="Identity" documentationId="template-detail.identity">
             <Field label="Name" value={template.data.name} />
             <Field
               label="Origin"
@@ -128,7 +129,7 @@ export function TemplateDetailPage() {
             />
           </Section>
 
-          <Section title="Behavior">
+          <Section title="Behavior" documentationId="template-detail.behavior">
             <Field
               label="Revert mode after test"
               value={yesNo(template.data.revert_mode)}
@@ -147,7 +148,10 @@ export function TemplateDetailPage() {
             />
           </Section>
 
-          <Section title="Tag suffixes">
+          <Section
+            title="Tag suffixes"
+            documentationId="template-detail.tag-suffixes"
+          >
             <Field
               label="Process variable"
               value={template.data.process_variable_suffix}
@@ -202,7 +206,10 @@ export function TemplateDetailPage() {
             />
           </Section>
 
-          <Section title="Mode values">
+          <Section
+            title="Mode values"
+            documentationId="template-detail.mode-values"
+          >
             <Field
               label="Manual value"
               value={template.data.mode_manual_value}

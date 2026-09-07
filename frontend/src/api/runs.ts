@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { toApiError } from "./errors";
 import type { components, operations } from "./schema";
+import type { AppMode } from "./capabilities";
 
 export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
 export type SampleResponse = components["schemas"]["SampleResponse"];
@@ -17,15 +18,23 @@ export type RunListFilter = NonNullable<
   operations["list_runs"]["parameters"]["query"]
 >;
 
-const runsKey = (filter: RunListFilter) => ["runs", filter] as const;
-const runKey = (id: number) => ["runs", id] as const;
-const lastRunRequestKey = ["runs", "last-request"] as const;
-const runDraftKey = ["runs", "draft"] as const;
+const runsRootKey = (mode: AppMode) => ["runs", mode] as const;
+const runsKey = (filter: RunListFilter, mode: AppMode) =>
+  [...runsRootKey(mode), "list", filter] as const;
+const runKey = (id: number, mode: AppMode) =>
+  [...runsRootKey(mode), "detail", id] as const;
+const lastRunRequestKey = [...runsRootKey("full"), "last-request"] as const;
+const runDraftKey = [...runsRootKey("full"), "draft"] as const;
 
 /** `GET /api/runs` — a filtered, paginated page of run summaries, newest-started-first. */
-export function useRuns(filter: RunListFilter = {}) {
+export function useRuns(
+  filter: RunListFilter = {},
+  enabled = true,
+  mode: AppMode = "full",
+) {
   return useQuery({
-    queryKey: runsKey(filter),
+    queryKey: runsKey(filter, mode),
+    enabled,
     queryFn: async () => {
       const { data, error, response } = await apiClient.GET("/api/runs", {
         params: { query: filter },
@@ -48,9 +57,9 @@ export function useRuns(filter: RunListFilter = {}) {
  * exact-moment refetch triggered by `useRunStream` itself the instant its `done` event
  * arrives, well ahead of this fallback.
  */
-export function useRun(id: number) {
+export function useRun(id: number, enabled = true, mode: AppMode = "full") {
   return useQuery({
-    queryKey: runKey(id),
+    queryKey: runKey(id, mode),
     queryFn: async () => {
       const { data, error, response } = await apiClient.GET("/api/runs/{id}", {
         params: { path: { id } },
@@ -58,7 +67,7 @@ export function useRun(id: number) {
       if (error) throw toApiError(error, response);
       return data;
     },
-    enabled: Number.isFinite(id),
+    enabled: enabled && Number.isFinite(id),
     refetchInterval: (query) =>
       query.state.data?.outcome === "running" ? 5000 : false,
   });
@@ -72,9 +81,10 @@ export function useRun(id: number) {
  * arguments (there's nothing to filter by) and default `staleTime`/no polling — this is a
  * one-shot seed read for a form's initial state, not a live view of anything.
  */
-export function useLastRunRequest() {
+export function useLastRunRequest(enabled = true) {
   return useQuery({
     queryKey: lastRunRequestKey,
+    enabled,
     queryFn: async () => {
       const { data, error, response } = await apiClient.GET(
         "/api/runs/last-request",
@@ -93,9 +103,10 @@ export function useLastRunRequest() {
  * 404, or 405; treat those responses as an empty draft so an upgrade does not start with a
  * misleading error banner. Unexpected server/database failures still surface normally.
  */
-export function useRunDraft() {
+export function useRunDraft(enabled = true) {
   return useQuery({
     queryKey: runDraftKey,
+    enabled,
     queryFn: async () => {
       const { data, error, response } = await apiClient.GET("/api/runs/draft");
       if (error) {
@@ -170,7 +181,11 @@ const emptyRunStreamState: RunStreamState = {
  * which would double-count against whatever `useRun` had already fetched if the two were
  * merged.
  */
-export function useRunStream(id: number, enabled: boolean): RunStreamState {
+export function useRunStream(
+  id: number,
+  enabled: boolean,
+  mode: AppMode = "full",
+): RunStreamState {
   const queryClient = useQueryClient();
   const [state, setState] = useState<RunStreamState>(emptyRunStreamState);
 
@@ -181,7 +196,9 @@ export function useRunStream(id: number, enabled: boolean): RunStreamState {
     }
 
     setState(emptyRunStreamState);
-    const source = new EventSource(`/api/runs/${id}/stream`);
+    const source = new EventSource(`/api/runs/${id}/stream`, {
+      withCredentials: true,
+    });
 
     source.addEventListener("initial", (event) => {
       const initialReadings = JSON.parse(
@@ -217,7 +234,7 @@ export function useRunStream(id: number, enabled: boolean): RunStreamState {
         outcome: done.outcome,
         reconnecting: false,
       }));
-      void queryClient.invalidateQueries({ queryKey: runKey(id) });
+      void queryClient.invalidateQueries({ queryKey: runKey(id, mode) });
     });
 
     source.onopen = () => {
@@ -237,7 +254,7 @@ export function useRunStream(id: number, enabled: boolean): RunStreamState {
     return () => {
       source.close();
     };
-  }, [id, enabled, queryClient]);
+  }, [id, enabled, mode, queryClient]);
 
   return state;
 }
@@ -248,7 +265,7 @@ export function useRunStream(id: number, enabled: boolean): RunStreamState {
  * cache entry from the `201` response and invalidates the list so `useRuns` picks it up
  * without waiting for its own next poll.
  */
-export function useStartRun() {
+export function useStartRun(mode: AppMode = "full") {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (request: StartRunRequest) => {
@@ -259,8 +276,8 @@ export function useStartRun() {
       return data;
     },
     onSuccess: (data) => {
-      queryClient.setQueryData(runKey(data.id), data);
-      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.setQueryData(runKey(data.id, mode), data);
+      void queryClient.invalidateQueries({ queryKey: runsRootKey(mode) });
     },
   });
 }
@@ -272,7 +289,7 @@ export function useStartRun() {
  * `useRun`'s query immediately for fast feedback — `useRun`'s own polling picks up the
  * eventual outcome.
  */
-export function useCancelRun() {
+export function useCancelRun(mode: AppMode = "full") {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: number) => {
@@ -285,7 +302,7 @@ export function useCancelRun() {
       if (error) throw toApiError(error, response);
     },
     onSuccess: (_data, id) => {
-      void queryClient.invalidateQueries({ queryKey: runKey(id) });
+      void queryClient.invalidateQueries({ queryKey: runKey(id, mode) });
     },
   });
 }
@@ -306,8 +323,8 @@ export function useUpdateRunNotes() {
       return data;
     },
     onSuccess: (data, { id }) => {
-      queryClient.setQueryData(runKey(id), data);
-      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.setQueryData(runKey(id, "full"), data);
+      void queryClient.invalidateQueries({ queryKey: runsRootKey("full") });
     },
   });
 }
@@ -327,8 +344,8 @@ export function useDeleteRunNotes() {
       return data;
     },
     onSuccess: (data, id) => {
-      queryClient.setQueryData(runKey(id), data);
-      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.setQueryData(runKey(id, "full"), data);
+      void queryClient.invalidateQueries({ queryKey: runsRootKey("full") });
     },
   });
 }
@@ -362,7 +379,7 @@ export function useWriteRun() {
       return data;
     },
     onSuccess: (data, { id }) => {
-      queryClient.setQueryData(runKey(id), data);
+      queryClient.setQueryData(runKey(id, "full"), data);
     },
   });
 }
@@ -389,7 +406,7 @@ export function useRevertRun() {
       return data;
     },
     onSuccess: (data, id) => {
-      queryClient.setQueryData(runKey(id), data);
+      queryClient.setQueryData(runKey(id, "full"), data);
     },
   });
 }
@@ -399,7 +416,7 @@ export function useRevertRun() {
  * run and its samples/results/write-back audit rows in one cascade (see `db-schema`'s
  * `ON DELETE CASCADE`); there is no undo.
  */
-export function useDeleteRun() {
+export function useDeleteRun(mode: AppMode = "full") {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: number) => {
@@ -409,8 +426,8 @@ export function useDeleteRun() {
       if (error) throw toApiError(error, response);
     },
     onSuccess: (_data, id) => {
-      queryClient.removeQueries({ queryKey: runKey(id) });
-      void queryClient.invalidateQueries({ queryKey: ["runs"] });
+      queryClient.removeQueries({ queryKey: runKey(id, mode) });
+      void queryClient.invalidateQueries({ queryKey: runsRootKey(mode) });
     },
   });
 }

@@ -43,8 +43,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: docker-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: docker-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('commit-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -56,6 +56,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -87,12 +89,13 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=edge,branch=main
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
 
       # Keep both attestations enabled. GHCR may render the attached metadata as an
       # `unknown/unknown` platform entry in its package UI, but the supply-chain evidence
       # is more valuable than that cosmetic presentation issue.
       - name: Build and push
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
@@ -103,3 +106,11 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
+
+      - name: Attest published image provenance
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

@@ -20,6 +20,7 @@
 
 use std::convert::Infallible;
 use std::time::Duration;
+use std::time::Instant;
 
 use async_stream::stream;
 use axum::Router;
@@ -96,18 +97,33 @@ pub(crate) async fn stream_run(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
+    stream_run_with_permit(state, run_id, None, None).await
+}
+
+pub(crate) async fn stream_run_with_permit(
+    state: AppState,
+    run_id: i64,
+    permit: Option<Vec<tokio::sync::OwnedSemaphorePermit>>,
+    timeout: Option<Duration>,
+) -> Result<impl IntoResponse, ApiError> {
     if TuneRunRow::get(&state.pool, run_id).await?.is_none() {
         return Err(ApiError::NotFound(format!("no run with id {run_id}")));
     }
 
     let pool = state.pool.clone();
     let events = stream! {
+        let _permit = permit;
+        let started = Instant::now();
         // `-1`: nothing sent yet, so the first poll below fetches every tick recorded so
         // far -- see `TuneSampleRow::list_for_run_since`'s own doc comment for why `-1` is a
         // safe "everything" sentinel (`tick` is always `>= 0`).
         let mut last_tick: i64 = -1;
         let mut sent_initial = false;
         loop {
+            if timeout.is_some_and(|limit| started.elapsed() >= limit) {
+                yield ok_event(Event::default().event("error").data("SSE demo time limit exceeded"));
+                break;
+            }
             let run_outcome = match TuneRunRow::get(&pool, run_id).await {
                 Ok(Some(run)) => {
                     if !sent_initial && let Some(initial) = run.initial_readings.as_ref() {
@@ -321,6 +337,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn streaming_after_its_deadline_emits_an_error_event_and_closes() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_running_run(&state, "LIC-STREAM-TIMEOUT").await;
+        let response = stream_run_with_permit(state, run_id, None, Some(Duration::ZERO))
+            .await
+            .unwrap()
+            .into_response();
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let events = parse_sse(core::str::from_utf8(&bytes).unwrap());
+
+        assert_eq!(
+            events,
+            vec![(
+                "error".to_string(),
+                "SSE demo time limit exceeded".to_string()
+            )]
+        );
     }
 
     #[tokio::test]

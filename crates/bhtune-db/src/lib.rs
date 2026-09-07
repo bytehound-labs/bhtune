@@ -29,6 +29,7 @@ pub mod seed;
 
 pub use backup::{RestoreOutcome, backup_to, restore_from};
 pub use error::{DbError, DbResult};
+pub use models::DemoSessionRow;
 pub use pool::{connect, connect_in_memory};
 pub use seed::{SeedOutcome, SeedResult, seed_builtin_templates, seed_templates};
 // Every `models`/`pool` function already takes/returns `sqlx::SqlitePool` in its public

@@ -75,6 +75,7 @@ export function PidActionModal({
       onClose={onClose}
       dismissible={!pending}
       widthClassName="max-w-2xl"
+      documentationId="run-detail.pid-action-review"
     >
       <div className="space-y-5">
         <div className="rounded-lg border border-amber-700/70 bg-amber-950/40 p-4">

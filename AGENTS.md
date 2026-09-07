@@ -48,6 +48,9 @@ file, resolved through the same `CLI > env > TOML > default` precedence as every
 setting, with console mirroring confined to stderr so it can never corrupt the `--output
 json` stdout contract — see "Logging" below. This completes all five `bhtune-cli` sub-phases;
 the CLI is a fully headless, scriptable adapter on its own, no server required.
+`prepare()` also finalizes any run row whose follow-up provenance snapshot fails: it records a
+`Failed` outcome, falling back to deleting the row if that terminal update cannot be persisted,
+so an owned HTTP preparation cannot leak a permanent `Running` row.
 The MRFT boundary-measurement correction and calculated-result safety guard are also implemented:
 result extrema are tracked separately from relay-switching hysteresis, degenerate or non-finite
 results are persisted as explicitly invalid rather than exposed as writable constants, and
@@ -294,9 +297,10 @@ Phase 9's two front-loaded,
 run-now items are also done: `docs-contract` (see
 "Documentation contract" above) and `docs-copilot-hook` — a paired `sessionStart`/`sessionEnd`
 Copilot CLI hook (`.github/hooks/docs-drift.json`) that warns when a session changed
-`crates/**` without touching any documentation surface, covering both a session's already-
-committed-and-pushed changes and anything still uncommitted (see `.github/hooks/README.md`
-for why it's a pair, not a single hook). `docs-generated-cli` is also done: a new
+Rust, user-visible `frontend/src/**`, or screenshot-documentation implementation change
+without touching any documentation surface, covering both a session's already-committed-and-
+pushed changes and anything still uncommitted (see `.github/hooks/README.md` for why it's a
+pair, not a single hook). `docs-generated-cli` is also done: a new
 `crates/bhtune-cli/examples/gen_docs.rs` regenerates the full CLI reference
 (`docs/reference/cli.md`, `clap-markdown`), one git/cargo-style man page per command and
 subcommand (`man/*.1`, `clap_mangen`, recursing `Command::get_subcommands()` rather than a
@@ -947,6 +951,15 @@ error_message })` even when the driver _rejects_ the write (read-only tag, out o
   is always configured) but the only way a test can bind an ephemeral port (`BHTUNE_BIND=
 127.0.0.1:0`) and still discover which port the OS actually chose from stdout, without
   hardcoding a port that might collide with something else already listening.
+- **`server-demo-mode` is done: public exposure uses a separate, server-enforced route surface.**
+  `ServerMode::Demo` is an explicit runtime mode in the same binary; `Full` remains the default
+  and retains the live-plant API. Demo mounts health, capabilities, built-in read-only
+  templates, and visitor-owned simulator run/history operations only. Anonymous
+  `__Host-bhtune_demo_session` cookies are opaque isolation/quota tokens: only their SHA-256
+  hashes are stored, ownership is attached during the initial `tune_runs` insert, and every
+  Demo list/detail/stream/cancel/export/delete query is owner-scoped. `/api/capabilities`
+  describes the mode, fixed policy, simulator bounds/defaults, restrictions, quotas, and
+  security metadata; the frontend fails closed if Demo metadata is missing or unsafe.
 - **Cargo preserves hyphens literally in `CARGO_BIN_EXE_<name>` when a `[[bin]]` name equals
   the package name and contains a hyphen.** For `bhtune-server` (package name and `[[bin]]`
   name both `"bhtune-server"`), the correct lookup in a test is
@@ -1280,6 +1293,14 @@ check`.** A dependency-free Node script that parses `pnpm licenses list --json`'
   unauthenticated network service in this exact topology, and it is strictly more dangerous than
   an unauthenticated bhtune (it can read/write any tag, whereas bhtune only ever writes the PID
   constants of one user-selected loop).
+- **Demo mode is not an authentication boundary; it is a reduced public capability boundary.**
+  A Demo deployment is safe to expose only because the server mounts no OPC, PID write/revert,
+  Config mutation, template mutation, notes, drafts, OpenAPI, or Scalar routes. Its anonymous
+  cookie identifies an isolated visitor namespace and carries quotas, but is not an account and
+  does not prove a person's identity. Fixed application-owned limits cannot be widened by
+  deployment configuration, in-memory coordination supports one application replica, and a
+  separate Demo database is required; Caddy, CrowdSec, and network controls remain necessary
+  perimeter defenses rather than being replaced by the application.
 - **Step Test is deferred**, not part of v1 (MRFT only). Step Test is an alternative, simpler
   manual tuning method that observes PV changes via an OPC DA _subscription_ rather than polling
   reads, and the bridge's protocol has no such push/subscription RPC yet — `ListServers`/`Read`/
@@ -1824,6 +1845,9 @@ Auto-discovered config file location (first one found wins):
 | Default OPC DA server | `--server`         | —                       | `server`         | none — must be set one way or another for `tune --driver opcda` and the `opc` subcommands                                                                                                           |
 | User template catalog | `--templates`      | `BHTUNE_TEMPLATES`      | `templates`      | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (falls back to `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error at this tier only |
 | History retention     | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days` | none — retain forever (see "Status" above for the retention sweep design)                                                                                                                           |
+| Server exposure mode  | —                  | `BHTUNE_SERVER_MODE`    | `server_mode`    | `full` — `demo` is the restricted, simulator-only public surface                                                                                                                                    |
+| Browser origin        | —                  | `BHTUNE_ORIGIN`         | `origin`         | derived loopback HTTP origin in Full mode; Demo requires one exact configured origin                                                                                                                |
+| Trusted proxy         | —                  | —                       | `trusted_proxy`  | none — forwarded client-IP headers are ignored unless the immediate peer matches this exact IP/CIDR                                                                                                 |
 
 `resolve_db_path`/`resolve_bridge_host`/`resolve_retention_days` fold the env var into the
 CLI value already (via clap's `env` attribute on `Cli::db`/`TuneArgs::bridge_host`/
@@ -1835,6 +1859,13 @@ server to fall back to — and is applied only for the `Opcda` driver inside
 `commands::tune::run` (never for `simulate`, which has no OPC server concept at all; a
 config-file `server` key is simply not consulted for a simulator run rather than causing an
 unrelated error).
+
+`server_mode` is resolved from `BHTUNE_SERVER_MODE` over the TOML value and defaults to
+`full`; it is intentionally not exposed as a browser Config control. `origin` is resolved from
+`BHTUNE_ORIGIN` over the TOML value and is used for exact-Origin checks on state-changing
+requests. `trusted_proxy` is a startup-only deployment setting, not a list of arbitrary
+forwarded addresses: Demo quota accounting trusts one normalized client-IP header only when
+the direct peer is inside the configured boundary.
 
 `db::open` gained `ensure_parent_dir`, creating the database path's parent directory tree
 (`std::fs::create_dir_all`) before connecting — needed once the default database path could
@@ -1853,6 +1884,106 @@ The block's actual branches are both genuinely exercised: the success path 13 ti
 `map_err`/`?` failure path exactly once, via the existing
 `run_with_cli_config_load_failure_is_exit_failure` test's unwritable `/nonexistent-dir/`
 database path — not a real gap.
+
+## Public simulator Demo mode (`server-demo-mode`)
+
+`bhtune-server` has two runtime exposure modes. `full` is the default and preserves the
+trusted/operator API, including OPC DA access, mutable templates/configuration, notes, drafts,
+and PID write/revert operations. `demo` is a server-enforced public surface for anonymous
+simulator demonstrations; it is not a second binary and it is not implemented by hiding Full
+mode controls in React.
+
+`BHTUNE_SERVER_MODE` overrides the optional `server_mode` TOML key and accepts only `full` or
+`demo`. Demo mode requires one exact configured browser origin from `BHTUNE_ORIGIN` or the
+`origin` TOML key. HTTPS is required except for explicit loopback HTTP origins used by tests and
+local development. `trusted_proxy` may name one exact IP address or matching-family CIDR; the
+server accepts the single `X-BHTune-Client-IP` value only from that peer. The deployment proxy
+overwrites the header, and the application falls back to the Axum peer address otherwise.
+
+The `[demo]` table is declarative rather than a tuning surface. Missing values resolve to the
+application-owned constants below; any present value must match exactly, so a deployment cannot
+weaken the public contract:
+
+| Control                                |           Fixed value |
+| -------------------------------------- | --------------------: |
+| Anonymous session lifetime             |        86,400 seconds |
+| Simulator poll interval                |                200 ms |
+| Whole-run timeout                      |            30 seconds |
+| Active runs globally / per visitor     |                 8 / 1 |
+| Accepted starts per token / client IP  | 6 / 6 per 600 seconds |
+| Retained terminal runs per visitor     |                    10 |
+| Current Demo-owned run rows globally   |                 5,000 |
+| JSON request body                      |                32 KiB |
+| SSE streams per visitor / globally     |                2 / 32 |
+| SSE absolute lifetime                  |            45 seconds |
+| Ordinary request concurrency / timeout |       64 / 10 seconds |
+| Cleanup interval                       |           300 seconds |
+
+Demo accepts only bounded simulator requests. The curated defaults are Yokogawa CentumVP,
+Flow/PI, reverse action, relay amplitude 10%, cycles skip/count `1/2`, zero noise protection,
+simulator gain/time constant/dead time/noise/seed `1.0/0.5/1.0/0/0`, PV/MV ranges `0–100`,
+and initial PV/MV `50`. Explicit values are bounded before the owned `prepare()` path: relay
+amplitude `1–20%`, skipped cycles `0–2`, counted cycles `1–3`, noise protection `0–3` seconds,
+gain magnitude `0.1–5.0` excluding zero, time constant `0.05–5` seconds, dead time `0–2`
+seconds, range endpoints `-1,000–1,000` with spans `1–1,000`, non-negative noise up to 5% of
+the PV span, and initial values inside their ranges. Gain sign and controller direction must
+form negative feedback, and the normal process/controller compatibility rules still apply.
+OPC server/bridge values, tag overrides, notes, `write_pid`, and write confirmation are
+rejected rather than ignored. The persisted/display identity is the fixed label
+`Simulator demo`; simulator internals remain `Sim.PV` and `Sim.MV`.
+
+The Demo route tree contains only:
+
+- `GET /api/health` and `GET /api/capabilities`
+- read-only built-in template list/detail
+- visitor-scoped run start/list/last-request/detail/stream/cancel/export/delete
+- the embedded SPA fallback
+
+Config, template mutation, server-backed drafts, notes, PID write/revert, OPC discovery/
+browse/read, OpenAPI, and Scalar are not mounted in Demo mode. The route boundary is therefore
+the security control; a client cannot reach an omitted capability by constructing an HTTP
+request manually. Demo list pagination is capped at 10, another visitor's numeric run ID
+returns the same `404` as an unknown ID, and every owner-scoped query applies the session
+condition in the database query itself.
+
+Anonymous identity is an opaque isolation token, not an account. The server issues a 32-byte
+cryptographically random lowercase-hex value in the host-only
+`__Host-bhtune_demo_session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`,
+`Max-Age=86400`, and no `Domain`. Only its SHA-256 hash is stored. Capability requests may
+issue the cookie without creating a row; a session row is created lazily only after an
+accepted, quota-checked run start. A shared browser profile shares its history and quotas;
+clearing cookies creates a new anonymous namespace. Sessions expire after the fixed lifetime
+and do not slide.
+
+The `0008_demo_sessions` migration adds `demo_sessions`, nullable
+`tune_runs.demo_session_id` ownership with cascading deletion, owner indexes, and database
+triggers that require an active session, require the simulator driver, make ownership
+immutable, and enforce the global current-row cap. Full-mode and pre-Demo rows retain
+`NULL` ownership. Startup recovery terminalizes owned rows still marked `running`; cleanup
+runs immediately and every five minutes, removing expired sessions only when they have no live
+run and pruning excess terminal history. The owned `prepare()` path records ownership in the
+initial insert; if follow-up provenance/effective-metadata persistence fails, it terminalizes
+the row or deletes it as a fallback rather than leaking a permanent `running` row.
+
+Admission uses non-queueing RAII permits: one global and one persistent per-visitor active-run
+permit are acquired before preparation, and accepted-start windows are checked per token and
+normalized client-IP before session creation or database writes. SSE has separate per-visitor
+and global permits plus a 45-second deadline. Ordinary Demo requests have their own
+concurrency and timeout layers. These controls are deliberately in-memory, so one application
+replica is supported; multiple replicas would require shared coordination before they could
+serve the same public namespace safely. Caddy/CrowdSec and network-level volumetric DDoS
+protection remain required perimeter controls.
+
+All Demo API responses are private (`Cache-Control: no-store`, `Vary: Cookie`, and no-index
+headers). State-changing browser requests require the exact configured `Origin`, CORS remains
+disabled, and responses receive CSP, framing, content-type, referrer, cross-origin, and
+Permissions Policy headers. The self-hosted deployment uses a dedicated database and runtime
+directories, a non-root single container with a read-only root filesystem, dropped
+capabilities, `no-new-privileges`, bounded CPU/memory/PIDs, a private Docker network, and an
+app1 firewall rule that admits the Caddy host only. GitHub Actions publishes a full-commit
+image tag; Woodpecker resolves and verifies its immutable digest before invoking the separate
+`FrontEnd` deployment wrapper. The public Caddy route remains a deliberate deployment
+activation step, not an application default.
 
 ## Browser configuration page and global quality policy
 
@@ -3375,11 +3506,14 @@ the published docs.
 
 ## `docs-agent-ci`: the AI docs agent
 
-`.github/workflows/docs-agent.yml` runs GitHub Copilot CLI headless on every PR touching
-`crates/**` and auto-commits narrative-prose documentation updates onto the PR branch — tier 2
-of the documentation contract (see "Documentation contract" above). Tier 1
-(`docs/reference/**`, generated) is already diff-gated by `checks.yml`; tier 3 (`AGENTS.md`) is
-explicitly off limits to this workflow.
+`.github/workflows/docs-agent.yml` captures deterministic Full/Demo Web UI screenshots on PRs
+touching `crates/**`, user-visible `frontend/src/**`, or screenshot tooling, then runs GitHub
+Copilot CLI headless and auto-commits narrative-prose documentation plus workflow-generated
+screenshot metadata onto same-repository PR branches — tier 2 of the documentation contract
+(see "Documentation contract" above). Fork PRs receive the candidate gallery without repository
+secrets; a maintainer-triggered run is required to apply text updates. Tier 1
+(`docs/reference/**`, generated) is already diff-gated by `checks.yml`; the screenshot lock is
+workflow-owned; tier 3 (`AGENTS.md`) is explicitly off limits to this workflow.
 
 **Guardrails, all load-bearing** (numbered comments in the workflow itself cross-reference
 these):
@@ -3391,11 +3525,13 @@ these):
    `COPILOT_GITHUB_TOKEN`, a personal PAT (see below), so GitHub attributes its push to that
    token's human owner — indistinguishable from that person pushing themselves. The commit
    author, independent of which token performed the push, is the only reliable signal. The
-   `paths: crates/**` trigger filter is a second, structural line of defense (the agent only
-   ever touches `docs/**`/`README.md`, which doesn't match that filter), but the explicit
-   author check doesn't rely on that alone.
-2. **Blast radius.** The agent may only touch `docs/**` (excluding the generated
-   `docs/reference/**`) and `README.md`. Enforced twice: a `--deny-tool 'write(AGENTS.md)'`
+   implementation-path trigger filter is a second, structural line of defense (the workflow-
+   owned commit only touches `docs/**`/`README.md` and the generated screenshot lock, which do
+   not match those implementation paths), but the explicit author check doesn't rely on that
+   alone.
+2. **Blast radius.** The agent may only touch `docs/**` (excluding generated references except
+   for the workflow-owned Web UI screenshot lock) and `README.md`; the screenshot capture is the
+   only workflow step allowed to update that lock. Enforced twice: a `--deny-tool 'write(AGENTS.md)'`
    flag blocks the one specific file that must never be auto-edited regardless of path-prefix
    ambiguity in the CLI's own tool-permission matching, and a post-run `git status --porcelain`
    check fails the job and discards every change if the diff touched anything outside the
@@ -3405,10 +3541,11 @@ these):
    it believes something here is stale, it says so in its final response instead, which gets
    posted as a PR comment for a human to act on or ignore.
 4. **Fork PRs.** `pull_request` runs from forks never receive repo secrets, so
-   `COPILOT_GITHUB_TOKEN` is absent and the job skips itself — the safe default. Deliberately
-   not "fixed" with `pull_request_target` (write permissions in the context of untrusted fork
-   code is a known privilege-escalation foot-gun). A `workflow_dispatch` path with a `pr_number`
-   input exists instead, for a maintainer who has already read the diff to run manually; since
+   `COPILOT_GITHUB_TOKEN` is absent and the Copilot prose step skips itself — the safe default.
+   The non-secret screenshot capture and review artifact still run. Deliberately not "fixed" with
+   `pull_request_target` (write permissions in the context of untrusted fork code is a known
+   privilege-escalation foot-gun). A `workflow_dispatch` path with a `pr_number` input exists
+   instead, for a maintainer who has already read the diff to apply text updates manually; since
    a fork PR's branch doesn't live in this repo, that path pushes to a new
    `docs-agent/pr-<n>-followup` branch here rather than trying to push back into the fork.
 5. **Auth.** `COPILOT_GITHUB_TOKEN` is a personal classic PAT (scopes include `copilot`, needed
@@ -3421,10 +3558,10 @@ these):
    `secrets.COPILOT_GITHUB_TOKEN`, so narrowing this later (a dedicated fine-grained PAT or App,
    if one is ever confirmed to support Copilot CLI auth) is a secret-rotation, not a workflow
    change.
-6. **Cost.** Each run consumes Copilot premium requests. The `crates/**` path filter keeps this
-   off PRs that can't have caused prose drift, and `--model` is pinned (`claude-sonnet-4.5`)
-   rather than left on auto-routing so a model upgrade never silently changes cost/behavior on
-   every future PR without a reviewed change here.
+6. **Cost.** Each same-repository run consumes Copilot premium requests. The implementation-path
+   filter keeps this off PRs that can't have caused prose drift or visual-documentation drift,
+   and `--model` is pinned (`claude-sonnet-4.5`) rather than left on auto-routing so a model
+   upgrade never silently changes cost/behavior on every future PR without a reviewed change here.
 
 **Validated locally** (flag parsing via a scratch-repo smoke test, then `actionlint` against
 the workflow file — it caught one real script-injection risk worth noting as a general
@@ -4146,12 +4283,12 @@ is process narrative that belongs in the commit message and PR description, not 
 reader opens to learn how the software behaves today.
 
 **Backstop, not a substitute.** `docs-copilot-hook` (a `sessionEnd` Copilot CLI hook, see
-`.github/hooks/README.md`) prints a cheap, non-blocking warning for the single most common
-miss — a session that changed `crates/**` without touching any documentation surface — but it
-is a safety net for an honest oversight, not a license to skip this step and let the hook catch
-it. It cannot judge whether documentation is actually _good_, and it has no way to catch drift
-in behavior that never touched `crates/**` at all (a `frontend/`-only or CI-workflow-only
-change with real user-visible impact, for instance).
+`.github/hooks/README.md`) prints a cheap, non-blocking warning for the common miss — a session
+that changed `crates/**`, user-visible `frontend/src/**`, or screenshot-documentation tooling
+without touching any documentation surface — but it is a safety net for an honest oversight,
+not a license to skip this step and let the hook catch it. It cannot judge whether documentation
+is actually _good_, and it has no way to catch drift in behavior that never touches one of those
+implementation paths.
 
 ## Knip dead-code analysis (`knip`, done)
 
@@ -4383,8 +4520,8 @@ When making frontend or browser-visible changes, keep the local test deployment 
 the result is available for manual testing after every edit:
 
 - Start `bhtune-server` with an isolated development database on
-  `127.0.0.1:8787`, for example
-  `BHTUNE_DB=/tmp/bhtune-dev.db BHTUNE_BIND=127.0.0.1:8787 cargo run -p bhtune-server`.
+  `0.0.0.0:8787`, for example
+  `BHTUNE_DB=/tmp/bhtune-dev.db BHTUNE_BIND=0.0.0.0:8787 cargo run -p bhtune-server`.
 - Start the frontend with `cd frontend && pnpm dev`. `frontend/vite.config.ts` binds Vite to
   `0.0.0.0` and allows the local `asus` hostname, so use `http://asus:5173` from another host
   on the trusted local network.
@@ -4393,7 +4530,9 @@ the result is available for manual testing after every edit:
   exits, start it again before finishing the change.
 - Verify both `http://127.0.0.1:8787/api/health` and the browser URL after each change. Do not
   expose the unauthenticated development API or UI beyond a trusted network, and never use a
-  normal user database for local UI testing.
+  normal user database for local UI testing. For Demo mode, keep the exact configured origin
+  and HTTPS/cookie requirements intact; non-loopback browser access requires a matching HTTPS
+  origin through a reverse proxy.
 
 ### Coverage enforcement
 
@@ -4443,6 +4582,21 @@ binary does something real and gains its own targeted tests.
 The indexed OPC integration also supports capability discovery, session-aware paged browsing,
 explicit browse-session cleanup, progressive namespace search, and persistent search-index
 operations through the driver, CLI, HTTP API, and frontend.
+
+The crate-map rows above summarize the long-lived crate phases. The public simulator Demo
+extension is complete across `bhtune-db`, `bhtune-cli`, `bhtune-server`, and `frontend/`;
+the separate FrontEnd deployment/Caddy assets are also authored. Public activation remains
+pending private deployment and rollback rehearsal, so DNS, firewall exposure, Caddy routing,
+Cloudflare Tunnel, authentication, CAPTCHA, and multi-replica coordination remain disabled
+and out of scope.
+
+| Demo surface        | Status                                                                                                                                                                                                               |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-db`         | Complete: anonymous session storage, nullable run ownership, owner-scoped queries, cleanup, recovery, and compatibility migration are implemented.                                                                   |
+| `bhtune-cli`        | Complete: shared owned preparation and deterministic simulator-only orchestration support the server without changing the Full-mode CLI contract.                                                                    |
+| `bhtune-server`     | Complete: validated Full/Demo runtime modes, restricted Demo routes, quotas, security checks, recovery, cleanup, and capabilities contract are implemented. Private deployment and public activation remain pending. |
+| `frontend/`         | Complete: capability-aware simulator-only UI, private history, live streaming, bounded requests, and Demo browser coverage are implemented.                                                                          |
+| FrontEnd deployment | Authored separately under `/home/mike/git/FrontEnd`; Compose, Caddy, Woodpecker, rollout, rollback, and validation assets await private rehearsal.                                                                   |
 
 ## Phases and todos (roadmap order)
 
@@ -4524,8 +4678,14 @@ delete`, and validating a single-JSON-template import too), and `template-docs` 
    user template catalog", and "Multi-template import, TOML export, and `template delete`"
    above.
 7. **Web GUI (`bhtune-server` + React SPA)** — `server-http-api`, `openapi-contract`, and
-   `frontend-shell` are all done: `bhtune-server` promoted from stub to a real Axum server
-   exposing `/api/health`, `/api/templates` (list/get/create/delete), and `/api/runs`
+   `frontend-shell` are all done: `bhtune-server` promoted from stub to a real Axum server.
+   The public simulator-demo extension is also implemented: `ServerMode::Demo` is a
+   server-enforced restricted route tree with anonymous owner-scoped sessions, fixed simulator
+   bounds/quotas, recovery/expiry cleanup, private SSE/history, capability-driven frontend
+   gating, and security headers. Full mode remains the default. The application currently
+   supports one Demo replica; self-hosted Caddy/Container deployment and public activation are
+   separate Phase 9 validation/deployment work and have not been rolled out.
+   The server exposes `/api/health`, `/api/templates` (list/get/create/delete), and `/api/runs`
    (filtered/paginated list, full run detail) over the tuning engine, sharing the CLI's config
    precedence and database bootstrap, with graceful shutdown on Ctrl+C/`SIGTERM`; every
    route/DTO is annotated with `utoipa`, aggregated into one OpenAPI 3.1 document served at
@@ -4677,9 +4837,10 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
 9. **Documentation and release** — two prerequisites are already done, front-loaded ahead of
    the rest of this phase since they're cheap and are what actually prevents drift: a
    documentation contract in this file (`docs-contract`, see "Documentation contract" above)
-   and a paired `sessionStart`/`sessionEnd` Copilot CLI hook warning when a session changes
-   `crates/**` without touching any documentation surface (`docs-copilot-hook`, see
-   `.github/hooks/README.md`). `docs-generated-cli` is also done: the CLI reference, man
+   and a paired `sessionStart`/`sessionEnd` Copilot CLI hook warning when a session changes Rust,
+   user-visible frontend, or screenshot-documentation implementation files without touching any
+   documentation surface (`docs-copilot-hook`, see `.github/hooks/README.md`). `docs-generated-cli`
+   is also done: the CLI reference, man
    pages, shell completions, and `bhtune.toml`/template-catalog JSON Schema all regenerate
    from the real `clap`/`serde` definitions and are drift-gated in CI — see
    "`docs-generated-cli`: generating the CLI reference, man pages, completions, and config
@@ -4703,11 +4864,14 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `ghcr.io/bytehound-labs/bhtune` on every push to `main` (tagged `edge`) and every version
    tag (tagged with the version and `latest`), and build-only (no push) on every PR — see
    "`pkg-docker`: the Docker image" below for the full design. `docs-agent-ci` is also done:
-   `.github/workflows/docs-agent.yml` runs GitHub Copilot CLI headless on PRs touching
-   `crates/**` and auto-commits narrative-prose doc updates, guarded against infinite loops,
-   scope creep beyond `docs/**`+`README.md`, and fork PRs — see "`docs-agent-ci`: the AI docs
-   agent" above for the full guardrail design; not yet validated against a real PR with
-   genuine prose drift. `pkg-evaluate-others` is also done: `.deb`/`.rpm` packages (built
+   `.github/workflows/docs-agent.yml` captures deterministic Full/Demo Web UI screenshots on
+   relevant implementation PRs, uploads a candidate gallery (including fork PRs without
+   secrets), and auto-commits narrative-prose updates plus workflow-generated screenshot metadata
+   on same-repository PRs, guarded against infinite loops, generated-lock edits, scope creep
+   beyond `docs/**`+`README.md`, and fork PRs — see "`docs-agent-ci`: the AI docs agent" above
+   for the full guardrail design; the capture/lock path still needs validation against a real
+   non-trivial PR with genuine visual drift. `pkg-evaluate-others` is also done: `.deb`/`.rpm`
+   packages (built
    with `cargo-deb`/`cargo-generate-rpm` from the same asset set as the Docker image),
    `cargo-binstall` metadata on `bhtune-cli`, and a prepared-but-inert Homebrew formula —
    see "`pkg-evaluate-others`: the remaining distribution channels" above for the full
@@ -4718,7 +4882,14 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    analysis" above. SonarQube Cloud analysis is configured for both BHTune and `opcda-bridge`
    through repository-specific `sonar-project.properties` and `.github/workflows/sonar.yml`
    files, with Rust LCOV coverage, maintainability analysis, weekly scans, and required aggregate
-   quality statuses. Remaining: release-time
+   quality statuses.
+   The public simulator-demo documentation and application/deployment integration are also
+   present: README and guides describe the anonymous, visitor-private simulator surface and
+   threat model, while the separate `FrontEnd` repository carries the digest-pinned Compose,
+   host-deployment, firewall, and Caddy integration. No DNS, public firewall exposure, Caddy
+   activation, Cloudflare Tunnel, or Internet rollout is part of the repository change until
+   private validation and rollback rehearsals pass.
+   Remaining: release-time
    version snapshots (`docs-versioning`, deferred until `release-v1`), and the rest of
    packaging: `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
    `release.yml`, but cutting the actual first tag is a deliberate call left to the project

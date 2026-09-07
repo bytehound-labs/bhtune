@@ -1013,6 +1013,7 @@ export function OpcTagBrowserModal({
         onClose();
       }}
       widthClassName="max-w-2xl"
+      documentationId="new-tune.opc-tag-browser"
     >
       {qualityWarning ? (
         <div className="space-y-4">

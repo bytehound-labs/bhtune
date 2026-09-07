@@ -60,7 +60,7 @@ pub struct RunListQuery {
     pub offset: Option<i64>,
 }
 
-fn filter_from_query(query: &RunListQuery) -> TuneRunFilter {
+pub(crate) fn filter_from_query(query: &RunListQuery) -> TuneRunFilter {
     let mut filter = TuneRunFilter::default();
     if let Some(v) = query.loop_id {
         filter = filter.with_loop_id(v);
@@ -204,7 +204,7 @@ pub(crate) async fn last_request(
 /// data, per this project's "just an open SQLite db, nothing hidden" design goal. Either way,
 /// the honest response is "nothing to prefill from", logged at `warn` so the data quality
 /// issue is visible without failing the request a real user is waiting on.
-fn parse_stored_request(run_id: i64, request_json: &str) -> Option<StartRunRequest> {
+pub(crate) fn parse_stored_request(run_id: i64, request_json: &str) -> Option<StartRunRequest> {
     match serde_json::from_str(request_json) {
         Ok(request) => Some(request),
         Err(e) => {

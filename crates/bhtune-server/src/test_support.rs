@@ -7,7 +7,6 @@
 use chrono::Utc;
 use std::sync::{Arc, RwLock};
 
-use crate::active_run::ActiveRun;
 use crate::state::AppState;
 
 /// An in-memory SQLite pool, migrated and seeded with the four built-in DCS/PLC templates
@@ -37,11 +36,12 @@ pub(crate) async fn in_memory_state() -> AppState {
     config_store.toml_tuning = config_store.config.tuning;
     config_store.tuning_sources =
         bhtune_cli::config::tuning_config_sources(&config_store.toml_tuning);
-    AppState {
+    AppState::for_mode(
         pool,
-        active_run: ActiveRun::default(),
-        config_store: Arc::new(RwLock::new(config_store)),
-    }
+        Arc::new(RwLock::new(config_store)),
+        bhtune_cli::config::ServerMode::Full,
+        bhtune_cli::config::DemoPolicy::default(),
+    )
 }
 
 /// A minimal mock `Bridge` gRPC service for tests that need a real

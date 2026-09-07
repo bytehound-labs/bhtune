@@ -24,6 +24,7 @@ export function TemplateListPage() {
     <div>
       <PageHeading
         title="Templates"
+        documentationId="templates.list-page"
         description="DCS/PLC tag-mapping presets used to derive a loop's OPC tag set from a single process-variable tag."
         actions={
           <Link to="/templates/new">

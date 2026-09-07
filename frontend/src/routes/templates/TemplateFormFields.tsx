@@ -33,7 +33,7 @@ export function TemplateFormFields({
 }) {
   return (
     <>
-      <FormSection title="Identity">
+      <FormSection title="Identity" documentationId="template-form.identity">
         <TextField
           label="Name"
           required
@@ -69,7 +69,7 @@ export function TemplateFormFields({
         />
       </FormSection>
 
-      <FormSection title="Behavior">
+      <FormSection title="Behavior" documentationId="template-form.behavior">
         <CheckboxField
           label="Revert mode after test"
           hint="Switch the controller back to its original mode after a completed MRFT test."
@@ -110,7 +110,10 @@ export function TemplateFormFields({
         />
       </FormSection>
 
-      <FormSection title="Tag suffixes">
+      <FormSection
+        title="Tag suffixes"
+        documentationId="template-form.tag-suffixes"
+      >
         <TextField
           label="Process variable"
           required
@@ -181,7 +184,10 @@ export function TemplateFormFields({
         />
       </FormSection>
 
-      <FormSection title="Mode values">
+      <FormSection
+        title="Mode values"
+        documentationId="template-form.mode-values"
+      >
         <TextField
           label="Manual value"
           value={form.mode_manual_value}

@@ -8,4 +8,6 @@ import type { paths } from "./schema";
 // already include the `/api` prefix (they come straight from the OpenAPI
 // spec), so no base path segment is added here — just the origin, which an
 // empty string resolves to `fetch`'s current-page default.
-export const apiClient = createClient<paths>({ baseUrl: "" });
+export const apiClient = createClient<paths>({
+  baseUrl: "",
+});

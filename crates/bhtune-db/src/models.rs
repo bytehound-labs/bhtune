@@ -10,7 +10,8 @@
 //! instead, matching the table exactly and avoiding a redundant, only-sometimes-consistent
 //! duplicate field.
 //!
-//! [`DcsTemplateRow`] and [`TuneRunRow`]/[`TuneSampleRow`]/[`TuneResultRow`]/
+//! [`DemoSessionRow`], [`DcsTemplateRow`], and
+//! [`TuneRunRow`]/[`TuneSampleRow`]/[`TuneResultRow`]/
 //! [`TuneMvActuationRow`]/[`TuneWriteRow`] have full repository methods (insert, lifecycle
 //! transitions, filtering, pagination) — covering `db-seed-templates` and
 //! `history-query-api`. [`LoopRow`] deliberately has none yet: full CRUD for saved loops
@@ -40,6 +41,165 @@ use crate::{
     convert::{enum_to_text, text_to_enum},
     error::{DbError, DbResult},
 };
+
+// demo_sessions {{{1
+
+/// Failure reason persisted when startup recovery terminates an owned demo run that was still
+/// marked as running.
+pub const DEMO_RESTART_INTERRUPTED_REASON: &str = "demo run was interrupted by a server restart";
+
+/// A short-lived anonymous owner for simulator-only public demo runs. The raw bearer token is
+/// never stored; callers pass its lowercase hexadecimal SHA-256 hash to the repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DemoSessionRow {
+    pub id: i64,
+    pub token_hash: String,
+    pub created_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+impl DemoSessionRow {
+    /// Persists a session on first use, or returns the already-persisted valid row when another
+    /// request won the same token-hash race.
+    pub async fn create(
+        pool: &SqlitePool,
+        token_hash: &str,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> DbResult<Self> {
+        Self::get_or_create(pool, token_hash, now, expires_at).await
+    }
+
+    /// Lazily persists a token hash on first use. Concurrent callers presenting the same token
+    /// converge on one row: the unique-token loser reloads the winner's valid row rather than
+    /// surfacing a uniqueness error.
+    ///
+    /// An expired or revoked conflicting row remains authoritative and is returned as
+    /// `RowNotFound`; it is never revived and its fixed expiry is never extended.
+    pub async fn get_or_create(
+        pool: &SqlitePool,
+        token_hash: &str,
+        now: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+    ) -> DbResult<Self> {
+        let inserted = sqlx::query(
+            "INSERT INTO demo_sessions (token_hash, created_at, last_seen_at, expires_at) \
+             VALUES (?, ?, ?, ?) \
+             ON CONFLICT(token_hash) DO NOTHING \
+             RETURNING *",
+        )
+        .bind(token_hash)
+        .bind(now)
+        .bind(now)
+        .bind(expires_at)
+        .fetch_optional(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        match inserted {
+            Some(row) => row_to_demo_session(row),
+            None => Self::get_by_token_hash(pool, token_hash, now)
+                .await?
+                .ok_or_else(|| DbError::Query(sqlx::Error::RowNotFound)),
+        }
+    }
+
+    /// Looks up an authorization session and atomically records its latest activity. Expired
+    /// and revoked rows are deliberately indistinguishable from a missing row, and the fixed
+    /// expiry is never extended.
+    pub async fn get_by_token_hash(
+        pool: &SqlitePool,
+        token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> DbResult<Option<Self>> {
+        let row = sqlx::query(
+            "UPDATE demo_sessions \
+             SET last_seen_at = MAX(last_seen_at, ?) \
+             WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ? \
+             RETURNING *",
+        )
+        .bind(now)
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(pool)
+        .await
+        .map_err(DbError::Query)?;
+        row.map(row_to_demo_session).transpose()
+    }
+
+    /// Records activity only while the session remains valid. `expires_at` is never changed:
+    /// demo sessions have an absolute lifetime, not a sliding one.
+    pub async fn touch_by_token_hash(
+        pool: &SqlitePool,
+        token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> DbResult<Option<Self>> {
+        Self::get_by_token_hash(pool, token_hash, now).await
+    }
+
+    pub async fn revoke(pool: &SqlitePool, id: i64, now: DateTime<Utc>) -> DbResult<bool> {
+        let result = sqlx::query(
+            "UPDATE demo_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+        )
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(DbError::Query)?;
+        Ok(result.rows_affected() != 0)
+    }
+
+    /// Removes expired/revoked sessions and cascades their terminal owned history.
+    ///
+    /// A session owning a running run is protected even after expiry or revocation. Startup
+    /// recovery must first mark that run failed via [`Self::recover_running_demo_runs`]; only a
+    /// later cleanup can remove the session and its now-terminal history.
+    pub async fn cleanup_expired(pool: &SqlitePool, now: DateTime<Utc>) -> DbResult<u64> {
+        let result = sqlx::query(
+            "DELETE FROM demo_sessions \
+             WHERE (expires_at <= ? OR revoked_at IS NOT NULL) \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM tune_runs \
+                   WHERE tune_runs.demo_session_id = demo_sessions.id \
+                     AND tune_runs.outcome = 'running' \
+               )",
+        )
+        .bind(now)
+        .execute(pool)
+        .await
+        .map_err(DbError::Query)?;
+        Ok(result.rows_affected())
+    }
+
+    /// Marks demo runs left in `running` state by a process restart as failed. Demo work is
+    /// intentionally not resumed after a crash or restart.
+    pub async fn recover_running_demo_runs(pool: &SqlitePool, now: DateTime<Utc>) -> DbResult<u64> {
+        let result = sqlx::query(
+            "UPDATE tune_runs SET outcome = 'failed', completed_at = ?, \
+             failure_reason = ? \
+             WHERE demo_session_id IS NOT NULL AND outcome = 'running'",
+        )
+        .bind(now)
+        .bind(DEMO_RESTART_INTERRUPTED_REASON)
+        .execute(pool)
+        .await
+        .map_err(DbError::Query)?;
+        Ok(result.rows_affected())
+    }
+}
+
+fn row_to_demo_session(row: SqliteRow) -> DbResult<DemoSessionRow> {
+    Ok(DemoSessionRow {
+        id: row.try_get("id").map_err(DbError::Query)?,
+        token_hash: row.try_get("token_hash").map_err(DbError::Query)?,
+        created_at: row.try_get("created_at").map_err(DbError::Query)?,
+        last_seen_at: row.try_get("last_seen_at").map_err(DbError::Query)?,
+        expires_at: row.try_get("expires_at").map_err(DbError::Query)?,
+        revoked_at: row.try_get("revoked_at").map_err(DbError::Query)?,
+    })
+}
 
 // dcs_templates {{{1
 
@@ -561,6 +721,7 @@ pub struct TuneRunInitialReadings {
 pub struct TuneRunRow {
     pub id: i64,
     pub loop_id: Option<i64>,
+    pub demo_session_id: Option<i64>,
     pub loop_name: String,
     pub driver: TuneDriver,
     /// The OPC DA server ProgID this run actually used -- `None` for a non-opcda run, or for
@@ -633,6 +794,7 @@ pub struct TuneRunRow {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TuneRunFilter {
     pub loop_id: Option<i64>,
+    pub demo_session_id: Option<i64>,
     pub process_type: Option<ProcessType>,
     pub controller_type: Option<ControllerType>,
     pub outcome: Option<TuneOutcome>,
@@ -652,6 +814,10 @@ pub struct TuneRunFilter {
 }
 
 impl TuneRunFilter {
+    pub fn with_demo_session_id(mut self, demo_session_id: i64) -> TuneRunFilter {
+        self.demo_session_id = Some(demo_session_id);
+        self
+    }
     pub fn with_loop_id(mut self, loop_id: i64) -> TuneRunFilter {
         self.loop_id = Some(loop_id);
         self
@@ -764,6 +930,34 @@ impl TuneRunRow {
         tags: &LoopTags,
         now: DateTime<Utc>,
     ) -> DbResult<TuneRunRow> {
+        Self::start_with_demo_session(
+            pool,
+            None,
+            loop_id,
+            loop_name,
+            driver,
+            config,
+            template_origin,
+            template,
+            tags,
+            now,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_with_demo_session(
+        pool: &SqlitePool,
+        demo_session_id: Option<i64>,
+        loop_id: Option<i64>,
+        loop_name: &str,
+        driver: TuneDriver,
+        config: LoopConfig,
+        template_origin: TemplateOrigin,
+        template: &DcsTemplate,
+        tags: &LoopTags,
+        now: DateTime<Utc>,
+    ) -> DbResult<TuneRunRow> {
         let template_snapshot_json =
             serde_json::to_string(template).expect("DcsTemplate serialization is infallible");
         let tags_json = serde_json::to_string(tags).expect("LoopTags serialization is infallible");
@@ -771,16 +965,23 @@ impl TuneRunRow {
         let row = sqlx::query(
             r#"
             INSERT INTO tune_runs (
-                loop_id, loop_name, driver, started_at, outcome,
+                loop_id, demo_session_id, loop_name, driver, started_at, outcome,
                 process_type, controller_type, relay_amp_percent, num_cycles_skip,
                 num_cycles_count, noise_protection_secs, mrft_delay_secs,
                 template_name, template_origin, template_snapshot_json, tags_json,
                 created_at
-            ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            )
+            SELECT ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE ? IS NULL OR EXISTS (
+                SELECT 1
+                FROM demo_sessions
+                WHERE id = ? AND revoked_at IS NULL AND expires_at > ?
+            )
             RETURNING *
             "#,
         )
         .bind(loop_id)
+        .bind(demo_session_id)
         .bind(loop_name)
         .bind(enum_to_text(&driver))
         .bind(now)
@@ -796,11 +997,179 @@ impl TuneRunRow {
         .bind(template_snapshot_json)
         .bind(tags_json)
         .bind(now)
-        .fetch_one(pool)
+        .bind(demo_session_id)
+        .bind(demo_session_id)
+        .bind(now)
+        .fetch_optional(pool)
         .await
-        .map_err(DbError::Query)?;
+        .map_err(DbError::Query)?
+        .ok_or_else(|| DbError::Query(sqlx::Error::RowNotFound))?;
 
         row_to_tune_run(row)
+    }
+
+    /// Starts a simulator run owned by a demo session. The database trigger rejects any
+    /// attempt to attach an owner to a live OPC DA run.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_owned(
+        pool: &SqlitePool,
+        demo_session_id: i64,
+        loop_name: &str,
+        config: LoopConfig,
+        template_origin: TemplateOrigin,
+        template: &DcsTemplate,
+        tags: &LoopTags,
+        now: DateTime<Utc>,
+    ) -> DbResult<TuneRunRow> {
+        Self::start_with_demo_session(
+            pool,
+            Some(demo_session_id),
+            None,
+            loop_name,
+            TuneDriver::Simulator,
+            config,
+            template_origin,
+            template,
+            tags,
+            now,
+        )
+        .await
+    }
+
+    pub async fn get_for_demo_session(
+        pool: &SqlitePool,
+        run_id: i64,
+        demo_session_id: i64,
+    ) -> DbResult<Option<TuneRunRow>> {
+        let row = sqlx::query("SELECT * FROM tune_runs WHERE id = ? AND demo_session_id = ?")
+            .bind(run_id)
+            .bind(demo_session_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(DbError::Query)?;
+        row.map(row_to_tune_run).transpose()
+    }
+
+    pub async fn list_for_demo_session(
+        pool: &SqlitePool,
+        demo_session_id: i64,
+        pagination: Pagination,
+    ) -> DbResult<Vec<TuneRunRow>> {
+        let rows = sqlx::query(
+            "SELECT * FROM tune_runs WHERE demo_session_id = ? \
+             ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?",
+        )
+        .bind(demo_session_id)
+        .bind(pagination.limit)
+        .bind(pagination.offset)
+        .fetch_all(pool)
+        .await
+        .map_err(DbError::Query)?;
+        rows.into_iter().map(row_to_tune_run).collect()
+    }
+
+    pub async fn newest_for_demo_session(
+        pool: &SqlitePool,
+        demo_session_id: i64,
+    ) -> DbResult<Option<TuneRunRow>> {
+        let row = sqlx::query(
+            "SELECT * FROM tune_runs WHERE demo_session_id = ? \
+             ORDER BY started_at DESC, id DESC LIMIT 1",
+        )
+        .bind(demo_session_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(DbError::Query)?;
+        row.map(row_to_tune_run).transpose()
+    }
+
+    pub async fn count_for_demo_session(pool: &SqlitePool, demo_session_id: i64) -> DbResult<i64> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM tune_runs WHERE demo_session_id = ?")
+            .bind(demo_session_id)
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)
+    }
+
+    /// Counts every current Demo-owned run across all sessions and outcomes. Full-mode rows have
+    /// `demo_session_id = NULL` and are excluded.
+    pub async fn count_demo_owned(pool: &SqlitePool) -> DbResult<i64> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM tune_runs WHERE demo_session_id IS NOT NULL")
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)
+    }
+
+    /// Deletes terminal history beyond the newest `retain` rows for one Demo owner. Running
+    /// rows never consume a retention slot and are never deleted. Child samples, results,
+    /// writes, and MV-actuation evidence cascade with each deleted run.
+    pub async fn prune_terminal_for_demo_session(
+        pool: &SqlitePool,
+        demo_session_id: i64,
+        retain: u32,
+    ) -> DbResult<u64> {
+        let result = sqlx::query(
+            "DELETE FROM tune_runs \
+             WHERE id IN ( \
+                 SELECT id FROM tune_runs \
+                 WHERE demo_session_id = ? AND outcome <> 'running' \
+                 ORDER BY started_at DESC, id DESC \
+                 LIMIT -1 OFFSET ? \
+             )",
+        )
+        .bind(demo_session_id)
+        .bind(i64::from(retain))
+        .execute(pool)
+        .await
+        .map_err(DbError::Query)?;
+        Ok(result.rows_affected())
+    }
+
+    /// Applies [`Self::prune_terminal_for_demo_session`]'s retention rule independently to
+    /// every Demo owner in one statement. Intended for periodic global cleanup.
+    pub async fn prune_terminal_demo_owned(pool: &SqlitePool, retain: u32) -> DbResult<u64> {
+        let result = sqlx::query(
+            "WITH ranked AS ( \
+                 SELECT id, ROW_NUMBER() OVER ( \
+                     PARTITION BY demo_session_id ORDER BY started_at DESC, id DESC \
+                 ) AS retention_rank \
+                 FROM tune_runs \
+                 WHERE demo_session_id IS NOT NULL AND outcome <> 'running' \
+             ) \
+             DELETE FROM tune_runs \
+             WHERE id IN (SELECT id FROM ranked WHERE retention_rank > ?)",
+        )
+        .bind(i64::from(retain))
+        .execute(pool)
+        .await
+        .map_err(DbError::Query)?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn count_rows_for_demo_session(
+        pool: &SqlitePool,
+        demo_session_id: i64,
+    ) -> DbResult<i64> {
+        sqlx::query_scalar(
+            "SELECT
+                (SELECT COUNT(*) FROM tune_runs WHERE demo_session_id = ?)
+              + (SELECT COUNT(*) FROM tune_samples WHERE run_id IN
+                    (SELECT id FROM tune_runs WHERE demo_session_id = ?))
+              + (SELECT COUNT(*) FROM tune_results WHERE run_id IN
+                    (SELECT id FROM tune_runs WHERE demo_session_id = ?))
+              + (SELECT COUNT(*) FROM tune_writes WHERE run_id IN
+                    (SELECT id FROM tune_runs WHERE demo_session_id = ?))
+              + (SELECT COUNT(*) FROM tune_mv_actuations WHERE run_id IN
+                    (SELECT id FROM tune_runs WHERE demo_session_id = ?))",
+        )
+        .bind(demo_session_id)
+        .bind(demo_session_id)
+        .bind(demo_session_id)
+        .bind(demo_session_id)
+        .bind(demo_session_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)
     }
 
     /// Records this run's connection provenance and the exact request it was started with
@@ -1271,6 +1640,20 @@ impl TuneRunRow {
             .map_err(DbError::Query)?;
         Ok(result.rows_affected() > 0)
     }
+
+    pub async fn delete_for_demo_session(
+        pool: &SqlitePool,
+        id: i64,
+        demo_session_id: i64,
+    ) -> DbResult<bool> {
+        let result = sqlx::query("DELETE FROM tune_runs WHERE id = ? AND demo_session_id = ?")
+            .bind(id)
+            .bind(demo_session_id)
+            .execute(pool)
+            .await
+            .map_err(DbError::Query)?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 /// Appends `WHERE <conditions>` to `builder` for every `Some` field in `filter`, or nothing
@@ -1283,6 +1666,11 @@ fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) {
 
     if let Some(loop_id) = filter.loop_id {
         builder.push(" AND loop_id = ").push_bind(loop_id);
+    }
+    if let Some(demo_session_id) = filter.demo_session_id {
+        builder
+            .push(" AND demo_session_id = ")
+            .push_bind(demo_session_id);
     }
     if let Some(process_type) = filter.process_type {
         builder
@@ -1423,6 +1811,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
     Ok(TuneRunRow {
         id: row.try_get("id").map_err(DbError::Query)?,
         loop_id: row.try_get("loop_id").map_err(DbError::Query)?,
+        demo_session_id: row.try_get("demo_session_id").map_err(DbError::Query)?,
         loop_name: row.try_get("loop_name").map_err(DbError::Query)?,
         driver: text_to_enum("driver", &driver)?,
         opc_server: row.try_get("opc_server").map_err(DbError::Query)?,

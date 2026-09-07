@@ -12,6 +12,7 @@ import {
 
 interface PidResultsPanelProps {
   readonly run: RunDetailResponse;
+  readonly demo?: boolean;
   readonly eligibility: WriteEligibility;
   readonly writePending: boolean;
   readonly writingResponseLevel?: ResponseLevel;
@@ -21,6 +22,7 @@ interface PidResultsPanelProps {
 
 export function PidResultsPanel({
   run,
+  demo = false,
   eligibility,
   writePending,
   writingResponseLevel,
@@ -37,6 +39,7 @@ export function PidResultsPanel({
     <CollapsibleSection
       title="Calculated results"
       defaultOpen
+      documentationId="run-detail.calculated-results"
       className={
         promoted
           ? "mb-8 rounded-xl border border-emerald-800/70 bg-gradient-to-br from-emerald-950/40 via-slate-950/20 to-slate-900/40 p-5 shadow-lg shadow-emerald-950/20"
@@ -52,8 +55,9 @@ export function PidResultsPanel({
     >
       {promoted && run.results.length > 0 && (
         <p className="mb-4 text-sm text-slate-300">
-          Choose a response level to review the exact PID values before writing
-          them to the controller.
+          {demo
+            ? "Compare the synthetic response levels. Demo results cannot be written to a controller."
+            : "Choose a response level to review the exact PID values before writing them to the controller."}
         </p>
       )}
 
@@ -75,7 +79,7 @@ export function PidResultsPanel({
                   {pidLabels.derivative}
                 </th>
                 <th className="px-4 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 font-medium">Actions</th>
+                {!demo && <th className="px-4 py-2 font-medium">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -83,6 +87,7 @@ export function PidResultsPanel({
                 <ResultRow
                   key={result.response_level}
                   result={result}
+                  demo={demo}
                   eligibility={eligibility}
                   writePending={writePending}
                   writingResponseLevel={writingResponseLevel}
@@ -93,7 +98,7 @@ export function PidResultsPanel({
           </table>
         </div>
       )}
-      {!eligibility.eligible && eligibility.reason && (
+      {!demo && !eligibility.eligible && eligibility.reason && (
         <p className="mt-3 text-xs text-slate-500">
           PID changes unavailable: {eligibility.reason}
         </p>
@@ -104,12 +109,14 @@ export function PidResultsPanel({
 
 function ResultRow({
   result,
+  demo,
   eligibility,
   writePending,
   writingResponseLevel,
   onWrite,
 }: {
   readonly result: RunResult;
+  readonly demo: boolean;
   readonly eligibility: WriteEligibility;
   readonly writePending: boolean;
   readonly writingResponseLevel?: ResponseLevel;
@@ -145,22 +152,24 @@ function ResultRow({
           </div>
         )}
       </td>
-      <td className="px-4 py-3">
-        <Button
-          variant="primary"
-          disabled={!canWrite || writePending}
-          title={
-            isValid
-              ? eligibility.reason
-              : `Calculated result unavailable: ${resultReason}`
-          }
-          onClick={() => {
-            if (canWrite) onWrite(result);
-          }}
-        >
-          {isWriting ? "Writing…" : "Review & write"}
-        </Button>
-      </td>
+      {!demo && (
+        <td className="px-4 py-3">
+          <Button
+            variant="primary"
+            disabled={!canWrite || writePending}
+            title={
+              isValid
+                ? eligibility.reason
+                : `Calculated result unavailable: ${resultReason}`
+            }
+            onClick={() => {
+              if (canWrite) onWrite(result);
+            }}
+          >
+            {isWriting ? "Writing…" : "Review & write"}
+          </Button>
+        </td>
+      )}
     </tr>
   );
 }

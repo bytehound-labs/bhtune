@@ -47,6 +47,26 @@ release progress and remaining work via the
 [issues](https://github.com/bytehound-labs/bhtune/issues) and
 [`AGENTS.md`](AGENTS.md), which records the full phased implementation plan.
 
+The browser also supports a restricted **Demo mode** for public simulator deployments. It
+removes every live-plant route and navigation action, sends only normalized simulator inputs,
+keeps each anonymous browser session's runs private, and uses the normal `/api/runs` history,
+detail, stream, cancel, export, and delete paths with owner-scoped responses. The capability
+request lazily assigns the host-only Demo cookie without creating database state; a session row
+is created only when that browser starts its first accepted run. The browser-local form draft
+expires after 24 hours. Demo policy limits and simulator timing are fixed application-owned
+values; deployment configuration may repeat them for validation but cannot widen them. Demo
+runs use the stable identity **Simulator demo**, not an external plant tag. The Demo page lets
+visitors choose a built-in template, process/controller type, and bounded MRFT and simulator
+settings while omitting controls that require live equipment. Full mode retains the complete
+OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing
+requests require the exact configured browser origin; non-loopback self-hosting therefore uses
+an HTTPS reverse proxy rather than direct HTTP access to the bound application port.
+The browser fails closed when the capability document is missing or malformed; it never
+widens the Demo surface from incomplete server metadata.
+The fixed Demo defaults use a 200 ms simulator poll interval, a 0.5-second time constant, and
+1 second of dead time. The Demo interface presents this boundary, the history limit, and the
+session lifetime in one persistent notice.
+
 ## Getting started
 
 - [Installation](docs/getting-started/installation.md) — build from source.
@@ -54,6 +74,12 @@ release progress and remaining work via the
   against the built-in simulator, no plant connection required.
 - [Web GUI quickstart](docs/getting-started/web-gui-quickstart.md) — the same tuning engine,
   driven from a browser.
+- [Web UI visual reference](docs/guides/web-ui/overview.md) — screenshots and task-focused
+  explanations for Full and Demo pages, OPC browsing, runs, templates, and configuration.
+  Short-page screenshots are cropped automatically to their rendered content; long workflows
+  retain full-page captures.
+- [Public simulator demo](docs/guides/public-simulator-demo.md) — the restricted mode's
+  privacy, limits, deployment boundary, and self-hosting requirements.
 - [MRFT concepts](docs/guides/mrft-concepts.md) and [Safety](docs/guides/safety.md) — what the
   test actually does, and the guardrails around running it unattended against live equipment.
 
@@ -153,6 +179,12 @@ after the command exits; release it explicitly with `bhtune opc close <session-i
 An index can remain usable after a completed inventory reports a non-fatal gateway diagnostic.
 The diagnostic remains available through the gateway/API and diagnostic CLI; the browser only
 shows an index error when the usable index state is `failed`.
+
+For a concrete example, selecting `Area01.FIC101.OUT` with a template whose PV suffix is `PV`
+sets the Tag name to `Area01.FIC101.PV`. BHTune reads the original `OUT` item first for OPC
+quality, then replaces everything after the final `.`, `!`, or `/`; it does not blindly append
+`.PV`. The [Web UI visual reference](docs/guides/web-ui/starting-a-tune.md#template-suffix-replacement)
+shows the browser and resulting Loop mapping.
 
 The New tune form's collapsible **Loop mapping** section is the single place to inspect and
 adjust the effective mapping. Every row shows its effective value and source. Tag mappings use
@@ -332,8 +364,25 @@ pnpm dev             # http://localhost:5173 or http://asus:5173 on the local ne
 
 The Vite development server binds to all local interfaces, allows the `asus` hostname, and
 proxies `/api/*` to the loopback `bhtune-server` on port `8787`. Frontend edits appear through
-hot module reload; restart `bhtune-server` after Rust or API changes. This development server
-has no authentication and should only be exposed on a trusted network.
+hot module reload; restart `bhtune-server` after Rust or API changes. The proxy keeps browser
+API calls same-origin to the Vite page; Full mode accepts that development flow while
+continuing to reject cross-site browser mutations. This development server has no
+authentication and should only be exposed on a trusted network.
+
+### Browser end-to-end tests
+
+The Playwright suite has separate Full and Demo projects. After building the server and
+frontend as above, run either project independently:
+
+```sh
+PLAYWRIGHT_MODE=full pnpm --filter bhtune-frontend exec playwright test --project=full
+PLAYWRIGHT_MODE=demo pnpm --filter bhtune-frontend exec playwright test --project=demo
+```
+
+The Demo project uses an isolated HTTPS proxy so Secure-cookie and reverse-proxy behavior are
+covered; it requires `openssl` in addition to the normal Rust, Node, and Playwright
+prerequisites. Omitting `PLAYWRIGHT_MODE` runs both projects and starts both isolated test
+servers.
 
 See [`frontend/README.md`](frontend/README.md) for details. The
 server shuts down gracefully on Ctrl+C (and on Unix, `SIGTERM`), draining in-flight requests
@@ -625,6 +674,52 @@ Fuzzing requires [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz); for ex
 ```sh
 cargo fuzz run config
 ```
+
+Knip provides deeper dead-code and dependency analysis across the root pnpm workspace,
+`frontend/`, and `website/`:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm run check:dead-code
+```
+
+The check examines unused files, dependencies, and exports, plus unresolved and unlisted
+imports. The Full and Demo Playwright server/proxy launchers are explicit Knip entry points
+because Playwright invokes them outside the application's import graph. CI runs the check on
+every pull request and push that changes the JavaScript/TypeScript workspace, its configuration,
+or the workflow that invokes it; it is not a weekly-only check.
+
+SonarQube Cloud provides broader maintainability analysis for the Rust, TypeScript/TSX,
+documentation-site, and repository-script sources:
+
+- Rust coverage is imported from the `cargo llvm-cov` LCOV report.
+- Generated files, build output, tests, fuzz targets, and documentation artifacts are excluded
+  from the source analysis.
+- Frontend and documentation-site code is analyzed for issues and duplication, but is excluded
+  from coverage until those packages produce JavaScript LCOV reports.
+- Relevant pull requests and pushes to `main` run the analysis, with a full scan every Wednesday
+  at 04:17 UTC and an available manual dispatch. Fork pull requests report an intentional skip
+  because repository secrets are unavailable.
+
+With the SonarScanner CLI installed and `SONAR_TOKEN` exported, reproduce the analysis locally
+after generating the Rust report:
+
+```sh
+cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+sonar-scanner
+```
+
+Maintainers can restore `SONAR_TOKEN` with the repository's dotenv-sync setup:
+
+```sh
+rbw unlock
+ds sync
+```
+
+The token is stored only in the ignored `.env` file and the `bhtune` Bitwarden note; `.env.example`
+documents the required key without containing its value. Use `ds push` after changing the local
+environment, and run `lefthook install` after cloning to enable the automatic pre-commit and
+post-merge synchronization hooks. CI uses the repository's GitHub Actions secret instead.
 
 ## Roadmap
 

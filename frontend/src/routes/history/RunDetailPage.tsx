@@ -29,18 +29,24 @@ import {
 } from "./RunDetailSections";
 import { ErrorBanner, LoadingState } from "../../components/ui";
 import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
+import type { AppCapabilities } from "../../api/capabilities";
 
 const EMPTY_TREND_SAMPLES: readonly SampleResponse[] = [];
 
-export function RunDetailPage() {
+export function RunDetailPage({
+  capabilities,
+}: {
+  readonly capabilities: AppCapabilities;
+}) {
   const { id } = useParams<{ id: string }>();
   const runId = Number(id);
   const navigate = useNavigate();
-  const run = useRun(runId);
-  const cancelRun = useCancelRun();
+  const isDemo = capabilities.mode === "demo";
+  const run = useRun(runId, true, isDemo ? "demo" : "full");
+  const cancelRun = useCancelRun(isDemo ? "demo" : "full");
   const updateNotes = useUpdateRunNotes();
   const deleteNotes = useDeleteRunNotes();
-  const deleteRun = useDeleteRun();
+  const deleteRun = useDeleteRun(isDemo ? "demo" : "full");
   const writeRun = useWriteRun();
   const revertRun = useRevertRun();
   const isRunning = run.data?.outcome === "running";
@@ -57,7 +63,11 @@ export function RunDetailPage() {
     lastWrite !== undefined &&
     lastWrite.kind === "write" &&
     lastWrite.success;
-  const stream = useRunStream(runId, isRunning);
+  const stream = useRunStream(
+    runId,
+    isRunning && capabilities.actions.stream_run,
+    isDemo ? "demo" : "full",
+  );
   const initialReadings = stream.initialReadings ?? run.data?.initial_readings;
   // The live SSE feed replays every sample from tick 0. Once terminal, the REST payload is
   // the cheaper source because there is no stream left to keep open.
@@ -255,6 +265,8 @@ export function RunDetailPage() {
       <RunDetailActions
         id={id}
         runId={runId}
+        demo={isDemo}
+        actions={capabilities.actions}
         isRunning={isRunning}
         hasSamples={hasSamples}
         originalRequest={run.data?.original_request}
@@ -276,12 +288,13 @@ export function RunDetailPage() {
       {run.isPending && Number.isFinite(runId) && (
         <LoadingState message="Loading run…" />
       )}
-      <RunDetailErrors errors={errors} />
+      <RunDetailErrors errors={errors} demo={isDemo} />
       {pidActionAlert && <ErrorBanner message={pidActionAlert} />}
 
       {run.isSuccess && (
         <RunDetailContent
           run={run.data}
+          demo={isDemo}
           isRunning={isRunning}
           stream={stream}
           initialReadings={initialReadings}
@@ -304,16 +317,19 @@ export function RunDetailPage() {
           onRevert={requestRevert}
         />
       )}
-      {run.data && (
-        <PidActionModal
-          run={run.data}
-          action={pidAction}
-          pending={pidActionPending}
-          error={pidActionError}
-          onClose={closePidAction}
-          onConfirm={confirmPidAction}
-        />
-      )}
+      {run.data &&
+        !isDemo &&
+        capabilities.actions.write_pid &&
+        capabilities.actions.revert_pid && (
+          <PidActionModal
+            run={run.data}
+            action={pidAction}
+            pending={pidActionPending}
+            error={pidActionError}
+            onClose={closePidAction}
+            onConfirm={confirmPidAction}
+          />
+        )}
     </div>
   );
 }
