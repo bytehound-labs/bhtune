@@ -3518,8 +3518,9 @@ these):
    change.
 6. **Cost.** Each same-repository run consumes Copilot premium requests. The implementation-path
    filter keeps this off PRs that can't have caused prose drift or visual-documentation drift,
-   and `--model` is pinned (`claude-sonnet-4.5`) rather than left on auto-routing so a model
-   upgrade never silently changes cost/behavior on every future PR without a reviewed change here.
+   and `--model`/`--effort` are pinned (`gpt-5.6-luna`/`max`) rather than left on auto-routing or
+   default reasoning effort, so a model or effort upgrade never silently changes cost/behavior on
+   every future PR without a reviewed change here.
 
 **Validated locally** (flag parsing via a scratch-repo smoke test, then `actionlint` against
 the workflow file — it caught one real script-injection risk worth noting as a general
