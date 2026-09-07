@@ -199,6 +199,9 @@ an associated screenshot scenario.
 Add a new scenario when a new route, major section, modal, or safety-relevant state is not
 clearly represented by an existing capture. Give the image meaningful alt text and a caption,
 keep all operational instructions in prose, and link the screenshot to its full-size Pages URL.
+The viewport stays fixed for deterministic layout; use `capture: "content-fit"` for short pages
+whose rendered content does not fill the viewport. Its height is computed automatically from the
+shared content root, so do not add per-page screenshot heights.
 
 ## Pull requests
 

@@ -6,6 +6,7 @@ type ScreenshotScenario = {
   id: string;
   coveredSections: string[];
   output: string;
+  capture?: "full-page" | "content-fit";
 };
 
 type ScreenshotManifest = {
@@ -22,6 +23,9 @@ const manifestPath = resolve(
 const manifest = JSON.parse(
   readFileSync(manifestPath, "utf8"),
 ) as ScreenshotManifest;
+
+const CONTENT_FIT_MIN_HEIGHT = 480;
+const CONTENT_FIT_BOTTOM_MARGIN = 32;
 
 mkdirSync(screenshotDir, { recursive: true });
 
@@ -47,8 +51,43 @@ export async function captureScenario(page: Page, scenarioId: string) {
     ).toBeVisible();
   }
 
+  const path = resolve(screenshotDir, scenario.output);
+  if (scenario.capture !== "content-fit") {
+    await page.screenshot({ path, fullPage: true });
+    return;
+  }
+
+  const viewport = page.viewportSize();
+  if (!viewport) {
+    throw new Error(`Scenario ${scenarioId} has no configured viewport`);
+  }
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const content = page.locator("[data-doc-screenshot-content]").first();
+  const contentBox = await content.boundingBox();
+  if (!contentBox) {
+    throw new Error(
+      `Scenario ${scenarioId} cannot measure the screenshot content root`,
+    );
+  }
+
+  const contentHeight = Math.max(
+    CONTENT_FIT_MIN_HEIGHT,
+    Math.ceil(contentBox.y + contentBox.height + CONTENT_FIT_BOTTOM_MARGIN),
+  );
+
+  if (contentHeight >= viewport.height) {
+    await page.screenshot({ path, fullPage: true });
+    return;
+  }
+
   await page.screenshot({
-    path: resolve(screenshotDir, scenario.output),
-    fullPage: true,
+    path,
+    clip: {
+      x: 0,
+      y: 0,
+      width: viewport.width,
+      height: contentHeight,
+    },
   });
 }
