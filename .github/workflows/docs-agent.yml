@@ -175,13 +175,15 @@ jobs:
             --allow-all-tools \
             --deny-tool 'write(AGENTS.md)' \
             --no-ask-user \
-            --model claude-sonnet-4.5 \
+            --model gpt-5.6-luna \
+            --effort max \
             --secret-env-vars COPILOT_GITHUB_TOKEN \
             --silent \
             | tee /tmp/docs-agent-output.txt
           # GUARDRAIL 5 (COST): the path filter above already keeps this from running on every
-          # PR; --model is pinned rather than left on auto-routing so a model upgrade never
-          # silently changes behavior/cost on every future PR without a reviewed change here.
+          # PR; --model and --effort are pinned rather than left on auto-routing/defaults so a
+          # model or reasoning-effort upgrade never silently changes behavior/cost on every
+          # future PR without a reviewed change here.
 
       - name: Enforce blast radius
         run: |
