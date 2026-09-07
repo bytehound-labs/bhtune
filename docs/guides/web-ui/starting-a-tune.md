@@ -19,8 +19,8 @@ after the run.
 
 {/* web-ui-screenshot: full-tune-simulator */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=85eebd59def9">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=85eebd59def9" alt="Full mode Simulator New Tune form with live-plant fields disabled" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=13982ceeafce">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=13982ceeafce" alt="Full mode Simulator New Tune form with live-plant fields disabled" />
   </a>
   <figcaption>Simulator mode disables only controls that require live equipment; process ranges, direction, MRFT parameters, and the template remain active.</figcaption>
 </figure>
@@ -41,24 +41,24 @@ reopened.
 
 {/* web-ui-screenshot: full-tune-opc */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=6ff89d67448b">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=6ff89d67448b" alt="Full mode OPC DA New Tune form showing connection, test parameters, and Loop mapping" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=9a10ac2832ab">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=9a10ac2832ab" alt="Full mode OPC DA New Tune form showing connection, test parameters, and Loop mapping" />
   </a>
   <figcaption>OPC DA mode exposes the live connection and mapping controls that the simulator disables.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: full-opc-server-picker */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-server-picker.png?v=fd601ab5e06d">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-server-picker.png?v=fd601ab5e06d" alt="BHTune OPC DA server discovery modal listing available server ProgIDs" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-server-picker.png?v=1da29a044fce">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-server-picker.png?v=1da29a044fce" alt="BHTune OPC DA server discovery modal listing available server ProgIDs" />
   </a>
   <figcaption>Server discovery is on demand and fills the ProgID field when an engineer selects a listed OPC DA server.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: full-opc-tag-browser */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=0aaa52b871be">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=0aaa52b871be" alt="BHTune hierarchical OPC tag browser with a selected tag and a successful quality read" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=7c6e5551d9b0">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=7c6e5551d9b0" alt="BHTune hierarchical OPC tag browser with a selected tag and a successful quality read" />
   </a>
   <figcaption>The tag browser expands one level at a time and reads the originally selected item before it is mapped into the loop.</figcaption>
 </figure>
@@ -83,8 +83,8 @@ not a second source of truth.
 
 {/* web-ui-screenshot: full-opc-tag-applied */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=d7a22cddd9fd">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=d7a22cddd9fd" alt="BHTune New Tune form showing Area01.FIC101.PV after selecting Area01.FIC101.OUT in the OPC browser" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=63c94c477223">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=63c94c477223" alt="BHTune New Tune form showing Area01.FIC101.PV after selecting Area01.FIC101.OUT in the OPC browser" />
   </a>
   <figcaption>After selection, the Tag name and Loop mapping preview show the template's PV suffix applied to the browsed path.</figcaption>
 </figure>
