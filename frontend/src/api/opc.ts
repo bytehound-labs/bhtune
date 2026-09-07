@@ -230,6 +230,118 @@ export function useRefreshOpcSearchIndex() {
   });
 }
 
+/** `POST /api/opc/search-index/auto-refresh` -- enables or disables scheduled refreshes. */
+export function useSetOpcSearchIndexAutoRefresh() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      enabled: boolean;
+    }) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/opc/search-index/auto-refresh",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              enabled: params.enabled,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
+    },
+  });
+}
+
+/** `POST /api/opc/search-index/control` -- controls an active build. */
+export function useControlOpcSearchIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      bridgeHost: string;
+      opcServer: string;
+      action: "pause" | "resume" | "cancel";
+    }) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/opc/search-index/control",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+              action: params.action,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
+    },
+  });
+}
+
+/** `DELETE /api/opc/search-index` -- removes index data and per-server enrollment. */
+export function useDeleteOpcSearchIndex() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { bridgeHost: string; opcServer: string }) => {
+      const { data, error, response } = await apiClient.DELETE(
+        "/api/opc/search-index",
+        {
+          params: {
+            query: {
+              bridge_host: params.bridgeHost || undefined,
+              opc_server: params.opcServer || undefined,
+            },
+          },
+        },
+      );
+      if (error) throw toApiError(error, response);
+      return data as OpcSearchIndexStatusResponse;
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        [
+          "opc",
+          "search-index",
+          "status",
+          variables.bridgeHost,
+          variables.opcServer,
+        ],
+        data,
+      );
+    },
+  });
+}
+
 /**
  * `GET /api/opc/read` -- backs the "Read selected tag" diagnostic action and the final
  * selection quality check in the OPC tag-tree browser. Modeled as a mutation even though it's

@@ -43,9 +43,8 @@ pub enum DriverError {
     #[error("'{operation}' is not supported by this driver")]
     Unsupported { operation: &'static str },
 
-    /// The gateway rejected an indexed-search operation because its current index
-    /// configuration does not permit it (for example, the server is not in the
-    /// gateway's indexed-server allow-list).
+    /// The gateway rejected an indexed-search operation because the server's current
+    /// enrollment or index state does not permit it.
     #[error("indexed-search operation rejected: {message}")]
     IndexOperationRejected { message: String },
 
@@ -119,11 +118,11 @@ mod tests {
     #[test]
     fn indexed_search_rejection_names_gateway_reason() {
         let err = DriverError::IndexOperationRejected {
-            message: "server is not configured for namespace indexing".to_string(),
+            message: "server is not enrolled for namespace indexing".to_string(),
         };
         assert_eq!(
             err.to_string(),
-            "indexed-search operation rejected: server is not configured for namespace indexing"
+            "indexed-search operation rejected: server is not enrolled for namespace indexing"
         );
     }
 

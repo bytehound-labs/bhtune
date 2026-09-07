@@ -436,7 +436,7 @@
             "schema": {
               "type": "integer",
               "format": "int32",
-              "minimum": 0
+              "minimum": 1
             }
           },
           {
@@ -462,6 +462,110 @@
           },
           "400": {
             "description": "The search request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index": {
+      "delete": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "delete_search_index",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The delete request or gateway connection is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/opc/search-index/auto-refresh": {
+      "post": {
+        "tags": [
+          "opc"
+        ],
+        "operationId": "set_search_index_auto_refresh",
+        "parameters": [
+          {
+            "name": "bridge_host",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "opc_server",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "enabled",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The auto-refresh request or gateway connection is invalid.",
             "content": {
               "application/json": {
                 "schema": {
@@ -631,7 +735,7 @@
             "schema": {
               "type": "integer",
               "format": "int32",
-              "minimum": 0
+              "minimum": 1
             }
           }
         ],
@@ -2971,6 +3075,55 @@
           }
         }
       },
+      "OpcIndexSchedulerResponse": {
+        "type": "object",
+        "required": [
+          "consecutive_failures",
+          "circuit_open"
+        ],
+        "properties": {
+          "circuit_open": {
+            "type": "boolean"
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_success_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "next_refresh_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retry_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "OpcIndexedSearchMatchResponse": {
         "type": "object",
         "required": [
@@ -3102,13 +3255,14 @@
         "required": [
           "server",
           "state",
-          "configured",
+          "auto_refresh_enabled",
           "active_generation",
           "entry_count",
           "unique_item_count",
           "database_bytes",
           "organization",
-          "source"
+          "source",
+          "scheduler"
         ],
         "properties": {
           "active_generation": {
@@ -3116,14 +3270,14 @@
             "format": "int64",
             "minimum": 0
           },
+          "auto_refresh_enabled": {
+            "type": "boolean"
+          },
           "completed_at": {
             "type": [
               "string",
               "null"
             ]
-          },
-          "configured": {
-            "type": "boolean"
           },
           "database_bytes": {
             "type": "integer",
@@ -3153,6 +3307,9 @@
                 "$ref": "#/components/schemas/OpcIndexedSearchProgressResponse"
               }
             ]
+          },
+          "scheduler": {
+            "$ref": "#/components/schemas/OpcIndexSchedulerResponse"
           },
           "server": {
             "type": "string"

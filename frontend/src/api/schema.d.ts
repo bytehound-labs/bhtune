@@ -130,6 +130,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/opc/search-index": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations["delete_search_index"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/opc/search-index/auto-refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["set_search_index_auto_refresh"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/opc/search-index/control": {
     parameters: {
       query?: never;
@@ -995,6 +1027,17 @@ export interface components {
     OpcCloseBrowseSessionResponse: {
       closed: boolean;
     };
+    OpcIndexSchedulerResponse: {
+      circuit_open: boolean;
+      /** Format: int32 */
+      consecutive_failures: number;
+      last_attempt_at?: string | null;
+      last_success_at?: string | null;
+      /** Format: int64 */
+      last_success_duration_ms?: number | null;
+      next_refresh_at?: string | null;
+      retry_after?: string | null;
+    };
     OpcIndexedSearchMatchResponse: {
       breadcrumbs: string[];
       display_name: string;
@@ -1049,8 +1092,8 @@ export interface components {
     OpcSearchIndexStatusResponse: {
       /** Format: int64 */
       active_generation: number;
+      auto_refresh_enabled: boolean;
       completed_at?: string | null;
-      configured: boolean;
       /** Format: int64 */
       database_bytes: number;
       /** Format: int64 */
@@ -1059,6 +1102,7 @@ export interface components {
       organization: string;
       progress?:
         null | components["schemas"]["OpcIndexedSearchProgressResponse"];
+      scheduler: components["schemas"]["OpcIndexSchedulerResponse"];
       server: string;
       source: string;
       started_at?: string | null;
@@ -1920,6 +1964,69 @@ export interface operations {
         content?: never;
       };
       /** @description The search request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  delete_search_index: {
+    parameters: {
+      query?: {
+        bridge_host?: string;
+        opc_server?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The delete request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  set_search_index_auto_refresh: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        enabled: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The auto-refresh request or gateway connection is invalid. */
       400: {
         headers: {
           [name: string]: unknown;

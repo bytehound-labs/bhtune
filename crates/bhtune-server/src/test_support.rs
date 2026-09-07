@@ -54,10 +54,10 @@ pub(crate) mod mock_bridge {
     use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
     use opcda_bridge_proto::bridge::{
         BrowsePage, BrowseRequest, CloseBrowseSessionRequest, ControlSearchIndexRequest,
-        GetCapabilitiesRequest, GetCapabilitiesResponse, GetSearchIndexStatusRequest,
-        ListServersRequest, ListServersResponse, ReadRequest, ReadResponse,
-        RefreshSearchIndexRequest, SearchEvent, SearchIndexResponse, SearchIndexStatus,
-        SearchRequest, WriteRequest, WriteResponse,
+        GetCapabilitiesRequest, GetCapabilitiesResponse, GetGatewayInfoRequest,
+        GetGatewayInfoResponse, GetSearchIndexStatusRequest, ListServersRequest,
+        ListServersResponse, ReadRequest, ReadResponse, RefreshSearchIndexRequest, SearchEvent,
+        SearchIndexResponse, SearchIndexStatus, SearchRequest, WriteRequest, WriteResponse,
     };
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
@@ -73,6 +73,7 @@ pub(crate) mod mock_bridge {
         pub(crate) browse_response: BrowsePage,
         pub(crate) browse_error: Option<Status>,
         pub(crate) capabilities_response: GetCapabilitiesResponse,
+        pub(crate) gateway_info_response: GetGatewayInfoResponse,
         pub(crate) capabilities_error: Option<Status>,
         pub(crate) search_events: Vec<SearchEvent>,
         pub(crate) search_error: Option<Status>,
@@ -114,6 +115,7 @@ pub(crate) mod mock_bridge {
                     max_indexed_search_results: 50,
                     ..Default::default()
                 },
+                gateway_info_response: GetGatewayInfoResponse::default(),
                 capabilities_error: None,
                 search_events: Vec::new(),
                 search_error: None,
@@ -137,6 +139,13 @@ pub(crate) mod mock_bridge {
 
     #[tonic::async_trait]
     impl Bridge for MockBridgeService {
+        async fn get_gateway_info(
+            &self,
+            _request: Request<GetGatewayInfoRequest>,
+        ) -> Result<Response<GetGatewayInfoResponse>, Status> {
+            Ok(Response::new(self.gateway_info_response.clone()))
+        }
+
         async fn get_capabilities(
             &self,
             _request: Request<GetCapabilitiesRequest>,

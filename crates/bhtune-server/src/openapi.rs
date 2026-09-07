@@ -52,7 +52,9 @@ use crate::routes::{config, draft, health, history, opc, runs, stream, templates
         opc::search_index_status,
         opc::search_index,
         opc::refresh_search_index,
+        opc::set_search_index_auto_refresh,
         opc::control_search_index,
+        opc::delete_search_index,
         opc::read,
     ),
     components(schemas(
@@ -91,6 +93,7 @@ use crate::routes::{config, draft, health, history, opc, runs, stream, templates
         opc::OpcBrowseResponse,
         opc::OpcCloseBrowseSessionResponse,
         opc::OpcIndexedSearchProgressResponse,
+        opc::OpcIndexSchedulerResponse,
         opc::OpcSearchIndexStatusResponse,
         opc::OpcIndexedSearchMatchResponse,
         opc::OpcSearchIndexResponse,
@@ -136,7 +139,9 @@ mod tests {
             ("/api/opc/search-index/status", "get"),
             ("/api/opc/search-index/search", "get"),
             ("/api/opc/search-index/refresh", "post"),
+            ("/api/opc/search-index/auto-refresh", "post"),
             ("/api/opc/search-index/control", "post"),
+            ("/api/opc/search-index", "delete"),
         ] {
             assert!(
                 document["paths"][path][method].is_object(),
@@ -147,12 +152,34 @@ mod tests {
         for schema in [
             "OpcIndexedSearchProgressResponse",
             "OpcSearchIndexStatusResponse",
+            "OpcIndexSchedulerResponse",
             "OpcIndexedSearchMatchResponse",
             "OpcSearchIndexResponse",
         ] {
             assert!(
                 document["components"]["schemas"][schema].is_object(),
                 "missing schema {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn indexed_and_progressive_search_limits_require_positive_values() {
+        let spec = ApiDoc::openapi();
+        let value = serde_json::to_value(spec).expect("spec must serialize to a JSON value");
+
+        for path in ["/api/opc/search", "/api/opc/search-index/search"] {
+            assert_eq!(
+                value["paths"][path]["get"]["parameters"]
+                    .as_array()
+                    .and_then(|parameters| {
+                        parameters
+                            .iter()
+                            .find(|parameter| parameter["name"] == "max_results")
+                    })
+                    .and_then(|parameter| parameter.pointer("/schema/minimum")),
+                Some(&serde_json::json!(1)),
+                "{path} must document a positive max_results minimum"
             );
         }
     }

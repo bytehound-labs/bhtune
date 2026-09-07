@@ -625,7 +625,7 @@ fn print_search_index_status(
     }
     println!("Server: {}", status.server);
     println!("State: {}", status.state);
-    println!("Configured: {}", status.configured);
+    println!("Auto-refresh enabled: {}", status.auto_refresh_enabled);
     println!("Active generation: {}", status.active_generation);
     println!("Entries: {}", status.entry_count);
     println!("Unique items: {}", status.unique_item_count);
@@ -687,7 +687,7 @@ fn json_search_index_status(status: &SearchIndexStatus) -> serde_json::Value {
     serde_json::json!({
         "server": status.server,
         "state": status.state.to_string(),
-        "configured": status.configured,
+        "auto_refresh_enabled": status.auto_refresh_enabled,
         "active_generation": status.active_generation,
         "entry_count": status.entry_count,
         "unique_item_count": status.unique_item_count,
@@ -697,6 +697,15 @@ fn json_search_index_status(status: &SearchIndexStatus) -> serde_json::Value {
         "database_bytes": status.database_bytes,
         "organization": format!("{:?}", status.organization).to_lowercase(),
         "source": format!("{:?}", status.source).to_lowercase(),
+        "scheduler": {
+            "next_refresh_at": status.scheduler.next_refresh_at,
+            "last_attempt_at": status.scheduler.last_attempt_at,
+            "last_success_at": status.scheduler.last_success_at,
+            "last_success_duration_ms": status.scheduler.last_success_duration_ms,
+            "retry_after": status.scheduler.retry_after,
+            "consecutive_failures": status.scheduler.consecutive_failures,
+            "circuit_open": status.scheduler.circuit_open,
+        },
         "progress": status.progress.as_ref().map(|progress| serde_json::json!({
             "branches_visited": progress.branches_visited,
             "entries_seen": progress.entries_seen,
@@ -1111,7 +1120,7 @@ mod tests {
         let status = ProtoSearchIndexStatus {
             server: "Sim.Server".into(),
             state: ProtoSearchIndexState::Partial as i32,
-            configured: true,
+            auto_refresh_enabled: true,
             active_generation: 2,
             entry_count: 3,
             unique_item_count: 2,
@@ -1258,7 +1267,7 @@ mod tests {
         let status = bhtune_driver::SearchIndexStatus {
             server: "Sim.Server".into(),
             state: bhtune_driver::SearchIndexState::Failed,
-            configured: true,
+            auto_refresh_enabled: true,
             active_generation: 1,
             entry_count: 2,
             unique_item_count: 1,
@@ -1277,6 +1286,7 @@ mod tests {
                 items_per_second: 2.0,
                 estimated_remaining_ms: None,
             }),
+            scheduler: bhtune_driver::IndexSchedulerDiagnostics::default(),
         };
         let indexed = bhtune_driver::SearchIndexResponse {
             matches: vec![bhtune_driver::IndexedSearchMatch {

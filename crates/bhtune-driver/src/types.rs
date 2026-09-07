@@ -261,6 +261,7 @@ pub enum SearchIndexState {
     Ready,
     Stale,
     Refreshing,
+    Promoting,
     Failed,
 }
 
@@ -273,6 +274,7 @@ impl SearchIndexState {
             Self::Ready => "ready",
             Self::Stale => "stale",
             Self::Refreshing => "refreshing",
+            Self::Promoting => "promoting",
             Self::Failed => "failed",
         }
     }
@@ -328,7 +330,7 @@ pub struct IndexedSearchProgress {
 pub struct SearchIndexStatus {
     pub server: String,
     pub state: SearchIndexState,
-    pub configured: bool,
+    pub auto_refresh_enabled: bool,
     pub active_generation: u64,
     pub entry_count: u64,
     pub unique_item_count: u64,
@@ -339,6 +341,19 @@ pub struct SearchIndexStatus {
     pub organization: NamespaceOrganization,
     pub source: BrowseSource,
     pub progress: Option<IndexedSearchProgress>,
+    pub scheduler: IndexSchedulerDiagnostics,
+}
+
+/// Scheduler and retry information for a persistent namespace index.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexSchedulerDiagnostics {
+    pub next_refresh_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_success_duration_ms: Option<u64>,
+    pub retry_after: Option<String>,
+    pub consecutive_failures: u32,
+    pub circuit_open: bool,
 }
 
 /// One selectable result from the persistent namespace index.

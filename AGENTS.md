@@ -683,12 +683,14 @@ The gateway's indexed-search extension adds `GET /api/opc/search-index/status`,
 `GET /api/opc/search-index/search`, and refresh/control endpoints with persistent-index state,
 progress, ranked exact matches, breadcrumbs, and `has_more`. `openapi.json` and
 `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
-The gateway accepts indexed-search operations only for ProgIDs listed in its
-`[index].servers` allow-list; an unconfigured server remains browseable but cannot be refreshed,
-and BHTune surfaces that requirement in the tag browser. Indexing is an optional search
-accelerator: the global search control is disabled until a complete usable generation exists,
-while lazy browse, direct ItemID entry, live reads, and tuning remain independent of index state.
-Index-status failures are compact diagnostics rather than browse failures.
+Indexing is an optional search accelerator with per-server enrollment owned by the gateway
+database. A fresh gateway has no enrolled servers; BHTune's tag browser can build an index for
+any exact ProgID returned by the gateway, without a TOML allow-list or restart. After a
+successful first build, automatic refresh is enabled by default under the gateway's configurable
+seven-day policy. The browser can retry, refresh, disable or re-enable automatic refresh, and
+delete an index while lazy browse, direct ItemID entry, live reads, and tuning remain
+independent of index state. Index-status failures are compact diagnostics rather than browse
+failures.
 
 Phase 7.5's `ui-opc-browser` is also done — the last GUI/API todo of the eleven. Two new pieces
 wire the OPC routes into
@@ -711,8 +713,9 @@ quality) and "Select tag", which replaces the selected node's final component wi
 template's process-variable suffix before writing it into the Tag name field, after a fresh read
 of the exact original selected ItemID confirms `Good` quality. A non-Good result requires an
 explicit choice to select another tag or proceed anyway; a read failure leaves the browser open.
-Double-clicking a selectable node performs the same selection, while double-clicking an
-expandable node expands or collapses it; branch-and-item nodes support both actions. Reopening
+Double-clicking a browsed or indexed-search selectable node performs the same selection, while
+double-clicking an expandable node expands or collapses it; branch-and-item nodes support both
+actions. Reopening
 the modal uses bridge-provided breadcrumbs or bounded search to reveal the current selection,
 then scrolls it into view; if the tag is no longer available, it falls back to the root level.
 The selection panel is rendered before a node is clicked, and the first loaded node is selected
@@ -776,7 +779,7 @@ overrides. The browser modal only browses, reads, checks quality, and selects th
 
 ## Scalable OPC browse/search integration
 
-The BHTune OPC integration now targets `opcda-bridge` 0.4.0 or newer. The old flat, globally
+The BHTune OPC integration now targets `opcda-bridge` 0.5.0 or newer. The old flat, globally
 limited namespace model is not supported: `bhtune-driver` uses typed capabilities, bounded browse
 pages, opaque browse sessions/node keys/page tokens, exact ItemIDs, branch/item/branch-and-item
 node kinds, explicit session cleanup, and gateway-owned persistent indexed search. The HTTP API
@@ -798,10 +801,13 @@ The diagnostic remains available through the gateway/API and CLI, while the brow
 index error when the usable index state is `failed`.
 
 Indexed search is deliberately not a prerequisite for tag selection or tuning. When a server is
-unconfigured, still building its first generation, or has no usable index, the browser disables
-only the global search input and keeps the lazy tree, exact ItemID entry, quality read, and
-selection controls available. It never falls back automatically to the slow live whole-server
-search. A failed tree page retains already loaded nodes and exposes a per-level **Retry** action;
+not enrolled, still building its first generation, or has no usable index, the browser disables
+only the global search input and offers **Build index** or **Retry build** while keeping the
+lazy tree, exact ItemID entry, quality read, and selection controls available. It never falls
+back automatically to the slow live whole-server search. A failed tree page retains already
+loaded nodes and exposes a per-level **Retry** action;
+when automatic refresh is enabled, the browser shows the next scheduled refresh as a relative
+days-and-hours countdown and keeps the exact scheduled time in the hover tooltip.
 unknown `/api/*` paths return JSON 404 responses instead of the SPA shell, making stale
 server/frontend combinations diagnosable.
 
@@ -848,8 +854,8 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   network. bhtune itself builds and runs on Linux, macOS, and Windows identically.
 - **The OPC DA client is a crates.io dependency, local to `bhtune-driver` only.** The
   `OpcDaDriver` implementation consumes the published `opcda-bridge` library with
-  `opcda-bridge = "0.4"` pinned directly in `crates/bhtune-driver/Cargo.toml` (currently
-  resolving to the 0.4.0 release) — not promoted
+  `opcda-bridge = "0.5"` pinned directly in `crates/bhtune-driver/Cargo.toml` (the
+  0.5.0 release) — not promoted
   to `[workspace.dependencies]`, since `bhtune-driver` is the only crate that talks to the
   bridge directly (everything else goes through the `Driver` trait), matching this project's
   single-consumer-stays-local dependency convention. It must not use a Git dependency or a
@@ -1501,7 +1507,7 @@ crate `opcda-bridge-client`:
 ```toml
 # crates/bhtune-driver/Cargo.toml
 [dependencies]
-opcda-bridge = "0.4"
+opcda-bridge = "0.5"
 ```
 
 The facade intentionally hides generated gRPC details and exposes typed capabilities,
@@ -1573,7 +1579,7 @@ Integration rules, as implemented in `OpcDaDriver`:
 - `close_browse_session` explicitly releases gateway-side browse state. The HTTP browser calls
   it during modal cleanup; the CLI leaves sessions open so printed continuation tokens remain
   usable and exposes `bhtune opc close <session-id>` for explicit cleanup.
-- `opcda-bridge-proto = "0.4"`, `tonic = "0.14"`, and `tokio-stream = "0.1"` are
+- `opcda-bridge-proto = "0.5"`, `tonic = "0.14"`, and `tokio-stream = "0.1"` are
   dev-dependencies only, pinned to the exact versions `opcda-bridge` itself uses internally,
   so this crate's mock-gateway smoke tests produce wire-compatible types. Production code
   never depends on `opcda-bridge-proto` directly — only the facade.
@@ -1581,9 +1587,9 @@ Integration rules, as implemented in `OpcDaDriver`:
 The gateway is a separate Windows process installed with `cargo install opcda-bridge-gateway` or
 downloaded from the upstream releases page. It runs beside the OPC DA server, listens on port
 `7600` by default, and requires the firewall to allow the client-to-gateway connection. The
-0.4.0 protocol offers `ListServers`, `GetCapabilities`, paged `Browse`, `CloseBrowseSession`,
-streaming live `Search`, persistent indexed-search status/query/refresh/control operations, and
-unary `Read`/`Write`. MRFT polling only needs the unary calls, while subscription-driven Step
+0.5.0 protocol offers `ListServers`, `GetCapabilities`, paged `Browse`, `CloseBrowseSession`,
+streaming live `Search`, persistent indexed-search status/query/refresh/control/delete operations,
+per-server automatic-refresh controls, and unary `Read`/`Write`. MRFT polling only needs the unary calls, while subscription-driven Step
 Test remains deferred until the bridge exposes a live push/subscription RPC.
 
 ## Simulator driver reference (`driver-simulator`)
@@ -4454,7 +4460,7 @@ operations through the driver, CLI, HTTP API, and frontend.
 1. **Repository scaffolding** _(this commit)_ — Cargo/pnpm workspaces, license, CLA draft, CI,
    `cargo-deny` open-source dependency gate.
 2. **`opcda-bridge` reusable client library** (published upstream) — consumed as a plain
-   crates.io dependency (`opcda-bridge = "0.4"`), local to `bhtune-driver`'s own `Cargo.toml`
+   crates.io dependency (`opcda-bridge = "0.5"`), local to `bhtune-driver`'s own `Cargo.toml`
    (see "Key architectural decisions" for why it stays out of `[workspace.dependencies]`).
 3. **`bhtune-core`** — the critical phase. Data model, MRFT state machine, tuning math, and the
    golden-master replay harness are all done, with the correctness-critical details above baked

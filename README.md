@@ -93,12 +93,12 @@ library from crates.io:
 
 ```toml
 [dependencies]
-opcda-bridge = "0.4"
+opcda-bridge = "0.5"
 ```
 
 The library communicates with the separate Windows-side
 [`opcda-bridge-gateway`](https://crates.io/crates/opcda-bridge-gateway) process over the network.
-BHTune requires gateway 0.4.0 or newer for the session-aware browse and persistent indexed-search
+BHTune requires gateway 0.5.0 or newer for the session-aware browse and UI-managed persistent indexed-search
 contract.
 The dependency is kept local to `bhtune-driver`; all other crates use the protocol-neutral
 `Driver` trait.
@@ -108,19 +108,26 @@ registered on the gateway. Its tag browser opens a bounded browse session, loads
 immediate children at a time, and provides **Load more** for incomplete pages. The gateway
 returns opaque navigation keys and exact ItemIDs; BHTune never reconstructs hierarchy by
 splitting `.`, `!`, or `/`, which is essential for namespaces such as
-`FCS0201!204FI00510.PV`. Double-clicking a leaf confirms it; double-clicking any expandable
-node expands or collapses it. Nodes that are both branches and items remain both expandable and
-selectable.
+`FCS0201!204FI00510.PV`. Double-clicking a browsed leaf or indexed-search result confirms it;
+double-clicking any expandable node expands or collapses it. Nodes that are both branches and
+items remain both expandable and selectable.
 
 The browser also exposes gateway capabilities and persistent indexed namespace search. Warm
 searches are bounded unary requests against the gateway-owned index, with ranked matches,
 breadcrumbs, exact ItemIDs, `has_more`, and explicit index state/progress. Search never downloads
 the complete namespace into the browser and never falls back to the slow live traversal search.
-Indexed search is an optional whole-server accelerator, configured per OPC DA server by adding
-the exact ProgID to the gateway's `[index].servers` allow-list and restarting
-`opcda-bridge-gateway` before using **Refresh index**. Without a usable index, the global search
-box is disabled with a compact status message, while lazy tree browsing, direct ItemID entry,
-live reads, and tuning remain available. The browser reports index configuration or build
+Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled servers
+and performs no automatic indexing; use **Build index** in the tag browser to opt the selected
+ProgID in. The gateway validates the ProgID against its current server list, persists the
+enrollment in its index database, and starts the first build immediately. After a successful
+build, automatic refresh is enabled by default and follows the gateway's configurable
+seven-day policy. The browser can refresh immediately, retry a failed first build, disable or
+re-enable future automatic refreshes, and delete the selected index without editing gateway TOML.
+When automatic refresh is enabled, the next scheduled refresh is shown as a relative days-and-hours
+countdown; the exact scheduled time is available by hovering over it.
+Disabling automatic refresh retains the existing searchable data. Without a usable index, the
+global search box is disabled with a compact status message, while lazy tree browsing, direct
+ItemID entry, live reads, and tuning remain available. The browser reports enrollment or build
 failures without treating them as browse failures.
 Browse sessions are closed when the modal exits, and reopening it reveals and scrolls to the saved
 selection when the gateway can resolve its path.
@@ -139,7 +146,8 @@ that node, and scrolls it into view; if it is no longer present, browsing falls 
 level.
 The diagnostic CLI exposes the bounded operations through `bhtune opc servers`, `browse`, and
 live `search`; `bhtune opc search-index status|search|refresh|control` manages and queries the
-persistent index. `bhtune opc browse --all` explicitly drains continuation pages instead of
+persistent index. Both search interfaces require a positive result limit. `bhtune opc browse
+--all` explicitly drains continuation pages instead of
 silently downloading an entire namespace. A browse session remains available for continuation
 after the command exits; release it explicitly with `bhtune opc close <session-id>`.
 An index can remain usable after a completed inventory reports a non-fatal gateway diagnostic.

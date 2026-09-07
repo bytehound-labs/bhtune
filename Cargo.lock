@@ -1419,11 +1419,10 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opcda-bridge"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89c724bc9871ebcb42fddb90ad5d44c730ffd71d49708c9261eb4c59db5c0741"
+version = "0.5.0"
 dependencies = [
  "opcda-bridge-proto",
+ "serde",
  "thiserror",
  "tonic",
  "tonic-prost",
@@ -1431,11 +1430,10 @@ dependencies = [
 
 [[package]]
 name = "opcda-bridge-proto"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d37affd52d0985df6f3770cec981b14b8a589ce348cb886b3788c3574c9b6fa"
+version = "0.5.0"
 dependencies = [
  "prost",
+ "toml",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",

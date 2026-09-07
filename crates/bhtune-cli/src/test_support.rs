@@ -12,10 +12,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
 use opcda_bridge_proto::bridge::{
     BrowsePage, BrowseRequest, CloseBrowseSessionRequest, ControlSearchIndexRequest,
-    GetCapabilitiesRequest, GetCapabilitiesResponse, GetSearchIndexStatusRequest,
-    ListServersRequest, ListServersResponse, ReadRequest, ReadResponse, RefreshSearchIndexRequest,
-    SearchEvent, SearchIndexResponse, SearchIndexStatus, SearchRequest, TagValue as ProtoTagValue,
-    WriteRequest, WriteResponse,
+    GetCapabilitiesRequest, GetCapabilitiesResponse, GetGatewayInfoRequest, GetGatewayInfoResponse,
+    GetSearchIndexStatusRequest, ListServersRequest, ListServersResponse, ReadRequest,
+    ReadResponse, RefreshSearchIndexRequest, SearchEvent, SearchIndexResponse, SearchIndexStatus,
+    SearchRequest, TagValue as ProtoTagValue, WriteRequest, WriteResponse,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -30,6 +30,7 @@ pub(crate) struct MockBridgeService {
     pub(crate) browse_continuation_response: Option<BrowsePage>,
     pub(crate) list_servers_response: ListServersResponse,
     pub(crate) capabilities_response: GetCapabilitiesResponse,
+    pub(crate) gateway_info_response: GetGatewayInfoResponse,
     pub(crate) search_events: Vec<SearchEvent>,
     pub(crate) search_index_status_response: SearchIndexStatus,
     pub(crate) search_index_response: SearchIndexResponse,
@@ -67,6 +68,7 @@ impl Default for MockBridgeService {
                 max_indexed_search_results: 50,
                 ..Default::default()
             },
+            gateway_info_response: GetGatewayInfoResponse::default(),
             search_events: Vec::new(),
             search_index_status_response: SearchIndexStatus::default(),
             search_index_response: SearchIndexResponse::default(),
@@ -87,6 +89,13 @@ impl MockBridgeService {
 
 #[tonic::async_trait]
 impl Bridge for MockBridgeService {
+    async fn get_gateway_info(
+        &self,
+        _request: Request<GetGatewayInfoRequest>,
+    ) -> Result<Response<GetGatewayInfoResponse>, Status> {
+        Ok(Response::new(self.gateway_info_response.clone()))
+    }
+
     async fn get_capabilities(
         &self,
         _request: Request<GetCapabilitiesRequest>,

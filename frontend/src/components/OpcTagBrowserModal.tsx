@@ -11,10 +11,13 @@ import {
   useOpcBrowseFetcher,
   useOpcIndexedSearch,
   useOpcSearchIndexStatus,
+  useControlOpcSearchIndex,
+  useDeleteOpcSearchIndex,
   useRefreshOpcSearchIndex,
+  useSetOpcSearchIndexAutoRefresh,
   useTestOpcConnection,
 } from "../api/opc";
-import { apiErrorMessage, userFacingErrorMessage } from "../api/errors";
+import { userFacingErrorMessage } from "../api/errors";
 import type {
   OpcBrowseResponse,
   OpcIndexedSearchMatchResponse,
@@ -26,6 +29,7 @@ import type {
 import type { components } from "../api/schema";
 import { SAMPLE_QUALITY_LABELS, SAMPLE_QUALITY_TONE } from "../lib/enumLabels";
 import { deriveTag } from "../lib/opcTags";
+import { formatExactTime, formatTimeUntil } from "../lib/time";
 import { Badge, Button, ErrorBanner, Modal } from "./ui";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
@@ -113,15 +117,11 @@ function searchStateLabel(status: OpcSearchIndexStatusResponse | undefined) {
   }
 }
 
-function indexConfigurationMessage(server: string): string {
-  return `Indexing is not enabled for ${server}. Add this exact ProgID to the gateway's [index].servers allow-list, then restart the gateway.`;
-}
-
 function hasUsableIndex(
   status: OpcSearchIndexStatusResponse | undefined,
 ): boolean {
   if (
-    !status?.configured ||
+    !status ||
     status.active_generation < 1 ||
     status.state === "partial" ||
     status.state === "not_indexed"
@@ -406,6 +406,9 @@ export function OpcTagBrowserModal({
     Boolean(opcServer),
   );
   const refreshSearchIndex = useRefreshOpcSearchIndex();
+  const controlSearchIndex = useControlOpcSearchIndex();
+  const setAutoRefreshMutation = useSetOpcSearchIndexAutoRefresh();
+  const deleteSearchIndex = useDeleteOpcSearchIndex();
   const testConnection = useTestOpcConnection();
   const [scopeState, setScopeState] = useState<Record<string, ScopeState>>({});
   const scopeStateRef = useRef(scopeState);
@@ -434,11 +437,6 @@ export function OpcTagBrowserModal({
   const searchResultRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const indexStatus = searchIndexStatus.data ?? searchResponse?.status;
   const indexStateLabel = searchStateLabel(indexStatus);
-  const indexNotConfigured =
-    indexStatus !== undefined && !indexStatus.configured;
-  const indexConfigurationHint = indexNotConfigured
-    ? indexConfigurationMessage(opcServer)
-    : null;
   const indexSearchAvailable = hasUsableIndex(indexStatus);
   const indexUnavailableMessage = searchIndexStatus.error
     ? `Global search is unavailable: ${userFacingErrorMessage(
@@ -911,10 +909,6 @@ export function OpcTagBrowserModal({
 
   async function refreshIndex() {
     setSearchError(null);
-    if (indexConfigurationHint) {
-      setSearchError(indexConfigurationHint);
-      return;
-    }
     try {
       const status = await refreshSearchIndex.mutateAsync({
         bridgeHost,
@@ -926,11 +920,67 @@ export function OpcTagBrowserModal({
       );
       await searchIndexStatus.refetch();
     } catch (err) {
-      const detail = apiErrorMessage(err);
       setSearchError(
-        detail.includes("server is not configured for namespace indexing")
-          ? indexConfigurationMessage(opcServer)
-          : userFacingErrorMessage(err, "Unable to refresh the tag index."),
+        userFacingErrorMessage(err, "Unable to refresh the tag index."),
+      );
+    }
+  }
+
+  async function setAutoRefresh(enabled: boolean) {
+    setSearchError(null);
+    try {
+      await setAutoRefreshMutation.mutateAsync({
+        bridgeHost,
+        opcServer,
+        enabled,
+      });
+      await searchIndexStatus.refetch();
+    } catch (err) {
+      setSearchError(
+        userFacingErrorMessage(
+          err,
+          enabled
+            ? "Unable to enable automatic index refresh."
+            : "Unable to disable automatic index refresh.",
+        ),
+      );
+    }
+  }
+
+  async function deleteIndex() {
+    if (
+      !window.confirm(
+        `Delete the namespace index for ${opcServer}? Search data and enrollment will be removed.`,
+      )
+    ) {
+      return;
+    }
+
+    setSearchError(null);
+    try {
+      await deleteSearchIndex.mutateAsync({ bridgeHost, opcServer });
+      setSearchMatches([]);
+      setSearchResponse(null);
+      await searchIndexStatus.refetch();
+    } catch (err) {
+      setSearchError(
+        userFacingErrorMessage(err, "Unable to delete the tag index."),
+      );
+    }
+  }
+
+  async function cancelIndexBuild() {
+    setSearchError(null);
+    try {
+      await controlSearchIndex.mutateAsync({
+        bridgeHost,
+        opcServer,
+        action: "cancel",
+      });
+      await searchIndexStatus.refetch();
+    } catch (err) {
+      setSearchError(
+        userFacingErrorMessage(err, "Unable to cancel the tag-index build."),
       );
     }
   }
@@ -1045,27 +1095,72 @@ export function OpcTagBrowserModal({
                 disabled={
                   refreshSearchIndex.isPending ||
                   !opcServer ||
-                  indexNotConfigured ||
-                  !indexStatus ||
-                  searchIndexStatus.isError ||
                   indexStatus?.state === "partial" ||
                   indexStatus?.state === "refreshing"
                 }
-                title={indexConfigurationHint ?? undefined}
                 onClick={() => void refreshIndex()}
               >
-                {refreshSearchIndex.isPending ? "Refreshing…" : "Refresh index"}
+                {refreshSearchIndex.isPending
+                  ? "Building…"
+                  : indexSearchAvailable
+                    ? "Refresh index"
+                    : indexStatus?.state === "failed"
+                      ? "Retry build"
+                      : "Build index"}
               </Button>
+              {(indexStatus?.state === "partial" ||
+                indexStatus?.state === "refreshing") && (
+                <Button
+                  type="button"
+                  disabled={controlSearchIndex.isPending}
+                  onClick={() => void cancelIndexBuild()}
+                >
+                  {controlSearchIndex.isPending
+                    ? "Cancelling…"
+                    : "Cancel build"}
+                </Button>
+              )}
+              {indexStatus &&
+                (indexStatus.active_generation > 0 ||
+                  indexStatus.state === "failed") && (
+                  <>
+                    {indexStatus.active_generation > 0 && (
+                      <Button
+                        type="button"
+                        disabled={
+                          setAutoRefreshMutation.isPending ||
+                          deleteSearchIndex.isPending
+                        }
+                        onClick={() =>
+                          void setAutoRefresh(!indexStatus.auto_refresh_enabled)
+                        }
+                      >
+                        {setAutoRefreshMutation.isPending
+                          ? "Saving…"
+                          : indexStatus.auto_refresh_enabled
+                            ? "Disable auto-refresh"
+                            : "Enable auto-refresh"}
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="danger"
+                      disabled={
+                        deleteSearchIndex.isPending ||
+                        refreshSearchIndex.isPending ||
+                        indexStatus.state === "partial" ||
+                        indexStatus.state === "refreshing"
+                      }
+                      onClick={() => void deleteIndex()}
+                    >
+                      {deleteSearchIndex.isPending
+                        ? "Deleting…"
+                        : "Delete index"}
+                    </Button>
+                  </>
+                )}
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-              <span>
-                {indexSearchAvailable
-                  ? searchQuery.trim().length < 3
-                    ? "Prefix search"
-                    : "Smart contains search"
-                  : "Global search unavailable"}{" "}
-                · results stay on the gateway
-              </span>
               {indexStateLabel && (
                 <span className="text-slate-400">
                   Index: {indexStateLabel.toLocaleLowerCase()}
@@ -1078,6 +1173,23 @@ export function OpcTagBrowserModal({
                   {indexStatus.progress.items_per_second.toFixed(0)} items/s
                 </span>
               )}
+              {indexStatus?.scheduler.next_refresh_at && (
+                <span
+                  title={
+                    formatExactTime(indexStatus.scheduler.next_refresh_at) ??
+                    undefined
+                  }
+                >
+                  Next refresh:{" "}
+                  {formatTimeUntil(indexStatus.scheduler.next_refresh_at)}
+                </span>
+              )}
+              {indexStatus && indexStatus.active_generation > 0 && (
+                <span>
+                  Auto-refresh:{" "}
+                  {indexStatus.auto_refresh_enabled ? "enabled" : "disabled"}
+                </span>
+              )}
             </div>
             {indexStatus?.state === "failed" && indexStatus.last_error && (
               <p role="status" className="text-xs text-red-300">
@@ -1086,16 +1198,7 @@ export function OpcTagBrowserModal({
             )}
             {!indexSearchAvailable && (
               <p role="status" className="text-xs text-slate-400">
-                {indexConfigurationHint ? (
-                  <>
-                    <span>{indexConfigurationHint}</span>{" "}
-                    <span>
-                      Lazy browse and direct ItemID entry remain available.
-                    </span>
-                  </>
-                ) : (
-                  indexUnavailableMessage
-                )}
+                {indexUnavailableMessage}
               </p>
             )}
           </div>
@@ -1133,6 +1236,7 @@ export function OpcTagBrowserModal({
                         disabled={busy}
                         onMouseEnter={() => setActiveSearchIndex(index)}
                         onClick={() => chooseSearchMatch(match)}
+                        onDoubleClick={() => void confirmTag(match.item_id)}
                         title={match.item_id}
                         className={`block w-full rounded px-2 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
                           active
@@ -1166,9 +1270,9 @@ export function OpcTagBrowserModal({
                       : indexStatus?.state === "partial"
                         ? "The tag index is still building; no complete no-match result is available yet."
                         : indexStatus?.state === "not_indexed"
-                          ? "The tag index is not ready. Refresh the index to build it."
+                          ? "The tag index has not been built. Build it to enable global search."
                           : indexStatus?.state === "failed"
-                            ? "The tag index failed to build. Refresh it after resolving the gateway error."
+                            ? "The tag index failed to build. Retry it after resolving the gateway error."
                             : "No matching tags."}
                   </p>
                 )}

@@ -212,7 +212,7 @@ impl From<IndexedSearchProgress> for OpcIndexedSearchProgressResponse {
 pub struct OpcSearchIndexStatusResponse {
     pub server: String,
     pub state: String,
-    pub configured: bool,
+    pub auto_refresh_enabled: bool,
     pub active_generation: u64,
     pub entry_count: u64,
     pub unique_item_count: u64,
@@ -223,6 +223,18 @@ pub struct OpcSearchIndexStatusResponse {
     pub organization: String,
     pub source: String,
     pub progress: Option<OpcIndexedSearchProgressResponse>,
+    pub scheduler: OpcIndexSchedulerResponse,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OpcIndexSchedulerResponse {
+    pub next_refresh_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_success_duration_ms: Option<u64>,
+    pub retry_after: Option<String>,
+    pub consecutive_failures: u32,
+    pub circuit_open: bool,
 }
 
 impl From<SearchIndexStatus> for OpcSearchIndexStatusResponse {
@@ -230,7 +242,7 @@ impl From<SearchIndexStatus> for OpcSearchIndexStatusResponse {
         Self {
             server: status.server,
             state: status.state.to_string(),
-            configured: status.configured,
+            auto_refresh_enabled: status.auto_refresh_enabled,
             active_generation: status.active_generation,
             entry_count: status.entry_count,
             unique_item_count: status.unique_item_count,
@@ -241,6 +253,15 @@ impl From<SearchIndexStatus> for OpcSearchIndexStatusResponse {
             organization: organization_name(status.organization).to_string(),
             source: source_name(status.source).to_string(),
             progress: status.progress.map(Into::into),
+            scheduler: OpcIndexSchedulerResponse {
+                next_refresh_at: status.scheduler.next_refresh_at,
+                last_attempt_at: status.scheduler.last_attempt_at,
+                last_success_at: status.scheduler.last_success_at,
+                last_success_duration_ms: status.scheduler.last_success_duration_ms,
+                retry_after: status.scheduler.retry_after,
+                consecutive_failures: status.scheduler.consecutive_failures,
+                circuit_open: status.scheduler.circuit_open,
+            },
         }
     }
 }
@@ -328,6 +349,7 @@ pub struct OpcSearchIndexQuery {
     #[serde(default = "default_search_match_mode")]
     pub match_mode: String,
     #[serde(default = "default_index_search_max_results")]
+    #[param(minimum = 1)]
     pub max_results: u32,
 }
 
@@ -396,6 +418,61 @@ pub(crate) async fn refresh_search_index(
     let status = with_timeout(
         "refresh the OPC namespace index",
         driver.refresh_search_index(query.force.unwrap_or(false)),
+    )
+    .await?;
+    Ok(Json(status.into()))
+}
+
+/// Query parameters for `POST /api/opc/search-index/auto-refresh`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpcSearchIndexAutoRefreshQuery {
+    pub bridge_host: Option<String>,
+    pub opc_server: Option<String>,
+    pub enabled: bool,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/opc/search-index/auto-refresh",
+    tag = "opc",
+    params(OpcSearchIndexAutoRefreshQuery),
+    responses(
+        (status = 200, body = OpcSearchIndexStatusResponse),
+        (status = 400, description = "The auto-refresh request or gateway connection is invalid.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn set_search_index_auto_refresh(
+    State(state): State<AppState>,
+    Query(query): Query<OpcSearchIndexAutoRefreshQuery>,
+) -> Result<Json<OpcSearchIndexStatusResponse>, ApiError> {
+    let driver = connect_search_index_driver(&state, query.bridge_host, query.opc_server).await?;
+    let status = with_timeout(
+        "set OPC namespace index auto-refresh",
+        driver.set_search_index_auto_refresh(query.enabled),
+    )
+    .await?;
+    Ok(Json(status.into()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/opc/search-index",
+    tag = "opc",
+    params(OpcSearchIndexServerQuery),
+    responses(
+        (status = 200, body = OpcSearchIndexStatusResponse),
+        (status = 400, description = "The delete request or gateway connection is invalid.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn delete_search_index(
+    State(state): State<AppState>,
+    Query(query): Query<OpcSearchIndexServerQuery>,
+) -> Result<Json<OpcSearchIndexStatusResponse>, ApiError> {
+    let driver = connect_search_index_driver(&state, query.bridge_host, query.opc_server).await?;
+    let status = with_timeout(
+        "delete the OPC namespace index",
+        driver.delete_search_index(),
     )
     .await?;
     Ok(Json(status.into()))
@@ -651,6 +728,7 @@ pub struct OpcSearchQuery {
     pub session_id: Option<String>,
     pub scope_node_key: Option<String>,
     #[serde(default = "default_search_max_results")]
+    #[param(minimum = 1)]
     pub max_results: u32,
     pub include_branches: Option<bool>,
     pub refresh: Option<bool>,
@@ -893,7 +971,12 @@ pub fn router() -> Router<AppState> {
         .route("/api/opc/search-index/status", get(search_index_status))
         .route("/api/opc/search-index/search", get(search_index))
         .route("/api/opc/search-index/refresh", post(refresh_search_index))
+        .route(
+            "/api/opc/search-index/auto-refresh",
+            post(set_search_index_auto_refresh),
+        )
         .route("/api/opc/search-index/control", post(control_search_index))
+        .route("/api/opc/search-index", delete(delete_search_index))
         .route("/api/opc/read", get(read))
 }
 
@@ -905,7 +988,9 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use opcda_bridge_proto::bridge::{
         BrowseNode as ProtoBrowseNode, BrowseNodeKind as ProtoBrowseNodeKind, BrowsePage,
-        BrowseSource as ProtoBrowseSource, IndexedSearchMatch as ProtoIndexedSearchMatch,
+        BrowseSource as ProtoBrowseSource,
+        IndexSchedulerDiagnostics as ProtoIndexSchedulerDiagnostics,
+        IndexedSearchMatch as ProtoIndexedSearchMatch,
         IndexedSearchProgress as ProtoIndexedSearchProgress, ListServersResponse,
         NamespaceOrganization as ProtoNamespaceOrganization, ReadResponse,
         SearchIndexResponse as ProtoSearchIndexResponse, SearchIndexState as ProtoSearchIndexState,
@@ -936,7 +1021,7 @@ mod tests {
         ProtoSearchIndexStatus {
             server: "Sim.Server".to_string(),
             state: state as i32,
-            configured: true,
+            auto_refresh_enabled: true,
             active_generation: 7,
             entry_count: 12_345,
             unique_item_count: 9_876,
@@ -946,6 +1031,25 @@ mod tests {
             database_bytes: 65_536,
             organization: ProtoNamespaceOrganization::Hierarchical as i32,
             source: ProtoBrowseSource::Da3 as i32,
+            effective_limits: None,
+            controller_state: 0,
+            pause_reason: None,
+            recovery_deadline: None,
+            foreground: Default::default(),
+            host: Default::default(),
+            storage: Default::default(),
+            scheduler: Some(ProtoIndexSchedulerDiagnostics {
+                next_refresh_at: Some("2026-08-23T10:05:00Z".to_string()),
+                last_attempt_at: Some("2026-08-16T10:05:00Z".to_string()),
+                last_success_at: Some("2026-08-16T10:05:00Z".to_string()),
+                last_success_duration_ms: Some(300_000),
+                retry_after: None,
+                consecutive_failures: 0,
+                circuit_open: false,
+            }),
+            health: Default::default(),
+            promoting: false,
+            pause_reason_detail: None,
             progress: Some(ProtoIndexedSearchProgress {
                 branches_visited: 321,
                 entries_seen: 12_345,
@@ -1124,6 +1228,7 @@ mod tests {
                 indexed_search_protocol_version: "1".to_string(),
                 max_indexed_search_results: 50,
                 search_index_state: ProtoSearchIndexState::Ready as i32,
+                search_index_promoting: false,
             },
             ..Default::default()
         })
@@ -1168,7 +1273,7 @@ mod tests {
             let body = body_json(response).await;
             assert_eq!(body["server"], "Sim.Server");
             assert_eq!(body["state"], expected_state);
-            assert_eq!(body["configured"], true);
+            assert_eq!(body["auto_refresh_enabled"], true);
             assert_eq!(body["active_generation"], 7);
             assert_eq!(body["entry_count"], 12_345);
             assert_eq!(body["unique_item_count"], 9_876);
@@ -1177,6 +1282,12 @@ mod tests {
             assert_eq!(body["database_bytes"], 65_536);
             assert_eq!(body["organization"], "hierarchical");
             assert_eq!(body["source"], "da3");
+            assert_eq!(body["scheduler"]["next_refresh_at"], "2026-08-23T10:05:00Z");
+            assert_eq!(body["scheduler"]["last_attempt_at"], "2026-08-16T10:05:00Z");
+            assert_eq!(body["scheduler"]["last_success_at"], "2026-08-16T10:05:00Z");
+            assert_eq!(body["scheduler"]["last_success_duration_ms"], 300_000);
+            assert_eq!(body["scheduler"]["consecutive_failures"], 0);
+            assert_eq!(body["scheduler"]["circuit_open"], false);
             assert_eq!(body["progress"]["branches_visited"], 321);
             assert_eq!(body["progress"]["entries_seen"], 12_345);
             assert_eq!(body["progress"]["unique_items"], 9_876);
@@ -1755,10 +1866,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_timeout_preserves_index_configuration_diagnostic() {
+    async fn with_timeout_preserves_index_enrollment_diagnostic() {
         let err = with_timeout("refresh the OPC namespace index", async {
             Err::<(), _>(bhtune_driver::DriverError::IndexOperationRejected {
-                message: "server is not configured for namespace indexing".to_string(),
+                message: "server is not enrolled for namespace indexing".to_string(),
             })
         })
         .await
@@ -1766,7 +1877,7 @@ mod tests {
         match err {
             ApiError::BadRequest(message) => {
                 assert!(message.contains("refresh the OPC namespace index"));
-                assert!(message.contains("server is not configured for namespace indexing"));
+                assert!(message.contains("server is not enrolled for namespace indexing"));
             }
             other => panic!("expected BadRequest, got {other:?}"),
         }

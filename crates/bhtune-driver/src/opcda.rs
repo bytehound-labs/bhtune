@@ -16,10 +16,10 @@ use crate::{
     error::{DriverError, DriverResult},
     types::{
         BrowseBreadcrumb, BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource,
-        DriverCapabilities, IndexedSearchMatch, IndexedSearchProgress, NamespaceOrganization,
-        Quality, SearchCompleted, SearchEvent, SearchIndexControlAction, SearchIndexRequest,
-        SearchIndexResponse, SearchIndexState, SearchIndexStatus, SearchMatch, SearchMatchMode,
-        SearchProgress, SearchRequest, TagId, TagValue, TagWrite, WriteOutcome,
+        DriverCapabilities, IndexSchedulerDiagnostics, IndexedSearchMatch, IndexedSearchProgress,
+        NamespaceOrganization, Quality, SearchCompleted, SearchEvent, SearchIndexControlAction,
+        SearchIndexRequest, SearchIndexResponse, SearchIndexState, SearchIndexStatus, SearchMatch,
+        SearchMatchMode, SearchProgress, SearchRequest, TagId, TagValue, TagWrite, WriteOutcome,
     },
 };
 
@@ -145,6 +145,29 @@ impl OpcDaDriver {
             .search_index_status(self.server.clone())
             .await
             .map_err(|err| map_bridge_error_for(err, "indexed-search status"))
+            .map(search_index_status_from_bridge)
+    }
+
+    /// Enables or disables future automatic refreshes for this OPC server's index.
+    pub async fn set_search_index_auto_refresh(
+        &self,
+        enabled: bool,
+    ) -> DriverResult<SearchIndexStatus> {
+        let mut client = self.client.lock().await;
+        client
+            .set_search_index_auto_refresh(self.server.clone(), enabled)
+            .await
+            .map_err(|err| map_bridge_error_for(err, "indexed-search auto-refresh"))
+            .map(search_index_status_from_bridge)
+    }
+
+    /// Deletes this OPC server's persistent namespace index and enrollment.
+    pub async fn delete_search_index(&self) -> DriverResult<SearchIndexStatus> {
+        let mut client = self.client.lock().await;
+        client
+            .delete_search_index(self.server.clone())
+            .await
+            .map_err(|err| map_bridge_error_for(err, "indexed-search delete"))
             .map(search_index_status_from_bridge)
     }
 
@@ -290,6 +313,17 @@ impl Driver for OpcDaDriver {
         self.control_search_index(action).await
     }
 
+    async fn set_search_index_auto_refresh(
+        &self,
+        enabled: bool,
+    ) -> DriverResult<SearchIndexStatus> {
+        self.set_search_index_auto_refresh(enabled).await
+    }
+
+    async fn delete_search_index(&self) -> DriverResult<SearchIndexStatus> {
+        self.delete_search_index().await
+    }
+
     async fn search_index(&self, request: SearchIndexRequest) -> DriverResult<SearchIndexResponse> {
         self.search_index_query(request).await
     }
@@ -379,6 +413,7 @@ pub fn search_index_state_from_bridge(state: opcda_bridge::SearchIndexState) -> 
         opcda_bridge::SearchIndexState::Ready => SearchIndexState::Ready,
         opcda_bridge::SearchIndexState::Stale => SearchIndexState::Stale,
         opcda_bridge::SearchIndexState::Refreshing => SearchIndexState::Refreshing,
+        opcda_bridge::SearchIndexState::Promoting => SearchIndexState::Promoting,
         opcda_bridge::SearchIndexState::Failed => SearchIndexState::Failed,
     }
 }
@@ -403,7 +438,7 @@ pub fn search_index_status_from_bridge(
     SearchIndexStatus {
         server: status.server,
         state: search_index_state_from_bridge(status.state),
-        configured: status.configured,
+        auto_refresh_enabled: status.auto_refresh_enabled,
         active_generation: status.active_generation,
         entry_count: status.entry_count,
         unique_item_count: status.unique_item_count,
@@ -414,6 +449,15 @@ pub fn search_index_status_from_bridge(
         organization: namespace_organization_from_bridge(status.organization),
         source: browse_source_from_bridge(status.source),
         progress: status.progress.map(indexed_search_progress_from_bridge),
+        scheduler: IndexSchedulerDiagnostics {
+            next_refresh_at: status.scheduler.next_refresh_at,
+            last_attempt_at: status.scheduler.last_attempt_at,
+            last_success_at: status.scheduler.last_success_at,
+            last_success_duration_ms: status.scheduler.last_success_duration_ms,
+            retry_after: status.scheduler.retry_after,
+            consecutive_failures: status.scheduler.consecutive_failures,
+            circuit_open: status.scheduler.circuit_open,
+        },
     }
 }
 
@@ -561,7 +605,13 @@ fn map_bridge_error_for(err: opcda_bridge::Error, operation: &'static str) -> Dr
         opcda_bridge::Error::Connect(_) => DriverError::Connect(Box::new(err)),
         opcda_bridge::Error::Rpc(status)
             if is_indexed_search_operation(operation)
-                && status.code() == tonic::Code::FailedPrecondition =>
+                && matches!(
+                    status.code(),
+                    tonic::Code::InvalidArgument
+                        | tonic::Code::NotFound
+                        | tonic::Code::AlreadyExists
+                        | tonic::Code::FailedPrecondition
+                ) =>
         {
             DriverError::IndexOperationRejected {
                 message: status.message().to_string(),
@@ -576,6 +626,10 @@ fn map_bridge_error_for(err: opcda_bridge::Error, operation: &'static str) -> Dr
         {
             DriverError::BrowseStateInvalid
         }
+        opcda_bridge::Error::UnknownIndexServer { .. }
+        | opcda_bridge::Error::IndexNotEnrolled { .. } => DriverError::IndexOperationRejected {
+            message: err.to_string(),
+        },
         opcda_bridge::Error::IncompatibleGateway { .. } => {
             DriverError::IncompatibleGateway { operation }
         }
@@ -591,6 +645,8 @@ fn is_indexed_search_operation(operation: &str) -> bool {
         "indexed-search status"
             | "indexed-search refresh"
             | "indexed-search control"
+            | "indexed-search auto-refresh"
+            | "indexed-search delete"
             | "indexed search"
     )
 }
@@ -791,6 +847,10 @@ mod tests {
                 SearchIndexState::Refreshing,
             ),
             (
+                opcda_bridge::SearchIndexState::Promoting,
+                SearchIndexState::Promoting,
+            ),
+            (
                 opcda_bridge::SearchIndexState::Failed,
                 SearchIndexState::Failed,
             ),
@@ -857,7 +917,7 @@ mod tests {
         let status = search_index_status_from_bridge(opcda_bridge::SearchIndexStatus {
             server: "S".into(),
             state: opcda_bridge::SearchIndexState::Partial,
-            configured: true,
+            auto_refresh_enabled: true,
             active_generation: 2,
             entry_count: 3,
             unique_item_count: 4,
@@ -868,6 +928,27 @@ mod tests {
             organization: opcda_bridge::NamespaceOrganization::Flat,
             source: opcda_bridge::BrowseSource::Derived,
             progress: None,
+            effective_limits: None,
+            controller_state: opcda_bridge::IndexControllerState::Unspecified,
+            pause_reason: None,
+            recovery_deadline: None,
+            pause_reason_detail: None,
+            foreground: opcda_bridge::IndexForegroundDiagnostics {
+                active_count: 0,
+                operations: 0,
+                errors: 0,
+                bad_quality: 0,
+                latency_p50_ms: None,
+                latency_p95_ms: None,
+                latency_max_ms: None,
+                last_error: false,
+                last_bad_quality: false,
+            },
+            host: opcda_bridge::IndexHostDiagnostics::default(),
+            storage: opcda_bridge::IndexStorageDiagnostics::default(),
+            scheduler: opcda_bridge::IndexSchedulerDiagnostics::default(),
+            health: opcda_bridge::IndexHealthDiagnostics::default(),
+            promoting: false,
         });
         assert_eq!(status.state, SearchIndexState::Partial);
         assert!(status.progress.is_none());
@@ -925,15 +1006,30 @@ mod tests {
     #[test]
     fn indexed_search_precondition_preserves_gateway_reason() {
         let err = map_bridge_error_for(
-            opcda_bridge::Error::Rpc(tonic::Status::failed_precondition(
-                "server is not configured for namespace indexing",
+            opcda_bridge::Error::Rpc(tonic::Status::not_found(
+                "server is not enrolled for namespace indexing",
             )),
             "indexed-search refresh",
         );
         assert!(matches!(
             err,
             DriverError::IndexOperationRejected { message }
-                if message == "server is not configured for namespace indexing"
+                if message == "server is not enrolled for namespace indexing"
+        ));
+    }
+
+    #[test]
+    fn indexed_search_invalid_argument_is_a_rejected_operation() {
+        let err = map_bridge_error_for(
+            opcda_bridge::Error::Rpc(tonic::Status::invalid_argument(
+                "OPC server is not registered on the gateway",
+            )),
+            "indexed-search refresh",
+        );
+        assert!(matches!(
+            err,
+            DriverError::IndexOperationRejected { message }
+                if message == "OPC server is not registered on the gateway"
         ));
     }
 
@@ -980,6 +1076,24 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn bridge_error_mapping_preserves_typed_index_enrollment_errors() {
+        for error in [
+            opcda_bridge::Error::UnknownIndexServer {
+                server: "Unknown.Server".into(),
+            },
+            opcda_bridge::Error::IndexNotEnrolled {
+                server: "Known.Server".into(),
+            },
+        ] {
+            assert!(matches!(
+                map_bridge_error_for(error, "indexed-search refresh"),
+                DriverError::IndexOperationRejected { message }
+                    if message.contains("Server")
+            ));
+        }
+    }
+
     #[tokio::test]
     async fn connect_failure_maps_to_driver_error_connect() {
         // Nothing is listening on this port, so `Client::connect` fails at the transport
@@ -1009,10 +1123,10 @@ mod smoke_tests {
         BrowseNode as ProtoBrowseNode, BrowseNodeKind as ProtoNodeKind,
         BrowsePage as ProtoBrowsePage, BrowseRequest, BrowseSource as ProtoBrowseSource,
         CloseBrowseSessionRequest, ControlSearchIndexRequest, GetCapabilitiesRequest,
-        GetCapabilitiesResponse, GetSearchIndexStatusRequest,
-        IndexedSearchMatch as ProtoIndexedSearchMatch, ListServersRequest, ListServersResponse,
-        NamespaceOrganization as ProtoOrganization, ReadRequest, ReadResponse,
-        RefreshSearchIndexRequest, SearchEvent as ProtoSearchEvent,
+        GetCapabilitiesResponse, GetGatewayInfoRequest, GetGatewayInfoResponse,
+        GetSearchIndexStatusRequest, IndexedSearchMatch as ProtoIndexedSearchMatch,
+        ListServersRequest, ListServersResponse, NamespaceOrganization as ProtoOrganization,
+        ReadRequest, ReadResponse, RefreshSearchIndexRequest, SearchEvent as ProtoSearchEvent,
         SearchIndexResponse as ProtoSearchIndexResponse, SearchIndexState as ProtoSearchIndexState,
         SearchIndexStatus as ProtoSearchIndexStatus, SearchProgress as ProtoSearchProgress,
         TagValue as ProtoTagValue, WriteRequest, WriteResponse,
@@ -1035,10 +1149,18 @@ mod smoke_tests {
         search_index_status_response: ProtoSearchIndexStatus,
         search_index_response: ProtoSearchIndexResponse,
         close_error: Option<Status>,
+        gateway_info_response: GetGatewayInfoResponse,
     }
 
     #[tonic::async_trait]
     impl Bridge for MockBridgeService {
+        async fn get_gateway_info(
+            &self,
+            _request: Request<GetGatewayInfoRequest>,
+        ) -> Result<Response<GetGatewayInfoResponse>, Status> {
+            Ok(Response::new(self.gateway_info_response.clone()))
+        }
+
         async fn get_capabilities(
             &self,
             _request: Request<GetCapabilitiesRequest>,
@@ -1222,6 +1344,7 @@ mod smoke_tests {
                 indexed_search_protocol_version: "1".into(),
                 max_indexed_search_results: 50,
                 search_index_state: ProtoSearchIndexState::Ready as i32,
+                search_index_promoting: false,
             },
             browse_response: browse_page(),
             ..Default::default()
@@ -1250,7 +1373,7 @@ mod smoke_tests {
             search_index_status_response: ProtoSearchIndexStatus {
                 server: "S1".into(),
                 state: ProtoSearchIndexState::Ready as i32,
-                configured: true,
+                auto_refresh_enabled: true,
                 active_generation: 7,
                 entry_count: 2,
                 unique_item_count: 2,
@@ -1269,7 +1392,7 @@ mod smoke_tests {
                 status: Some(ProtoSearchIndexStatus {
                     server: "S1".into(),
                     state: ProtoSearchIndexState::Ready as i32,
-                    configured: true,
+                    auto_refresh_enabled: true,
                     active_generation: 7,
                     entry_count: 2,
                     unique_item_count: 2,
