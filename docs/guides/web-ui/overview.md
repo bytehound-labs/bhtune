@@ -45,8 +45,8 @@ system or a route-level substitute for the server's Demo enforcement.
 
 {/* web-ui-screenshot: demo-tune */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=017fd39ffaf0">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=017fd39ffaf0" alt="BHTune Demo mode simulator tune form with the persistent Demo policy notice" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=f085b3a97af1">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=f085b3a97af1" alt="BHTune Demo mode simulator tune form with the persistent Demo policy notice" />
   </a>
   <figcaption>Demo mode keeps simulator controls visible while omitting live-plant actions. The persistent notice states the boundary, history limit, and session lifetime.</figcaption>
 </figure>
