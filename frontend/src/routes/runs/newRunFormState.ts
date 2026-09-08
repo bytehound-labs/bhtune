@@ -139,6 +139,23 @@ export function demoControllerTypesFor(
   );
 }
 
+export function demoDefaultControllerTypeFor(
+  capabilities: SimulatorCapabilities,
+  processType: ProcessType,
+): ControllerType {
+  const controllerTypes = demoControllerTypesFor(capabilities, processType);
+  if (controllerTypes.includes(capabilities.defaults.controller_type)) {
+    return capabilities.defaults.controller_type;
+  }
+  const fallback = controllerTypes[0];
+  if (fallback === undefined) {
+    throw new Error(
+      `The server did not provide controller types for ${processType}.`,
+    );
+  }
+  return fallback;
+}
+
 const TAG_PREVIEW_LABELS: Record<TagOverrideKey, string> = {
   processVariable: "Process variable (PV)",
   manipulatedVariable: "Manipulated variable (MV)",
@@ -270,7 +287,7 @@ export function formFromDemoCapabilities(
 ): FormState {
   const processType = capabilities.process_types[0];
   const controllerType = processType
-    ? demoControllerTypesFor(capabilities, processType)[0]
+    ? demoDefaultControllerTypeFor(capabilities, processType)
     : undefined;
   const processDefaults = processType
     ? demoProcessDefaultsFor(capabilities, processType)
@@ -435,7 +452,7 @@ function formFromDemoInput(
     typeof source.controller_type === "string" &&
     controllerTypes.includes(source.controller_type as ControllerType)
       ? (source.controller_type as ControllerType)
-      : controllerTypes[0];
+      : demoDefaultControllerTypeFor(capabilities, processType);
   const endpointBounds = capabilities.limits.range_endpoint;
   const spanBounds = capabilities.limits.range_span;
   const pvRange = demoRange(

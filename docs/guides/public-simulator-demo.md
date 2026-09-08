@@ -42,8 +42,8 @@ requirements below remain authoritative if images are unavailable.
 
 {/* web-ui-screenshot: demo-tune */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=017fd39ffaf0">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=017fd39ffaf0" alt="BHTune Demo simulator tune form with the fixed policy notice and bounded fields" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=f085b3a97af1">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=f085b3a97af1" alt="BHTune Demo simulator tune form with the fixed policy notice and bounded fields" />
   </a>
   <figcaption>The Demo form exposes bounded simulator controls and makes live-plant features unavailable.</figcaption>
 </figure>

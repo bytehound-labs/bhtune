@@ -330,10 +330,10 @@
         "docs/guides/web-ui/overview.md",
         "docs/guides/public-simulator-demo.md"
       ],
-      "sha256": "017fd39ffaf0d5b6d57195506df93572d9806b36312ffc943de863650f544b9c",
+      "sha256": "f085b3a97af18741d5ec0c1c7b33094bea8b2d674f2d403a4bf7bc10dc359063",
       "width": 1440,
       "height": 1405,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=017fd39ffaf0"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=f085b3a97af1"
     },
     {
       "id": "demo-history",

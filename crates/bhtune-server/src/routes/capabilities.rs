@@ -82,6 +82,7 @@ pub struct ProcessControllerCompatibility {
 pub struct DemoSimulatorDefaults {
     pub tag_name: String,
     pub template: String,
+    pub controller_type: ControllerType,
     pub direction: ControllerDirection,
     pub pv_range: FloatBounds,
     pub mv_range: FloatBounds,
@@ -236,6 +237,7 @@ fn demo_simulator() -> DemoSimulatorCapabilities {
         defaults: DemoSimulatorDefaults {
             tag_name: DEMO_TAG_NAME.to_owned(),
             template: DEMO_TEMPLATE_NAME.to_owned(),
+            controller_type: ControllerType::Pi,
             direction: ControllerDirection::Reverse,
             pv_range: FloatBounds {
                 min: DEMO_RANGE_LOW,
@@ -425,6 +427,15 @@ mod tests {
                 .unwrap()
                 .controller_types,
             [ControllerType::P, ControllerType::Pi]
+        );
+        assert_eq!(
+            response
+                .simulator
+                .as_ref()
+                .unwrap()
+                .defaults
+                .controller_type,
+            ControllerType::Pi
         );
         assert_eq!(
             response.simulator.as_ref().unwrap().limits.cycles_count,

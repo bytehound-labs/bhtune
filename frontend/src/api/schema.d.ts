@@ -923,6 +923,7 @@ export interface components {
       templates: string[];
     };
     DemoSimulatorDefaults: {
+      controller_type: components["schemas"]["ControllerType"];
       /** Format: int32 */
       cycles_count: number;
       /** Format: int32 */

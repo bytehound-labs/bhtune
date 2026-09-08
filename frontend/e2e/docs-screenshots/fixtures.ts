@@ -185,6 +185,7 @@ const demoCapabilities = {
     defaults: {
       template: "Yokogawa CentumVP",
       tag_name: "Simulator",
+      controller_type: "pi",
       direction: "reverse",
       poll_interval_ms: 200,
       run_timeout_secs: 30,

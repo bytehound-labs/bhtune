@@ -337,9 +337,15 @@ function validateDemoSimulator(value: unknown) {
   }
 
   const defaults = record(simulator.defaults, "simulator.defaults");
+  const defaultControllerType = text(
+    defaults,
+    "controller_type",
+    "simulator.defaults",
+  );
   if (
     text(defaults, "template", "simulator.defaults") !== template ||
     text(defaults, "tag_name", "simulator.defaults") !== tagName ||
+    !CONTROLLER_TYPES.has(defaultControllerType) ||
     (defaults.direction !== "direct" && defaults.direction !== "reverse")
   ) {
     throw new Error("The server returned contradictory simulator defaults.");
