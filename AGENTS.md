@@ -10,7 +10,7 @@ browser-based web GUI.
 Early. Workspace and CI are in place. `bhtune-core`'s data model (`core-model`), MRFT
 relay-switching engine (`core-mrft`), and tuning-constant math (`core-tuning-math`) are
 implemented and unit-tested. `bhtune-db`'s SQLite schema (`db-schema`) is implemented and
-tested — all 7 tables, migrations, and connection/pragma setup — the four built-in DCS
+tested — the complete pre-v0.1 schema, migration setup, and connection/pragma behavior — the four built-in DCS
 templates seed themselves on startup (`db-seed-templates`), the run-history repository
 layer (`history-query-api`) is done: full run lifecycle (start/record-initial-readings/
 complete/fail/abort), dynamic filtering and pagination over runs, and per-run sample/result/
@@ -1955,7 +1955,7 @@ accepted, quota-checked run start. A shared browser profile shares its history a
 clearing cookies creates a new anonymous namespace. Sessions expire after the fixed lifetime
 and do not slide.
 
-The `0008_demo_sessions` migration adds `demo_sessions`, nullable
+The consolidated pre-v0.1 schema includes `demo_sessions`, nullable
 `tune_runs.demo_session_id` ownership with cascading deletion, owner indexes, and database
 triggers that require an active session, require the simulator driver, make ownership
 immutable, and enforce the global current-row cap. Full-mode and pre-Demo rows retain
@@ -4480,11 +4480,14 @@ The repository now has a layered hardening gate for both source changes and rele
   value; unrelated response changes remain breaking. The request-property removals allowed by
   the comparator are exact pre-v1 migrations of the per-tune quality/timing settings into global
   configuration; unrelated removals remain breaking.
-- **Database compatibility.** Migration `0002_history_query_indexes.sql` is the first
-  forward migration after the initial schema. `pool.rs` constructs a representative database
-  at migration 0001, inserts data, opens it through the normal connection path, and verifies
-  both preservation and application of the new indexes. Future schema changes should extend
-  this pattern rather than editing an already-applied migration.
+- **Database compatibility.** Before v0.1, the migrations directory contains one consolidated
+  `0001_initial_schema.sql` describing the complete current schema. Fresh-schema tests verify
+  the single recorded migration plus the final indexes, checked-result constraints, Demo
+  ownership triggers, and MV actuation audit table. While no supported external database
+  depends on the pre-release history, another squash is allowed; local and test databases are
+  disposable and may need recreation. Once v0.1 ships or a database is distributed or
+  supported outside development, applied migration history becomes a compatibility contract and
+  future schema changes must use new forward migrations rather than editing `0001`.
 
 ## Build / Test / Lint / Coverage
 
