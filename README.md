@@ -34,6 +34,9 @@ BHTune is designed around a few core principles:
   web GUI for interactive use, both built on the same tuning engine and the same SQLite database.
 - **Stores everything in a plain, open SQLite database.** No encryption, no usage gating, no
   license dongle — just a single database anyone can inspect.
+- **Keeps the schema disposable before v0.1.** Fresh databases use one consolidated migration;
+  while no supported external database depends on the pre-release history, that baseline may be
+  squashed again. Once v0.1 ships, applied migration history becomes a compatibility contract.
 - **Is built to be extended.** OPC DA is the primary, supported driver for v1. The tag-I/O
   interface (`Driver` trait) is deliberately protocol-agnostic — see [Roadmap](#roadmap) for
   planned OPC UA and Modbus drivers.
@@ -676,8 +679,11 @@ The repository also validates high-risk boundaries and delivery artifacts automa
   and patch coverage.
 - SonarCloud analyzes each applicable pull request and requires its Open/Confirmed issue count to
   be zero before merge.
-- Databases created before the current migration set are upgraded in a compatibility test that
-  verifies representative settings survive the forward migration.
+- Fresh databases are validated against the complete consolidated pre-v0.1 schema, including
+  its indexes, checked-result constraints, Demo ownership triggers, and MV actuation audit
+  table. Local/test databases are disposable during pre-v0.1 schema squashes; after v0.1,
+  existing databases must be preserved through forward migrations rather than silently
+  recreated.
 - CodeQL, Semgrep, Gitleaks, actionlint, and zizmor run in GitHub Actions with immutable action
   pins. Release assets carry keyless Sigstore signatures, a CycloneDX SBOM, and GitHub artifact
   provenance attestations.

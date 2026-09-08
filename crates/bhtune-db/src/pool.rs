@@ -77,43 +77,6 @@ async fn run_migrations(pool: &SqlitePool) -> DbResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::Row;
-
-    async fn apply_migrations_through(pool: &SqlitePool, migration_count: usize) {
-        sqlx::query(
-            r#"
-            CREATE TABLE _sqlx_migrations (
-                version BIGINT PRIMARY KEY,
-                description TEXT NOT NULL,
-                installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                success BOOLEAN NOT NULL,
-                checksum BLOB NOT NULL,
-                execution_time BIGINT NOT NULL
-            )
-            "#,
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-
-        let migrations = sqlx::migrate!("./migrations");
-        for migration in migrations.migrations.iter().take(migration_count) {
-            sqlx::raw_sql(sqlx::AssertSqlSafe(migration.sql.as_str()))
-                .execute(pool)
-                .await
-                .unwrap();
-            sqlx::query(
-                "INSERT INTO _sqlx_migrations \
-                 (version, description, success, checksum, execution_time) VALUES (?, ?, 1, ?, 0)",
-            )
-            .bind(migration.version)
-            .bind(migration.description.as_ref())
-            .bind(migration.checksum.as_ref())
-            .execute(pool)
-            .await
-            .unwrap();
-        }
-    }
 
     #[tokio::test]
     async fn connect_creates_file_and_applies_wal_and_foreign_keys() {
@@ -153,378 +116,75 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count, 1);
+
+        let (migration_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(migration_count, 1);
     }
 
     #[tokio::test]
-    async fn connect_in_memory_runs_migrations() {
+    async fn connect_in_memory_runs_the_final_schema_migration() {
         let pool = connect_in_memory().await.unwrap();
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'dcs_templates'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(count, 1);
+
+        let (migration_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(migration_count, 1);
+
+        let (migration_version,): (i64,) =
+            sqlx::query_as("SELECT version FROM _sqlx_migrations WHERE success = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(migration_version, 1);
     }
 
     #[tokio::test]
-    async fn connect_upgrades_a_pre_index_database_and_backfills_write_quality_policy() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("before-history-indexes.db");
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true)
-            .foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
+    async fn fresh_schema_contains_final_history_demo_and_actuation_objects() {
+        let pool = connect_in_memory().await.unwrap();
 
-        apply_migrations_through(&pool, 1).await;
-        sqlx::query(
-            "INSERT INTO settings (key, value, updated_at) VALUES ('migration-fixture', ?, ?)",
-        )
-        .bind(r#"{"preserve":true}"#)
-        .bind(chrono::Utc::now())
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let started_at = chrono::Utc::now();
-        for allow_uncertain_quality in [1_i64, 0] {
-            sqlx::query(
-                r#"
-                INSERT INTO tune_runs (
-                    loop_name, template_name, template_origin, template_snapshot_json,
-                    tags_json, driver, started_at, outcome, process_type, controller_type,
-                    relay_amp_percent, num_cycles_skip, num_cycles_count,
-                    noise_protection_secs, mrft_delay_secs, allow_uncertain_quality, created_at
-                ) VALUES ('migration-fixture', 'fixture', 'builtin', '{}', '{}', 'simulator',
-                          ?, 'completed', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
-                "#,
+        for (object_type, object_name) in [
+            ("table", "demo_sessions"),
+            ("table", "tune_mv_actuations"),
+            ("index", "idx_tune_samples_run_time"),
+            ("index", "idx_tune_writes_run_written"),
+            ("index", "idx_tune_runs_demo_session"),
+            ("index", "idx_tune_runs_demo_session_outcome"),
+            ("trigger", "tune_runs_demo_session_insert"),
+            ("trigger", "tune_runs_demo_session_valid_insert"),
+            ("trigger", "tune_runs_demo_global_limit_insert"),
+            ("trigger", "tune_runs_demo_session_update"),
+            ("trigger", "tune_runs_demo_session_immutable"),
+        ] {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?",
             )
-            .bind(started_at)
-            .bind(allow_uncertain_quality)
-            .bind(started_at)
-            .execute(&pool)
+            .bind(object_type)
+            .bind(object_name)
+            .fetch_one(&pool)
             .await
             .unwrap();
+            assert_eq!(
+                count, 1,
+                "expected final schema object {object_type} {object_name}"
+            );
         }
-        let run_ids: Vec<i64> = sqlx::query_scalar(
-            "SELECT id FROM tune_runs WHERE loop_name = 'migration-fixture' ORDER BY id",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        for (run_id, response_level) in run_ids.iter().zip(["moderate", "aggressive"]) {
-            sqlx::query(
-                "INSERT INTO tune_writes (run_id, response_level, written_at, kind, success) VALUES (?, ?, ?, 'write', 1)",
-            )
-            .bind(run_id)
-            .bind(response_level)
-            .bind(started_at)
-            .execute(&pool)
-            .await
-            .unwrap();
+
+        let result_columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('tune_results')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        for column in ["status", "invalid_reason"] {
+            assert!(
+                result_columns.iter().any(|name| name == column),
+                "checked-result column {column} is missing"
+            );
         }
-        pool.close().await;
-
-        let upgraded = connect(&path).await.unwrap();
-        let (value,): (String,) =
-            sqlx::query_as("SELECT value FROM settings WHERE key = 'migration-fixture'")
-                .fetch_one(&upgraded)
-                .await
-                .unwrap();
-        assert_eq!(value, r#"{"preserve":true}"#);
-
-        let indexes: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM pragma_index_list('tune_samples')")
-                .fetch_all(&upgraded)
-                .await
-                .unwrap();
-        assert!(
-            indexes
-                .iter()
-                .any(|name| name == "idx_tune_samples_run_time")
-        );
-        let indexes: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM pragma_index_list('tune_writes')")
-                .fetch_all(&upgraded)
-                .await
-                .unwrap();
-        assert!(
-            indexes
-                .iter()
-                .any(|name| name == "idx_tune_writes_run_written")
-        );
-
-        let policies: Vec<i64> = sqlx::query_scalar(
-            r#"
-            SELECT tw.allow_uncertain_quality
-            FROM tune_writes tw
-            JOIN tune_runs tr ON tr.id = tw.run_id
-            WHERE tr.loop_name = 'migration-fixture'
-            ORDER BY tw.id
-            "#,
-        )
-        .fetch_all(&upgraded)
-        .await
-        .unwrap();
-        assert_eq!(
-            policies,
-            vec![1, 0],
-            "legacy writes inherit the global true default unless their parent run explicitly disabled it"
-        );
-
-        let timing_metrics: Vec<Option<String>> = sqlx::query_scalar(
-            "SELECT timing_metrics_json FROM tune_runs WHERE loop_name = 'migration-fixture' ORDER BY id",
-        )
-        .fetch_all(&upgraded)
-        .await
-        .unwrap();
-        assert_eq!(
-            timing_metrics,
-            vec![None, None],
-            "pre-diagnostics runs must remain readable with no invented timing metrics"
-        );
-    }
-
-    #[tokio::test]
-    async fn connect_upgrades_a_migration_0004_database_with_mv_actuation_audit_support() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("before-mv-actuation-verification.db");
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true)
-            .foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-
-        apply_migrations_through(&pool, 4).await;
-        let started_at = chrono::Utc::now();
-        let run_id: i64 = sqlx::query_scalar(
-            r#"
-            INSERT INTO tune_runs (
-                loop_name, template_name, template_origin, template_snapshot_json,
-                tags_json, driver, started_at, outcome, process_type, controller_type,
-                relay_amp_percent, num_cycles_skip, num_cycles_count,
-                noise_protection_secs, mrft_delay_secs, created_at
-            ) VALUES (
-                'migration-0004-fixture', 'fixture', 'builtin', '{}', '{}', 'opcda',
-                ?, 'completed', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?
-            )
-            RETURNING id
-            "#,
-        )
-        .bind(started_at)
-        .bind(started_at)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO settings (key, value, updated_at) VALUES ('migration-0004-fixture', ?, ?)",
-        )
-        .bind(r#"{"preserve":true}"#)
-        .bind(started_at)
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool.close().await;
-
-        let upgraded = connect(&path).await.unwrap();
-        let preserved: String =
-            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'migration-0004-fixture'")
-                .fetch_one(&upgraded)
-                .await
-                .unwrap();
-        assert_eq!(preserved, r#"{"preserve":true}"#);
-        let preserved_run: String =
-            sqlx::query_scalar("SELECT outcome FROM tune_runs WHERE id = ?")
-                .bind(run_id)
-                .fetch_one(&upgraded)
-                .await
-                .unwrap();
-        assert_eq!(
-            preserved_run, "completed",
-            "migration 0005 must not rewrite existing run outcomes"
-        );
-
-        let commanded_at = started_at + chrono::Duration::seconds(1);
-        sqlx::query(
-            r#"
-            INSERT INTO tune_mv_actuations (
-                run_id, sequence, kind, commanded_at, target_mv, previous_commanded_mv,
-                tolerance, confirmation_due_at
-            ) VALUES (?, 0, 'relay', ?, 55.0, 45.0, 0.1, ?)
-            "#,
-        )
-        .bind(run_id)
-        .bind(commanded_at)
-        .bind(commanded_at + chrono::Duration::seconds(4))
-        .execute(&upgraded)
-        .await
-        .unwrap();
-
-        sqlx::query("DELETE FROM tune_runs WHERE id = ?")
-            .bind(run_id)
-            .execute(&upgraded)
-            .await
-            .unwrap();
-        let remaining: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM tune_mv_actuations WHERE run_id = ?")
-                .bind(run_id)
-                .fetch_one(&upgraded)
-                .await
-                .unwrap();
-        assert_eq!(
-            remaining, 0,
-            "the new audit table must cascade-delete with an upgraded run"
-        );
-    }
-
-    #[tokio::test]
-    async fn connect_upgrades_migration_0006_results_without_losing_values() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("before-checked-results.db");
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true)
-            .foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-
-        apply_migrations_through(&pool, 6).await;
-        let started_at = chrono::Utc::now();
-        let run_id: i64 = sqlx::query_scalar(
-            r#"
-            INSERT INTO tune_runs (
-                loop_name, template_name, template_origin, template_snapshot_json,
-                tags_json, driver, started_at, outcome, process_type, controller_type,
-                relay_amp_percent, num_cycles_skip, num_cycles_count,
-                noise_protection_secs, mrft_delay_secs, created_at
-            ) VALUES (
-                'migration-0006-results', 'fixture', 'builtin', '{}', '{}', 'simulator',
-                ?, 'completed', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?
-            )
-            RETURNING id
-            "#,
-        )
-        .bind(started_at)
-        .bind(started_at)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            r#"
-            INSERT INTO tune_results (
-                run_id, response_level, kp, ti_minutes, td_minutes,
-                proportional, integral, derivative
-            ) VALUES (?, 'moderate', 1.5, 2.5, 0.0, 66.7, 2.5, 0.0)
-            "#,
-        )
-        .bind(run_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool.close().await;
-
-        let upgraded = connect(&path).await.unwrap();
-        let row = sqlx::query(
-            "SELECT kp, ti_minutes, td_minutes, proportional, integral, derivative, \
-             status, invalid_reason FROM tune_results WHERE run_id = ?",
-        )
-        .bind(run_id)
-        .fetch_one(&upgraded)
-        .await
-        .unwrap();
-        assert_eq!(row.try_get::<f32, _>("kp").unwrap(), 1.5);
-        assert_eq!(row.try_get::<f32, _>("ti_minutes").unwrap(), 2.5);
-        assert_eq!(row.try_get::<f32, _>("td_minutes").unwrap(), 0.0);
-        assert_eq!(row.try_get::<f32, _>("proportional").unwrap(), 66.7);
-        assert_eq!(row.try_get::<f32, _>("integral").unwrap(), 2.5);
-        assert_eq!(row.try_get::<f32, _>("derivative").unwrap(), 0.0);
-        assert_eq!(row.try_get::<String, _>("status").unwrap(), "valid");
-        assert_eq!(
-            row.try_get::<Option<String>, _>("invalid_reason").unwrap(),
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn connect_classifies_legacy_non_finite_results_as_invalid() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("before-checked-results-with-infinity.db");
-        let options = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true)
-            .foreign_keys(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-
-        apply_migrations_through(&pool, 6).await;
-        let started_at = chrono::Utc::now();
-        let run_id: i64 = sqlx::query_scalar(
-            r#"
-            INSERT INTO tune_runs (
-                loop_name, template_name, template_origin, template_snapshot_json,
-                tags_json, driver, started_at, outcome, process_type, controller_type,
-                relay_amp_percent, num_cycles_skip, num_cycles_count,
-                noise_protection_secs, mrft_delay_secs, created_at
-            ) VALUES (
-                'migration-0006-infinity', 'fixture', 'builtin', '{}', '{}', 'simulator',
-                ?, 'completed', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?
-            )
-            RETURNING id
-            "#,
-        )
-        .bind(started_at)
-        .bind(started_at)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            r#"
-            INSERT INTO tune_results (
-                run_id, response_level, kp, ti_minutes, td_minutes,
-                proportional, integral, derivative
-            ) VALUES (?, 'moderate', 1e999, 2.5, 0.0, 66.7, 2.5, 0.0)
-            "#,
-        )
-        .bind(run_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool.close().await;
-
-        let upgraded = connect(&path).await.unwrap();
-        let row = sqlx::query(
-            "SELECT kp, ti_minutes, td_minutes, proportional, integral, derivative, \
-             status, invalid_reason FROM tune_results WHERE run_id = ?",
-        )
-        .bind(run_id)
-        .fetch_one(&upgraded)
-        .await
-        .unwrap();
-        assert_eq!(row.try_get::<Option<f32>, _>("kp").unwrap(), None);
-        assert_eq!(row.try_get::<Option<f32>, _>("ti_minutes").unwrap(), None);
-        assert_eq!(row.try_get::<Option<f32>, _>("td_minutes").unwrap(), None);
-        assert_eq!(row.try_get::<Option<f32>, _>("proportional").unwrap(), None);
-        assert_eq!(row.try_get::<Option<f32>, _>("integral").unwrap(), None);
-        assert_eq!(row.try_get::<Option<f32>, _>("derivative").unwrap(), None);
-        assert_eq!(row.try_get::<String, _>("status").unwrap(), "invalid");
-        assert_eq!(
-            row.try_get::<String, _>("invalid_reason").unwrap(),
-            "non_finite_kp"
-        );
     }
 }
