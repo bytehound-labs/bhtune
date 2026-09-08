@@ -4,11 +4,11 @@
 -- browser or the `sqlite3` CLI.
 --
 -- Every table needed through the `history` phase (Phase 10 in the plan) is
--- created here, in one migration, deliberately. BHTune is still pre-v0.1, so
--- this schema may be consolidated again while no supported user-held or
--- deployed database depends on the intermediate migration history. Once v0.1
--- establishes a supported database format, future schema changes must use
--- forward migrations rather than editing this file.
+-- created here, in one migration, deliberately: nothing has shipped yet, so
+-- there is no meaningful "migration history" to preserve, and squashing
+-- everything the roadmap already knows it needs into the initial schema
+-- avoids a string of `ALTER TABLE`s later for tables whose shape is already
+-- decided.
 --
 -- Conventions used throughout:
 --   * Timestamps are TEXT (RFC 3339 / ISO 8601, UTC) -- how sqlx's `chrono`
@@ -123,21 +123,6 @@ CREATE TABLE loops (
     updated_at                TEXT NOT NULL
 );
 CREATE INDEX idx_loops_dcs_template ON loops(dcs_template_id);
-
--- Anonymous, short-lived ownership for the public simulator-only demo surface.
-CREATE TABLE demo_sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    token_hash    TEXT NOT NULL UNIQUE,
-    created_at    TIMESTAMP NOT NULL,
-    last_seen_at  TIMESTAMP NOT NULL,
-    expires_at    TIMESTAMP NOT NULL,
-    revoked_at    TIMESTAMP,
-    CHECK (length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'),
-    CHECK (expires_at > created_at),
-    CHECK (revoked_at IS NULL OR revoked_at >= created_at)
-);
-
-CREATE INDEX idx_demo_sessions_expires_at ON demo_sessions(expires_at);
 
 -- One MRFT (or future Step Test) execution against a loop. Snapshots the
 -- configuration and initial readings actually used as flattened, real
@@ -257,23 +242,13 @@ CREATE TABLE tune_runs (
     restore_status             TEXT CHECK (restore_status IS NULL OR restore_status IN ('confirmed', 'incomplete')),
     restore_detail              TEXT,
 
-    created_at                TEXT NOT NULL,
-    timing_metrics_json      TEXT
-        CHECK (timing_metrics_json IS NULL OR json_valid(timing_metrics_json)),
-    effective_tuning_json    TEXT
-        CHECK (effective_tuning_json IS NULL OR json_valid(effective_tuning_json)),
-    demo_session_id          INTEGER
-        REFERENCES demo_sessions(id) ON DELETE CASCADE
+    created_at                TEXT NOT NULL
 );
 CREATE INDEX idx_tune_runs_loop_started ON tune_runs(loop_id, started_at);
 CREATE INDEX idx_tune_runs_started_at ON tune_runs(started_at);
 CREATE INDEX idx_tune_runs_outcome ON tune_runs(outcome);
 CREATE INDEX idx_tune_runs_process_controller ON tune_runs(process_type, controller_type);
 CREATE INDEX idx_tune_runs_template_name ON tune_runs(template_name);
-CREATE INDEX idx_tune_runs_demo_session
-    ON tune_runs(demo_session_id, started_at DESC);
-CREATE INDEX idx_tune_runs_demo_session_outcome
-    ON tune_runs(demo_session_id, outcome);
 
 -- Per-tick engine state during a run -- mirrors
 -- `bhtune_core::mrft::MrftState` plus the `Tick` that produced it. This is
@@ -303,8 +278,6 @@ CREATE TABLE tune_samples (
     UNIQUE (run_id, tick)
 );
 CREATE INDEX idx_tune_samples_run_tick ON tune_samples(run_id, tick);
-CREATE INDEX idx_tune_samples_run_time
-    ON tune_samples (run_id, time);
 
 -- Calculated PID results for one response level of one run -- mirrors
 -- `bhtune_core::tuning_math::{TuningResult, PidParameters}`. A successfully
@@ -313,66 +286,19 @@ CREATE INDEX idx_tune_samples_run_time
 -- Sluggish), written once at completion. This is what was *calculated* --
 -- see `tune_writes` for what was actually *written* to the DCS, which may
 -- be none, one, or more than one of these.
--- A result is explicitly invalid when the calculation produced a non-finite or
--- otherwise unusable value; invalid rows retain the diagnostic reason but never
--- expose numeric values that could be written to a controller.
 CREATE TABLE tune_results (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id             INTEGER NOT NULL REFERENCES tune_runs(id) ON DELETE CASCADE,
     response_level     TEXT NOT NULL CHECK (response_level IN ('aggressive', 'moderate', 'sluggish')),
 
-    kp                 REAL,
-    ti_minutes         REAL,
-    td_minutes         REAL,
+    kp                  REAL NOT NULL,
+    ti_minutes          REAL NOT NULL,
+    td_minutes          REAL NOT NULL,
 
     -- `PidParameters`, in the run's DCS template's own representation.
-    proportional        REAL,
-    integral             REAL,
-    derivative           REAL,
-
-    status             TEXT NOT NULL DEFAULT 'valid',
-    invalid_reason     TEXT CHECK (
-        invalid_reason IS NULL OR invalid_reason IN (
-            'non_finite_pv_amplitude',
-            'non_positive_pv_amplitude',
-            'non_finite_period',
-            'non_positive_period',
-            'non_finite_frequency',
-            'non_positive_frequency',
-            'non_finite_kp',
-            'non_finite_ti_minutes',
-            'non_finite_td_minutes',
-            'non_finite_proportional',
-            'non_finite_integral',
-            'non_finite_derivative'
-        )
-    ),
-
-    CHECK (
-        (status = 'valid'
-            AND invalid_reason IS NULL
-            AND kp IS NOT NULL
-            AND ti_minutes IS NOT NULL
-            AND td_minutes IS NOT NULL
-            AND proportional IS NOT NULL
-            AND integral IS NOT NULL
-            AND derivative IS NOT NULL)
-        OR
-        (status = 'invalid'
-            AND invalid_reason IS NOT NULL
-            AND kp IS NULL
-            AND ti_minutes IS NULL
-            AND td_minutes IS NULL
-            AND proportional IS NULL
-            AND integral IS NULL
-            AND derivative IS NULL)
-    ),
-    CHECK (kp IS NULL OR kp BETWEEN -3.4028234663852886e38 AND 3.4028234663852886e38),
-    CHECK (ti_minutes IS NULL OR ti_minutes BETWEEN -3.4028234663852886e38 AND 3.4028234663852886e38),
-    CHECK (td_minutes IS NULL OR td_minutes BETWEEN -3.4028234663852886e38 AND 3.4028234663852886e38),
-    CHECK (proportional IS NULL OR proportional BETWEEN -3.4028234663852886e38 AND 3.4028234663852886e38),
-    CHECK (integral IS NULL OR integral BETWEEN -3.4028234663852886e38 AND 3.4028234663852886e38),
-    CHECK (derivative IS NULL OR derivative BETWEEN -3.4028234663852886e38 AND 3.4028234663852886e38),
+    proportional        REAL NOT NULL,
+    integral             REAL NOT NULL,
+    derivative           REAL NOT NULL,
 
     UNIQUE (run_id, response_level)
 );
@@ -433,40 +359,10 @@ CREATE TABLE tune_writes (
     -- further rollback. See `bhtune history revert` for reverting a
     -- *successful* write later.
     rollback_state            TEXT CHECK (rollback_state IN ('succeeded', 'failed')),
-    rollback_error            TEXT,
-    allow_uncertain_quality   INTEGER NOT NULL DEFAULT 1
-        CHECK (allow_uncertain_quality IN (0, 1))
+    rollback_error            TEXT
 );
 
 CREATE INDEX idx_tune_writes_run ON tune_writes(run_id);
-CREATE INDEX idx_tune_writes_run_written
-    ON tune_writes (run_id, written_at);
-
--- Audit every accepted OPC DA manipulated-variable command independently of
--- the commanded-MV sample trail.
-CREATE TABLE tune_mv_actuations (
-    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id                   INTEGER NOT NULL REFERENCES tune_runs(id) ON DELETE CASCADE,
-    sequence                 INTEGER NOT NULL CHECK (sequence >= 0),
-    kind                     TEXT NOT NULL CHECK (kind IN ('relay', 'restore')),
-    commanded_at             TEXT NOT NULL,
-    target_mv                REAL NOT NULL,
-    previous_commanded_mv    REAL,
-    tolerance                REAL NOT NULL CHECK (tolerance >= 0),
-    confirmation_due_at      TEXT NOT NULL,
-    last_checked_at          TEXT,
-    readback_mv              REAL,
-    readback_quality         TEXT CHECK (
-        readback_quality IS NULL
-        OR readback_quality IN ('good', 'uncertain', 'bad')
-    ),
-    attempt_count            INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-    status                   TEXT NOT NULL DEFAULT 'pending' CHECK (
-        status IN ('pending', 'confirmed', 'failed', 'unverified', 'superseded')
-    ),
-    detail                   TEXT,
-    UNIQUE (run_id, sequence)
-);
 
 -- App-wide key/value settings -- e.g. the `history-retention` policy --
 -- shared between the CLI and GUI without a dedicated table per setting.
@@ -477,51 +373,3 @@ CREATE TABLE settings (
     value        TEXT NOT NULL CHECK (json_valid(value)),
     updated_at   TEXT NOT NULL
 );
-
--- Demo ownership is established on the initial run insert, is simulator-only,
--- and cannot be attached, removed, or transferred afterward.
-CREATE TRIGGER tune_runs_demo_session_insert
-BEFORE INSERT ON tune_runs
-WHEN NEW.demo_session_id IS NOT NULL AND NEW.driver <> 'simulator'
-BEGIN
-    SELECT RAISE(ABORT, 'demo_session_id requires simulator driver');
-END;
-
-CREATE TRIGGER tune_runs_demo_session_valid_insert
-BEFORE INSERT ON tune_runs
-WHEN NEW.demo_session_id IS NOT NULL AND NOT EXISTS (
-    SELECT 1
-    FROM demo_sessions
-    WHERE id = NEW.demo_session_id
-      AND revoked_at IS NULL
-      AND created_at <= NEW.started_at
-      AND expires_at > NEW.started_at
-)
-BEGIN
-    SELECT RAISE(ABORT, 'demo_session_id requires an active demo session');
-END;
-
--- DemoPolicy fixes this cap at 5,000. The repository count supports an early
--- friendly rejection; this trigger is the race-safe backstop for concurrent
--- starts.
-CREATE TRIGGER tune_runs_demo_global_limit_insert
-BEFORE INSERT ON tune_runs
-WHEN NEW.demo_session_id IS NOT NULL
- AND (SELECT COUNT(*) FROM tune_runs WHERE demo_session_id IS NOT NULL) >= 5000
-BEGIN
-    SELECT RAISE(ABORT, 'demo tune run row limit reached');
-END;
-
-CREATE TRIGGER tune_runs_demo_session_update
-BEFORE UPDATE OF driver ON tune_runs
-WHEN NEW.demo_session_id IS NOT NULL AND NEW.driver <> 'simulator'
-BEGIN
-    SELECT RAISE(ABORT, 'demo_session_id requires simulator driver');
-END;
-
-CREATE TRIGGER tune_runs_demo_session_immutable
-BEFORE UPDATE OF demo_session_id ON tune_runs
-WHEN NEW.demo_session_id IS NOT OLD.demo_session_id
-BEGIN
-    SELECT RAISE(ABORT, 'demo_session_id is immutable');
-END;

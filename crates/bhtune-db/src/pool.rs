@@ -122,7 +122,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 8);
     }
 
     #[tokio::test]
@@ -134,14 +134,14 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 8);
 
         let (migration_version,): (i64,) =
-            sqlx::query_as("SELECT version FROM _sqlx_migrations WHERE success = 1")
+            sqlx::query_as("SELECT MAX(version) FROM _sqlx_migrations WHERE success = 1")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_version, 1);
+        assert_eq!(migration_version, 8);
     }
 
     #[tokio::test]

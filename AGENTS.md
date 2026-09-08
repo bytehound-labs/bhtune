@@ -1955,15 +1955,16 @@ accepted, quota-checked run start. A shared browser profile shares its history a
 clearing cookies creates a new anonymous namespace. Sessions expire after the fixed lifetime
 and do not slide.
 
-The consolidated pre-v0.1 schema includes `demo_sessions`, nullable
-`tune_runs.demo_session_id` ownership with cascading deletion, owner indexes, and database
-triggers that require an active session, require the simulator driver, make ownership
-immutable, and enforce the global current-row cap. Full-mode and pre-Demo rows retain
-`NULL` ownership. Startup recovery terminalizes owned rows still marked `running`; cleanup
-runs immediately and every five minutes, removing expired sessions only when they have no live
-run and pruning excess terminal history. The owned `prepare()` path records ownership in the
-initial insert; if follow-up provenance/effective-metadata persistence fails, it terminalizes
-the row or deletes it as a fallback rather than leaking a permanent `running` row.
+The pre-v0.1 schema is applied through the preserved forward migration chain `0001` through
+`0008`. Migration `0008` adds `demo_sessions`, nullable `tune_runs.demo_session_id` ownership
+with cascading deletion, owner indexes, and database triggers that require an active session,
+require the simulator driver, make ownership immutable, and enforce the global current-row cap.
+Full-mode and pre-Demo rows retain `NULL` ownership. Startup recovery terminalizes owned rows
+still marked `running`; cleanup runs immediately and every five minutes, removing expired
+sessions only when they have no live run and pruning excess terminal history. The owned
+`prepare()` path records ownership in the initial insert; if follow-up provenance/effective-
+metadata persistence fails, it terminalizes the row or deletes it as a fallback rather than
+leaking a permanent `running` row.
 
 Admission uses non-queueing RAII permits: one global and one persistent per-visitor active-run
 permit are acquired before preparation, and accepted-start windows are checked per token and
@@ -4480,14 +4481,14 @@ The repository now has a layered hardening gate for both source changes and rele
   value; unrelated response changes remain breaking. The request-property removals allowed by
   the comparator are exact pre-v1 migrations of the per-tune quality/timing settings into global
   configuration; unrelated removals remain breaking.
-- **Database compatibility.** Before v0.1, the migrations directory contains one consolidated
-  `0001_initial_schema.sql` describing the complete current schema. Fresh-schema tests verify
-  the single recorded migration plus the final indexes, checked-result constraints, Demo
-  ownership triggers, and MV actuation audit table. While no supported external database
-  depends on the pre-release history, another squash is allowed; local and test databases are
-  disposable and may need recreation. Once v0.1 ships or a database is distributed or
-  supported outside development, applied migration history becomes a compatibility contract and
-  future schema changes must use new forward migrations rather than editing `0001`.
+- **Database compatibility.** The migrations directory preserves the deployed pre-v0.1
+  sequence `0001` through `0008`, including each migration's exact SQLx checksum. Fresh-schema
+  tests verify all eight migrations and the final indexes, checked-result constraints, Demo
+  ownership triggers, and MV actuation audit table. A dedicated compatibility test upgrades a
+  pre-Demo (`0007`) database to `0008` without losing existing rows. Once a database is
+  deployed, distributed, or retained for supported use, its applied migration history is a
+  compatibility contract: future schema changes must use new forward migrations, and existing
+  migration files must not be edited or squashed.
 
 ## Build / Test / Lint / Coverage
 
