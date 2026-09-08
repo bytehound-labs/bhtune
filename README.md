@@ -75,6 +75,8 @@ digest and requires GitHub's signed build provenance to match the BHTune reposit
 main-branch Docker workflow, the triggering commit, and the image digest before rollout.
 The Woodpecker verifier uses a pinned, checksum-verified GitHub CLI release so Sigstore trust
 root support does not depend on the Alpine package repository's CLI version.
+It waits for GitHub's attestation record as well as the image tag, because those two registry
+objects can become visible at different times.
 Changes to the image-promotion or Woodpecker deployment definitions also produce a matching
 immutable image, so the deployment job always runs against the configuration that was
 reviewed for that commit.

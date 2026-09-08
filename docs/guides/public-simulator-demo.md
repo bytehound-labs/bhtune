@@ -166,6 +166,8 @@ commit, and the resolved image digest before it invokes the host rollout wrapper
 The deployment runner downloads a pinned, checksum-verified GitHub CLI release for this
 verification instead of relying on the older distribution-package version in its Alpine base
 image; this keeps Sigstore trust-root support reproducible across runner updates.
+The verifier waits for the attestation record after the image tag appears because GHCR image
+publication and GitHub attestation indexing are eventually consistent.
 The Docker workflow and Woodpecker deployment definition are both image-triggering paths:
 changing either one publishes a matching immutable commit image before deployment, preventing
 a deployment-only fix from being stranded without a corresponding GHCR artifact.
