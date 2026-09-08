@@ -2714,6 +2714,7 @@
         "required": [
           "tag_name",
           "template",
+          "controller_type",
           "direction",
           "pv_range",
           "mv_range",
@@ -2732,6 +2733,9 @@
           "sim_initial_mv"
         ],
         "properties": {
+          "controller_type": {
+            "$ref": "#/components/schemas/ControllerType"
+          },
           "cycles_count": {
             "type": "integer",
             "format": "int32",

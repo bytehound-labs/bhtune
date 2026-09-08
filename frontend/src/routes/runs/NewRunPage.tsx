@@ -28,6 +28,7 @@ import { NewRunForm } from "./NewRunForm";
 import {
   buildRequest,
   demoControllerTypesFor,
+  demoDefaultControllerTypeFor,
   demoDraftFromForm,
   demoProcessDefaultsFor,
   draftFromForm,
@@ -136,7 +137,7 @@ function controllerTypeForProcess(
       processType,
     );
     if (controllerTypes.includes(current)) return current;
-    return controllerTypes[0] ?? current;
+    return demoDefaultControllerTypeFor(simulatorCapabilities, processType);
   }
   if (current === "pid" && !TEMPERATURE_PROCESS_TYPES.has(processType)) {
     return "pi";

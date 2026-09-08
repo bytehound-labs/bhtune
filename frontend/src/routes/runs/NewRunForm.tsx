@@ -22,6 +22,7 @@ import {
   CONTROLLER_TYPES,
   DRIVERS,
   demoControllerTypesFor,
+  demoDefaultControllerTypeFor,
   PROCESS_TYPES,
   RESPONSE_LEVELS,
   TEMPERATURE_PROCESS_TYPES,
@@ -524,12 +525,13 @@ function demoFields({
   const processType = processTypes.includes(form.processType)
     ? form.processType
     : processTypes[0];
+  if (!processType) return null;
   const controllerTypes = processType
     ? demoControllerTypesFor(simulatorCapabilities, processType)
     : [];
   const controllerType = controllerTypes.includes(form.controllerType)
     ? form.controllerType
-    : controllerTypes[0];
+    : demoDefaultControllerTypeFor(simulatorCapabilities, processType);
   return (
     <>
       <FormSection

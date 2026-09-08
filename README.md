@@ -6,6 +6,10 @@
 [![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Docs](https://img.shields.io/badge/docs-bytehound--labs.github.io%2Fbhtune-blue.svg)](https://bytehound-labs.github.io/bhtune/)
 
+> **[Try the public simulator Demo](https://bhtunedemo.bytehound.ca/)** — run BHTune in your
+> browser with synthetic process data and no plant connection. Demo results are for
+> experimentation only; never copy them directly into live equipment.
+
 An open-source PID loop auto-tuner for industrial control systems (DCS/PLC), built by
 [ByteHound](https://github.com/bytehound-labs).
 

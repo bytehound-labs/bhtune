@@ -74,6 +74,7 @@ const capabilities = {
     defaults: {
       tag_name: "Simulator demo",
       template: "Yokogawa CentumVP",
+      controller_type: "pi",
       direction: "reverse",
       pv_range: { min: 0, max: 100, absolute_min: null },
       mv_range: { min: 0, max: 100, absolute_min: null },
@@ -361,6 +362,9 @@ test.describe("Demo mode contract", () => {
     await page.goto("/runs/new");
 
     await expect(page.getByLabel("Template")).toHaveValue("Yokogawa CentumVP");
+    await expect(
+      page.getByRole("combobox", { name: "Controller type", exact: true }),
+    ).toHaveValue("pi");
     await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("10");
     await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
     await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
@@ -584,7 +588,7 @@ test.describe("Demo mode contract", () => {
     ).toHaveValue("flow");
     await expect(
       page.getByRole("combobox", { name: "Controller type", exact: true }),
-    ).toHaveValue("p");
+    ).toHaveValue("pi");
     await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("10");
     await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
     await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
@@ -609,7 +613,7 @@ test.describe("Demo mode contract", () => {
       template: "Yokogawa CentumVP",
       tagname: "Simulator demo",
       process_type: "flow",
-      controller_type: "p",
+      controller_type: "pi",
       relay_amp: 10,
       cycles_skip: 1,
       cycles_count: 2,
@@ -808,7 +812,7 @@ test.describe("Demo mode contract", () => {
     ).toHaveValue("flow");
     await expect(
       page.getByRole("combobox", { name: "Controller type", exact: true }),
-    ).toHaveValue("p");
+    ).toHaveValue("pi");
     await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("10");
     await expect(page.getByLabel("Cycles to skip")).toHaveValue("1");
     await expect(page.getByLabel("Cycles to count")).toHaveValue("2");
@@ -832,7 +836,7 @@ test.describe("Demo mode contract", () => {
       template: "Yokogawa CentumVP",
       tagname: "Simulator demo",
       process_type: "flow",
-      controller_type: "p",
+      controller_type: "pi",
       relay_amp: 10,
       cycles_skip: 1,
       cycles_count: 2,
