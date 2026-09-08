@@ -112,12 +112,35 @@ steps:
         printf 'Resolved %s to %s\n' "$image_tag" "$digest"
         export GH_TOKEN="$BHTUNE_GITHUB_TOKEN"
         digest_without_prefix="$(printf '%s\n' "$digest" | sed 's/^sha256://')"
-        attestation_json="$(
-          "$gh_bin" attestation verify "oci://$image_repo@$digest" \
+        attestation_json=''
+        attestation_deadline=$((SECONDS + 600))
+        attestation_error="$work_dir/attestation-error"
+        while (( SECONDS < attestation_deadline )); do
+          if "$gh_bin" attestation verify "oci://$image_repo@$digest" \
             --repo "$expected_repo" \
             --cert-identity "$expected_workflow" \
-            --format json
-        )"
+            --format json \
+            >"$work_dir/attestation.json" 2>"$attestation_error"; then
+            attestation_json="$(cat "$work_dir/attestation.json")"
+            break
+          fi
+
+          if grep -Fq 'HTTP 404: Not Found' "$attestation_error"; then
+            printf 'Image attestation is not ready yet; waiting...\n'
+            sleep 10
+            continue
+          fi
+
+          cat "$attestation_error" >&2
+          printf 'error: image attestation verification failed\n' >&2
+          exit 1
+        done
+
+        if [[ -z "$attestation_json" ]]; then
+          printf 'error: timed out waiting for the image attestation for %s\n' "$digest" >&2
+          exit 1
+        fi
+
         if ! printf '%s\n' "$attestation_json" | jq -e \
           --arg image "$image_repo" \
           --arg digest "$digest_without_prefix" \
