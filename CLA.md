@@ -111,19 +111,18 @@ Signing happens automatically on your first pull request — there is no paperwo
 account to create.
 
 1. Open a pull request as usual.
-2. A CLA check runs and, if you have not signed yet, a bot comments on your pull request with a
-   link to this document.
+2. The **CLA signature check** runs. If you have not signed yet it fails, and its summary links
+   to this document and quotes the line below.
 3. Read this agreement, then post a comment on your pull request containing exactly:
 
 ```text
 I have read the CLA Document and I hereby sign the CLA
 ```
 
-4. The check re-runs and passes. Your signature is recorded, along with your GitHub username and
-   the pull request number, on the repository's `cla-signatures` branch.
+4. The check re-runs automatically and passes. Your signature is recorded, along with your GitHub
+   username and the pull request number, on the repository's `cla-signatures` branch.
 
-You sign once. Later pull requests are recognized automatically. If the check ever needs to run
-again, comment `recheck` on the pull request.
+You sign once. Later pull requests are recognized automatically.
 
 If you are signing on behalf of a company and need a countersigned or negotiated agreement,
 open an issue to start that conversation instead.

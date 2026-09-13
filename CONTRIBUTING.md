@@ -9,10 +9,10 @@ Agreement](CLA.md). Please read it in full before signing — it sets out exactl
 grant and what rights you keep.
 
 Signing happens on the pull request itself; there is no paperwork and no account to create. If
-you have not signed yet, a bot comments on your first pull request, and you sign by replying with
-the one-line statement it quotes. Your signature is recorded on the repository's
-`cla-signatures` branch and recognized automatically on later pull requests. Comment `recheck` if
-the check needs to run again.
+you have not signed yet, the **CLA signature check** fails and its summary quotes the exact
+one-line statement to post. Add that line as a new comment on your pull request and the check
+re-runs automatically. Your signature is recorded on the repository's `cla-signatures` branch and
+recognized automatically on every later pull request.
 
 ## Development workflow: trunk-based
 

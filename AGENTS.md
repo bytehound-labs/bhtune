@@ -4381,30 +4381,40 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
   their own copyright, and cannot have the AGPL retracted from already-released code. A
   contributor who objects is told to walk away rather than discovering the term later. By
   explicit decision this disclosure lives **only** in `CLA.md` — `README.md` and
-  `CONTRIBUTING.md` link to it without restating commercial terms — so the PR bot comment
-  carries the pointer to it, which is the moment a contributor is actually about to sign.
+  `CONTRIBUTING.md` link to it without restating commercial terms — and the failing check's job
+  summary links straight to it, which is the moment a contributor is actually about to sign.
 - **Clauses added beyond the old draft**, closing gaps from the earlier pre-legal punch-list:
   patent-litigation termination (5), third-party material disclosure (7), employer/corporate
   authorization (8), no-obligation-to-use (10), trademark disclaimer (11), Alberta governing law
   (13), and a severability/non-retroactivity clause (14). Still outstanding: a real legal review.
-- **Enforcement is `.github/workflows/cla.yml`.** Signature storage cannot go on `main`, which is
-  protected with `enforce_admins: true` and requires pull requests — a bot push would simply be
-  rejected — so signatures are committed to a dedicated `cla-signatures` branch via the action's
-  `branch` input. The workflow runs on `pull_request_target` (needed so fork PRs get a token that
-  can comment and record) and deliberately contains **no `actions/checkout`**: checking out or
-  executing pull request code in that context would hand a fork the job's write permissions.
-  `concurrency` uses `cancel-in-progress: false`, since cancelling mid-run can lose a signature a
-  contributor already posted. The `issue_comment` trigger is filtered down to pull request
-  comments matching exactly the signing phrase or `recheck`, so ordinary discussion does not
-  start runs. `mikeboiko`, `Copilot`, `dependabot[bot]`, and `*[bot]` are allowlisted.
-- **The action is archived upstream, and that was a deliberate trade.**
-  `contributor-assistant/github-action` was archived in March 2026, but every action in this repo
-  is already SHA-pinned (`ca4a40a7d1004f18d9960b404b97e5f30a505a08`, v2.6.1), so archival changes
-  nothing about the code that actually executes. The maintained alternatives were all _worse_
-  provenance for a job holding `contents: write`: the top forks carry 2–4 stars and `yjs/cla-tool`
-  has 0 stars with no tagged release, versus 347 stars and broad deployment for the original.
-  Revisit if a credible maintained successor appears, or if a vulnerability is reported against
-  the pinned commit.
+- **Enforcement is `.github/workflows/cla.yml`, written in-house with no third-party action.**
+  An earlier draft used `contributor-assistant/github-action`, which required `pull_request_target`
+  and was archived upstream in March 2026. The repo's own `security-lint.yml` gate rejected both:
+  zizmor raised `dangerous-triggers` (medium) for the trigger and `archived-uses` (**high**) for
+  the action. Rather than suppress a high-confidence finding from the project's own security
+  audit, both causes were removed. The workflow now splits into two jobs so no privileged trigger
+  is needed:
+  - `check` runs on plain `pull_request`. A fork PR's read-only `GITHUB_TOKEN` is _sufficient_
+    here, because the job only needs to read the signature file and fail; a failing required
+    check is what blocks the merge, so it needs no write access at all. Instructions and the
+    exact signing phrase are written to `$GITHUB_STEP_SUMMARY`, replacing the bot comment.
+  - `sign` runs on `issue_comment`, which always executes the workflow from the default branch
+    and never checks out pull request code — so holding `contents: write` there is safe. It
+    records the signature through the Contents API, reacts to the comment, and re-runs the failed
+    `check` run so the contributor does not have to push again.
+
+  Logic is plain `bash` + `jq` + the preinstalled `gh` CLI, so the supply chain for a job holding
+  `contents: write` is GitHub's own tooling and nothing else. There is no `actions/checkout`
+  anywhere in the file, and every value taken from the event payload is passed through `env:`
+  rather than interpolated into a `run:` script, which is what keeps zizmor's `template-injection`
+  audit quiet. Signature storage cannot live on `main`, which is protected with
+  `enforce_admins: true` and requires pull requests — a bot push would simply be rejected — so
+  signatures go to a dedicated orphan `cla-signatures` branch. `concurrency` uses
+  `cancel-in-progress: false`, since cancelling mid-run can lose a signature a contributor has
+  already posted. Maintainers (`mikeboiko`, `Copilot`) and any account of type `Bot` are exempt.
+  Verified locally against the same tool versions CI pins: `actionlint` v1.7.7 clean, and
+  `zizmor` 1.29.0 reporting **no findings** both offline and online, restoring the repo's clean
+  baseline.
 
 ## Cross-project CI/CD audit (`cross-project-ci-audit`, done)
 
