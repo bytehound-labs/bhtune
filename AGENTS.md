@@ -907,9 +907,13 @@ error_message })` even when the driver _rejects_ the write (read-only tag, out o
   ignore.
 
 - **AGPL-3.0-or-later + CLA.** BHTune is distributed under the AGPL. The CLA (see `CLA.md`,
-  currently a draft — not yet in force) records the rights needed to accept and maintain
-  contributions, naming ByteHound Corp. as the entity. Still outstanding before it's binding: a
-  legal review of the text, and wiring up a CLA-signing check (`cla-tooling`).
+  version 1.0, in force) records the rights needed to accept and maintain contributions, naming
+  ByteHound Corp. as the entity. Its copyright grant is deliberately broad enough to sublicense
+  contributions under terms other than the AGPL, which is what keeps a paid enterprise offering
+  possible; `CLA.md` states that to contributors plainly rather than burying it in legal prose.
+  Enforcement runs on every pull request through `.github/workflows/cla.yml` (`cla-tooling`). The
+  text has not had a formal legal review — worth arranging before a large corporate contributor
+  signs.
 - **v1 adapters: CLI + browser-based web GUI, served by `bhtune-server`.** There is no desktop
   app. The original plan called for a Tauri v2 desktop shell (see the deleted `bhtune-desktop`
   placeholder crate in git history) with a Dockerized web server as a possible future add-on;
@@ -4364,9 +4368,43 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
   Once all required checks and the applicable SonarQube zero-issue check pass, queue the required
   squash merge with `gh pr merge <PR> --auto --squash --delete-branch` and verify that GitHub
   reports the PR as merged.
-- **No CLA-enforcement bot wired up yet.** `CLA.md` is a draft naming ByteHound Corp. as the
-  entity; it does not bind anyone until the text has had a legal review and a CLA-assistant check
-  is added to the PR checks.
+
+## Contributor License Agreement (`cla-tooling`, done)
+
+`CLA.md` is version 1.0 and in force; the earlier DRAFT banner is gone. Four things shaped it:
+
+- **The commercial disclosure is the point, not a footnote.** BHTune stays AGPL, but ByteHound
+  Corp. may also sell a commercial/enterprise license, and a contribution may end up inside what
+  is sold. Section 3's copyright grant is what makes that legally possible, so the agreement says
+  so in plain language up front ("Commercial licensing — please read before signing"), together
+  with the limits that run the other way: contributors are not paid, gain no revenue claim, keep
+  their own copyright, and cannot have the AGPL retracted from already-released code. A
+  contributor who objects is told to walk away rather than discovering the term later. By
+  explicit decision this disclosure lives **only** in `CLA.md` — `README.md` and
+  `CONTRIBUTING.md` link to it without restating commercial terms — so the PR bot comment
+  carries the pointer to it, which is the moment a contributor is actually about to sign.
+- **Clauses added beyond the old draft**, closing gaps from the earlier pre-legal punch-list:
+  patent-litigation termination (5), third-party material disclosure (7), employer/corporate
+  authorization (8), no-obligation-to-use (10), trademark disclaimer (11), Alberta governing law
+  (13), and a severability/non-retroactivity clause (14). Still outstanding: a real legal review.
+- **Enforcement is `.github/workflows/cla.yml`.** Signature storage cannot go on `main`, which is
+  protected with `enforce_admins: true` and requires pull requests — a bot push would simply be
+  rejected — so signatures are committed to a dedicated `cla-signatures` branch via the action's
+  `branch` input. The workflow runs on `pull_request_target` (needed so fork PRs get a token that
+  can comment and record) and deliberately contains **no `actions/checkout`**: checking out or
+  executing pull request code in that context would hand a fork the job's write permissions.
+  `concurrency` uses `cancel-in-progress: false`, since cancelling mid-run can lose a signature a
+  contributor already posted. The `issue_comment` trigger is filtered down to pull request
+  comments matching exactly the signing phrase or `recheck`, so ordinary discussion does not
+  start runs. `mikeboiko`, `Copilot`, `dependabot[bot]`, and `*[bot]` are allowlisted.
+- **The action is archived upstream, and that was a deliberate trade.**
+  `contributor-assistant/github-action` was archived in March 2026, but every action in this repo
+  is already SHA-pinned (`ca4a40a7d1004f18d9960b404b97e5f30a505a08`, v2.6.1), so archival changes
+  nothing about the code that actually executes. The maintained alternatives were all _worse_
+  provenance for a job holding `contents: write`: the top forks carry 2–4 stars and `yjs/cla-tool`
+  has 0 stars with no tagged release, versus 347 stars and broad deployment for the original.
+  Revisit if a credible maintained successor appears, or if a vulnerability is reported against
+  the pinned commit.
 
 ## Cross-project CI/CD audit (`cross-project-ci-audit`, done)
 
@@ -4424,8 +4462,8 @@ while auditing rather than pre-existing on either side): **`.github/dependabot.y
 `cargo` + `github-actions` (no `npm` — pure Rust workspace, no frontend), with matching
 `dependencies`/`rust`/`ci` labels created using the same colors as `bhtune`'s.
 
-The **CLA-enforcement bot** remains a separate pre-existing gap, tracked under "Deferred setup"
-below, not part of this audit's CI/CD scope.
+The **CLA-enforcement bot** was a separate pre-existing gap, outside this audit's CI/CD scope; it
+is now implemented — see "Contributor License Agreement (`cla-tooling`, done)" above.
 
 **Follow-up, implemented later:** **CODEOWNERS, issue templates, and a PR template** — a
 shared gap on both repos, not something to port one way — were added to both

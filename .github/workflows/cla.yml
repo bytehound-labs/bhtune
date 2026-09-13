@@ -1,0 +1,62 @@
+name: CLA
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+# Signature recording commits to the `cla-signatures` branch, so concurrent runs must not be
+# cancelled midway -- a cancelled run can drop a signature a contributor already posted.
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  cla:
+    name: Check CLA signature
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Comment events fire on issues as well as pull requests, and on every comment body. Only the
+    # signing phrase and an explicit `recheck` should start a run.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request != null &&
+        (github.event.comment.body == 'recheck' ||
+         github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))
+    permissions:
+      actions: write # re-run the blocked check once a signature is recorded
+      contents: write # commit the signature file to the `cla-signatures` branch
+      pull-requests: write # comment on the pull request
+      statuses: write # report the CLA check result
+    steps:
+      # Deliberately no `actions/checkout`: this workflow runs in the `pull_request_target`
+      # context with write permissions, so checking out or executing pull request code would let
+      # an untrusted fork run with those permissions.
+      - name: Check or record CLA signature
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: https://github.com/bytehound-labs/bhtune/blob/main/CLA.md
+          # `main` is protected and requires pull requests, so signatures live on their own
+          # branch rather than being committed directly to the default branch.
+          branch: cla-signatures
+          path-to-signatures: signatures/version1/cla.json
+          allowlist: mikeboiko,dependabot[bot],Copilot,*[bot]
+          create-file-commit-message: "chore(cla): create signature store"
+          signed-commit-message: "chore(cla): record signature for @$contributorName (#$pullRequestNo)"
+          custom-notsigned-prcomment: >
+            Thanks for contributing to BHTune. Before this pull request can be merged, please
+            sign the Contributor License Agreement.
+
+
+            **Please read it in full, including the "Commercial licensing" section**, which
+            explains that BHTune may also be sold under a paid enterprise license and that your
+            contribution may be included in it. You keep the copyright to your work, and the
+            open-source AGPL release stays open source.
+
+
+            To sign, post a new comment on this pull request containing exactly:
