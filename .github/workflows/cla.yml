@@ -1,0 +1,190 @@
+name: CLA
+
+# Contributor License Agreement gate.
+#
+# Deliberately split into two jobs so that no privileged workflow trigger is
+# needed:
+#
+#   check  - runs on `pull_request`. On a fork PR the token is read-only, which
+#            is all this job needs: it reads the signature file and fails with
+#            instructions. A failing required check is what blocks the merge, so
+#            no write permission and no `pull_request_target` is required.
+#   sign   - runs on `issue_comment`, which always executes the workflow from the
+#            default branch and never checks out pull request code. This is the
+#            job that records a signature and therefore the only one with write
+#            access.
+#
+# No repository content is ever checked out here, and every value taken from the
+# event payload is passed through `env:` rather than interpolated into a shell
+# script.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  # Never cancel in flight: cancelling the `sign` job could drop a signature a
+  # contributor has already posted.
+  cancel-in-progress: false
+
+env:
+  SIGNATURE_BRANCH: cla-signatures
+  SIGNATURE_PATH: signatures/version1/cla.json
+  SIGN_PHRASE: "I have read the CLA Document and I hereby sign the CLA"
+
+jobs:
+  check:
+    name: CLA signature check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check whether the pull request author has signed the CLA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+        run: |
+          set -euo pipefail
+
+          # Maintainers and bots are exempt: ByteHound Corp. already owns its own
+          # contributions, and a bot cannot agree to anything.
+          if [ "$AUTHOR_TYPE" = "Bot" ] || [ "$AUTHOR" = "mikeboiko" ] || [ "$AUTHOR" = "Copilot" ]; then
+            echo "Author '$AUTHOR' is exempt from the CLA requirement."
+            echo "CLA not required for \`$AUTHOR\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          signatures='{"signedContributors":[]}'
+          if fetched=$(gh api \
+              -H "Accept: application/vnd.github.raw" \
+              "repos/${REPOSITORY}/contents/${SIGNATURE_PATH}?ref=${SIGNATURE_BRANCH}" 2>/dev/null); then
+            signatures="$fetched"
+          else
+            echo "No signature file found yet; treating as empty."
+          fi
+
+          if printf '%s' "$signatures" \
+            | jq -e --arg u "$AUTHOR" 'any(.signedContributors[]?; .name == $u)' >/dev/null; then
+            echo "Contributor '$AUTHOR' has signed the CLA."
+            echo "\`$AUTHOR\` has signed the CLA. :white_check_mark:" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "## CLA signature required"
+            echo
+            echo "\`$AUTHOR\` has not yet signed the Contributor License Agreement."
+            echo
+            echo "Please read [CLA.md](https://github.com/${REPOSITORY}/blob/main/CLA.md)."
+            echo "It explains that ByteHound Corp. may later offer a paid enterprise"
+            echo "licence that can include your contribution, that you keep your own"
+            echo "copyright, and that you are not paid for contributing."
+            echo
+            echo "If you agree, post exactly this as a new comment on your pull request:"
+            echo
+            echo '```text'
+            echo "$SIGN_PHRASE"
+            echo '```'
+            echo
+            echo "This check re-runs automatically once your signature is recorded."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::error::$AUTHOR has not signed the CLA. Comment on this pull request with: $SIGN_PHRASE"
+          exit 1
+
+  sign:
+    name: Record CLA signature
+    # The phrase is repeated literally here because workflow-level `env` is not
+    # available in a job-level `if:`. It must stay identical to SIGN_PHRASE
+    # above and to the wording quoted in CLA.md and CONTRIBUTING.md.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Record the signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SIGNER: ${{ github.event.comment.user.login }}
+          SIGNER_ID: ${{ github.event.comment.user.id }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          set -euo pipefail
+
+          signatures='{"signedContributors":[]}'
+          file_sha=""
+          if response=$(gh api \
+              "repos/${REPOSITORY}/contents/${SIGNATURE_PATH}?ref=${SIGNATURE_BRANCH}" 2>/dev/null); then
+            file_sha=$(printf '%s' "$response" | jq -r '.sha')
+            signatures=$(printf '%s' "$response" | jq -r '.content' | base64 -d)
+          fi
+
+          if printf '%s' "$signatures" \
+            | jq -e --arg u "$SIGNER" 'any(.signedContributors[]?; .name == $u)' >/dev/null; then
+            echo "Contributor '$SIGNER' has already signed; nothing to record."
+          else
+            updated=$(printf '%s' "$signatures" | jq \
+              --arg u "$SIGNER" \
+              --argjson id "$SIGNER_ID" \
+              --argjson pr "$PR_NUMBER" \
+              --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              '.signedContributors += [{name: $u, id: $id, pullRequestNo: $pr, signedAt: $at}]')
+
+            args=(
+              --method PUT
+              -f "message=chore(cla): record signature for @${SIGNER}"
+              -f "branch=${SIGNATURE_BRANCH}"
+              -f "content=$(printf '%s' "$updated" | base64 -w0)"
+            )
+            if [ -n "$file_sha" ]; then
+              args+=(-f "sha=${file_sha}")
+            fi
+            gh api "repos/${REPOSITORY}/contents/${SIGNATURE_PATH}" "${args[@]}" >/dev/null
+
+            echo "Recorded CLA signature for '$SIGNER'."
+          fi
+
+          # Acknowledge the signing comment so the contributor can see it was
+          # processed. Best-effort only: a missing reaction must never fail a
+          # signature that has already been recorded.
+          gh api --method POST \
+            "repos/${REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=rocket >/dev/null || true
+
+      - name: Re-run the CLA check for this pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          head_sha=$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')
+          run_id=$(gh api \
+            "repos/${REPOSITORY}/actions/workflows/cla.yml/runs?event=pull_request&head_sha=${head_sha}" \
+            --jq '[.workflow_runs[] | select(.conclusion == "failure")] | first | .id // empty')
+
+          if [ -z "$run_id" ]; then
+            echo "No failed CLA run found for ${head_sha}; nothing to re-run."
+            exit 0
+          fi
+
+          gh api --method POST "repos/${REPOSITORY}/actions/runs/${run_id}/rerun-failed-jobs" >/dev/null
+          echo "Re-ran CLA check run ${run_id}."

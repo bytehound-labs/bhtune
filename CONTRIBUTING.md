@@ -5,9 +5,14 @@ BHTune is under active development. The practices below apply to all contributio
 ## Contributor License Agreement
 
 Before your first pull request can be merged, you must sign the [Contributor License
-Agreement](CLA.md). A CLA-assistant bot will comment on your PR with instructions the first time
-you contribute. The CLA documents the rights needed to accept and maintain contributions — see
-the CLA itself for exactly what rights you are and are not granting.
+Agreement](CLA.md). Please read it in full before signing — it sets out exactly what rights you
+grant and what rights you keep.
+
+Signing happens on the pull request itself; there is no paperwork and no account to create. If
+you have not signed yet, the **CLA signature check** fails and its summary quotes the exact
+one-line statement to post. Add that line as a new comment on your pull request and the check
+re-runs automatically. Your signature is recorded on the repository's `cla-signatures` branch and
+recognized automatically on every later pull request.
 
 ## Development workflow: trunk-based
 
