@@ -252,6 +252,12 @@ Until authentication ships (a planned, not yet available, feature), treat a non-
 the same way you'd treat any other unauthenticated service on your OT network: only do it on a
 trusted, isolated network, and prefer console/remote-desktop access to the host running
 `bhtune-server` over exposing it further.
+Full mode provides CSRF protection for browser mutations without requiring per-host setup:
+when no `BHTUNE_ORIGIN` or `origin` config value is present, the server accepts an `Origin` only
+when its host and effective port match the request `Host`. Set an explicit origin when a reverse
+proxy rewrites `Host` or when one external browser origin must be pinned. Requests without an
+`Origin` remain available for CLI/curl compatibility. This policy does not authenticate users,
+authorize operators, or make an unauthenticated non-loopback deployment safe to expose publicly.
 
 The frontend development server is also unauthenticated. It binds all local interfaces so a
 trusted host can use `http://asus:5173`, and proxies browser API requests to the local

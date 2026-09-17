@@ -725,9 +725,12 @@ pub struct BhtuneConfig {
     /// Overrides [`DEFAULT_BIND_ADDR`] -- the `host:port` `bhtune-server` listens on. Only
     /// meaningful to the server binary; see [`resolve_bind_addr`].
     pub bind: Option<String>,
-    /// Exact browser origin allowed for state-changing HTTP requests. `BHTUNE_ORIGIN`
-    /// overrides this value. Demo mode requires HTTPS, except for explicit loopback HTTP
-    /// origins used by local tests and development.
+    /// Optional exact browser origin for state-changing HTTP requests. `BHTUNE_ORIGIN`
+    /// overrides this value. Full mode automatically matches the browser origin to the
+    /// request host when this is unset; set it for a reverse proxy that rewrites `Host` or
+    /// to pin one public origin. Demo mode always requires an exact configured origin and
+    /// requires HTTPS, except for explicit loopback HTTP origins used by local tests and
+    /// development.
     #[serde(default)]
     pub origin: Option<String>,
     /// IP address or matching-family CIDR of a reverse proxy trusted to supply the
@@ -1825,14 +1828,14 @@ pub fn resolve_origin(
     config: &BhtuneConfig,
     bind_addr: &str,
     mode: ServerMode,
-) -> Result<String, String> {
-    let origin = env_origin
-        .or_else(|| config.origin.clone())
-        .unwrap_or_else(|| format!("http://{bind_addr}"));
+) -> Result<Option<String>, String> {
+    let configured_origin = env_origin.or_else(|| config.origin.clone());
     if mode == ServerMode::Demo {
+        let origin = configured_origin.unwrap_or_else(|| format!("http://{bind_addr}"));
         validate_demo_origin(&origin)?;
+        return Ok(Some(origin));
     }
-    Ok(origin)
+    Ok(configured_origin)
 }
 
 /// Validates the exact browser origin used by a public Demo deployment.
@@ -4070,7 +4073,7 @@ rate_window_secs = 10
     }
 
     #[test]
-    fn origin_resolution_preserves_full_defaults_and_validates_demo() {
+    fn origin_resolution_keeps_full_mode_automatic_and_validates_demo() {
         let config = BhtuneConfig {
             origin: Some("https://config.example".to_owned()),
             ..Default::default()
@@ -4083,11 +4086,11 @@ rate_window_secs = 10
                 ServerMode::Demo,
             )
             .unwrap(),
-            "https://environment.example"
+            Some("https://environment.example".to_owned())
         );
         assert_eq!(
             resolve_origin(None, &config, "127.0.0.1:8787", ServerMode::Demo).unwrap(),
-            "https://config.example"
+            Some("https://config.example".to_owned())
         );
         assert_eq!(
             resolve_origin(
@@ -4097,7 +4100,7 @@ rate_window_secs = 10
                 ServerMode::Demo,
             )
             .unwrap(),
-            "http://127.0.0.1:8787"
+            Some("http://127.0.0.1:8787".to_owned())
         );
         assert_eq!(
             resolve_origin(
@@ -4107,7 +4110,17 @@ rate_window_secs = 10
                 ServerMode::Full,
             )
             .unwrap(),
-            "http://0.0.0.0:8787"
+            None
+        );
+        assert_eq!(
+            resolve_origin(
+                Some("https://configured.example".to_owned()),
+                &BhtuneConfig::default(),
+                "0.0.0.0:8787",
+                ServerMode::Full,
+            )
+            .unwrap(),
+            Some("https://configured.example".to_owned())
         );
         assert!(
             resolve_origin(

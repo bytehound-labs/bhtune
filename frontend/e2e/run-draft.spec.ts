@@ -146,6 +146,24 @@ test.describe("New Tune draft persistence", () => {
     ).toBeVisible();
   });
 
+  test("restores the required relay amplitude when a saved draft has no value", async ({
+    page,
+    request,
+  }) => {
+    const response = await request.put("/api/runs/draft", {
+      data: {
+        ...defaultDraft,
+        relay_amp: null,
+      },
+    });
+    expect(response.ok()).toBeTruthy();
+
+    await page.goto("/runs/new");
+    await waitForDraftHydration(page);
+
+    await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("10");
+  });
+
   test("resets process defaults when the process type changes", async ({
     page,
   }) => {

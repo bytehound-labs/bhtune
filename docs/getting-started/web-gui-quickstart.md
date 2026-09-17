@@ -70,6 +70,10 @@ Binding anywhere other than `127.0.0.1` exposes the server to your network with 
 authentication** — see [Safety](../guides/safety.md#network-exposure) before doing this outside
 a trusted, isolated OT network. Authentication is a planned, not yet shipped, feature (see the
 roadmap in the main [README](https://github.com/bytehound-labs/bhtune#readme)).
+For direct Full-mode browser access, no origin setting is required: the server compares the
+browser `Origin` with the request `Host` and effective port. Set `BHTUNE_ORIGIN` or the
+`origin` config key when a reverse proxy rewrites `Host`, or to pin the external browser origin.
+This same-host check is CSRF protection only and does not provide authentication.
 
 ## Frontend development mode
 
@@ -88,7 +92,8 @@ deployed through hot module reload after each save; restart `bhtune-server` afte
 changes. The proxy keeps browser API calls same-origin to the Vite page; Full mode accepts
 that development flow while continuing to reject cross-site browser mutations. The
 development server and API have no authentication, so do not expose them beyond a trusted
-network.
+network. If a proxy presents a different external host, configure `BHTUNE_ORIGIN` with the
+browser-visible origin.
 
 ## Run a tune
 
@@ -183,8 +188,9 @@ network.
      including OPC values that are temporarily inactive while **Simulator** is selected. The
      draft follows you across browsers and machines rather than living in `localStorage`.
      Notes are intentionally left blank after a reload so one run's operator context is not
-     copied into another. On an installation without a saved draft, the form quietly falls back
-     once to the newest run's settings or the built-in defaults; this normal first-use state
+     copied into another. Relay amplitude is required; a missing or cleared saved value restores
+     the built-in 10% default. On an installation without a saved draft, the form quietly falls
+     back once to the newest run's settings or the built-in defaults; this normal first-use state
      does not display an error. **Duplicate this run** takes precedence over both sources, and
      **Reset to defaults** replaces the saved draft with the built-in defaults. Connection, Test
      parameters, Loop mapping, Simulator parameters, and Automatic PID settings are independently

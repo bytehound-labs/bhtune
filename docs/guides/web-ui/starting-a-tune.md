@@ -103,8 +103,10 @@ continue; starting a tune still applies the server's normal quality safeguards.
 
 Every editable field except Notes is saved as the app-wide New Tune draft, including values
 belonging to the inactive driver. Notes intentionally start blank after reload so operator
-context is not copied into another tune. **Duplicate this run** takes precedence over the saved
-draft and newest-run fallback; **Reset to defaults** replaces the draft with built-in defaults.
+context is not copied into another tune. Relay amplitude is required; if an older or cleared
+saved draft has no relay-amplitude value, the New Tune form restores its built-in 10% default.
+**Duplicate this run** takes precedence over the saved draft and newest-run fallback; **Reset to
+defaults** replaces the draft with built-in defaults.
 
 Notes are optional run metadata and can be edited or cleared from run detail. Automatic PID
 write-back is available only for an eligible OPC DA run and requires explicit confirmation;

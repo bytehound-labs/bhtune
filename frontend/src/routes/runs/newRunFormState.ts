@@ -1045,7 +1045,8 @@ function draftSimulatorNumber(
 /**
  * Converts the mutable saved draft into form state. `undefined` means an older or partial
  * draft omitted a field and should use the built-in default; `null` means it was cleared,
- * except for process defaults, where it resolves to the selected process type's value.
+ * except for process defaults and the required relay amplitude, which resolve to their
+ * built-in defaults.
  */
 export function formFromDraft(draft: NewRunDraft): FormState {
   const driver = draft.driver ?? initialForm.driver;
@@ -1082,7 +1083,7 @@ export function formFromDraft(draft: NewRunDraft): FormState {
     bridgeHost: draft.bridge_host ?? "",
     processType,
     controllerType: draft.controller_type ?? initialForm.controllerType,
-    relayAmp: toNumOrBlank(draft.relay_amp),
+    relayAmp: draft.relay_amp ?? initialForm.relayAmp,
     ...processDefaults,
     tagSources: draftTagSources(draft),
     valueSources,

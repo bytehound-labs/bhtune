@@ -144,7 +144,7 @@ pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundSer
         config_store,
         mode,
         demo_policy,
-        Some(allowed_origin),
+        allowed_origin,
         config.trusted_proxy.clone(),
     );
     if mode == config::ServerMode::Demo {

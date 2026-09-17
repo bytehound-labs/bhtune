@@ -1297,6 +1297,14 @@ check`.** A dependency-free Node script that parses `pnpm licenses list --json`'
   unauthenticated network service in this exact topology, and it is strictly more dangerous than
   an unauthenticated bhtune (it can read/write any tag, whereas bhtune only ever writes the PID
   constants of one user-selected loop).
+- **Full-mode browser mutations use automatic same-host CSRF validation by default.** When neither
+  `BHTUNE_ORIGIN` nor the TOML `origin` key is set, a state-changing request with an `Origin`
+  header is accepted only when its HTTP(S) origin authority matches the request `Host`
+  case-insensitively, including effective ports; requests without `Origin` remain accepted for
+  CLI/curl compatibility, and explicit `cross-site` Fetch Metadata is rejected. An explicit
+  origin remains a strict pin for reverse proxies that rewrite `Host` or deployments that need
+  one public origin. This is not authentication, and Full mode remains unsafe for untrusted
+  networks. Demo mode intentionally keeps exact configured-origin validation.
 - **Demo mode is not an authentication boundary; it is a reduced public capability boundary.**
   A Demo deployment is safe to expose only because the server mounts no OPC, PID write/revert,
   Config mutation, template mutation, notes, drafts, OpenAPI, or Scalar routes. Its anonymous
@@ -1850,7 +1858,7 @@ Auto-discovered config file location (first one found wins):
 | User template catalog | `--templates`      | `BHTUNE_TEMPLATES`      | `templates`      | Linux/macOS: `$XDG_CONFIG_HOME/bhtune/templates.toml` (falls back to `$HOME/.config/bhtune/templates.toml`); Windows: `%APPDATA%\bhtune\templates.toml` — missing is not an error at this tier only |
 | History retention     | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days` | none — retain forever (see "Status" above for the retention sweep design)                                                                                                                           |
 | Server exposure mode  | —                  | `BHTUNE_SERVER_MODE`    | `server_mode`    | `full` — `demo` is the restricted, simulator-only public surface                                                                                                                                    |
-| Browser origin        | —                  | `BHTUNE_ORIGIN`         | `origin`         | derived loopback HTTP origin in Full mode; Demo requires one exact configured origin                                                                                                                |
+| Browser origin        | —                  | `BHTUNE_ORIGIN`         | `origin`         | automatic same-host validation in Full mode when unset; explicit exact origin when configured; Demo requires one exact configured origin                                                            |
 | Trusted proxy         | —                  | —                       | `trusted_proxy`  | none — forwarded client-IP headers are ignored unless the immediate peer matches this exact IP/CIDR                                                                                                 |
 
 `resolve_db_path`/`resolve_bridge_host`/`resolve_retention_days` fold the env var into the
@@ -1866,10 +1874,11 @@ unrelated error).
 
 `server_mode` is resolved from `BHTUNE_SERVER_MODE` over the TOML value and defaults to
 `full`; it is intentionally not exposed as a browser Config control. `origin` is resolved from
-`BHTUNE_ORIGIN` over the TOML value and is used for exact-Origin checks on state-changing
-requests. `trusted_proxy` is a startup-only deployment setting, not a list of arbitrary
-forwarded addresses: Demo quota accounting trusts one normalized client-IP header only when
-the direct peer is inside the configured boundary.
+`BHTUNE_ORIGIN` over the TOML value. In Full mode, an unset value enables same-host Origin/Host
+validation; an explicit value is a strict origin pin. In Demo mode, a value is mandatory and is
+used for exact-Origin checks on state-changing requests. `trusted_proxy` is a startup-only
+deployment setting, not a list of arbitrary forwarded addresses: Demo quota accounting trusts
+one normalized client-IP header only when the direct peer is inside the configured boundary.
 
 `db::open` gained `ensure_parent_dir`, creating the database path's parent directory tree
 (`std::fs::create_dir_all`) before connecting — needed once the default database path could
@@ -1898,7 +1907,9 @@ simulator demonstrations; it is not a second binary and it is not implemented by
 mode controls in React.
 
 `BHTUNE_SERVER_MODE` overrides the optional `server_mode` TOML key and accepts only `full` or
-`demo`. Demo mode requires one exact configured browser origin from `BHTUNE_ORIGIN` or the
+`demo`. Full mode automatically matches browser `Origin` to request `Host` when
+`BHTUNE_ORIGIN` and the `origin` TOML key are both absent; an explicit value remains a strict
+origin pin. Demo mode requires one exact configured browser origin from `BHTUNE_ORIGIN` or the
 `origin` TOML key. HTTPS is required except for explicit loopback HTTP origins used by tests and
 local development. `trusted_proxy` may name one exact IP address or matching-family CIDR; the
 server accepts the single `X-BHTune-Client-IP` value only from that peer. The deployment proxy

@@ -74,7 +74,7 @@ JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bht
       }
     },
     "origin": {
-      "description": "Exact browser origin allowed for state-changing HTTP requests. `BHTUNE_ORIGIN`\noverrides this value. Demo mode requires HTTPS, except for explicit loopback HTTP\norigins used by local tests and development.",
+      "description": "Optional exact browser origin for state-changing HTTP requests. `BHTUNE_ORIGIN`\noverrides this value. Full mode automatically matches the browser origin to the\nrequest host when this is unset; set it for a reverse proxy that rewrites `Host` or\nto pin one public origin. Demo mode always requires an exact configured origin and\nrequires HTTPS, except for explicit loopback HTTP origins used by local tests and\ndevelopment.",
       "type": [
         "string",
         "null"

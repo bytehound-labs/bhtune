@@ -69,6 +69,12 @@ settings while omitting controls that require live equipment. Full mode retains 
 OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing
 requests require the exact configured browser origin; non-loopback self-hosting therefore uses
 an HTTPS reverse proxy rather than direct HTTP access to the bound application port.
+Full mode does not require an origin setting for direct browser access: when `origin` and
+`BHTUNE_ORIGIN` are unset, state-changing browser requests are accepted only when the browser
+origin's host and effective port match the request `Host`. Set `BHTUNE_ORIGIN` or the `origin`
+config key when a reverse proxy rewrites `Host`, or when one public origin must be pinned.
+This is CSRF protection, not authentication; an unauthenticated Full-mode server still belongs
+on a trusted network.
 The browser fails closed when the capability document is missing or malformed; it never
 widens the Demo surface from incomplete server metadata.
 The fixed Demo defaults use a 200 ms simulator poll interval, a 0.5-second time constant, and
@@ -290,6 +296,30 @@ image, sharing the running server's database via the mounted volume:
 docker exec bhtune bhtune history list
 ```
 
+Full-mode Docker access needs no `BHTUNE_ORIGIN` setting. The server automatically matches a
+browser's origin to the host and port used to reach the container, so the same command works
+through `http://localhost:8787`, a LAN hostname, or a LAN address. If a reverse proxy presents
+a different external host than the one it forwards in `Host`, set
+`-e BHTUNE_ORIGIN=https://bhtune.example.com` (or the equivalent `origin` config key) to pin
+that external origin.
+
+When OPC DA gateway names are maintained in the Linux host's `/etc/hosts` file, bind that
+file into the container so the server resolves the same names as the host:
+
+```sh
+docker run -d --name bhtune \
+  -p 8787:8787 \
+  --mount type=bind,source=/etc/hosts,target=/etc/hosts,readonly \
+  -v bhtune-data:/var/lib/bhtune \
+  ghcr.io/bytehound-labs/bhtune:edge
+```
+
+Docker does not copy arbitrary host `/etc/hosts` entries into containers automatically. The
+bind mount is intended for Linux hosts that use local aliases such as `yok3`; it also exposes
+the host's other hosts-file entries to the container. On Docker Desktop, or when aliases are
+provided by DNS instead, use the platform's DNS configuration or explicit `--add-host` entries
+instead. The public simulator Demo deployment does not need OPC gateway host mappings.
+
 See the [`Dockerfile`](Dockerfile) for the full build and the image's baked-in defaults
 (`BHTUNE_BIND=0.0.0.0:8787`, `BHTUNE_DB=/var/lib/bhtune/bhtune.db` — both overridable with
 `docker run -e`). This is a _secondary_ distribution channel for IT-managed Linux hosts; a
@@ -345,7 +375,8 @@ and `GET`/`PUT`/`DELETE /api/templates/{name}`;
 per-tick Server-Sent Events feed of an in-progress run, `GET`/`PUT /api/runs/draft` for the
 app-wide autosaved New tune form draft (all fields except Notes), and
 `GET /api/runs/last-request` for the newest run's settings as a one-time fallback when no draft
-exists. A missing draft is a normal first-use state and quietly falls back to the newest run or
+exists. A missing or cleared saved relay-amplitude value restores the required built-in 10%
+default. A missing draft is a normal first-use state and quietly falls back to the newest run or
 built-in defaults; `POST /api/runs`/
 `POST /api/runs/{id}/cancel` to start and cancel a tune, plus `POST /api/runs/{id}/write`/
 `POST /api/runs/{id}/revert` to write or roll back PID constants after a run has finished;
@@ -390,7 +421,9 @@ proxies `/api/*` to the loopback `bhtune-server` on port `8787`. Frontend edits 
 hot module reload; restart `bhtune-server` after Rust or API changes. The proxy keeps browser
 API calls same-origin to the Vite page; Full mode accepts that development flow while
 continuing to reject cross-site browser mutations. This development server has no
-authentication and should only be exposed on a trusted network.
+authentication and should only be exposed on a trusted network. If no explicit origin is
+configured, Full mode compares the browser origin with the API request's `Host`; set
+`BHTUNE_ORIGIN` when a proxy presents a different external origin.
 
 ### Browser end-to-end tests
 
