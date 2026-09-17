@@ -802,6 +802,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page
       .getByLabel("OPC DA server ProgID")
       .fill("Matrikon.OPC.Simulation");
+    await page.getByLabel("Tag name").fill("");
 
     await page.route("**/api/opc/read**", async (route) => {
       const url = new URL(route.request().url());
@@ -957,6 +958,163 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .poll(() => treeViewport.evaluate((element) => element.scrollTop))
       .toBeGreaterThan(0);
     await expect(page.getByRole("button", { name: "Collapse" })).toHaveCount(2);
+  });
+
+  test("reopens a saved tag with bounded live search when no index is available", async ({
+    page,
+  }) => {
+    const originalTag = "FCS0217!204FC03010.PV";
+    let liveSearchRequests = 0;
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByLabel("Tag name").fill(originalTag);
+
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(searchIndexStatus("not_indexed", false)),
+      });
+    });
+    await page.route("**/api/opc/search**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname !== "/api/opc/search") {
+        await route.fallback();
+        return;
+      }
+      liveSearchRequests += 1;
+      expect(url.searchParams.get("session_id")).toBe("session-1");
+      expect(url.searchParams.get("scope_node_key")).toBe("fcs0217");
+      expect(url.searchParams.get("query")).toBe(originalTag);
+      expect(url.searchParams.get("match_mode")).toBe("exact");
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: [
+          "event: match\n",
+          `data: ${JSON.stringify({
+            node: {
+              node_key: "pv",
+              display_name: "PV",
+              kind: "item",
+              item_id: originalTag,
+            },
+            breadcrumbs: [
+              { node_key: "fcs0217", display_name: "" },
+              { node_key: "loop", display_name: "204FC03010" },
+            ],
+          })}\n\n`,
+          'event: completed\ndata: {"complete":true,"cancelled":false,"truncated":false,"warning":null}\n\n',
+        ].join(""),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      const url = new URL(route.request().url());
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      const nodes =
+        parentNodeKey === "fcs0217"
+          ? [browseNode("loop", "204FC03010", "branch")]
+          : parentNodeKey === "loop"
+            ? [browseNode("pv", "PV", "item", originalTag)]
+            : [
+                browseNode("unrelated", "SCS0130", "item", "SCS0130.PV"),
+                browseNode("fcs0217", "FCS0217", "branch_and_item", "FCS0217"),
+              ];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage(nodes)),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
+    await expect(page.getByRole("button", { name: "FCS0217" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "204FC03010" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "PV" })).toBeVisible();
+    expect(liveSearchRequests).toBe(1);
+  });
+
+  test("falls back to the root only when indexed and live search fail", async ({
+    page,
+  }) => {
+    const originalTag = "FCS0217!204FC03010.PV";
+    let indexedSearchRequests = 0;
+    let liveSearchRequests = 0;
+
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByLabel("Tag name").fill(originalTag);
+
+    await page.unroute("**/api/opc/search-index/status**");
+    await page.route("**/api/opc/search-index/status**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          searchIndexStatus(
+            "failed",
+            true,
+            "inventory stream ended before completion",
+          ),
+        ),
+      });
+    });
+    await page.route("**/api/opc/search-index/search**", async (route) => {
+      indexedSearchRequests += 1;
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "persistent index search is unavailable",
+        }),
+      });
+    });
+    await page.route("**/api/opc/search**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname !== "/api/opc/search") {
+        await route.fallback();
+        return;
+      }
+      liveSearchRequests += 1;
+      expect(url.searchParams.get("scope_node_key")).toBe("fcs0217");
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "live namespace search is unavailable",
+        }),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      const url = new URL(route.request().url());
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      const nodes =
+        parentNodeKey === "fcs0217"
+          ? [browseNode("loop", "204FC03010", "branch")]
+          : parentNodeKey === "loop"
+            ? [browseNode("pv", "PV", "item", originalTag)]
+            : [
+                browseNode("unrelated", "SCS0130", "item", "SCS0130.PV"),
+                browseNode("fcs0217", "FCS0217", "branch_and_item", "FCS0217"),
+              ];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage(nodes)),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    await expect(page.getByText("Index: failed")).toBeVisible();
+    await expect(page.getByText("Selected: SCS0130.PV")).toBeVisible();
+    await expect(page.getByRole("button", { name: "FCS0217" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "204FC03010" })).toHaveCount(
+      0,
+    );
+    expect(indexedSearchRequests).toBe(1);
+    expect(liveSearchRequests).toBe(1);
   });
 
   test("provides debounced indexed search with keyboard selection and exact ItemIDs", async ({

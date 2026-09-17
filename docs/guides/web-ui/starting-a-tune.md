@@ -37,7 +37,10 @@ Choose **OPC DA** to expose the Bridge host, OPC DA server ProgID, Tag name, and
 **Browse servers** discovers registered ProgIDs on the configured gateway. **Browse tags** opens
 a one-level-at-a-time tree after a ProgID is present. The browser can expand dotted or
 slash-separated namespaces, test-read a selected item, and preserve the current path when
-reopened.
+reopened. When reopening a saved tag, it uses persistent indexed breadcrumbs when available and
+then scopes one bounded exact live search beneath a matching server-returned root node before
+selecting an unrelated root item. It only uses unscoped live search when no root scope is
+available.
 
 {/* web-ui-screenshot: full-tune-opc */}
 <figure>

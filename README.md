@@ -167,7 +167,11 @@ items remain both expandable and selectable.
 The browser also exposes gateway capabilities and persistent indexed namespace search. Warm
 searches are bounded unary requests against the gateway-owned index, with ranked matches,
 breadcrumbs, exact ItemIDs, `has_more`, and explicit index state/progress. Search never downloads
-the complete namespace into the browser and never falls back to the slow live traversal search.
+the complete namespace into the browser. Reopening a saved tag tries indexed breadcrumbs first
+and then uses a server-returned root node's opaque key to scope one bounded exact live search
+when the persistent index is unavailable or cannot resolve the path. It only falls back to an
+unscoped live search when no matching root scope is available, and falls back to the root when
+all search mechanisms fail.
 Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled servers
 and performs no automatic indexing; use **Build index** in the tag browser to opt the selected
 ProgID in. The gateway validates the ProgID against its current server list, persists the

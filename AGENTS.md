@@ -1610,7 +1610,11 @@ Integration rules, as implemented in `OpcDaDriver`:
   timestamps, error, source, and build progress. `search_index` performs a bounded unary query
   against that index and returns ranked matches with exact ItemIDs, breadcrumbs, and `has_more`.
   `refresh_search_index` and `control_search_index` expose explicit refresh and pause/resume/
-  cancel controls. BHTune does not fall back to the known-slow live traversal search.
+  cancel controls. The browser's global search remains index-backed, while reopening a saved tag first
+  uses a server-returned root node's opaque key to scope one bounded exact live traversal search
+  in the active browse session when the persistent index cannot resolve its path. It may use
+  unscoped live search only when no matching root scope is available; it never invents hierarchy
+  from ItemID punctuation.
 - `close_browse_session` explicitly releases gateway-side browse state. The HTTP browser calls
   it during modal cleanup; the CLI leaves sessions open so printed continuation tokens remain
   usable and exposes `bhtune opc close <session-id>` for explicit cleanup.

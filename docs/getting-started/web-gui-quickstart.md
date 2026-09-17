@@ -164,7 +164,10 @@ browser-visible origin.
      The **Config** page controls whether `Uncertain` readings are accepted during tuning;
      they are accepted by default, while `Bad` quality is always rejected.
      Reopening the browser expands the available path to the current Tag name, selects that node,
-     and scrolls it into view; an unavailable tag falls back to the root level.
+     and scrolls it into view. It uses indexed breadcrumbs first and then tries one bounded exact
+     live search scoped beneath a matching server-returned root node when the persistent index
+     cannot resolve the path. If no root scope is available, it uses the unscoped live search;
+     only an unavailable tag after all search attempts falls back to the root level.
      Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled
      servers and does not index every registered OPC DA server automatically. Use **Build index**
      in the tag browser to enroll the selected ProgID and start its first build; no gateway TOML
