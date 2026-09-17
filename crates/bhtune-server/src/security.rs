@@ -1,11 +1,12 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{HeaderMap, HeaderValue, Method, Request, header},
+    http::{HeaderMap, HeaderValue, Method, Request, header, uri::Authority},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use bhtune_cli::config::ServerMode;
+use std::str::FromStr;
 
 // React's tag tree and uPlot set layout values through element `style` attributes. Keep
 // stylesheet sources self-only while permitting only that narrow inline-style surface.
@@ -41,17 +42,105 @@ fn origin_is_allowed(
 
     // Full mode predates browser-only operation and must retain CLI/curl compatibility. A Vite
     // development page reaches the backend through its same-origin proxy, so its browser
-    // Origin is the Vite origin rather than the backend's configured origin. Fetch Metadata is
-    // browser-controlled; accept that narrow same-origin case while retaining the exact-origin
-    // check for clients that do not provide it and rejecting cross-site browser requests.
-    match headers
+    // Origin is the Vite origin rather than the backend's configured origin when no explicit
+    // origin pin is configured. Fetch Metadata is browser-controlled; accept that narrow
+    // same-origin case while rejecting explicit cross-site requests. Without an explicit
+    // configured origin, compare the browser origin with the request Host instead of
+    // synthesizing an origin from the bind address, which is often 0.0.0.0 in a container.
+    let fetch_site = headers
         .get("sec-fetch-site")
-        .and_then(|value| value.to_str().ok())
-    {
-        Some(fetch_site) if fetch_site.eq_ignore_ascii_case("same-origin") => origin.is_some(),
-        Some(_) => origin.is_some_and(|origin| configured_origin == Some(origin)),
-        None => origin.is_none_or(|origin| configured_origin == Some(origin)),
+        .and_then(|value| value.to_str().ok());
+    if fetch_site.is_some_and(|value| value.eq_ignore_ascii_case("cross-site")) {
+        return false;
     }
+    if fetch_site.is_some_and(|value| value.eq_ignore_ascii_case("same-origin")) {
+        return match configured_origin {
+            Some(configured_origin) => {
+                parse_http_origin(configured_origin).is_some()
+                    && origin.is_some_and(|origin| configured_origin == origin)
+            }
+            None => origin.is_some_and(|origin| parse_http_origin(origin).is_some()),
+        };
+    }
+    if origin.is_none() {
+        return true;
+    }
+
+    match configured_origin {
+        Some(configured_origin) => {
+            parse_http_origin(configured_origin).is_some()
+                && origin.is_some_and(|origin| configured_origin == origin)
+        }
+        None => origin.is_some_and(|origin| {
+            let Some(host) = headers.get(header::HOST).and_then(parse_host_header) else {
+                return false;
+            };
+            origin_matches_host(origin, &host)
+        }),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedAuthority {
+    host: String,
+    port: Option<u16>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedHttpOrigin {
+    https: bool,
+    authority: ParsedAuthority,
+}
+
+fn parse_http_origin(origin: &str) -> Option<ParsedHttpOrigin> {
+    if origin.trim() != origin || origin.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let (scheme, authority) = origin.split_once("://")?;
+    let https = if scheme.eq_ignore_ascii_case("https") {
+        true
+    } else if scheme.eq_ignore_ascii_case("http") {
+        false
+    } else {
+        return None;
+    };
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
+        return None;
+    }
+    Some(ParsedHttpOrigin {
+        https,
+        authority: parse_authority(authority)?,
+    })
+}
+
+fn parse_host_header(value: &HeaderValue) -> Option<ParsedAuthority> {
+    parse_authority(value.to_str().ok()?)
+}
+
+fn parse_authority(value: &str) -> Option<ParsedAuthority> {
+    if value.trim() != value || value.is_empty() {
+        return None;
+    }
+    let authority = Authority::from_str(value).ok()?;
+    let host = authority.host();
+    if host.is_empty() {
+        return None;
+    }
+    Some(ParsedAuthority {
+        host: host.to_ascii_lowercase(),
+        port: authority.port_u16(),
+    })
+}
+
+fn origin_matches_host(origin: &str, host: &ParsedAuthority) -> bool {
+    let Some(origin) = parse_http_origin(origin) else {
+        return false;
+    };
+    if origin.authority.host != host.host {
+        return false;
+    }
+    let default_port = if origin.https { 443 } else { 80 };
+    origin.authority.port.unwrap_or(default_port) == host.port.unwrap_or(default_port)
 }
 
 fn response_is_private(mode: ServerMode, path: &str) -> bool {
@@ -105,8 +194,9 @@ fn apply_private_response_headers(response: &mut Response) {
 ///
 /// Demo mode requires the exact configured Origin on every state-changing request. Full mode
 /// retains CLI/curl compatibility, accepts a browser-controlled `same-origin` request from the
-/// Vite development proxy, and otherwise requires the configured Origin. This middleware never
-/// emits CORS response headers.
+/// Vite development proxy when no explicit origin pin is configured, and otherwise requires
+/// either the explicitly configured Origin or an automatic same-host match. This middleware
+/// never emits CORS response headers.
 ///
 /// Baseline browser protections apply to every response. Demo responses additionally receive
 /// private/no-index caching headers on every path, including the embedded SPA; Full mode
@@ -231,18 +321,10 @@ mod tests {
         ));
 
         headers.insert(header::ORIGIN, HeaderValue::from_static("http://asus:5173"));
-        assert!(origin_is_allowed(
-            ServerMode::Full,
-            &headers,
-            Some("http://127.0.0.1:8787")
-        ));
+        assert!(origin_is_allowed(ServerMode::Full, &headers, None));
 
         headers.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
-        assert!(!origin_is_allowed(
-            ServerMode::Full,
-            &headers,
-            Some("http://127.0.0.1:8787")
-        ));
+        assert!(!origin_is_allowed(ServerMode::Full, &headers, None));
 
         headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
         headers.remove(header::ORIGIN);
@@ -253,10 +335,101 @@ mod tests {
         ));
     }
 
-    async fn app(mode: ServerMode) -> Router {
+    #[test]
+    fn full_mode_without_configured_origin_matches_the_request_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("goa1:8787"));
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://GOA1:8787"));
+        assert!(origin_is_allowed(ServerMode::Full, &headers, None));
+
+        headers.insert("sec-fetch-site", HeaderValue::from_static("same-site"));
+        assert!(origin_is_allowed(ServerMode::Full, &headers, None));
+
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://goa1:80"));
+        assert!(!origin_is_allowed(ServerMode::Full, &headers, None));
+
+        headers.insert(header::HOST, HeaderValue::from_static("other.example:8787"));
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://goa1:8787"));
+        assert!(!origin_is_allowed(ServerMode::Full, &headers, None));
+    }
+
+    #[test]
+    fn full_mode_rejects_malformed_or_duplicate_automatic_origin_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("goa1:8787"));
+        headers.insert(header::ORIGIN, HeaderValue::from_static("goa1"));
+        assert!(!origin_is_allowed(ServerMode::Full, &headers, None));
+
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://goa1"));
+        headers.append(header::ORIGIN, HeaderValue::from_static("http://goa1:8787"));
+        assert!(!origin_is_allowed(ServerMode::Full, &headers, None));
+
+        headers.clear();
+        headers.insert(header::HOST, HeaderValue::from_static("["));
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://goa1:8787"));
+        assert!(!origin_is_allowed(ServerMode::Full, &headers, None));
+    }
+
+    #[test]
+    fn full_mode_explicit_origin_remains_a_strict_override() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("goa1:8787"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://public.example"),
+        );
+        assert!(origin_is_allowed(
+            ServerMode::Full,
+            &headers,
+            Some("https://public.example")
+        ));
+        assert!(!origin_is_allowed(
+            ServerMode::Full,
+            &headers,
+            Some("https://other.example")
+        ));
+
+        headers.insert(header::ORIGIN, HeaderValue::from_static("garbage"));
+        assert!(!origin_is_allowed(
+            ServerMode::Full,
+            &headers,
+            Some("garbage")
+        ));
+
+        headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://public.example"),
+        );
+        assert!(origin_is_allowed(
+            ServerMode::Full,
+            &headers,
+            Some("https://public.example")
+        ));
+        headers.insert(header::ORIGIN, HeaderValue::from_static("http://goa1:8787"));
+        assert!(!origin_is_allowed(
+            ServerMode::Full,
+            &headers,
+            Some("https://public.example")
+        ));
+    }
+
+    #[test]
+    fn full_mode_accepts_cli_requests_without_origin_but_rejects_explicit_cross_site() {
+        let mut headers = HeaderMap::new();
+        assert!(origin_is_allowed(ServerMode::Full, &headers, None));
+
+        headers.insert("sec-fetch-site", HeaderValue::from_static("same-site"));
+        assert!(origin_is_allowed(ServerMode::Full, &headers, None));
+
+        headers.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert!(!origin_is_allowed(ServerMode::Full, &headers, None));
+    }
+
+    async fn app_with_origin(mode: ServerMode, allowed_origin: Option<&str>) -> Router {
         let mut state = crate::test_support::in_memory_state().await;
         state.mode = mode;
-        state.allowed_origin = Some("https://bhtunedemo.bytehound.ca".into());
+        state.allowed_origin = allowed_origin.map(str::to_owned);
         Router::new()
             .route("/api/change", post(|| async { StatusCode::NO_CONTENT }))
             .route(
@@ -281,6 +454,12 @@ mod tests {
                 origin_and_security_headers,
             ))
             .with_state(state)
+    }
+
+    async fn app(mode: ServerMode) -> Router {
+        let allowed_origin =
+            (mode == ServerMode::Demo).then_some("https://bhtunedemo.bytehound.ca");
+        app_with_origin(mode, allowed_origin).await
     }
 
     #[tokio::test]
@@ -348,6 +527,63 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cross_site.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn full_mode_automatic_origin_allows_same_host_mutations() {
+        let app = app(ServerMode::Full).await;
+        let same_host = app
+            .clone()
+            .oneshot(
+                Request::post("/api/change")
+                    .header(header::HOST, "goa1:8787")
+                    .header(header::ORIGIN, "http://goa1:8787")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(same_host.status(), StatusCode::NO_CONTENT);
+
+        let wrong_host = app
+            .oneshot(
+                Request::post("/api/change")
+                    .header(header::HOST, "other.example:8787")
+                    .header(header::ORIGIN, "http://goa1:8787")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong_host.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn full_mode_explicit_origin_stays_pinned_in_the_middleware() {
+        let app = app_with_origin(ServerMode::Full, Some("https://public.example")).await;
+        let exact = app
+            .clone()
+            .oneshot(
+                Request::post("/api/change")
+                    .header(header::ORIGIN, "https://public.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exact.status(), StatusCode::NO_CONTENT);
+
+        let same_host_but_not_pinned = app
+            .oneshot(
+                Request::post("/api/change")
+                    .header(header::HOST, "goa1:8787")
+                    .header(header::ORIGIN, "http://goa1:8787")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(same_host_but_not_pinned.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

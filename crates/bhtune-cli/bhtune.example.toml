@@ -19,9 +19,12 @@
 # BHTUNE_SERVER_MODE takes precedence.
 server_mode = "full"
 
-# Exact browser origin allowed for state-changing requests. BHTUNE_ORIGIN takes precedence.
-# Demo mode requires HTTPS, except that explicit localhost/loopback HTTP origins are accepted
-# for local tests and development. An origin contains only a scheme, host, and optional port.
+# Optional exact browser origin for state-changing requests. BHTUNE_ORIGIN takes precedence.
+# Full mode automatically matches a browser Origin to the request Host when this is unset.
+# Set it when a reverse proxy rewrites Host, or to pin one public origin. Demo mode always
+# requires an exact configured origin and requires HTTPS, except that explicit
+# localhost/loopback HTTP origins are accepted for local tests and development. An origin
+# contains only a scheme, host, and optional port.
 # origin = "https://bhtunedemo.example.com"
 
 # Optional reverse-proxy address trusted to supply X-BHTune-Client-IP for Demo quotas. Use one

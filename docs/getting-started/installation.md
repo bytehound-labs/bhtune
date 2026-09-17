@@ -31,6 +31,30 @@ volume:
 docker exec bhtune bhtune history list
 ```
 
+Full-mode Docker access does not require `BHTUNE_ORIGIN`. When no origin is configured, browser
+mutations are accepted only when the browser origin's host and effective port match the request
+`Host`, so the same image works through `localhost`, a LAN hostname, or a LAN address. Set
+`BHTUNE_ORIGIN` (or the `origin` config key) when a reverse proxy rewrites `Host` or when a
+single external origin must be pinned. This is CSRF protection, not authentication; keep
+non-loopback Full-mode deployments on a trusted network.
+
+When OPC DA gateway names are maintained in the Linux host's `/etc/hosts` file, bind that
+file into the container so the server resolves the same names as the host:
+
+```sh
+docker run -d --name bhtune \
+  -p 8787:8787 \
+  --mount type=bind,source=/etc/hosts,target=/etc/hosts,readonly \
+  -v bhtune-data:/var/lib/bhtune \
+  ghcr.io/bytehound-labs/bhtune:edge
+```
+
+Docker does not copy arbitrary host `/etc/hosts` entries into containers automatically. The
+bind mount is intended for Linux hosts that use local aliases such as `yok3`; it also exposes
+the host's other hosts-file entries to the container. On Docker Desktop, or when aliases are
+provided by DNS instead, use the platform's DNS configuration or explicit `--add-host` entries
+instead. The public simulator Demo deployment does not need OPC gateway host mappings.
+
 The image sets `BHTUNE_BIND=0.0.0.0:8787` and `BHTUNE_DB=/var/lib/bhtune/bhtune.db` as its own
 defaults — see [`Dockerfile`](https://github.com/bytehound-labs/bhtune/blob/main/Dockerfile)
 for the full build and [Configuration precedence](../reference/config.md) for how to override

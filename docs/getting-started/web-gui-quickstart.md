@@ -70,6 +70,10 @@ Binding anywhere other than `127.0.0.1` exposes the server to your network with 
 authentication** — see [Safety](../guides/safety.md#network-exposure) before doing this outside
 a trusted, isolated OT network. Authentication is a planned, not yet shipped, feature (see the
 roadmap in the main [README](https://github.com/bytehound-labs/bhtune#readme)).
+For direct Full-mode browser access, no origin setting is required: the server compares the
+browser `Origin` with the request `Host` and effective port. Set `BHTUNE_ORIGIN` or the
+`origin` config key when a reverse proxy rewrites `Host`, or to pin the external browser origin.
+This same-host check is CSRF protection only and does not provide authentication.
 
 ## Frontend development mode
 
@@ -88,7 +92,8 @@ deployed through hot module reload after each save; restart `bhtune-server` afte
 changes. The proxy keeps browser API calls same-origin to the Vite page; Full mode accepts
 that development flow while continuing to reject cross-site browser mutations. The
 development server and API have no authentication, so do not expose them beyond a trusted
-network.
+network. If a proxy presents a different external host, configure `BHTUNE_ORIGIN` with the
+browser-visible origin.
 
 ## Run a tune
 
