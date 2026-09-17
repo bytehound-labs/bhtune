@@ -371,6 +371,21 @@ mod tests {
     }
 
     #[test]
+    fn origin_parsers_reject_invalid_syntax() {
+        assert!(parse_http_origin(" http://goa1:8787").is_none());
+        assert!(parse_http_origin("ftp://goa1:8787").is_none());
+        assert!(parse_http_origin("http://").is_none());
+        assert!(parse_http_origin("http://goa1:8787/path").is_none());
+        assert!(parse_http_origin("http://goa1:8787?query").is_none());
+        assert!(parse_http_origin("http://goa1:8787#fragment").is_none());
+        assert!(parse_http_origin("http://user@goa1:8787").is_none());
+
+        assert!(parse_authority("").is_none());
+        assert!(parse_authority(" ").is_none());
+        assert!(parse_authority(":8787").is_none());
+    }
+
+    #[test]
     fn full_mode_explicit_origin_remains_a_strict_override() {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, HeaderValue::from_static("goa1:8787"));
