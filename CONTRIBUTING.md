@@ -243,10 +243,30 @@ and a worked example. In short:
 - A unit test parses and validates the entire embedded catalog on every CI run, so a
   malformed or incomplete contribution fails the build rather than merging silently broken.
 
-## Releases
+## Releases and changelogs
 
-SemVer tags cut directly from `main`. No release branches. release-plz tracks per-crate versions
-and changelogs in-repo; see `release-plz.toml`.
+Use [Conventional Commits](https://www.conventionalcommits.org/) for every commit. Release-worthy
+types are `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, and `revert`;
+release-preparation commits and generic `chore` commits do not create product release content.
+Scopes are optional, but a specific scope such as `core`, `driver`, `db`, `cli`, or `server` makes
+the root changelog easier to review.
+
+The root [`CHANGELOG.md`](CHANGELOG.md) is the single product changelog for all five workspace
+crates. Contributors should describe user-visible changes in commits and update the relevant
+documentation, but should not hand-edit release version entries or workspace version numbers.
+`release-plz` generates the release preparation commit and owns the versioned changelog entry
+when the release process is activated.
+
+Releases use a single product tag cut from `main`; there are no release branches. `bhtune-cli`
+owns the product tag and release version, while `.github/workflows/release.yml` alone creates the
+GitHub Release and uploads artifacts. The current policy is git-only: BHTune crates are not
+published to crates.io. Release automation is guarded by the
+`RELEASE_AUTOMATION_ENABLED` repository variable and remains disabled until an approved RC has
+passed the hosted canary and the maintainer activation gates are complete.
+
+Maintainers must follow the [release automation guide](docs/guides/releasing.md), including the
+first-release baseline, documentation-snapshot rules, rate-limit guard, and partial-failure
+recovery procedure.
 
 ## License
 

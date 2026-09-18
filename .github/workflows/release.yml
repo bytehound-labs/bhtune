@@ -13,22 +13,13 @@ on:
       - "v[0-9]+.*"
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-github-state
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  # Only for a real tag push -- a `workflow_dispatch` dry run has no release to create and
-  # needs none, since `build`'s upload step below is itself skipped (dry-run) in that case.
-  #
-  # NOTE for `release-v1`: once `RELEASE_PLZ_TOKEN` is provisioned and release-plz's own
-  # workflow lands, confirm release-plz isn't *also* creating the GitHub Release for the
-  # same tag (it can either just tag, or tag-and-release depending on config) -- creating it
-  # twice would fail this job. If release-plz ends up owning release creation, delete this
-  # job and drop `needs: create-release` from `build` below; `build` already tolerates that
-  # rename via `if: ${{ !cancelled() }}`.
   create-release:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
@@ -38,13 +29,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Enforce GitHub Release rate limit
+        env:
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/release_rate_limit.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --token "$GITHUB_TOKEN" \
+            --api-url "$GITHUB_API_URL"
 
       - uses: taiki-e/create-gh-release-action@eba8ea96c86cca8a37f1b56e94b4d13301fba651
         with:
-          # No `changelog:` yet -- release-plz (`release-v1`) is what will eventually
-          # produce a CHANGELOG.md to point this at. Until then every release's notes are
-          # just GitHub's auto-generated "what's changed" list.
           allow-missing-changelog: true
 
   build:

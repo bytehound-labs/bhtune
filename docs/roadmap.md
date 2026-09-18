@@ -14,6 +14,30 @@ If one of these matters to you sooner than it might otherwise land, say so on th
 [issue tracker](https://github.com/bytehound-labs/bhtune/issues) — real usage is what decides
 order here, not a fixed sequence.
 
+## Release automation and versioned documentation
+
+The release infrastructure is implemented, but the first stable product release remains
+pending. The state machine is fail-closed and keeps ownership explicit:
+
+- `bhtune-cli` is the single product-release anchor for the shared workspace version, product
+  tag, and root `CHANGELOG.md`.
+- `release-plz` prepares git-only release changes and does not publish BHTune crates or create
+  GitHub Releases.
+- `.github/workflows/release.yml` is the sole GitHub Release and artifact owner. It publishes
+  the supported platform archives, Linux packages, checksums, SBOM, provenance, and signatures
+  for an approved tag.
+- Stable documentation snapshots are generated only for exact `X.Y.Z` versions, exclude
+  `docs/internal/**`, and retain the newest three stable versions. Prerelease tags do not create
+  snapshots.
+- The first stable release is `v0.1.0`, and its release-integrity check uses the explicit
+  first-release baseline documented in the
+  [release automation guide](guides/releasing.md).
+
+The remaining release work is operational rather than architectural: approve and validate a
+public RC, retain its canary evidence, complete the activation gates, and cut the first stable
+release. Crates.io publication is outside the current policy. Windows MSI packaging, AUR
+publication, and any future registry channels remain separate follow-on work.
+
 ## Additional protocol drivers: OPC UA and Modbus
 
 OPC DA (via [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge)) is the primary,

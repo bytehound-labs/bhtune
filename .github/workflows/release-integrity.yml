@@ -1,0 +1,63 @@
+name: Release integrity
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: release-integrity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  integrity:
+    name: Release integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bypass ordinary changes
+        if: github.event_name != 'pull_request' || !startsWith(github.event.pull_request.head.ref, 'release-plz-')
+        run: echo "Release integrity bypassed for a non-release pull request."
+
+      - name: Validate release-plz configuration
+        if: github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'release-plz-')
+        run: python3 scripts/check_release_plz_config.py
+
+      - name: Validate release PR identity
+        if: github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'release-plz-')
+        env:
+          HEAD_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.repository }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          test "$HEAD_AUTHOR" = "mikeboiko"
+          test "$HEAD_REPOSITORY" = "$BASE_REPOSITORY"
+          test "$BASE_BRANCH" = "main"
+
+      - name: Validate release content and baseline
+        if: github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'release-plz-')
+        env:
+          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RELEASE_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          RELEASE_BASELINE_SHA: 2016c5c945d20a42140ec57b6e09f4a49ec98aef
+        run: |
+          python3 scripts/check_release_content.py \
+            --base "$RELEASE_BASE_SHA" \
+            --head "$RELEASE_HEAD_SHA" \
+            --head-branch "$RELEASE_HEAD_BRANCH" \
+            --baseline "$RELEASE_BASELINE_SHA"
+
+      - name: Validate the exact stable documentation snapshot
+        if: github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'release-plz-')
+        run: python3 scripts/sync_docs_version.py --repository . --check
