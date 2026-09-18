@@ -366,8 +366,8 @@ shape) and `DELETE /api/runs/{id}` (`delete_run`, cascading through `tune_sample
 `tune_results`/`tune_writes` via the schema's existing `ON DELETE CASCADE`) are both new
 `bhtune-server` routes; the frontend adds Export CSV/Export JSON download links (plain
 `<a download>` tags, deliberately not a fetch-then-blob dance, so the browser's native
-download handling does the work) and a Delete run button (`window.confirm` then navigate
-back to the run list) to `RunDetailPage`. `delete_run`'s conflict check deliberately reads
+download handling does the work) and a Delete run button using the shared styled
+confirmation modal before navigating back to the run list. `delete_run`'s conflict check deliberately reads
 the run's own DB `outcome` column rather than `ActiveRun`'s in-memory registry: `drive()`
 persists a run's terminal outcome to the database _before_ returning, and `ActiveRun::release`
 only runs strictly after `drive()` returns (see `routes::runs::start_run`), so there is a real
@@ -1034,7 +1034,7 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
   `ErrorBanner`/`EmptyState`/`LoadingState` plus `Section`/`Field` for read-only displays and
   `FormSection`/`TextField`/`SelectField`/`CheckboxField` for forms), so screens stay
   consistent without a component library dependency. The Templates screens
-  (`routes/templates/`) are List (table + delete via `window.confirm`), Detail (read-only,
+  (`routes/templates/`) are List (table + shared styled delete confirmation), Detail (read-only,
   grouped into Identity/Behavior/Tag suffixes/Mode values), and Create (all 27 `DcsTemplate`
   fields via plain controlled `useState` — no form library, since the project has no existing
   form-library precedent and the field count doesn't yet justify adding one; `versions` is
@@ -4348,6 +4348,13 @@ workspaces and is not applicable to the Rust-only `opcda-bridge` repository.
 - **Commits**: [Conventional Commits](https://www.conventionalcommits.org/).
 - **Formatting/linting**: `cargo fmt --check --all` and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+- **Frontend browser dialogs**: production code must not call `window.alert`,
+  `window.confirm`, or `window.prompt`. Use the shared styled `Modal`/
+  `ConfirmModal` components for user-facing dialogs, keep destructive-action
+  confirmations open when a mutation fails, and prevent dismissal while the
+  mutation is pending. Playwright coverage must assert the visible styled
+  dialog and click its explicit action rather than install native-dialog
+  handlers.
 - **No unused dependencies**: `cargo machete` runs in CI. Placeholder crates (any stub not yet
   consuming a path dependency) deliberately carry **no** dependency on other workspace crates
   until they actually use one — don't add `bhtune-core` etc. back as a path dependency just to

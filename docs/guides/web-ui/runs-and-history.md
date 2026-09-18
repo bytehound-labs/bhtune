@@ -97,5 +97,7 @@ write and readback failures appear in the page alert and audit table.
 
 The newest successful write offers **Restore previous values** through the same popup. Both
 actions are disabled with a reason unless the run is finished, used OPC DA, has all PID tags,
-and recorded its original server and bridge connection. Export CSV/JSON, Delete tune, and
-Duplicate this run are available from the completed detail page.
+and recorded its original server and bridge connection. Export CSV/JSON, **Delete tune**, and
+**Duplicate this run** are available from the completed detail page. Delete tune opens a styled
+confirmation dialog before it removes the run's persisted samples, calculated results, and PID
+write/audit history; the deletion cannot be undone through the UI.

@@ -74,7 +74,10 @@ function searchIndexStatus(
     server: "Test.Server",
     state,
     auto_refresh_enabled: autoRefreshEnabled,
-    active_generation: state === "not_indexed" || state === "deleting" ? 0 : 1,
+    active_generation:
+      state === "not_indexed" || state === "deleting" || state === "failed"
+        ? 0
+        : 1,
     entry_count: state === "deleting" ? 0 : 2,
     unique_item_count: state === "deleting" ? 0 : 2,
     started_at: null,
@@ -206,8 +209,6 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
         body: JSON.stringify(status),
       });
     });
-    page.on("dialog", (dialog) => void dialog.accept());
-
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(
       page.getByRole("button", { name: "Build index", exact: true }),
@@ -237,6 +238,18 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(page.getByText("Next refresh:")).toHaveCount(0);
 
     await page
+      .getByRole("button", { name: "Delete index", exact: true })
+      .click();
+    const deleteDialog = page.getByRole("dialog", {
+      name: "Delete tag index?",
+    });
+    await expect(deleteDialog).toBeVisible();
+    await expect(
+      deleteDialog.getByText(
+        "Indexed search data and this server's index enrollment will be removed.",
+      ),
+    ).toBeVisible();
+    await deleteDialog
       .getByRole("button", { name: "Delete index", exact: true })
       .click();
     await expect(page.getByText("Index: deleting")).toBeVisible();
@@ -1229,9 +1242,25 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.getByRole("button", { name: "Browse tags" }).click();
 
-    await expect(
-      page.getByText(`Index error: ${diagnostic}`, { exact: true }),
-    ).toBeVisible();
+    const indexError = page.getByText(`Index error: ${diagnostic}`, {
+      exact: true,
+    });
+    const unavailableMessage = page.getByText(
+      "Global search is unavailable because the gateway has no complete index. Lazy browse and direct ItemID entry remain available.",
+      { exact: true },
+    );
+    await expect(indexError).toBeVisible();
+    await expect(unavailableMessage).toBeVisible();
+    await expect(indexError).toHaveClass(/block/);
+    await expect(unavailableMessage).toHaveClass(/block/);
+
+    const [errorBox, unavailableBox] = await Promise.all([
+      indexError.boundingBox(),
+      unavailableMessage.boundingBox(),
+    ]);
+    expect(errorBox).not.toBeNull();
+    expect(unavailableBox).not.toBeNull();
+    expect(unavailableBox!.y).toBeGreaterThan(errorBox!.y + errorBox!.height);
   });
 
   test("offers a first build when the server has no index", async ({

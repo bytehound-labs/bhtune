@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { Link } from "react-router";
 import { useDeleteTemplate, useTemplates } from "../../api/templates";
 import { userFacingErrorMessage } from "../../api/errors";
 import {
   Badge,
   Button,
+  ConfirmModal,
   EmptyState,
   ErrorBanner,
   LoadingState,
@@ -19,6 +21,25 @@ const originTone = {
 export function TemplateListPage() {
   const templates = useTemplates();
   const deleteTemplate = useDeleteTemplate();
+  const [templateToDelete, setTemplateToDelete] = useState<string | null>(null);
+
+  function requestDelete(name: string) {
+    deleteTemplate.reset();
+    setTemplateToDelete(name);
+  }
+
+  function cancelDelete() {
+    if (deleteTemplate.isPending) return;
+    deleteTemplate.reset();
+    setTemplateToDelete(null);
+  }
+
+  function confirmDelete() {
+    if (!templateToDelete || deleteTemplate.isPending) return;
+    deleteTemplate.mutate(templateToDelete, {
+      onSuccess: () => setTemplateToDelete(null),
+    });
+  }
 
   return (
     <div>
@@ -91,15 +112,7 @@ export function TemplateListPage() {
                         deleteTemplate.isPending &&
                         deleteTemplate.variables === template.name
                       }
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            `Delete template "${template.name}"? This cannot be undone.`,
-                          )
-                        ) {
-                          deleteTemplate.mutate(template.name);
-                        }
-                      }}
+                      onClick={() => requestDelete(template.name)}
                     >
                       Delete
                     </Button>
@@ -111,7 +124,7 @@ export function TemplateListPage() {
         </div>
       )}
 
-      {deleteTemplate.isError && (
+      {deleteTemplate.isError && !templateToDelete && (
         <div className="mt-4">
           <ErrorBanner
             message={userFacingErrorMessage(
@@ -120,6 +133,34 @@ export function TemplateListPage() {
             )}
           />
         </div>
+      )}
+      {templateToDelete && (
+        <ConfirmModal
+          title="Delete template?"
+          onCancel={cancelDelete}
+          onConfirm={confirmDelete}
+          pending={deleteTemplate.isPending}
+          confirmLabel="Delete template"
+          pendingLabel="Deleting template…"
+          errorMessage={
+            deleteTemplate.isError
+              ? userFacingErrorMessage(
+                  deleteTemplate.error,
+                  "Unable to delete the template.",
+                )
+              : null
+          }
+          documentationId="templates.delete-confirmation"
+        >
+          <p>
+            Delete <strong>{templateToDelete}</strong>? This removes the
+            template from the current database and cannot be undone here.
+          </p>
+          <p className="mt-2 text-slate-400">
+            Built-in and catalog templates will return on the next startup while
+            their source definition remains available.
+          </p>
+        </ConfirmModal>
       )}
     </div>
   );
