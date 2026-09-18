@@ -77,7 +77,8 @@ pub async fn run(pool: &SqlitePool, args: ExportArgs) -> anyhow::Result<()> {
 
     match &args.output {
         Some(path) => {
-            std::fs::write(path, &bytes)
+            tokio::fs::write(path, &bytes)
+                .await
                 .map_err(|e| anyhow::anyhow!("failed to write '{}': {e}", path.display()))?;
             println!(
                 "Exported {} sample(s) from run {} to '{}'.",

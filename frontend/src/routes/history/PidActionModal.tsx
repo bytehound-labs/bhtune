@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { RunDetailResponse } from "../../api/runs";
 import { userFacingErrorMessage } from "../../api/errors";
 import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
@@ -35,6 +36,8 @@ export function PidActionModal({
   onClose,
   onConfirm,
 }: PidActionModalProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
   if (!action) return null;
 
   const isWrite = action.kind === "write";
@@ -75,6 +78,7 @@ export function PidActionModal({
       onClose={onClose}
       dismissible={!pending}
       widthClassName="max-w-2xl"
+      initialFocusRef={cancelRef}
       documentationId="run-detail.pid-action-review"
     >
       <div className="space-y-5">
@@ -169,7 +173,7 @@ export function PidActionModal({
         )}
 
         <div className="flex justify-end gap-2">
-          <Button onClick={onClose} disabled={pending} autoFocus={!pending}>
+          <Button onClick={onClose} disabled={pending} buttonRef={cancelRef}>
             Cancel
           </Button>
           <Button

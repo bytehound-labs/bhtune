@@ -80,7 +80,8 @@ pub fn parse_import_contents(contents: &str) -> anyhow::Result<Vec<DcsTemplate>>
 }
 
 async fn import(pool: &SqlitePool, path: &Path) -> anyhow::Result<()> {
-    let contents = std::fs::read_to_string(path)
+    let contents = tokio::fs::read_to_string(path)
+        .await
         .map_err(|e| anyhow::anyhow!("failed to read '{}': {e}", path.display()))?;
 
     if looks_like_json_object(&contents) {
@@ -200,7 +201,8 @@ async fn export(
         TemplateFileFormat::Toml => bhtune_core::template::to_catalog_toml(vec![row.template])
             .map_err(|e| anyhow::anyhow!("failed to serialize template as TOML: {e}"))?,
     };
-    std::fs::write(path, contents)
+    tokio::fs::write(path, contents)
+        .await
         .map_err(|e| anyhow::anyhow!("failed to write '{}': {e}", path.display()))?;
     println!("Exported template '{name}' to '{}'.", path.display());
     Ok(())

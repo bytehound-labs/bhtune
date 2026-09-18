@@ -45,13 +45,15 @@ utoipa = { workspace = true, features = ["chrono"] }
 # `sync` for `crate::cancel`'s process-wide `tokio::sync::watch`-based Ctrl+C handle
 # (`safety-cancellation`), listed explicitly here even though `test_support.rs` was already
 # pulling `sync` in transitively via dev-dependency feature unification, so the real
-# (non-test) binary's own dependency on it isn't left implicit.
+# (non-test) binary's own dependency on it isn't left implicit; `fs` keeps async command
+# handlers from blocking the executor during template and sample export file I/O.
 tokio = { version = "1", features = [
   "rt-multi-thread",
   "macros",
   "time",
   "signal",
   "sync",
+  "fs",
 ] }
 # Structured logging (`cli-logging`), matching `opcda-bridge-gateway`'s own `tracing`
 # stack/versions/features exactly so both projects' logging conventions stay recognizable to
