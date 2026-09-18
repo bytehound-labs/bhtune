@@ -3,7 +3,14 @@
  * the `frontend-shell` health indicator (slate = pending/neutral, red = error, emerald =
  * success) stays consistent across every screen rather than being re-invented per file.
  */
-import { useEffect, useId, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 
 export function PageHeading({
@@ -47,7 +54,7 @@ export function Button({
   variant = "neutral",
   disabled = false,
   title,
-  autoFocus = false,
+  buttonRef,
 }: {
   readonly children: ReactNode;
   readonly onClick?: () => void;
@@ -55,7 +62,7 @@ export function Button({
   readonly variant?: keyof typeof buttonVariants;
   readonly disabled?: boolean;
   readonly title?: string;
-  readonly autoFocus?: boolean;
+  readonly buttonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   return (
     <button
@@ -63,7 +70,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      autoFocus={autoFocus}
+      ref={buttonRef}
       className={`rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${buttonVariants[variant]}`}
     >
       {children}
@@ -528,6 +535,7 @@ export function Modal({
   children,
   widthClassName = "max-w-lg",
   dismissible = true,
+  initialFocusRef,
   documentationId,
 }: {
   readonly title: string;
@@ -535,6 +543,7 @@ export function Modal({
   readonly children: ReactNode;
   readonly widthClassName?: string;
   readonly dismissible?: boolean;
+  readonly initialFocusRef?: RefObject<HTMLElement | null>;
   readonly documentationId?: string;
 }) {
   const titleId = useId();
@@ -554,6 +563,10 @@ export function Modal({
       document.body.style.overflow = previousOverflow;
     };
   }, []);
+
+  useEffect(() => {
+    if (dismissible) initialFocusRef?.current?.focus();
+  }, [dismissible, initialFocusRef]);
 
   return createPortal(
     <div
@@ -620,11 +633,14 @@ export function ConfirmModal({
   readonly confirmVariant?: keyof typeof buttonVariants;
   readonly documentationId?: string;
 }) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
   return (
     <Modal
       title={title}
       onClose={onCancel}
       dismissible={!pending}
+      initialFocusRef={cancelRef}
       documentationId={documentationId}
     >
       <div className="space-y-4">
@@ -640,7 +656,7 @@ export function ConfirmModal({
           </div>
         )}
         <div className="flex justify-end gap-2">
-          <Button onClick={onCancel} disabled={pending} autoFocus={!pending}>
+          <Button onClick={onCancel} disabled={pending} buttonRef={cancelRef}>
             Cancel
           </Button>
           <Button

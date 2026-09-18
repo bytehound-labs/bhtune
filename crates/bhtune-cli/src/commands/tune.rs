@@ -4886,12 +4886,18 @@ pub async fn write_pid_values(
         match read_previous_pid_values(driver, p_tag, i_tag, d_tag, allow_uncertain).await {
             Ok(previous) => previous,
             Err(e) => {
-                let message = e.to_string();
-                new_write.error_message = Some(message.clone());
+                let error_message = e.to_string();
+                new_write.error_message = Some(error_message.clone());
                 TuneWriteRow::insert(pool, run_id, new_write).await?;
-                tracing::error!(run_id, ?response_level, ?kind, %message, "PID pre-read failed");
+                tracing::error!(
+                    run_id,
+                    ?response_level,
+                    ?kind,
+                    %error_message,
+                    "PID pre-read failed"
+                );
                 return Ok(PidWriteOutcome::Failed {
-                    detail: format!("pre-read failed: {message}"),
+                    detail: format!("pre-read failed: {error_message}"),
                 });
             }
         };

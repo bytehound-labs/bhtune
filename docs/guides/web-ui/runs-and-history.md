@@ -108,8 +108,8 @@ to `/runs`.
 
 {/* web-ui-screenshot: full-history-delete-confirmation */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=c5b460b262df">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=c5b460b262df" alt="BHTune failed completed-run deletion confirmation with an inline retry error" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=30893d2955fc">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=30893d2955fc" alt="BHTune failed completed-run deletion confirmation with an inline retry error" />
   </a>
   <figcaption>Run deletion is a retryable, styled confirmation: the failed attempt does not change history, while the successful retry removes the run and navigates back to History.</figcaption>
 </figure>
