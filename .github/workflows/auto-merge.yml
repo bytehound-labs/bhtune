@@ -1,0 +1,59 @@
+name: Release PR auto-merge
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Release-plz pull request number
+        required: true
+        type: number
+
+concurrency:
+  group: release-pr-merge-${{ github.event.pull_request.number || inputs.pull_request }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read # Inspect the candidate release PR before requesting auto-merge.
+
+jobs:
+  auto-merge:
+    name: Queue release PR squash merge
+    if: >-
+      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release-plz-') &&
+      github.event.pull_request.user.login == 'mikeboiko'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # Enable GitHub's protected-branch auto-merge request.
+      pull-requests: write # Queue and inspect the validated release PR.
+    steps:
+      - name: Validate release PR and queue auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull_request }}
+        run: |
+          pr="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json baseRefName,headRefName,headRepository,author,title,commits)"
+          jq -e --arg repository "$GITHUB_REPOSITORY" '
+            .baseRefName == "main" and
+            (.headRefName | startswith("release-plz-")) and
+            .headRepository.full_name == $repository and
+            .author.login == "mikeboiko" and
+            (.title | test("^chore\\(release\\): prepare v[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+            (.commits | length) >= 1 and
+            (.commits[-1].messageHeadline |
+              test("^chore\\(release\\): prepare v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+          ' <<<"$pr"
+          gh pr merge "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --auto \
+            --squash \
+            --delete-branch

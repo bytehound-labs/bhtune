@@ -152,6 +152,12 @@ jobs:
       - name: Check image path filter consistency
         run: python3 scripts/check_image_path_filters.py
 
+      - name: Run release automation policy tests
+        run: python3 -m unittest discover -s scripts -p '*_test.py'
+
+      - name: Check release-plz policy
+        run: python3 scripts/check_release_plz_config.py
+
       - name: Fetch base OpenAPI spec
         if: github.event_name == 'pull_request'
         env:

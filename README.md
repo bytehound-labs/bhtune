@@ -52,10 +52,10 @@ against the built-in simulator with no setup at all, or against a real OPC DA lo
 constants, writing them back with confirmation and rollback, and recording full run history.
 See [Getting started](#getting-started) below to try it. No versioned release or prebuilt
 binaries exist yet (see [Installation](#installation)). One captured golden trace validates
-the MRFT port end to end; additional legacy trace capture is intentionally deferred. Track
-release progress and remaining work via the
-[issues](https://github.com/bytehound-labs/bhtune/issues) and
-[`AGENTS.md`](AGENTS.md), which records the full phased implementation plan.
+the MRFT port end to end; additional legacy trace capture is intentionally deferred. The guarded
+release state machine is implemented but remains fail-closed until its prerelease evidence and
+explicit activation gates are complete; see the
+[release automation guide](docs/guides/releasing.md).
 
 The browser also supports a restricted **Demo mode** for public simulator deployments. It
 removes every live-plant route and navigation action, sends only normalized simulator inputs,
@@ -366,15 +366,27 @@ actually accepts. The same generation step also produces man pages (`man/*.1` â€
 ./man/bhtune-tune.1`) and shell completions (`completions/bhtune.bash`, `completions/_bhtune`,
 `completions/bhtune.fish`); packaged releases install both into the usual system locations.
 
+### Release and distribution
+
+The release state machine has one product anchor: `bhtune-cli` owns the product version, tag, and
+root `CHANGELOG.md` entry for all five workspace crates. `release-plz` prepares the git-only
+release PR and product tag; it does not publish crates or create GitHub Releases. The
+`release.yml` workflow is the sole owner of GitHub Releases and attaches the Linux x86_64,
+macOS arm64, and Windows x86_64 archives, `.deb`/`.rpm` packages, checksums, SBOM, provenance,
+and Sigstore evidence.
+
+The first stable release is not cut. An approved prerelease must pass the hosted Linux/macOS/
+Windows canary before stable release automation can be activated, and the repository kill switch
+remains fail-closed until that approval. The current release policy does not publish BHTune crates
+to [crates.io](https://crates.io). See the
+[release automation guide](docs/guides/releasing.md) for the RC procedure, activation gates,
+recovery rules, and release-rate limits.
+
 ### What's still coming
 
-Once a version tag is pushed, release tooling already in place
-(`.github/workflows/release.yml`, `taiki-e/upload-rust-binary-action`) attaches prebuilt
-Linux/macOS/Windows archives (each bundling both `bhtune` and `bhtune-server`) to the
-[Releases](https://github.com/bytehound-labs/bhtune/releases) page automatically. A Windows
-installer and an AUR package are committed follow-on distribution channels, not yet built.
-Publishing to [crates.io](https://crates.io), Homebrew, and a few other channels is still an
-open evaluation, not a commitment â€” see the [roadmap](docs/roadmap.md).
+A Windows installer and an AUR package are follow-on distribution channels, not yet built.
+Homebrew remains prepared but inactive; additional registry publication is outside the current
+release policy. See the [roadmap](docs/roadmap.md).
 
 ### Running the server
 

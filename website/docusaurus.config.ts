@@ -1,8 +1,28 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Config } from "@docusaurus/types";
 import type * as Preset from "@docusaurus/preset-classic";
 import { themes as prismThemes } from "prism-react-renderer";
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
+
+const versionsPath = path.join(__dirname, "versions.json");
+const versionedVersions: string[] = fs.existsSync(versionsPath)
+  ? JSON.parse(fs.readFileSync(versionsPath, "utf8"))
+  : [];
+const hasVersionedDocs = versionedVersions.length > 0;
+const docsVersioning = hasVersionedDocs
+  ? {
+      includeCurrentVersion: true,
+      lastVersion: versionedVersions[0],
+      versions: {
+        current: { label: "Next" },
+        ...Object.fromEntries(
+          versionedVersions.map((version) => [version, { label: version }]),
+        ),
+      },
+    }
+  : {};
 
 const config: Config = {
   title: "BHTune",
@@ -47,6 +67,7 @@ const config: Config = {
           // repo-relative path directly instead.
           editUrl: ({ docPath }) =>
             `https://github.com/bytehound-labs/bhtune/edit/main/docs/${docPath}`,
+          ...docsVersioning,
         },
         blog: false,
         theme: {
@@ -67,6 +88,14 @@ const config: Config = {
         src: "img/favicon.svg",
       },
       items: [
+        ...(hasVersionedDocs
+          ? [
+              {
+                type: "docsVersionDropdown" as const,
+                position: "left" as const,
+              },
+            ]
+          : []),
         {
           href: "https://github.com/bytehound-labs/bhtune",
           label: "GitHub",

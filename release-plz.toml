@@ -1,9 +1,28 @@
-# Configures release-plz's changelog/version automation. The companion
-# `.github/workflows/release-plz.yml` + `auto-merge.yml` pair (see
-# opcda-bridge for the exact shape) is deliberately deferred until a
-# `RELEASE_PLZ_TOKEN` secret is provisioned for this repo — see AGENTS.md.
-# Shipping the workflow now, without that secret, would produce a failing
-# Actions run on every push to main.
+# Configures one product release for the complete BHTune workspace. The
+# bhtune-cli package is the release anchor because it is the user-facing
+# product; the other workspace crates contribute to its root changelog but do
+# not create their own tags or GitHub Releases.
 [workspace]
 publish = false
 git_only = true
+release = false
+git_tag_enable = false
+git_release_enable = false
+changelog_update = false
+release_commits = "^(feat|fix|perf|refactor|docs|test|build|ci|revert)(\\([^)]*\\))?!?:\\s+\\S"
+pr_name = "chore(release): prepare v{{ version }}"
+pr_branch_prefix = "release-plz-"
+
+[[package]]
+name = "bhtune-cli"
+release = true
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+changelog_update = true
+changelog_path = "CHANGELOG.md"
+changelog_include = [
+  "bhtune-core",
+  "bhtune-driver",
+  "bhtune-db",
+  "bhtune-server",
+]

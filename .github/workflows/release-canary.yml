@@ -1,0 +1,366 @@
+name: Release canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing GitHub Release prerelease tag, for example v0.1.0-rc.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-canary-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify-evidence:
+    name: Verify release evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Confirm prerelease and download exact assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isPrerelease)"
+          python3 - "$RELEASE_TAG" "$release_json" <<'PY'
+          import json
+          import sys
+
+          tag, raw = sys.argv[1:]
+          release = json.loads(raw)
+          if release["tagName"] != tag:
+              raise SystemExit(
+                  f"release tag mismatch: requested {tag!r}, got {release['tagName']!r}"
+              )
+          if not release["isPrerelease"]:
+              raise SystemExit(f"release is not marked as a prerelease: {tag}")
+          PY
+          rm -rf dist
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir dist --clobber --pattern '*'
+
+      - name: Verify checksums, SBOM, provenance, and signatures
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_release_artifacts.py \
+            --assets-dir dist \
+            --tag "$RELEASE_TAG" \
+            --report "$RUNNER_TEMP/release-canary-evidence.json"
+
+      - name: Upload evidence report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-canary-evidence
+          path: ${{ runner.temp }}/release-canary-evidence.json
+          if-no-files-found: warn
+
+  smoke:
+    name: Smoke test ${{ matrix.name }}
+    needs: verify-evidence
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - name: macOS arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Download exact release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist --clobber --pattern '*'
+        if: runner.os != 'Windows'
+
+      - name: Download exact release assets (Windows)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: pwsh
+        run: gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir dist --clobber --pattern '*'
+        if: runner.os == 'Windows'
+
+      - name: Verify exact release assets (Unix)
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_release_artifacts.py \
+            --assets-dir dist \
+            --tag "$RELEASE_TAG" \
+            --report "$RUNNER_TEMP/release-canary-${{ matrix.target }}.json"
+        if: runner.os != 'Windows'
+
+      - name: Verify exact release assets (Windows)
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: pwsh
+        run: |
+          python scripts/verify_release_artifacts.py `
+            --assets-dir dist `
+            --tag $env:RELEASE_TAG `
+            --report "$env:RUNNER_TEMP\release-canary-${{ matrix.target }}.json"
+        if: runner.os == 'Windows'
+
+      - name: Run Linux archive, CLI, server, and package smoke tests
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          archive="bhtune-${RELEASE_TAG}-${TARGET}.tar.gz"
+          extract="$RUNNER_TEMP/bhtune-canary"
+          mkdir -p "$extract"
+          tar -xzf "dist/$archive" -C "$extract"
+          test -x "$extract/bhtune"
+          test -x "$extract/bhtune-server"
+          "$extract/bhtune" --version | tee "$RUNNER_TEMP/bhtune-version.txt"
+          grep -F "$version" "$RUNNER_TEMP/bhtune-version.txt"
+
+          cat > "$RUNNER_TEMP/bhtune.toml" <<EOF
+          [tuning]
+          mrft_delay_secs = 0
+          poll_interval_ms = 5
+          timeout_secs = 30
+          op_timeout_secs = 5
+          restore_timeout_secs = 5
+          [log]
+          dir = "$RUNNER_TEMP/bhtune-logs"
+          EOF
+          mkdir -p "$RUNNER_TEMP/bhtune-logs"
+          "$extract/bhtune" \
+            --config "$RUNNER_TEMP/bhtune.toml" \
+            --db "$RUNNER_TEMP/bhtune-cli.db" \
+            simulate \
+            --cycles-skip 0 \
+            --cycles-count 1 \
+            --noise-protection-secs 0 \
+            --output json > "$RUNNER_TEMP/bhtune-simulate.json"
+          python3 - "$RUNNER_TEMP/bhtune-simulate.json" <<'PY'
+          import json
+          import sys
+
+          result = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          if result.get("outcome") != "completed":
+              raise SystemExit(f"simulator smoke test did not complete: {result}")
+          PY
+
+          server_log="$RUNNER_TEMP/bhtune-server.log"
+          BHTUNE_DB="$RUNNER_TEMP/bhtune-server.db" \
+          BHTUNE_BIND="127.0.0.1:8787" \
+          "$extract/bhtune-server" \
+            --config "$RUNNER_TEMP/bhtune.toml" >"$server_log" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8787/api/health > "$RUNNER_TEMP/health.json"; then
+              break
+            fi
+            sleep 1
+          done
+          test -s "$RUNNER_TEMP/health.json"
+          curl --fail --silent http://127.0.0.1:8787/ | grep -Eiq '<!doctype html|<html'
+
+          deb="$(find dist -maxdepth 1 -name '*.deb' -print -quit)"
+          test -n "$deb"
+          sudo apt-get update
+          sudo apt-get install -y "$deb"
+          command -v bhtune
+          bhtune --version | grep -F "$version"
+
+          docker run --rm --pull=always \
+            -v "$PWD/dist:/dist:ro" \
+            fedora:latest \
+            bash -euxo pipefail -c \
+            'dnf install -y /dist/*.rpm && bhtune --version'
+        if: runner.os == 'Linux'
+
+      - name: Run macOS archive, CLI, and server smoke tests
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          archive="bhtune-${RELEASE_TAG}-${TARGET}.tar.gz"
+          extract="$RUNNER_TEMP/bhtune-canary"
+          mkdir -p "$extract"
+          tar -xzf "dist/$archive" -C "$extract"
+          test -x "$extract/bhtune"
+          test -x "$extract/bhtune-server"
+          "$extract/bhtune" --version | tee "$RUNNER_TEMP/bhtune-version.txt"
+          grep -F "$version" "$RUNNER_TEMP/bhtune-version.txt"
+
+          cat > "$RUNNER_TEMP/bhtune.toml" <<EOF
+          [tuning]
+          mrft_delay_secs = 0
+          poll_interval_ms = 5
+          timeout_secs = 30
+          op_timeout_secs = 5
+          restore_timeout_secs = 5
+          [log]
+          dir = "$RUNNER_TEMP/bhtune-logs"
+          EOF
+          mkdir -p "$RUNNER_TEMP/bhtune-logs"
+          "$extract/bhtune" \
+            --config "$RUNNER_TEMP/bhtune.toml" \
+            --db "$RUNNER_TEMP/bhtune-cli.db" \
+            simulate \
+            --cycles-skip 0 \
+            --cycles-count 1 \
+            --noise-protection-secs 0 \
+            --output json > "$RUNNER_TEMP/bhtune-simulate.json"
+          python3 - "$RUNNER_TEMP/bhtune-simulate.json" <<'PY'
+          import json
+          import sys
+
+          result = json.loads(open(sys.argv[1], encoding="utf-8").read())
+          if result.get("outcome") != "completed":
+              raise SystemExit(f"simulator smoke test did not complete: {result}")
+          PY
+
+          server_log="$RUNNER_TEMP/bhtune-server.log"
+          BHTUNE_DB="$RUNNER_TEMP/bhtune-server.db" \
+          BHTUNE_BIND="127.0.0.1:8787" \
+          "$extract/bhtune-server" \
+            --config "$RUNNER_TEMP/bhtune.toml" >"$server_log" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8787/api/health > "$RUNNER_TEMP/health.json"; then
+              break
+            fi
+            sleep 1
+          done
+          test -s "$RUNNER_TEMP/health.json"
+          curl --fail --silent http://127.0.0.1:8787/ | grep -Eiq '<!doctype html|<html'
+        if: runner.os == 'macOS'
+
+      - name: Run Windows archive, CLI, and server smoke tests
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.Substring(1)
+          $archive = "bhtune-$env:RELEASE_TAG-$env:TARGET.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "bhtune-canary"
+          Expand-Archive -LiteralPath (Join-Path $PWD "dist\$archive") -DestinationPath $extract -Force
+          $bhtune = Join-Path $extract "bhtune.exe"
+          $server = Join-Path $extract "bhtune-server.exe"
+          if (-not (Test-Path $bhtune)) { throw "missing $bhtune" }
+          if (-not (Test-Path $server)) { throw "missing $server" }
+          & $bhtune --version | Tee-Object (Join-Path $env:RUNNER_TEMP "bhtune-version.txt")
+          if (-not (Get-Content (Join-Path $env:RUNNER_TEMP "bhtune-version.txt") | Select-String -SimpleMatch $version)) {
+            throw "binary version does not contain $version"
+          }
+
+          $config = Join-Path $env:RUNNER_TEMP "bhtune.toml"
+          @"
+          [tuning]
+          mrft_delay_secs = 0
+          poll_interval_ms = 5
+          timeout_secs = 30
+          op_timeout_secs = 5
+          restore_timeout_secs = 5
+          [log]
+          dir = "$($env:RUNNER_TEMP -replace '\\', '/')/bhtune-logs"
+          "@ | Set-Content -Path $config -Encoding utf8
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "bhtune-logs") | Out-Null
+          & $bhtune `
+            --config $config `
+            --db (Join-Path $env:RUNNER_TEMP "bhtune-cli.db") `
+            simulate `
+            --cycles-skip 0 `
+            --cycles-count 1 `
+            --noise-protection-secs 0 `
+            --output json |
+            Set-Content -Path (Join-Path $env:RUNNER_TEMP "bhtune-simulate.json") -Encoding utf8
+          $result = Get-Content (Join-Path $env:RUNNER_TEMP "bhtune-simulate.json") -Raw | ConvertFrom-Json
+          if ($result.outcome -ne "completed") { throw "simulator smoke test did not complete" }
+
+          $serverStdout = Join-Path $env:RUNNER_TEMP "bhtune-server.stdout.log"
+          $serverStderr = Join-Path $env:RUNNER_TEMP "bhtune-server.stderr.log"
+          $env:BHTUNE_DB = Join-Path $env:RUNNER_TEMP "bhtune-server.db"
+          $env:BHTUNE_BIND = "127.0.0.1:8787"
+          $process = Start-Process -FilePath $server -ArgumentList "--config", $config `
+            -PassThru -RedirectStandardOutput $serverStdout -RedirectStandardError $serverStderr
+          try {
+            $healthy = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              try {
+                $response = Invoke-WebRequest -UseBasicParsing `
+                  -Uri "http://127.0.0.1:8787/api/health"
+                if ($response.StatusCode -eq 200) {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $healthy) { throw "server health endpoint did not become ready" }
+            $page = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8787/"
+            if ($page.StatusCode -ne 200 -or $page.Content -notmatch "<html|<!doctype") {
+              throw "server UI smoke test failed"
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+        if: runner.os == 'Windows'
+
+      - name: Upload platform smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-canary-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/release-canary-*.json
+            ${{ runner.temp }}/bhtune-version.txt
+            ${{ runner.temp }}/bhtune-simulate.json
+            ${{ runner.temp }}/health.json
+            ${{ runner.temp }}/bhtune-server*.log
+          if-no-files-found: warn

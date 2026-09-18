@@ -1,0 +1,187 @@
+name: Release-plz
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: bhtune-release-state
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    name: Release-plz dry run
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release-plz policy
+        run: python3 scripts/check_release_plz_config.py
+
+      - name: Run credential-free release dry run
+        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          command: release
+          version: 0.3.168
+          dry_run: true
+
+  release:
+    name: Create product tag
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+      needs.release-pr.outputs.release_commit == 'true'
+    needs: release-pr
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write # Create the single product tag through release-plz.
+      pull-requests: write # Read and update the single release PR.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release-plz policy
+        run: python3 scripts/check_release_plz_config.py
+
+      - name: Enforce GitHub Release rate limit
+        env:
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          python3 scripts/release_rate_limit.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --token "$GITHUB_TOKEN" \
+            --api-url "$GITHUB_API_URL"
+
+      - name: Create the single product tag
+        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        with:
+          command: release
+          version: 0.3.168
+
+  release-pr:
+    name: Create or refresh release PR
+    if: >-
+      vars.RELEASE_AUTOMATION_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      release_commit: ${{ steps.release-commit.outputs.present }}
+    permissions:
+      contents: write # Amend and push the generated docs snapshot to the release branch.
+      pull-requests: write # Create, inspect, and validate the release PR.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release-plz policy
+        run: python3 scripts/check_release_plz_config.py
+
+      - name: Detect an existing release commit
+        id: release-commit
+        run: |
+          subject="$(git log -1 --format=%s)"
+          if python3 scripts/release_policy.py --release-commit-subject "$subject"; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "A release commit is already present; no release PR is needed."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or refresh release PR
+        if: steps.release-commit.outputs.present != 'true'
+        uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        with:
+          command: release-pr
+          version: 0.3.168
+
+      - name: Locate and validate the release PR
+        if: steps.release-commit.outputs.present != 'true'
+        id: release-pr
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          prs="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --base main \
+            --limit 20 \
+            --json number,headRefName,baseRefName,title,author,headRepository)"
+          matches="$(jq -c '
+            map(select(
+              (.headRefName | startswith("release-plz-")) and
+              .baseRefName == "main" and
+              (.title | test("^chore\\(release\\): prepare v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+            ))
+          ' <<<"$prs")"
+          count="$(jq 'length' <<<"$matches")"
+          if [[ "$count" != "1" ]]; then
+            echo "Expected exactly one validated release-plz PR, found $count."
+            exit 1
+          fi
+          pr="$(jq -c '.[0]' <<<"$matches")"
+          author="$(jq -r '.author.login' <<<"$pr")"
+          head_repository="$(jq -r '.headRepository.full_name' <<<"$pr")"
+          if [[ "$author" != "mikeboiko" || "$head_repository" != "$GITHUB_REPOSITORY" ]]; then
+            echo "Release PR author or repository identity is not approved."
+            exit 1
+          fi
+          echo "number=$(jq -r '.number' <<<"$pr")" >> "$GITHUB_OUTPUT"
+          echo "branch=$(jq -r '.headRefName' <<<"$pr")" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch release branch
+        if: steps.release-commit.outputs.present != 'true'
+        env:
+          RELEASE_BRANCH: ${{ steps.release-pr.outputs.branch }}
+        run: git fetch origin "refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
+
+      - name: Generate the exact stable documentation snapshot
+        if: steps.release-commit.outputs.present != 'true'
+        env:
+          RELEASE_BRANCH: ${{ steps.release-pr.outputs.branch }}
+        run: |
+          git checkout --detach "origin/$RELEASE_BRANCH"
+          python3 scripts/sync_docs_version.py --repository .
+
+      - name: Amend and publish documentation changes
+        if: steps.release-commit.outputs.present != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          RELEASE_BRANCH: ${{ steps.release-pr.outputs.branch }}
+        run: |
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "Documentation snapshot is already current."
+            exit 0
+          fi
+          git config user.name "release-plz"
+          git config user.email "release-plz@users.noreply.github.com"
+          git add CHANGELOG.md website/versioned_docs website/versioned_sidebars website/versions.json
+          git commit --amend --no-edit
+          git -c "http.extraheader=AUTHORIZATION: bearer $GITHUB_TOKEN" \
+            push --force-with-lease origin "HEAD:refs/heads/$RELEASE_BRANCH"
