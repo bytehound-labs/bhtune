@@ -16,16 +16,16 @@ place.
 
 {/* web-ui-screenshot: full-template-list */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=82b9ba2f2840">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=82b9ba2f2840" alt="BHTune Templates page listing available DCS and PLC templates" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=6e1056bda4d8">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=6e1056bda4d8" alt="BHTune Templates page listing available DCS and PLC templates" />
   </a>
   <figcaption>The template list identifies the available mapping catalog and its ownership origin.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: full-template-detail */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-detail.png?v=af48ae6715dd">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-detail.png?v=af48ae6715dd" alt="BHTune template detail page showing identity, behavior, tag suffixes, and mode values" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-detail.png?v=9f597b270329">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-detail.png?v=9f597b270329" alt="BHTune template detail page showing identity, behavior, tag suffixes, and mode values" />
   </a>
   <figcaption>Template detail groups the mapping into identity, behavior, suffixes, and raw mode values.</figcaption>
 </figure>
@@ -33,20 +33,34 @@ place.
 The create and edit forms use the same grouped fields as the read-only detail view. A user's
 template name is immutable during editing; rename by deleting and recreating it instead.
 
+Deleting a user-owned template uses a styled confirmation dialog. A failed request leaves the
+template in the list and keeps the dialog open with an inline retryable error; the retry is
+performed in that same dialog and only a successful response removes the row. Built-in and
+catalog templates are protected from ordinary user-template deletion flows, and their source
+definitions cause them to return on the next startup if a source-backed row is removed.
+
 {/* web-ui-screenshot: full-template-create */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=34747585e504">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=34747585e504" alt="BHTune New template form with identity, behavior, suffix, and mode-value sections" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=0288054a48d3">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=0288054a48d3" alt="BHTune New template form with identity, behavior, suffix, and mode-value sections" />
   </a>
   <figcaption>Create a user-owned template by filling the same fields documented in the template catalog reference.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: full-template-edit */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=94ad5ceae468">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=94ad5ceae468" alt="BHTune edit-template form with the existing template name locked" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=51c86c29a3e7">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=51c86c29a3e7" alt="BHTune edit-template form with the existing template name locked" />
   </a>
   <figcaption>Edit preserves the template identity; the locked Name field prevents an unsupported rename.</figcaption>
+</figure>
+
+{/* web-ui-screenshot: full-template-delete-confirmation */}
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=3ab396dfce26">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=3ab396dfce26" alt="BHTune failed user-template deletion confirmation with an inline retry error" />
+  </a>
+  <figcaption>A failed user-template deletion keeps the row and confirmation dialog intact until the retry succeeds.</figcaption>
 </figure>
 
 For the complete field reference, catalog format, validation rules, and the
@@ -62,8 +76,8 @@ template-catalog path remain file/configuration settings.
 
 {/* web-ui-screenshot: full-config */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-config.png?v=7ee5d37a7587">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-config.png?v=7ee5d37a7587" alt="BHTune Configuration page showing OPC quality, retention, timing, safety, and guidance sections" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-config.png?v=6c11d08abbfb">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-config.png?v=6c11d08abbfb" alt="BHTune Configuration page showing OPC quality, retention, timing, safety, and guidance sections" />
   </a>
   <figcaption>Configuration keeps global quality, retention, timing, and safety policy in one reviewed surface.</figcaption>
 </figure>

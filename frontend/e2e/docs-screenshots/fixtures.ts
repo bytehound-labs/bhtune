@@ -1,4 +1,7 @@
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
+import type { components } from "../../src/api/schema";
+
+type SearchIndexStatus = components["schemas"]["OpcSearchIndexStatusResponse"];
 
 const template = {
   name: "Yokogawa CentumVP",
@@ -503,7 +506,7 @@ const browsePage = (nodes: ReturnType<typeof browseNode>[]) => ({
   warning: null,
 });
 
-const searchIndexStatus = {
+const searchIndexStatus: SearchIndexStatus = {
   server: "Yokogawa.Example",
   state: "not_indexed",
   active_generation: 0,
@@ -528,17 +531,64 @@ const searchIndexStatus = {
   last_error: null,
 };
 
-async function json(page: Page, pattern: string, value: unknown) {
-  await page.route(pattern, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(value),
-    }),
-  );
+type FullFixtureState = {
+  templates: typeof templates;
+  completedRun: typeof completedRun | null;
+  liveRun: typeof liveRun;
+  searchIndexStatus: typeof searchIndexStatus;
+  deleteAttempts: {
+    searchIndex: number;
+    run: number;
+    template: number;
+  };
+};
+
+function createFullFixtureState(searchIndexReady = false): FullFixtureState {
+  return {
+    templates: templates.map((item) => ({ ...item })),
+    completedRun: { ...completedRun },
+    liveRun: { ...liveRun, id: 4243 },
+    searchIndexStatus: searchIndexReady
+      ? {
+          ...searchIndexStatus,
+          state: "ready",
+          active_generation: 7,
+          auto_refresh_enabled: true,
+          database_bytes: 8192,
+          entry_count: 128,
+          unique_item_count: 128,
+          completed_at: "2025-01-01T00:01:00.000Z",
+        }
+      : { ...searchIndexStatus },
+    deleteAttempts: {
+      searchIndex: 0,
+      run: 0,
+      template: 0,
+    },
+  };
 }
 
-async function installCommonRoutes(page: Page, demo: boolean) {
+function fulfillJson(route: Route, value: unknown, status = 200) {
+  return route.fulfill({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify(value),
+  });
+}
+
+async function delayForDelete() {
+  await new Promise((resolve) => setTimeout(resolve, 350));
+}
+
+async function json(page: Page, pattern: string, value: unknown) {
+  await page.route(pattern, (route) => fulfillJson(route, value));
+}
+
+async function installCommonRoutes(
+  page: Page,
+  demo: boolean,
+  fullState?: FullFixtureState,
+) {
   await json(page, "**/api/health", {
     status: "ok",
     version: "0.1.0-docs",
@@ -548,7 +598,12 @@ async function installCommonRoutes(page: Page, demo: boolean) {
     "**/api/capabilities",
     demo ? demoCapabilities : capabilities,
   );
-  await json(page, "**/api/templates", templates);
+  await page.route("**/api/templates", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
+    return fulfillJson(route, fullState?.templates ?? templates);
+  });
   await page.route("**/api/runs/draft", (route) =>
     route.fulfill({
       status: 200,
@@ -558,43 +613,81 @@ async function installCommonRoutes(page: Page, demo: boolean) {
   );
   await json(page, "**/api/runs/last-request", null);
   await page.route("**/api/templates/*", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
     const path = new URL(route.request().url()).pathname;
     const name = decodeURIComponent(path.slice(path.lastIndexOf("/") + 1));
-    const selected =
-      templates.find((item) => item.name === name) ??
-      (name === "Example Template" ? userTemplate : template);
-    return route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(selected),
-    });
+    const selected = (fullState?.templates ?? templates).find(
+      (item) => item.name === name,
+    );
+    if (!selected) {
+      return fulfillJson(route, { error: "Template not found." }, 404);
+    }
+    return fulfillJson(route, selected);
   });
   await json(page, "**/api/runs/draft", null);
   await json(page, "**/api/runs/last-request", null);
   await json(page, "**/api/config", config);
   await json(page, "**/api/health", { status: "ok", version: "docs-fixture" });
-  await json(page, "**/api/runs?*", {
-    returned: 2,
-    total: 2,
-    runs: [
-      runSummary(demo ? demoCompletedRun : completedRun),
-      {
-        ...runSummary(demo ? demoLiveRun : liveRun),
-        id: 4243,
-        tag_name: demo ? "Simulator" : "Area01.PIC201.PV",
-        outcome: "running",
-      },
-    ],
+  await page.route("**/api/runs?*", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
+    const listedRuns = fullState
+      ? [
+          ...(fullState.completedRun ? [fullState.completedRun] : []),
+          fullState.liveRun,
+        ]
+      : [demoCompletedRun, demoLiveRun];
+    return fulfillJson(route, {
+      returned: listedRuns.length,
+      total: listedRuns.length,
+      runs: listedRuns.map((run) => runSummary(run)),
+    });
   });
 }
 
-export async function installFullRoutes(page: Page) {
-  await installCommonRoutes(page, false);
+export async function installFullRoutes(
+  page: Page,
+  options: { searchIndexReady?: boolean } = {},
+) {
+  const state = createFullFixtureState(options.searchIndexReady);
+  await installCommonRoutes(page, false, state);
   await json(page, "**/api/opc/servers*", {
     servers: ["Yokogawa.Example", "Kepware.KEPServerEX.V6"],
   });
-  await json(page, "**/api/opc/search-index/status*", searchIndexStatus);
+  await page.route("**/api/opc/search-index/status*", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
+    return fulfillJson(route, state.searchIndexStatus);
+  });
+  await page.route("**/api/opc/search-index*", async (route) => {
+    if (route.request().method() !== "DELETE") {
+      return route.fallback();
+    }
+    state.deleteAttempts.searchIndex += 1;
+    await delayForDelete();
+    if (state.deleteAttempts.searchIndex === 1) {
+      return fulfillJson(route, { error: "Fixture delete failure." }, 503);
+    }
+    state.searchIndexStatus = {
+      ...state.searchIndexStatus,
+      state: "not_indexed",
+      active_generation: 0,
+      auto_refresh_enabled: false,
+      database_bytes: 0,
+      entry_count: 0,
+      unique_item_count: 0,
+      completed_at: null,
+    };
+    return fulfillJson(route, state.searchIndexStatus);
+  });
   await page.route("**/api/opc/browse*", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
     const url = new URL(route.request().url());
     const parentNodeKey = url.searchParams.get("parent_node_key");
     const nodes =
@@ -625,11 +718,9 @@ export async function installFullRoutes(page: Page) {
     });
   });
   await page.route("**/api/opc/browse/sessions/*", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ closed: true }),
-    }),
+    route.request().method() === "DELETE"
+      ? fulfillJson(route, { closed: true })
+      : route.fallback(),
   );
   await json(page, "**/api/opc/read*", {
     tag: "Area01.FIC101.OUT",
@@ -648,14 +739,63 @@ export async function installFullRoutes(page: Page) {
       ].join(""),
     }),
   );
-  await json(page, "**/api/runs/4242", completedRun);
-  await json(page, "**/api/runs/4243", liveRun);
+  await page.route("**/api/runs/4242", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
+    if (!state.completedRun) {
+      return fulfillJson(route, { error: "Run not found." }, 404);
+    }
+    return fulfillJson(route, state.completedRun);
+  });
+  await page.route("**/api/runs/4242", async (route) => {
+    if (route.request().method() !== "DELETE") {
+      return route.fallback();
+    }
+    state.deleteAttempts.run += 1;
+    await delayForDelete();
+    if (state.deleteAttempts.run === 1) {
+      return fulfillJson(route, { error: "Fixture delete failure." }, 503);
+    }
+    state.completedRun = null;
+    return route.fulfill({ status: 204 });
+  });
+  await page.route("**/api/runs/4243", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
+    return fulfillJson(route, state.liveRun);
+  });
+  await page.route("**/api/templates/*", async (route) => {
+    if (route.request().method() !== "DELETE") {
+      return route.fallback();
+    }
+    const path = new URL(route.request().url()).pathname;
+    const name = decodeURIComponent(path.slice(path.lastIndexOf("/") + 1));
+    state.deleteAttempts.template += 1;
+    await delayForDelete();
+    if (state.deleteAttempts.template === 1) {
+      return fulfillJson(route, { error: "Fixture delete failure." }, 503);
+    }
+    state.templates = state.templates.filter((item) => item.name !== name);
+    return route.fulfill({ status: 204 });
+  });
 }
 
 export async function installDemoRoutes(page: Page) {
   await installCommonRoutes(page, true);
-  await json(page, "**/api/runs/4242", demoCompletedRun);
-  await json(page, "**/api/runs/4243", demoLiveRun);
+  await page.route("**/api/runs/4242", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
+    return fulfillJson(route, demoCompletedRun);
+  });
+  await page.route("**/api/runs/4243", (route) => {
+    if (route.request().method() !== "GET") {
+      return route.fallback();
+    }
+    return fulfillJson(route, demoLiveRun);
+  });
   await page.route("**/api/runs/4242/stream", (route) =>
     route.fulfill({
       status: 200,
