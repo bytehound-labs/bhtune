@@ -4608,7 +4608,9 @@ The repository now has a layered hardening gate for both source changes and rele
 ### Local browser development deployment
 
 When making frontend or browser-visible changes, keep the local test deployment running so
-the result is available for manual testing after every edit:
+the result is available for manual testing after every edit. Always bind this local server to
+`0.0.0.0:8787`, never to a loopback-only address, so it is reachable from the trusted local
+network:
 
 - Start `bhtune-server` with an isolated development database on
   `0.0.0.0:8787`, for example
