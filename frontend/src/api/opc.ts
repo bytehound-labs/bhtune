@@ -15,7 +15,7 @@ export type OpcSearchIndexResponse =
   components["schemas"]["OpcSearchIndexResponse"];
 export type OpcSearchMatchMode = "exact" | "prefix" | "contains";
 
-export interface OpcLiveSearchBreadcrumb {
+interface OpcLiveSearchBreadcrumb {
   node_key: string;
   display_name: string;
 }
