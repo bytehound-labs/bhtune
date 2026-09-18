@@ -195,7 +195,8 @@ Browse sessions are closed when the modal exits, and reopening it reveals the sa
 expands its path, and scrolls the selected row inside the tree viewport when the gateway can
 resolve its path. During that restoration, the browser shows a blocking loading status until
 the path is expanded, the exact ItemID is selected, and the row is positioned in the tree
-viewport, so intermediate tree movement is not exposed.
+viewport, so intermediate tree movement is not exposed. The global search controls remain
+visible while the tree and selected-tag panel settle.
 
 With a template selected, confirming a tag selection replaces its final component with that
 template's process-variable suffix before writing the value into the Tag name field.

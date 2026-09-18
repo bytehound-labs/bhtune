@@ -1108,6 +1108,10 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
       .getByRole("status")
       .filter({ hasText: "Locating saved tag…" });
     await expect(restoring).toBeVisible();
+    const globalSearch = dialog.getByLabel("Search OPC tags");
+    await expect(globalSearch).toBeVisible();
+    await expect(globalSearch).toBeEnabled();
+    await expect(globalSearch).not.toHaveAttribute("aria-hidden", "true");
     await expect(
       dialog.locator('div[aria-hidden="true"]').first(),
     ).toHaveAttribute("aria-hidden", "true");

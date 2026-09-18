@@ -38,9 +38,10 @@ Choose **OPC DA** to expose the Bridge host, OPC DA server ProgID, Tag name, and
 a one-level-at-a-time tree after a ProgID is present. The browser can expand dotted or
 slash-separated namespaces, test-read a selected item, and preserve the current path when
 reopened, keeping the selected row inside the tree viewport. When reopening a saved tag, a
-blocking loading status remains until the persistent indexed breadcrumbs or bounded live-search
-fallback has expanded the path, selected the exact ItemID, and positioned the row in the tree
-viewport. It uses persistent indexed breadcrumbs when available and then scopes one bounded exact
+blocking loading status covers the tree and selected-tag panel until the persistent indexed
+breadcrumbs or bounded live-search fallback has expanded the path, selected the exact ItemID,
+and positioned the row in the tree viewport. The global search controls remain visible during
+this restoration. It uses persistent indexed breadcrumbs when available and then scopes one bounded exact
 live search beneath a matching server-returned root node before selecting an unrelated root item.
 It only uses unscoped live search when no root scope is available.
 

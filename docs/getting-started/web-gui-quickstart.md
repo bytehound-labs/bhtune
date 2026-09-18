@@ -165,7 +165,8 @@ browser-visible origin.
      they are accepted by default, while `Bad` quality is always rejected.
      Reopening the browser shows a loading status while it expands the available path to the
      current Tag name, selects that node, and scrolls the selected row into the tree viewport.
-     The tree is revealed only after that restoration settles. It uses indexed breadcrumbs first
+     The tree is revealed only after that restoration settles, while the global search controls
+     remain visible. It uses indexed breadcrumbs first
      and then tries one bounded exact
      live search scoped beneath a matching server-returned root node when the persistent index
      cannot resolve the path. If no root scope is available, it uses the unscoped live search;

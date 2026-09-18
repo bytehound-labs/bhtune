@@ -737,10 +737,11 @@ ui.tsx`) backs the tag browser and is reusable for future modals: closes on Esca
 backdrop click, or an explicit close button.
 
 Saved-tag restoration is visually atomic: `OpcTagBrowserModal` keeps the tree mounted for
-measurement, but covers it with the shared `LoadingOverlay` until the exact saved ItemID is
-selected, its gateway-provided path is expanded, and the row is verified inside the inner tree
-viewport. Root errors, unavailable tags, cancellation, and fallback selection must settle this
-phase rather than leave a loading state stuck. Prefer the shared `Spinner`, `LoadingStatus`,
+measurement, but covers the tree and selected-tag panel with the shared `LoadingOverlay` until
+the exact saved ItemID is selected, its gateway-provided path is expanded, and the row is
+verified inside the inner tree viewport. The global search controls remain visible while this
+region settles. Root errors, unavailable tags, cancellation, and fallback selection must settle
+this phase rather than leave a loading state stuck. Prefer the shared `Spinner`, `LoadingStatus`,
 `LoadingOverlay`, and `Button` loading primitives over local spinners or text-only pending
 feedback when adding related asynchronous UI.
 

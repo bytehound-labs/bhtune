@@ -1046,6 +1046,8 @@ type TagBrowserContentProps = Readonly<{
   tree: TreeLevelProps;
   treeViewportRef: RefObject<HTMLDivElement | null>;
   selectedTagPanel: SelectedTagPanelProps;
+  initializationPending: boolean;
+  initializationMessage: string;
 }>;
 
 function TagBrowserContent({
@@ -1054,19 +1056,27 @@ function TagBrowserContent({
   tree,
   treeViewportRef,
   selectedTagPanel,
+  initializationPending,
+  initializationMessage,
 }: TagBrowserContentProps) {
   return (
     <>
       <IndexControls {...indexControls} />
       <IndexedSearchResults {...searchResults} />
-      <div
-        ref={treeViewportRef}
-        data-testid="opc-tag-tree-viewport"
-        className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2"
+      <LoadingOverlay
+        active={initializationPending}
+        message={initializationMessage}
+        className="mt-3 min-h-[24rem]"
       >
-        <TreeLevel {...tree} />
-      </div>
-      <SelectedTagPanel {...selectedTagPanel} />
+        <div
+          ref={treeViewportRef}
+          data-testid="opc-tag-tree-viewport"
+          className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2"
+        >
+          <TreeLevel {...tree} />
+        </div>
+        <SelectedTagPanel {...selectedTagPanel} />
+      </LoadingOverlay>
     </>
   );
 }
@@ -2007,6 +2017,10 @@ export function OpcTagBrowserModal({
               if (selectedTag) void confirmTag(selectedTag);
             },
           }}
+          initializationPending={initializationPending}
+          initializationMessage={
+            initialTag.trim() ? "Locating saved tag…" : "Loading tags…"
+          }
         />
       </>
     );
@@ -2023,13 +2037,7 @@ export function OpcTagBrowserModal({
         widthClassName="max-w-2xl"
         documentationId="new-tune.opc-tag-browser"
       >
-        <LoadingOverlay
-          active={initializationPending}
-          message={initialTag.trim() ? "Locating saved tag…" : "Loading tags…"}
-          className="min-h-[24rem]"
-        >
-          {modalContent}
-        </LoadingOverlay>
+        {modalContent}
       </Modal>
       {deleteConfirmationOpen && (
         <ConfirmModal
