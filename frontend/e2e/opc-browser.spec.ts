@@ -91,15 +91,17 @@ function searchIndexStatus(
     | "failed" = "ready",
   autoRefreshEnabled = true,
   lastError: string | null = null,
+  activeGeneration?: number,
 ) {
   return {
     server: "Test.Server",
     state,
     auto_refresh_enabled: autoRefreshEnabled,
     active_generation:
-      state === "not_indexed" || state === "deleting" || state === "failed"
+      activeGeneration ??
+      (state === "not_indexed" || state === "deleting" || state === "failed"
         ? 0
-        : 1,
+        : 1),
     entry_count: state === "deleting" ? 0 : 2,
     unique_item_count: state === "deleting" ? 0 : 2,
     started_at: null,
@@ -1278,6 +1280,7 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
             "failed",
             true,
             "inventory stream ended before completion",
+            1,
           ),
         ),
       });
