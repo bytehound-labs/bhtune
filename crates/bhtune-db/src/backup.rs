@@ -44,7 +44,7 @@ const EXCLUSIVITY_PROBE_TIMEOUT: Duration = Duration::from_millis(200);
 /// right behavior for a backup command: silently clobbering a previous backup because of a
 /// reused filename would be its own data-loss bug, not a convenience worth having.
 pub async fn backup_to(pool: &SqlitePool, dest: &Path) -> DbResult<()> {
-    if dest.exists() {
+    if tokio::fs::try_exists(dest).await.map_err(DbError::Io)? {
         return Err(DbError::BackupDestinationExists(dest.to_path_buf()));
     }
 
@@ -124,20 +124,26 @@ pub async fn restore_from(
     // confused by this process's own still-open connections.
     pool.close().await;
 
-    let pre_restore_backup = if db_path.exists() {
+    let pre_restore_backup = if tokio::fs::try_exists(db_path).await.map_err(DbError::Io)? {
         Some(exclusive_pre_restore_snapshot(db_path, now).await?)
     } else {
         None
     };
 
     let tmp_path = sibling_path(db_path, ".restoring-tmp");
-    std::fs::copy(backup_path, &tmp_path).map_err(DbError::Io)?;
-    std::fs::rename(&tmp_path, db_path).map_err(DbError::Io)?;
+    tokio::fs::copy(backup_path, &tmp_path)
+        .await
+        .map_err(DbError::Io)?;
+    tokio::fs::rename(&tmp_path, db_path)
+        .await
+        .map_err(DbError::Io)?;
 
     for suffix in ["-wal", "-shm"] {
         let sidecar = sibling_path(db_path, suffix);
-        if sidecar.exists() {
-            std::fs::remove_file(&sidecar).map_err(DbError::Io)?;
+        if tokio::fs::try_exists(&sidecar).await.map_err(DbError::Io)? {
+            tokio::fs::remove_file(&sidecar)
+                .await
+                .map_err(DbError::Io)?;
         }
     }
 
@@ -204,7 +210,7 @@ async fn exclusive_pre_restore_snapshot(db_path: &Path, now: DateTime<Utc>) -> D
 /// bhtune database", not just any SQLite file). Read-only so validating a backup can never
 /// itself be the thing that corrupts or migrates it.
 async fn validate_backup_file(path: &Path) -> DbResult<()> {
-    if !path.exists() {
+    if !tokio::fs::try_exists(path).await.map_err(DbError::Io)? {
         return Err(DbError::InvalidBackup(format!(
             "{} does not exist",
             path.display()
@@ -449,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn validate_backup_file_reports_a_path_that_cannot_be_opened_as_sqlite_at_all() {
         let dir = tempfile::tempdir().unwrap();
-        // A directory exists, so the earlier `path.exists()` check passes, but SQLite
+        // A directory exists, so the earlier existence check passes, but SQLite
         // cannot open a directory as a database file — this fails at connection time,
         // before any query (including `PRAGMA integrity_check`) is ever issued.
         let err = validate_backup_file(dir.path()).await.unwrap_err();
