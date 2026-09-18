@@ -69,6 +69,15 @@ class GitFixture:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding=UTF8)
 
+    def read(self, relative):
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(f"unsafe fixture path: {relative}")
+        root = self.path.resolve()
+        path = (root / relative_path).resolve()
+        path.relative_to(root)
+        return path.read_text(encoding=UTF8)
+
     def commit(self, message):
         self.run(GIT, "add", ".")
         self.run(GIT, "commit", "-m", message)
@@ -173,12 +182,12 @@ class ReleaseRateLimitTests(unittest.TestCase):
             fetch_releases(TEST_REPOSITORY, TEST_TOKEN, opener=lambda *_args, **_kwargs: FakeResponse({}, 401))
         with self.assertRaises(ReleaseRateError):
             fetch_releases(TEST_REPOSITORY, TEST_TOKEN, opener=lambda *_args, **_kwargs: FakeResponse({}))
+
+        def raise_offline(*_args, **_kwargs):
+            raise URLError("offline")
+
         with self.assertRaises(ReleaseRateError):
-            fetch_releases(
-                TEST_REPOSITORY,
-                TEST_TOKEN,
-                opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("offline")),
-            )
+            fetch_releases(TEST_REPOSITORY, TEST_TOKEN, opener=raise_offline)
 
     def test_rate_fetch_paginates_until_short_page(self):
         calls = []
@@ -308,6 +317,25 @@ class DocsVersionTests(unittest.TestCase):
         self.path.joinpath("docs/internal/v1-checklist.md").parent.mkdir(parents=True)
         self.path.joinpath("docs/internal/v1-checklist.md").write_text("# Internal\n", encoding=UTF8)
 
+    def write(self, relative, content):
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(f"unsafe fixture path: {relative}")
+        root = self.path.resolve()
+        path = (root / relative_path).resolve()
+        path.relative_to(root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding=UTF8)
+
+    def read(self, relative):
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(f"unsafe fixture path: {relative}")
+        root = self.path.resolve()
+        path = (root / relative_path).resolve()
+        path.relative_to(root)
+        return path.read_text(encoding=UTF8)
+
     def tearDown(self):
         self.tempdir.cleanup()
 
@@ -328,8 +356,7 @@ class DocsVersionTests(unittest.TestCase):
             [LATEST_RELEASE, "0.3.0", "0.2.0"],
         )
         self.assertFalse((self.path / "website/versioned_docs/version-0.1.0").exists())
-        doc = self.path / "docs/intro.md"
-        doc.write_text(doc.read_text(encoding=UTF8) + "\nUpdated.\n", encoding=UTF8)
+        self.write("docs/intro.md", self.read("docs/intro.md") + "\nUpdated.\n")
         self.assertTrue(synchronize(self.path, LATEST_RELEASE))
         self.assertTrue(check(self.path, LATEST_RELEASE))
 

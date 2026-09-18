@@ -145,7 +145,6 @@ def sidebar_items(repository: Path, directory: Path) -> list[Any]:
             continue
         if not any(path.rglob("*.md")) and not any(path.rglob("*.mdx")):
             continue
-        relative = path.relative_to(repository / DOCS_DIR)
         nested = sidebar_items(repository, path)
         entries.append(
             (
@@ -178,24 +177,6 @@ def read_versions(repository: Path) -> list[str]:
         if item not in versions:
             versions.append(item)
     return versions
-
-
-def _safe_output_path(repository: Path, relative_path: Path) -> Path:
-    if relative_path.is_absolute() or ".." in relative_path.parts or "\x00" in str(relative_path):
-        raise DocsVersionError(f"unsafe generated path: {relative_path}")
-    root = repository.resolve()
-    target = (root / relative_path).resolve()
-    try:
-        target.relative_to(root)
-    except ValueError as error:
-        raise DocsVersionError(f"generated path escapes repository: {relative_path}") from error
-    return target
-
-
-def write_json(repository: Path, relative_path: Path, value: object) -> None:
-    path = _safe_output_path(repository, relative_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
 def validate_snapshot(repository: Path, version: str, versions: list[str]) -> None:
@@ -240,22 +221,40 @@ def validate_snapshot(repository: Path, version: str, versions: list[str]) -> No
         raise DocsVersionError(f"version {version} is not retained in {VERSIONS_FILE}")
 
 
+def _is_stale_version(name: str, retained: set[str], prefix: str, suffix: str = "") -> bool:
+    if not name.startswith(prefix) or suffix and not name.endswith(suffix):
+        return False
+    version = name.removeprefix(prefix)
+    if suffix:
+        version = version.removesuffix(suffix)
+    return stable_version(version) is not None and version not in retained
+
+
+def _remove_stale_doc_versions(root: Path, retained: set[str]) -> None:
+    if not root.is_dir():
+        return
+    for path in root.iterdir():
+        if path.is_dir() and _is_stale_version(path.name, retained, "version-"):
+            shutil.rmtree(path)
+
+
+def _remove_stale_sidebars(root: Path, retained: set[str]) -> None:
+    if not root.is_dir():
+        return
+    for path in root.iterdir():
+        if path.is_file() and _is_stale_version(
+            path.name,
+            retained,
+            "version-",
+            "-sidebars.json",
+        ):
+            path.unlink()
+
+
 def remove_exact_stale_versions(repository: Path, retained: list[str]) -> None:
     retained_set = set(retained)
-    docs_root = repository / VERSIONED_DOCS_DIR
-    if docs_root.is_dir():
-        for path in docs_root.iterdir():
-            if path.is_dir() and path.name.startswith("version-"):
-                version = path.name.removeprefix("version-")
-                if stable_version(version) is not None and version not in retained_set:
-                    shutil.rmtree(path)
-    sidebars_root = repository / VERSIONED_SIDEBARS_DIR
-    if sidebars_root.is_dir():
-        for path in sidebars_root.iterdir():
-            if path.is_file() and path.name.startswith("version-") and path.name.endswith("-sidebars.json"):
-                version = path.name.removeprefix("version-").removesuffix("-sidebars.json")
-                if stable_version(version) is not None and version not in retained_set:
-                    path.unlink()
+    _remove_stale_doc_versions(repository / VERSIONED_DOCS_DIR, retained_set)
+    _remove_stale_sidebars(repository / VERSIONED_SIDEBARS_DIR, retained_set)
 
 
 def _snapshot_matches(repository: Path, version: str, digest: str, sidebar_value: dict) -> bool:
@@ -303,7 +302,9 @@ def _synchronize_snapshot(
     destination = repository / version_dir(version)
     copy_sources(repository, destination)
     (destination / DIGEST_FILE).write_text(digest + "\n", encoding="utf-8")
-    write_json(repository, sidebar_path(version), sidebar_value)
+    sidebar = repository / sidebar_path(version)
+    sidebar.parent.mkdir(parents=True, exist_ok=True)
+    sidebar.write_text(json.dumps(sidebar_value, indent=2) + "\n", encoding="utf-8")
     return True
 
 
@@ -326,7 +327,9 @@ def synchronize(repository: Path, version: str) -> bool:
         render_sidebar(repository),
     )
     if existing_versions != retained:
-        write_json(repository, VERSIONS_FILE, retained)
+        versions_path = repository / VERSIONS_FILE
+        versions_path.parent.mkdir(parents=True, exist_ok=True)
+        versions_path.write_text(json.dumps(retained, indent=2) + "\n", encoding="utf-8")
         changed = True
     remove_exact_stale_versions(repository, retained)
     validate_snapshot(repository, version, retained)

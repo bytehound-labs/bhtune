@@ -238,7 +238,7 @@ def diff_lines(repository: Path, comparison: str, head: str, path: str) -> list[
 def version_metadata_only(path: str, lines: Iterable[str]) -> bool:
     if path.endswith("Cargo.lock"):
         return all(LOCK_VERSION_LINE.fullmatch(line) for line in lines)
-    if path == "Cargo.toml" or path.startswith("crates/") and path.endswith("Cargo.toml"):
+    if path == CARGO_MANIFEST or path.startswith("crates/") and path.endswith(CARGO_MANIFEST):
         return all(
             VERSION_ASSIGNMENT.fullmatch(line) or INLINE_VERSION_ASSIGNMENT.fullmatch(line)
             for line in lines
