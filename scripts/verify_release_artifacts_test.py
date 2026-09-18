@@ -1,11 +1,14 @@
 import hashlib
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from verify_release_artifacts import (
+from scripts.verify_release_artifacts import (
     ArtifactVerificationError,
+    main,
     verify_release_assets,
 )
 
@@ -76,3 +79,22 @@ class ReleaseArtifactTests(unittest.TestCase):
         next(directory.glob("*.sigstore.json")).unlink()
         with self.assertRaises(ArtifactVerificationError):
             verify_release_assets(directory, tag)
+
+    def test_unsafe_report_path_returns_verification_error(self):
+        directory, tag = self.make_release()
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            exit_code = main(
+                [
+                    "--assets-dir",
+                    str(directory),
+                    "--tag",
+                    tag,
+                    "--report",
+                    str(directory / ".." / "release-report.json"),
+                ]
+            )
+        self.assertEqual(exit_code, 1)
+        self.assertIn("unsafe report path", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())

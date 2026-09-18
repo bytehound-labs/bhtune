@@ -20,11 +20,27 @@ WORKSPACE_MEMBERS = (
     "bhtune-server",
 )
 INITIAL_RELEASE_VERSION = (0, 1, 0)
-STABLE_TAG = re.compile(r"^v(?P<version>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)$")
-VERSION_ONLY_LINE = re.compile(
-    r"^\s*(?:version\s*=\s*(?:\"[^\"]+\"|\{[^}]*\})|[A-Za-z0-9_-]+\s*=\s*\{[^}]*\bversion\s*=\s*\"[^\"]+\"[^}]*\})\s*$"
+STABLE_TAG = re.compile(
+    r"^v(?P<version>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)$"
+)
+VERSION_ASSIGNMENT = re.compile(r'^\s*version\s*=\s*(?:"[^"]+"|\{[^}]*\})\s*$')
+INLINE_VERSION_ASSIGNMENT = re.compile(
+    r'^\s*[A-Za-z0-9_-]+\s*=\s*\{.*\bversion\s*=\s*"[^"]+".*\}\s*$'
 )
 LOCK_VERSION_LINE = re.compile(r"^\s*version\s*=\s*\"[^\"]+\"\s*$")
+CARGO_MANIFEST = "Cargo.toml"
+SAFE_GIT_OPTIONS = frozenset(
+    {
+        "--",
+        "--is-ancestor",
+        "--list",
+        "--merged",
+        "--name-only",
+        "-e",
+        "-n",
+    }
+)
+GIT_REVISION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$")
 
 
 class ReleaseContentError(RuntimeError):
@@ -41,13 +57,48 @@ class ReleaseContext:
     stable_tag: str | None
 
 
+def _validate_git_revision(value: str, label: str) -> str:
+    if (
+        not GIT_REVISION_PATTERN.fullmatch(value)
+        or ".." in value
+        or value.endswith(".")
+        or "@{" in value
+    ):
+        raise ReleaseContentError(f"{label} is not a safe git revision")
+    return value
+
+
+def _validate_repo_path(value: str) -> str:
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts or "\x00" in value:
+        raise ReleaseContentError(f"repository path is not safe: {value!r}")
+    return value
+
+
 def run_git(repository: Path, *args: str) -> str:
+    if not args or args[0] not in {
+        "cat-file",
+        "diff",
+        "merge-base",
+        "rev-list",
+        "show",
+        "tag",
+    }:
+        raise ReleaseContentError("unsupported git operation")
+    for argument in args:
+        if "\x00" in argument or "\r" in argument or "\n" in argument:
+            raise ReleaseContentError("git argument contains control characters")
+        if argument.startswith("-") and argument not in SAFE_GIT_OPTIONS:
+            if not argument.startswith("--unified="):
+                raise ReleaseContentError(f"unsupported git option: {argument}")
     try:
         result = subprocess.run(
-            ["git", "-C", str(repository), *args],
+            ["git", *args],
+            cwd=repository,
             check=True,
             capture_output=True,
             text=True,
+            shell=False,
         )
     except (OSError, subprocess.CalledProcessError) as error:
         detail = getattr(error, "stderr", "") or str(error)
@@ -58,46 +109,55 @@ def run_git(repository: Path, *args: str) -> str:
 def parse_version(value: object, label: str) -> tuple[int, int, int]:
     if not isinstance(value, str):
         raise ReleaseContentError(f"{label} is not a version string")
-    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value)
+    match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", value)
     if not match:
         raise ReleaseContentError(f"{label} must be a stable X.Y.Z version, got {value!r}")
     return tuple(int(part) for part in match.groups())
 
 
 def read_manifest(repository: Path, revision: str, relative_path: str) -> dict:
+    safe_revision = _validate_git_revision(revision, "manifest revision")
+    safe_path = _validate_repo_path(relative_path)
     try:
-        content = run_git(repository, "show", f"{revision}:{relative_path}")
+        content = run_git(repository, "show", f"{safe_revision}:{safe_path}")
         return tomllib.loads(content)
     except tomllib.TOMLDecodeError as error:
-        raise ReleaseContentError(f"{relative_path} at {revision} is malformed TOML: {error}") from error
+        raise ReleaseContentError(
+            f"{safe_path} at {safe_revision} is malformed TOML: {error}"
+        ) from error
 
 
 def workspace_versions(repository: Path, revision: str) -> dict[str, str]:
-    root = read_manifest(repository, revision, "Cargo.toml")
+    safe_revision = _validate_git_revision(revision, "workspace revision")
+    root = read_manifest(repository, safe_revision, CARGO_MANIFEST)
     package = root.get("workspace", {}).get("package", {})
     root_version = package.get("version")
-    version_tuple = parse_version(root_version, f"workspace version at {revision}")
+    version_tuple = parse_version(root_version, f"workspace version at {safe_revision}")
     resolved = {"workspace": ".".join(str(part) for part in version_tuple)}
     members = root.get("workspace", {}).get("members")
     if not isinstance(members, list) or set(members) != {
         f"crates/{member}" for member in WORKSPACE_MEMBERS
     }:
-        raise ReleaseContentError(f"workspace members at {revision} do not match the five BHTune crates")
+        raise ReleaseContentError(
+            f"workspace members at {safe_revision} do not match the five BHTune crates"
+        )
 
     for member in WORKSPACE_MEMBERS:
-        path = f"crates/{member}/Cargo.toml"
-        manifest = read_manifest(repository, revision, path)
+        path = f"crates/{member}/{CARGO_MANIFEST}"
+        manifest = read_manifest(repository, safe_revision, path)
         package_table = manifest.get("package")
         if not isinstance(package_table, dict):
-            raise ReleaseContentError(f"{path} at {revision} has no [package] table")
+            raise ReleaseContentError(f"{path} at {safe_revision} has no [package] table")
         member_version = package_table.get("version")
         if isinstance(member_version, dict) and member_version.get("workspace") is True:
             resolved[member] = resolved["workspace"]
         elif isinstance(member_version, str):
-            parse_version(member_version, f"{path} version at {revision}")
+            parse_version(member_version, f"{path} version at {safe_revision}")
             resolved[member] = member_version
         else:
-            raise ReleaseContentError(f"{path} at {revision} has no resolvable package version")
+            raise ReleaseContentError(
+                f"{path} at {safe_revision} has no resolvable package version"
+            )
         if resolved[member] != resolved["workspace"]:
             raise ReleaseContentError(
                 f"{path} resolves to {resolved[member]}, not workspace version {resolved['workspace']}"
@@ -110,7 +170,8 @@ def version_tuple(value: str) -> tuple[int, int, int]:
 
 
 def stable_tags(repository: Path, base: str) -> list[tuple[tuple[int, int, int], str]]:
-    tags = run_git(repository, "tag", "--merged", base, "--list", "v*").splitlines()
+    safe_base = _validate_git_revision(base, "comparison base")
+    tags = run_git(repository, "tag", "--merged", safe_base, "--list", "v*").splitlines()
     result = []
     for tag in tags:
         match = STABLE_TAG.fullmatch(tag.strip())
@@ -138,26 +199,35 @@ def resolve_comparison(repository: Path, base: str, baseline: str | None) -> tup
         return comparison, tag
     if not baseline:
         raise ReleaseContentError("RELEASE_BASELINE_SHA is required when no stable product tag exists")
-    run_git(repository, "cat-file", "-e", f"{baseline}^{{commit}}")
+    safe_baseline = _validate_git_revision(baseline, "release baseline")
+    safe_base = _validate_git_revision(base, "comparison base")
+    run_git(repository, "cat-file", "-e", f"{safe_baseline}^{{commit}}")
     try:
-        subprocess.run(
-            ["git", "-C", str(repository), "merge-base", "--is-ancestor", baseline, base],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as error:
+        run_git(repository, "merge-base", "--is-ancestor", safe_baseline, safe_base)
+    except ReleaseContentError as error:
         raise ReleaseContentError("RELEASE_BASELINE_SHA is not an ancestor of the PR base") from error
-    return baseline, None
+    return safe_baseline, None
 
 
 def diff_files(repository: Path, comparison: str, head: str) -> list[str]:
-    output = run_git(repository, "diff", "--name-only", f"{comparison}..{head}")
+    safe_comparison = _validate_git_revision(comparison, "comparison revision")
+    safe_head = _validate_git_revision(head, "head revision")
+    output = run_git(repository, "diff", "--name-only", f"{safe_comparison}..{safe_head}")
     return [line for line in output.splitlines() if line]
 
 
 def diff_lines(repository: Path, comparison: str, head: str, path: str) -> list[str]:
-    output = run_git(repository, "diff", "--unified=0", f"{comparison}..{head}", "--", path)
+    safe_comparison = _validate_git_revision(comparison, "comparison revision")
+    safe_head = _validate_git_revision(head, "head revision")
+    safe_path = _validate_repo_path(path)
+    output = run_git(
+        repository,
+        "diff",
+        "--unified=0",
+        f"{safe_comparison}..{safe_head}",
+        "--",
+        safe_path,
+    )
     return [
         line[1:]
         for line in output.splitlines()
@@ -169,7 +239,10 @@ def version_metadata_only(path: str, lines: Iterable[str]) -> bool:
     if path.endswith("Cargo.lock"):
         return all(LOCK_VERSION_LINE.fullmatch(line) for line in lines)
     if path == "Cargo.toml" or path.startswith("crates/") and path.endswith("Cargo.toml"):
-        return all(VERSION_ONLY_LINE.fullmatch(line) for line in lines)
+        return all(
+            VERSION_ASSIGNMENT.fullmatch(line) or INLINE_VERSION_ASSIGNMENT.fullmatch(line)
+            for line in lines
+        )
     return False
 
 

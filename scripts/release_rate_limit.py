@@ -5,17 +5,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 HOURLY_LIMIT = 3
 DAILY_LIMIT = 12
 PAGE_SIZE = 100
+TRUSTED_API_URL = "https://api.github.com"
+REPOSITORY_PATTERN = r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
 
 
 class ReleaseRateError(RuntimeError):
@@ -102,7 +104,7 @@ def _read_json_response(response: object) -> object:
     try:
         status = getattr(response, "status", 200)
         payload = response.read()
-    except Exception as error:  # pragma: no cover - exercised through fetch_releases
+    except (AttributeError, OSError) as error:  # pragma: no cover - exercised through fetch_releases
         raise ReleaseRateError(f"GitHub Releases API response could not be read: {error}") from error
     if status != 200:
         raise ReleaseRateError(f"GitHub Releases API returned HTTP {status}")
@@ -112,17 +114,44 @@ def _read_json_response(response: object) -> object:
         raise ReleaseRateError("GitHub Releases API returned malformed JSON") from error
 
 
+def _validate_repository(repository: str) -> str:
+    if not re.fullmatch(REPOSITORY_PATTERN, repository):
+        raise ReleaseRateError("repository must have the form owner/name")
+    return repository
+
+
+def _validate_api_url(api_url: str) -> str:
+    parts = urlsplit(api_url)
+    if (
+        parts.scheme != "https"
+        or parts.netloc != "api.github.com"
+        or parts.path.rstrip("/")
+        or parts.query
+        or parts.fragment
+    ):
+        raise ReleaseRateError("GitHub Releases API URL must be https://api.github.com")
+    return TRUSTED_API_URL
+
+
+def _release_page(payload: object) -> list[object]:
+    if not isinstance(payload, list):
+        raise ReleaseRateError("GitHub Releases API returned a non-array response")
+    return payload
+
+
 def fetch_releases(
     repository: str,
     token: str,
     *,
-    api_url: str = "https://api.github.com",
+    api_url: str = TRUSTED_API_URL,
     opener: Callable[..., object] = urlopen,
 ) -> list[object]:
     """Fetch every release page, rejecting incomplete or malformed responses."""
 
     if not repository or not token:
         raise ReleaseRateError("repository and GitHub token are required")
+    repository = _validate_repository(repository)
+    api_url = _validate_api_url(api_url)
     releases: list[object] = []
     page = 1
     while True:
@@ -139,10 +168,9 @@ def fetch_releases(
         try:
             response = opener(request, timeout=20)
             payload = _read_json_response(response)
-        except (HTTPError, URLError, TimeoutError, OSError) as error:
+        except OSError as error:
             raise ReleaseRateError(f"GitHub Releases API request failed: {error}") from error
-        if not isinstance(payload, list):
-            raise ReleaseRateError("GitHub Releases API returned a non-array response")
+        payload = _release_page(payload)
         for release in payload:
             release_timestamp(release)
         releases.extend(payload)
@@ -158,7 +186,7 @@ def check_repository(
     token: str,
     *,
     now: datetime | None = None,
-    api_url: str = "https://api.github.com",
+    api_url: str = TRUSTED_API_URL,
     opener: Callable[..., object] = urlopen,
 ) -> RateDecision:
     """Fetch release history and return a fail-closed rate decision."""
@@ -171,7 +199,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN"))
-    parser.add_argument("--api-url", default=os.environ.get("GITHUB_API_URL", "https://api.github.com"))
+    parser.add_argument("--api-url", default=os.environ.get("GITHUB_API_URL", TRUSTED_API_URL))
     parser.add_argument("--now", help="UTC ISO-8601 timestamp for deterministic checks")
     args = parser.parse_args()
 

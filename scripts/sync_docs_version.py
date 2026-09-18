@@ -58,11 +58,12 @@ def iter_source_files(repository: Path) -> Iterable[Path]:
     if not docs_root.is_dir():
         raise DocsVersionError(f"documentation source directory is missing: {docs_root}")
     for path in sorted(docs_root.rglob("*")):
-        if path.is_file() and DOCS_DIR / path.relative_to(docs_root) != Path("docs/internal"):
-            relative = path.relative_to(docs_root)
-            if relative.parts and relative.parts[0] == "internal":
-                continue
-            yield path
+        if not path.is_file():
+            continue
+        relative = path.relative_to(docs_root)
+        if relative.parts and relative.parts[0] == "internal":
+            continue
+        yield path
 
 
 def digest_inputs(repository: Path) -> str:
@@ -131,7 +132,7 @@ def frontmatter_position(path: Path) -> tuple[int, str]:
     return (10_000, path.name)
 
 
-def sidebar_items(repository: Path, directory: Path, relative_root: Path = Path(".")) -> list[Any]:
+def sidebar_items(repository: Path, directory: Path) -> list[Any]:
     entries: list[tuple[tuple[int, str], Any]] = []
     children = sorted(path for path in directory.iterdir() if path.name != "internal")
     files = [path for path in children if path.is_file() and path.suffix.lower() in {".md", ".mdx"}]
@@ -145,7 +146,7 @@ def sidebar_items(repository: Path, directory: Path, relative_root: Path = Path(
         if not any(path.rglob("*.md")) and not any(path.rglob("*.mdx")):
             continue
         relative = path.relative_to(repository / DOCS_DIR)
-        nested = sidebar_items(repository, path, relative)
+        nested = sidebar_items(repository, path)
         entries.append(
             (
                 (10_000, path.name),
@@ -179,7 +180,20 @@ def read_versions(repository: Path) -> list[str]:
     return versions
 
 
-def write_json(path: Path, value: object) -> None:
+def _safe_output_path(repository: Path, relative_path: Path) -> Path:
+    if relative_path.is_absolute() or ".." in relative_path.parts or "\x00" in str(relative_path):
+        raise DocsVersionError(f"unsafe generated path: {relative_path}")
+    root = repository.resolve()
+    target = (root / relative_path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as error:
+        raise DocsVersionError(f"generated path escapes repository: {relative_path}") from error
+    return target
+
+
+def write_json(repository: Path, relative_path: Path, value: object) -> None:
+    path = _safe_output_path(repository, relative_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
@@ -244,24 +258,14 @@ def remove_exact_stale_versions(repository: Path, retained: list[str]) -> None:
                     path.unlink()
 
 
-def synchronize(repository: Path, version: str) -> bool:
-    if stable_version(version) is None:
-        return False
-    versions = read_versions(repository)
-    versions = [item for item in versions if item != version]
-    versions.append(version)
-    versions.sort(key=lambda item: stable_version(item), reverse=True)
-    retained = versions[:3]
-
+def _snapshot_matches(repository: Path, version: str, digest: str, sidebar_value: dict) -> bool:
     destination = repository / version_dir(version)
-    digest = digest_inputs(repository)
     current_digest = (
         (destination / DIGEST_FILE).read_text(encoding="utf-8").strip()
         if (destination / DIGEST_FILE).is_file()
         else None
     )
     sidebar = repository / sidebar_path(version)
-    sidebar_value = render_sidebar(repository)
     current_sidebar = None
     if sidebar.is_file():
         try:
@@ -285,13 +289,44 @@ def synchronize(repository: Path, version: str) -> bool:
         (destination / relative).read_bytes() == (repository / DOCS_DIR / relative).read_bytes()
         for relative in expected_files
     )
-    changed = current_digest != digest or current_sidebar != sidebar_value or not files_match
-    if changed:
-        copy_sources(repository, destination)
-        (destination / DIGEST_FILE).write_text(digest + "\n", encoding="utf-8")
-        write_json(sidebar, sidebar_value)
-    if read_versions(repository) != retained:
-        write_json(repository / VERSIONS_FILE, retained)
+    return current_digest == digest and current_sidebar == sidebar_value and files_match
+
+
+def _synchronize_snapshot(
+    repository: Path,
+    version: str,
+    digest: str,
+    sidebar_value: dict,
+) -> bool:
+    if _snapshot_matches(repository, version, digest, sidebar_value):
+        return False
+    destination = repository / version_dir(version)
+    copy_sources(repository, destination)
+    (destination / DIGEST_FILE).write_text(digest + "\n", encoding="utf-8")
+    write_json(repository, sidebar_path(version), sidebar_value)
+    return True
+
+
+def _retained_versions(repository: Path, version: str) -> tuple[list[str], list[str]]:
+    existing = read_versions(repository)
+    versions = [item for item in existing if item != version]
+    versions.append(version)
+    versions.sort(key=lambda item: stable_version(item), reverse=True)
+    return existing, versions[:3]
+
+
+def synchronize(repository: Path, version: str) -> bool:
+    if stable_version(version) is None:
+        return False
+    existing_versions, retained = _retained_versions(repository, version)
+    changed = _synchronize_snapshot(
+        repository,
+        version,
+        digest_inputs(repository),
+        render_sidebar(repository),
+    )
+    if existing_versions != retained:
+        write_json(repository, VERSIONS_FILE, retained)
         changed = True
     remove_exact_stale_versions(repository, retained)
     validate_snapshot(repository, version, retained)

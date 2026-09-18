@@ -93,24 +93,22 @@ def _verify_manifest_entry(
         )
 
 
-def verify_release_assets(assets_dir: Path, tag: str) -> dict:
-    """Verify product assets, checksums, SBOM, provenance, and signatures."""
-    tag = validate_canary_tag(tag)
-    if not assets_dir.is_dir():
-        raise ArtifactVerificationError(f"asset directory does not exist: {assets_dir}")
-
-    archives = {
+def _archive_paths(assets_dir: Path, tag: str) -> dict[str, Path]:
+    return {
         target: assets_dir / f"bhtune-{tag}-{target}{'.zip' if target.endswith('msvc') else '.tar.gz'}"
         for target in ARCHIVE_TARGETS
     }
-    missing_archives = [
-        path.name for path in archives.values() if not path.is_file()
-    ]
+
+
+def _require_archives(archives: dict[str, Path]) -> None:
+    missing_archives = [path.name for path in archives.values() if not path.is_file()]
     if missing_archives:
         raise ArtifactVerificationError(
             "missing platform archive(s): " + ", ".join(missing_archives)
         )
 
+
+def _require_packages(assets_dir: Path) -> list[Path]:
     debs = sorted(assets_dir.glob("*.deb"))
     rpms = sorted(assets_dir.glob("*.rpm"))
     if len(debs) != 1:
@@ -121,8 +119,10 @@ def verify_release_assets(assets_dir: Path, tag: str) -> dict:
         raise ArtifactVerificationError(
             f"expected exactly one .rpm package, found {len(rpms)}"
         )
+    return [debs[0], rpms[0]]
 
-    product_assets = [*archives.values(), debs[0], rpms[0]]
+
+def _verify_evidence(assets_dir: Path, product_assets: list[Path]) -> tuple[Path, Path, Path]:
     manifest_path = assets_dir / "release-assets.sha256"
     if not manifest_path.is_file():
         raise ArtifactVerificationError("missing release-assets.sha256")
@@ -146,11 +146,12 @@ def verify_release_assets(assets_dir: Path, tag: str) -> dict:
         _verify_manifest_entry(manifest, asset, manifest_name=manifest_path.name)
         signature_path = assets_dir / f"{asset.name}.sigstore.json"
         if not signature_path.is_file():
-            raise ArtifactVerificationError(
-                f"missing Sigstore bundle for {asset.name}"
-            )
+            raise ArtifactVerificationError(f"missing Sigstore bundle for {asset.name}")
         _require_json_object(signature_path, f"Sigstore bundle for {asset.name}")
+    return manifest_path, sbom_path, provenance_path
 
+
+def _verify_archive_checksums(assets_dir: Path, archives: dict[str, Path]) -> None:
     for archive in archives.values():
         checksum_path = assets_dir / f"{archive.name}.sha256"
         if not checksum_path.is_file():
@@ -158,11 +159,22 @@ def verify_release_assets(assets_dir: Path, tag: str) -> dict:
                 f"missing published checksum file for {archive.name}"
             )
         archive_manifest = _checksum_entries(checksum_path)
-        _verify_manifest_entry(
-            archive_manifest,
-            archive,
-            manifest_name=checksum_path.name,
-        )
+        _verify_manifest_entry(archive_manifest, archive, manifest_name=checksum_path.name)
+
+
+def verify_release_assets(assets_dir: Path, tag: str) -> dict:
+    """Verify product assets, checksums, SBOM, provenance, and signatures."""
+    tag = validate_canary_tag(tag)
+    if not assets_dir.is_dir():
+        raise ArtifactVerificationError(f"asset directory does not exist: {assets_dir}")
+    archives = _archive_paths(assets_dir, tag)
+    _require_archives(archives)
+    packages = _require_packages(assets_dir)
+    product_assets = [*archives.values(), *packages]
+    manifest_path, sbom_path, provenance_path = _verify_evidence(
+        assets_dir, product_assets
+    )
+    _verify_archive_checksums(assets_dir, archives)
 
     return {
         "tag": tag,
@@ -174,6 +186,15 @@ def verify_release_assets(assets_dir: Path, tag: str) -> dict:
             f"{asset.name}.sigstore.json" for asset in product_assets
         ],
     }
+
+
+def _safe_report_path(path: Path) -> Path:
+    if "\x00" in str(path) or ".." in path.parts:
+        raise ArtifactVerificationError(f"unsafe report path: {path}")
+    resolved = path.expanduser().resolve()
+    if not resolved.parent.is_dir():
+        raise ArtifactVerificationError(f"report directory does not exist: {resolved.parent}")
+    return resolved
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -191,7 +212,11 @@ def main(argv: list[str] | None = None) -> int:
     rendered = json.dumps(report, indent=2, sort_keys=True)
     print(rendered)
     if args.report:
-        args.report.write_text(rendered + "\n", encoding="utf-8")
+        try:
+            _safe_report_path(args.report).write_text(rendered + "\n", encoding="utf-8")
+        except (ArtifactVerificationError, OSError) as error:
+            print(f"release artifact verification failed: {error}", file=sys.stderr)
+            return 1
     return 0
 
 
