@@ -477,7 +477,12 @@ test.describe("post-tune PID actions", () => {
     );
     await modal.getByRole("button", { name: "Write PID settings" }).click();
     await request;
+
     await expect(page.getByRole("dialog")).not.toBeVisible();
+    const writingButton = resultsSection(page).getByRole("button", {
+      name: "Writing…",
+    });
+    await expect(writingButton).toBeDisabled();
     await expect(page.getByRole("alert")).toHaveCount(0);
 
     releaseWrite();
@@ -558,6 +563,10 @@ test.describe("post-tune PID actions", () => {
       .click();
     await request;
     await expect(page.getByRole("dialog")).not.toBeVisible();
+    const restoringButton = page.getByRole("button", {
+      name: "Restoring…",
+    });
+    await expect(restoringButton).toBeDisabled();
     await expect(page.getByRole("alert")).toHaveCount(0);
 
     releaseRevert();

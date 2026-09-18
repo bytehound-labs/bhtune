@@ -167,7 +167,11 @@ items remain both expandable and selectable.
 The browser also exposes gateway capabilities and persistent indexed namespace search. Warm
 searches are bounded unary requests against the gateway-owned index, with ranked matches,
 breadcrumbs, exact ItemIDs, `has_more`, and explicit index state/progress. Search never downloads
-the complete namespace into the browser and never falls back to the slow live traversal search.
+the complete namespace into the browser. Reopening a saved tag tries indexed breadcrumbs first
+and then uses a server-returned root node's opaque key to scope one bounded exact live search
+when the persistent index is unavailable or cannot resolve the path. It only falls back to an
+unscoped live search when no matching root scope is available, and falls back to the root when
+all search mechanisms fail.
 Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled servers
 and performs no automatic indexing; use **Build index** in the tag browser to opt the selected
 ProgID in. The gateway validates the ProgID against its current server list, persists the
@@ -186,9 +190,13 @@ countdown; the exact scheduled time is available by hovering over it.
 Disabling automatic refresh retains the existing searchable data. Without a usable index, the
 global search box is disabled with a compact status message, while lazy tree browsing, direct
 ItemID entry, live reads, and tuning remain available. The browser reports enrollment or build
-failures on a separate diagnostic line without treating them as browse failures.
-Browse sessions are closed when the modal exits, and reopening it reveals and scrolls to the saved
-selection when the gateway can resolve its path.
+failures without treating them as browse failures.
+Browse sessions are closed when the modal exits, and reopening it reveals the saved selection,
+expands its path, and scrolls the selected row inside the tree viewport when the gateway can
+resolve its path. During that restoration, the browser shows a blocking loading status until
+the path is expanded, the exact ItemID is selected, and the row is positioned in the tree
+viewport, so intermediate tree movement is not exposed. The global search controls remain
+visible while the tree and selected-tag panel settle.
 
 With a template selected, confirming a tag selection replaces its final component with that
 template's process-variable suffix before writing the value into the Tag name field.
@@ -200,8 +208,8 @@ requires an explicit choice to select a different tag or proceed anyway. Proceed
 selects the item; a tune still applies its live-reading quality safeguards. The global Config
 page controls whether `Uncertain` readings are accepted during tuning; `Bad` is always rejected.
 Reopening the browser automatically expands the available path to the current Tag name, selects
-that node, and scrolls it into view; if it is no longer present, browsing falls back to the root
-level.
+that node, and scrolls the selected row into the tree viewport; if it is no longer present,
+browsing falls back to the root level.
 The diagnostic CLI exposes the bounded operations through `bhtune opc servers`, `browse`, and
 live `search`; `bhtune opc search-index status|search|refresh|control` manages and queries the
 persistent index. Both search interfaces require a positive result limit. `bhtune opc browse

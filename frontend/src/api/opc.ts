@@ -15,6 +15,21 @@ export type OpcSearchIndexResponse =
   components["schemas"]["OpcSearchIndexResponse"];
 export type OpcSearchMatchMode = "exact" | "prefix" | "contains";
 
+interface OpcLiveSearchBreadcrumb {
+  node_key: string;
+  display_name: string;
+}
+
+export interface OpcLiveSearchMatch {
+  node: {
+    node_key: string;
+    display_name: string;
+    kind: string;
+    item_id: string | null;
+  };
+  breadcrumbs: OpcLiveSearchBreadcrumb[];
+}
+
 export interface OpcBrowsePageRequest {
   sessionId?: string;
   parentNodeKey?: string;
@@ -189,6 +204,99 @@ export function useOpcIndexedSearch() {
       );
     },
   });
+}
+
+/**
+ * `GET /api/opc/search` -- bounded live namespace search used to reveal a saved tag when
+ * the persistent gateway-owned index is unavailable or cannot return a usable match.
+ * Breadcrumb node keys come from the active browse session and must be passed through
+ * unchanged; the browser never infers hierarchy from OPC ItemID punctuation.
+ */
+export async function searchOpcLive(params: {
+  bridgeHost: string;
+  opcServer: string;
+  query: string;
+  sessionId?: string;
+  scopeNodeKey?: string;
+  maxResults?: number;
+  signal?: AbortSignal;
+}): Promise<OpcLiveSearchMatch[]> {
+  const searchParams = new URLSearchParams({
+    bridge_host: params.bridgeHost,
+    opc_server: params.opcServer,
+    query: params.query,
+    match_mode: "exact",
+    max_results: String(params.maxResults ?? 1),
+    include_branches: "false",
+  });
+  if (params.sessionId) {
+    searchParams.set("session_id", params.sessionId);
+  }
+  if (params.scopeNodeKey) {
+    searchParams.set("scope_node_key", params.scopeNodeKey);
+  }
+
+  const response = await fetch(`/api/opc/search?${searchParams}`, {
+    headers: { Accept: "text/event-stream" },
+    credentials: "same-origin",
+    signal: params.signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Live OPC search failed with HTTP ${response.status}.`);
+  }
+  if (!response.body) {
+    throw new Error("Live OPC search returned no event stream.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const matches: OpcLiveSearchMatch[] = [];
+  let buffer = "";
+
+  const consumeEvent = (record: string) => {
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of record.split(/\r?\n/)) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice("event:".length).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).trimStart());
+      }
+    }
+    if (!dataLines.length) return;
+
+    const payload: unknown = JSON.parse(dataLines.join("\n"));
+    if (eventName === "match") {
+      matches.push(payload as OpcLiveSearchMatch);
+    } else if (eventName === "error") {
+      const message =
+        typeof payload === "object" &&
+        payload !== null &&
+        "error" in payload &&
+        typeof payload.error === "string"
+          ? payload.error
+          : "The OPC namespace search failed.";
+      throw new Error(message);
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      let separatorIndex = buffer.indexOf("\n\n");
+      while (separatorIndex >= 0) {
+        consumeEvent(buffer.slice(0, separatorIndex));
+        buffer = buffer.slice(separatorIndex + 2);
+        separatorIndex = buffer.indexOf("\n\n");
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) consumeEvent(buffer);
+    return matches;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /** `POST /api/opc/search-index/refresh` -- starts or coalesces an index refresh. */

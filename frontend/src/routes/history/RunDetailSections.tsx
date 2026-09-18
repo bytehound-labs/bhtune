@@ -458,6 +458,7 @@ function WriteRow({
         {isLastWrite && canRevertLastWrite ? (
           <Button
             variant="danger"
+            loading={revertPending}
             disabled={revertPending}
             title={eligibility.reason}
             onClick={() => onRevert(write)}

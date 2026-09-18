@@ -736,6 +736,15 @@ logic to replace any final component while preserving the tag path. A new shared
 ui.tsx`) backs the tag browser and is reusable for future modals: closes on Escape, a
 backdrop click, or an explicit close button.
 
+Saved-tag restoration is visually atomic: `OpcTagBrowserModal` keeps the tree mounted for
+measurement, but covers the tree and selected-tag panel with the shared `LoadingOverlay` until
+the exact saved ItemID is selected, its gateway-provided path is expanded, and the row is
+verified inside the inner tree viewport. The global search controls remain visible while this
+region settles. Root errors, unavailable tags, cancellation, and fallback selection must settle
+this phase rather than leave a loading state stuck. Prefer the shared `Spinner`, `LoadingStatus`,
+`LoadingOverlay`, and `Button` loading primitives over local spinners or text-only pending
+feedback when adding related asynchronous UI.
+
 Manually verified against a real running `bhtune-server` plus a temporary, deliberately
 not-committed mock gRPC gateway — a path-aware fake `Bridge` service bound to
 `127.0.0.1:7600`, since the crate's existing `smoke_tests::MockBridgeService` ignores
@@ -1610,7 +1619,11 @@ Integration rules, as implemented in `OpcDaDriver`:
   timestamps, error, source, and build progress. `search_index` performs a bounded unary query
   against that index and returns ranked matches with exact ItemIDs, breadcrumbs, and `has_more`.
   `refresh_search_index` and `control_search_index` expose explicit refresh and pause/resume/
-  cancel controls. BHTune does not fall back to the known-slow live traversal search.
+  cancel controls. The browser's global search remains index-backed, while reopening a saved tag first
+  uses a server-returned root node's opaque key to scope one bounded exact live traversal search
+  in the active browse session when the persistent index cannot resolve its path. It may use
+  unscoped live search only when no matching root scope is available; it never invents hierarchy
+  from ItemID punctuation.
 - `close_browse_session` explicitly releases gateway-side browse state. The HTTP browser calls
   it during modal cleanup; the CLI leaves sessions open so printed continuation tokens remain
   usable and exposes `bhtune opc close <session-id>` for explicit cleanup.
@@ -4263,6 +4276,13 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     sample persistence, and total tick work. These diagnostics are intentionally advisory: they
     do not invalidate otherwise finite results, abort a run, or block a valid PID write until
     field evidence supports a stronger policy.
+24. **`[fixed, no flag needed]` Saved OPC tag restoration must settle before it is shown.**
+    `OpcTagBrowserModal` leaves the tree mounted so layout can be measured, but keeps the
+    asynchronous root load, search fallback, breadcrumb expansion, exact selection, and inner
+    viewport scroll behind a shared blocking overlay. The overlay is cleared only after the
+    selected row is rendered and fully visible; root errors, unavailable tags, cancellation, and
+    fallback selection must all clear it deterministically. Reuse shared loading primitives
+    instead of introducing one-off spinners or text-only waits for equivalent frontend work.
 
 ## Documentation contract (`docs-contract`)
 
@@ -4589,7 +4609,9 @@ The repository now has a layered hardening gate for both source changes and rele
 ### Local browser development deployment
 
 When making frontend or browser-visible changes, keep the local test deployment running so
-the result is available for manual testing after every edit:
+the result is available for manual testing after every edit. Always bind this local server to
+`0.0.0.0:8787`, never to a loopback-only address, so it is reachable from the trusted local
+network:
 
 - Start `bhtune-server` with an isolated development database on
   `0.0.0.0:8787`, for example

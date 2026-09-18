@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -15,12 +16,14 @@ import {
   useDeleteOpcSearchIndex,
   useRefreshOpcSearchIndex,
   useSetOpcSearchIndexAutoRefresh,
+  searchOpcLive,
   useTestOpcConnection,
 } from "../api/opc";
 import { userFacingErrorMessage } from "../api/errors";
 import type {
   OpcBrowseResponse,
   OpcIndexedSearchMatchResponse,
+  OpcLiveSearchMatch,
   OpcReadResponse,
   OpcSearchIndexResponse,
   OpcSearchIndexStatusResponse,
@@ -30,7 +33,16 @@ import type { components } from "../api/schema";
 import { SAMPLE_QUALITY_LABELS, SAMPLE_QUALITY_TONE } from "../lib/enumLabels";
 import { deriveTag } from "../lib/opcTags";
 import { formatExactTime, formatTimeUntil } from "../lib/time";
-import { Badge, Button, ConfirmModal, ErrorBanner, Modal } from "./ui";
+import {
+  Badge,
+  Button,
+  ConfirmModal,
+  ErrorBanner,
+  LoadingOverlay,
+  LoadingStatus,
+  Modal,
+  Spinner,
+} from "./ui";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
 type QualityWarning = {
@@ -59,6 +71,7 @@ type ScopeSnapshot = Omit<ScopeState, "status" | "message">;
 const INDENT_PX = 18;
 const ROOT_SCOPE_KEY = "__root__";
 const BROWSE_PAGE_SIZE = 200;
+const MAX_ROOT_SCOPE_PAGES = 32;
 const SEARCH_MAX_RESULTS = 50;
 const SEARCH_DEBOUNCE_MS = 150;
 
@@ -141,6 +154,79 @@ function hasUsableIndex(
 
 function matchPath(match: OpcIndexedSearchMatchResponse): string {
   return [...match.breadcrumbs, match.display_name].join(" / ");
+}
+
+type RevealSearchMatch = {
+  itemId: string;
+  displayName: string;
+  nodeKey: string | null;
+  breadcrumbs: Array<{
+    displayName: string;
+    nodeKey: string | null;
+  }>;
+};
+
+function revealMatchFromIndexedSearch(
+  match: OpcIndexedSearchMatchResponse,
+): RevealSearchMatch {
+  return {
+    itemId: match.item_id,
+    displayName: match.display_name,
+    nodeKey: null,
+    breadcrumbs: match.breadcrumbs.map((displayName) => ({
+      displayName,
+      nodeKey: null,
+    })),
+  };
+}
+
+function revealMatchFromLiveSearch(
+  match: OpcLiveSearchMatch,
+  scopeRoot?: OpcTagNodeResponse,
+): RevealSearchMatch | null {
+  if (!match.node.item_id) return null;
+  const breadcrumbs = match.breadcrumbs
+    .filter((breadcrumb) => breadcrumb.display_name.trim().length > 0)
+    .map((breadcrumb) => ({
+      displayName: breadcrumb.display_name,
+      nodeKey: breadcrumb.node_key,
+    }));
+  const normalizedBreadcrumbs = scopeRoot
+    ? [
+        {
+          displayName: scopeRoot.display_name,
+          nodeKey: scopeRoot.node_key,
+        },
+        ...breadcrumbs.filter(
+          (breadcrumb) => breadcrumb.nodeKey !== scopeRoot.node_key,
+        ),
+      ]
+    : breadcrumbs;
+  return {
+    itemId: match.node.item_id,
+    displayName: match.node.display_name,
+    nodeKey: match.node.node_key,
+    breadcrumbs: normalizedBreadcrumbs,
+  };
+}
+
+function rootScopeCandidates(
+  nodes: OpcTagNodeResponse[],
+  target: string,
+): OpcTagNodeResponse[] {
+  return nodes
+    .filter((node) => {
+      const itemId = nodeItemId(node);
+      return (
+        nodeCanExpand(node) &&
+        itemId !== null &&
+        (target === itemId || target.startsWith(itemId))
+      );
+    })
+    .sort(
+      (left, right) =>
+        (nodeItemId(right)?.length ?? 0) - (nodeItemId(left)?.length ?? 0),
+    );
 }
 
 type TextRange = [number, number];
@@ -258,28 +344,16 @@ function noSearchMatchesMessage(
 }
 
 function indexBuildButtonLabel(
-  isPending: boolean,
   indexSearchAvailable: boolean,
   state: OpcSearchIndexStatusResponse["state"] | undefined,
 ): string {
-  if (isPending) return "Building…";
   if (indexSearchAvailable) return "Refresh index";
   if (state === "failed") return "Retry build";
   return "Build index";
 }
 
-function autoRefreshButtonLabel(isPending: boolean, enabled: boolean): string {
-  if (isPending) return "Saving…";
+function autoRefreshButtonLabel(enabled: boolean): string {
   return enabled ? "Disable auto-refresh" : "Enable auto-refresh";
-}
-
-function selectionReadButtonLabel(
-  selectionCheckPending: boolean,
-  readPending: boolean,
-): string {
-  if (selectionCheckPending) return "Checking…";
-  if (readPending) return "Reading…";
-  return "Read selected tag";
 }
 
 function autoRefreshErrorMessage(enabled: boolean): string {
@@ -329,6 +403,35 @@ type TreeLevelProps = Readonly<{
   selectedNodeRef: RefObject<HTMLButtonElement | null>;
   disabled: boolean;
 }>;
+
+function scrollSelectedNodeIntoView(
+  viewport: HTMLDivElement | null,
+  selectedNode: HTMLButtonElement | null,
+): boolean {
+  if (!viewport || !selectedNode) return false;
+
+  const viewportRect = viewport.getBoundingClientRect();
+  const selectedRect = selectedNode.getBoundingClientRect();
+  const visibleTop = viewportRect.top + viewport.clientTop + 4;
+  const visibleBottom =
+    viewportRect.top + viewport.clientTop + viewport.clientHeight - 4;
+
+  if (selectedRect.top < visibleTop) {
+    viewport.scrollTop -= visibleTop - selectedRect.top;
+  } else if (selectedRect.bottom > visibleBottom) {
+    viewport.scrollTop += selectedRect.bottom - visibleBottom;
+  }
+
+  const settledViewportRect = viewport.getBoundingClientRect();
+  const settledSelectedRect = selectedNode.getBoundingClientRect();
+  const settledVisibleTop = settledViewportRect.top + viewport.clientTop + 4;
+  const settledVisibleBottom =
+    settledViewportRect.top + viewport.clientTop + viewport.clientHeight - 4;
+  return (
+    settledSelectedRect.top >= settledVisibleTop &&
+    settledSelectedRect.bottom <= settledVisibleBottom
+  );
+}
 
 type TreeNodeRowProps = Readonly<{
   node: OpcTagNodeResponse;
@@ -490,12 +593,11 @@ function TreeLevel({
 
   if (state.status === "loading" && state.nodes.length === 0) {
     return (
-      <div
+      <LoadingStatus
+        message="Loading…"
+        size="sm"
         className="py-1 text-xs text-slate-500"
-        style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
-      >
-        Loading…
-      </div>
+      />
     );
   }
   if (state.status === "error" && state.nodes.length === 0) {
@@ -564,6 +666,7 @@ function TreeLevel({
           className="py-1 text-xs text-blue-300 hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
           style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
         >
+          {state.status === "loading-more" && <Spinner size="sm" />}
           {state.status === "loading-more" ? "Loading more…" : "Load more"}
         </button>
       )}
@@ -669,47 +772,50 @@ function IndexControls({
             indexStatus?.state === "refreshing" ||
             indexStatus?.state === "deleting"
           }
+          loading={refreshPending}
           onClick={onRefresh}
         >
-          {indexBuildButtonLabel(
-            refreshPending,
-            indexSearchAvailable,
-            indexStatus?.state,
-          )}
+          {indexBuildButtonLabel(indexSearchAvailable, indexStatus?.state)}
         </Button>
         {canCancelBuild && (
-          <Button type="button" disabled={controlPending} onClick={onCancel}>
-            {controlPending ? "Cancelling…" : "Cancel build"}
+          <Button
+            type="button"
+            loading={controlPending}
+            disabled={controlPending}
+            onClick={onCancel}
+          >
+            Cancel build
           </Button>
         )}
         {indexStatus?.state === "deleting" && (
-          <output className="text-xs text-amber-300">
-            Deleting the tag index… browse and direct reads remain available.
-          </output>
+          <LoadingStatus
+            message="Deleting the tag index… browse and direct reads remain available."
+            size="sm"
+            className="text-xs text-amber-300"
+          />
         )}
         {canDelete && (
           <>
             {indexStatus.active_generation > 0 && (
               <Button
                 type="button"
+                loading={autoRefreshPending}
                 disabled={autoRefreshPending || deletePending}
                 onClick={() =>
                   onSetAutoRefresh(!indexStatus.auto_refresh_enabled)
                 }
               >
-                {autoRefreshButtonLabel(
-                  autoRefreshPending,
-                  indexStatus.auto_refresh_enabled,
-                )}
+                {autoRefreshButtonLabel(indexStatus.auto_refresh_enabled)}
               </Button>
             )}
             <Button
               type="button"
               variant="danger"
+              loading={deletePending}
               disabled={deleteDisabled}
               onClick={onDelete}
             >
-              {deletePending ? "Deleting…" : "Delete index"}
+              Delete index
             </Button>
           </>
         )}
@@ -910,11 +1016,12 @@ function SelectedTagPanel({
           </p>
 
           <div className="mt-3 flex items-center gap-2">
-            <Button disabled={busy} onClick={onRead}>
-              {selectionReadButtonLabel(
-                selectionCheckPending,
-                testConnection.isPending,
-              )}
+            <Button
+              loading={selectionCheckPending || testConnection.isPending}
+              disabled={busy}
+              onClick={onRead}
+            >
+              Read selected tag
             </Button>
             {testConnection.isSuccess && testConnection.data && (
               <span className="text-xs text-slate-300">
@@ -937,8 +1044,13 @@ function SelectedTagPanel({
 
           <div className="mt-3 flex justify-end gap-2">
             <Button onClick={onCancel}>Cancel</Button>
-            <Button variant="primary" disabled={busy} onClick={onConfirm}>
-              {selectionCheckPending ? "Checking…" : "Select tag"}
+            <Button
+              variant="primary"
+              loading={selectionCheckPending}
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              Select tag
             </Button>
           </div>
         </>
@@ -951,23 +1063,39 @@ type TagBrowserContentProps = Readonly<{
   indexControls: IndexControlsProps;
   searchResults: IndexedSearchResultsProps;
   tree: TreeLevelProps;
+  treeViewportRef: RefObject<HTMLDivElement | null>;
   selectedTagPanel: SelectedTagPanelProps;
+  initializationPending: boolean;
+  initializationMessage: string;
 }>;
 
 function TagBrowserContent({
   indexControls,
   searchResults,
   tree,
+  treeViewportRef,
   selectedTagPanel,
+  initializationPending,
+  initializationMessage,
 }: TagBrowserContentProps) {
   return (
     <>
       <IndexControls {...indexControls} />
       <IndexedSearchResults {...searchResults} />
-      <div className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
-        <TreeLevel {...tree} />
-      </div>
-      <SelectedTagPanel {...selectedTagPanel} />
+      <LoadingOverlay
+        active={initializationPending}
+        message={initializationMessage}
+        className="mt-3 min-h-[24rem]"
+      >
+        <div
+          ref={treeViewportRef}
+          data-testid="opc-tag-tree-viewport"
+          className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2"
+        >
+          <TreeLevel {...tree} />
+        </div>
+        <SelectedTagPanel {...selectedTagPanel} />
+      </LoadingOverlay>
     </>
   );
 }
@@ -979,8 +1107,9 @@ function TagBrowserContent({
  * round-trips the gateway's opaque session, node, and page tokens; display names are never
  * parsed into paths. When the user confirms a selection, the active template's
  * process-variable suffix is applied to the selected node's exact original ItemID, after a
- * fresh quality check reads that same ItemID. Reopening at a saved tag uses indexed-search
- * breadcrumbs to reveal and scroll the matching node when the server supports it.
+ * fresh quality check reads that same ItemID. Reopening at a saved tag uses persistent
+ * indexed-search breadcrumbs when available and falls back to a bounded live search before
+ * selecting an unrelated root item.
  */
 export function OpcTagBrowserModal({
   bridgeHost,
@@ -1015,6 +1144,11 @@ export function OpcTagBrowserModal({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const selectedNodeRef = useRef<HTMLButtonElement | null>(null);
+  const treeViewportRef = useRef<HTMLDivElement | null>(null);
+  const [initializationPending, setInitializationPending] = useState(
+    Boolean(opcServer),
+  );
+  const [initializationSettled, setInitializationSettled] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const closedSessionIdsRef = useRef<Set<string>>(new Set());
   const disposedRef = useRef(false);
@@ -1143,6 +1277,7 @@ export function OpcTagBrowserModal({
     parentNodeKey: string | null,
     displayName: string,
     expectedItemId: string | null,
+    expectedNodeKey: string | null,
     isCancelled: () => boolean,
   ): Promise<OpcTagNodeResponse | null> {
     let state = scopeStateRef.current[scopeKey(parentNodeKey)];
@@ -1156,7 +1291,8 @@ export function OpcTagBrowserModal({
       const match = state.nodes.find((node) => {
         return (
           node.display_name === displayName &&
-          (!expectedItemId || nodeItemId(node) === expectedItemId)
+          (!expectedItemId || nodeItemId(node) === expectedItemId) &&
+          (!expectedNodeKey || node.node_key === expectedNodeKey)
         );
       });
       if (match) return match;
@@ -1171,21 +1307,22 @@ export function OpcTagBrowserModal({
     return null;
   }
 
-  async function revealIndexedSearchMatch(
-    match: OpcIndexedSearchMatchResponse,
+  async function revealSearchMatch(
+    match: RevealSearchMatch,
     isCancelled: () => boolean,
   ): Promise<boolean> {
     let parentNodeKey: string | null = null;
     const breadcrumbs =
-      match.breadcrumbs.at(-1) === match.display_name
+      match.breadcrumbs.at(-1)?.displayName === match.displayName
         ? match.breadcrumbs.slice(0, -1)
         : match.breadcrumbs;
 
     for (const breadcrumb of breadcrumbs) {
       const branch = await ensureNodeByName(
         parentNodeKey,
-        breadcrumb,
+        breadcrumb.displayName,
         null,
+        breadcrumb.nodeKey,
         isCancelled,
       );
       if (!branch || !nodeCanExpand(branch)) return false;
@@ -1200,13 +1337,157 @@ export function OpcTagBrowserModal({
 
     const node = await ensureNodeByName(
       parentNodeKey,
-      match.display_name,
-      match.item_id,
+      match.displayName,
+      match.itemId,
+      match.nodeKey,
       isCancelled,
     );
     if (!node || !nodeItemId(node)) return false;
-    setSelectedNode({ nodeKey: node.node_key, itemId: match.item_id });
+    setSelectedNode({ nodeKey: node.node_key, itemId: match.itemId });
     return true;
+  }
+
+  async function revealRootScopeCandidate(
+    candidate: OpcTagNodeResponse,
+    target: string,
+    isCancelled: () => boolean,
+    controller: AbortController,
+  ): Promise<boolean> {
+    try {
+      const liveMatches = await searchOpcLive({
+        bridgeHost,
+        opcServer,
+        query: target,
+        sessionId: sessionIdRef.current ?? undefined,
+        scopeNodeKey: candidate.node_key,
+        maxResults: 1,
+        signal: controller.signal,
+      });
+      const liveMatch = liveMatches.find(
+        (match) => match.node.item_id === target,
+      );
+      if (!liveMatch || isCancelled() || controller.signal.aborted) {
+        return false;
+      }
+      const revealMatch = revealMatchFromLiveSearch(liveMatch, candidate);
+      return revealMatch ? revealSearchMatch(revealMatch, isCancelled) : false;
+    } catch {
+      return false;
+    }
+  }
+
+  async function revealWithinRootScopes(
+    initialRootNodes: OpcTagNodeResponse[],
+    target: string,
+    isCancelled: () => boolean,
+    controller: AbortController,
+  ): Promise<{ revealed: boolean; foundScope: boolean }> {
+    let state = scopeStateRef.current[ROOT_SCOPE_KEY] ?? {
+      status: "loaded" as const,
+      nodes: initialRootNodes,
+      nextPageToken: null,
+      complete: true,
+      warning: null,
+    };
+    const attemptedScopes = new Set<string>();
+    let pagesRead = 0;
+
+    while (!isCancelled() && !controller.signal.aborted) {
+      const candidates = rootScopeCandidates(state.nodes, target).filter(
+        (candidate) => !attemptedScopes.has(candidate.node_key),
+      );
+      for (const candidate of candidates) {
+        if (isCancelled() || controller.signal.aborted) break;
+        attemptedScopes.add(candidate.node_key);
+        if (
+          await revealRootScopeCandidate(
+            candidate,
+            target,
+            isCancelled,
+            controller,
+          )
+        ) {
+          return { revealed: true, foundScope: true };
+        }
+      }
+
+      if (!state.nextPageToken || pagesRead >= MAX_ROOT_SCOPE_PAGES) {
+        return {
+          revealed: false,
+          foundScope: attemptedScopes.size > 0,
+        };
+      }
+      const snapshot = await load(null, {
+        pageToken: state.nextPageToken,
+        append: true,
+      });
+      if (!snapshot) {
+        return {
+          revealed: false,
+          foundScope: attemptedScopes.size > 0,
+        };
+      }
+      state = { status: "loaded", ...snapshot };
+      pagesRead += 1;
+    }
+
+    return { revealed: false, foundScope: attemptedScopes.size > 0 };
+  }
+
+  async function revealFromIndexedSearch(
+    target: string,
+    isCancelled: () => boolean,
+    controller: AbortController,
+  ): Promise<boolean> {
+    try {
+      const result = await indexedSearch.mutateAsync({
+        bridgeHost,
+        opcServer,
+        query: target,
+        matchMode: "exact",
+        maxResults: 1,
+        signal: controller.signal,
+      });
+      const match = result.matches.find(
+        (candidate) => candidate.item_id === target,
+      );
+      if (!match || isCancelled() || controller.signal.aborted) {
+        return false;
+      }
+      return revealSearchMatch(
+        revealMatchFromIndexedSearch(match),
+        isCancelled,
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async function revealFromUnscopedLiveSearch(
+    target: string,
+    isCancelled: () => boolean,
+    controller: AbortController,
+  ): Promise<boolean> {
+    try {
+      const liveMatches = await searchOpcLive({
+        bridgeHost,
+        opcServer,
+        query: target,
+        sessionId: sessionIdRef.current ?? undefined,
+        maxResults: 1,
+        signal: controller.signal,
+      });
+      const liveMatch = liveMatches.find(
+        (candidate) => candidate.node.item_id === target,
+      );
+      if (!liveMatch || isCancelled() || controller.signal.aborted) {
+        return false;
+      }
+      const revealMatch = revealMatchFromLiveSearch(liveMatch);
+      return revealMatch ? revealSearchMatch(revealMatch, isCancelled) : false;
+    } catch {
+      return false;
+    }
   }
 
   async function revealInitialTag(
@@ -1220,24 +1501,27 @@ export function OpcTagBrowserModal({
       setSelectedNode({ nodeKey: rootMatch.node_key, itemId: target });
       return true;
     }
-    if (!canUseIndexedSearch) return false;
 
     const controller = new AbortController();
     searchAbortRef.current = controller;
     try {
-      const result = await indexedSearch.mutateAsync({
-        bridgeHost,
-        opcServer,
-        query: target,
-        matchMode: "exact",
-        maxResults: 1,
-        signal: controller.signal,
-      });
-      const match = result.matches.find(
-        (candidate) => candidate.item_id === target,
+      if (
+        canUseIndexedSearch &&
+        (await revealFromIndexedSearch(target, isCancelled, controller))
+      ) {
+        return true;
+      }
+
+      if (isCancelled() || controller.signal.aborted) return false;
+      const scoped = await revealWithinRootScopes(
+        rootNodes,
+        target,
+        isCancelled,
+        controller,
       );
-      if (!match || isCancelled() || controller.signal.aborted) return false;
-      return revealIndexedSearchMatch(match, isCancelled);
+      if (scoped.revealed || scoped.foundScope) return scoped.revealed;
+
+      return revealFromUnscopedLiveSearch(target, isCancelled, controller);
     } catch {
       return false;
     } finally {
@@ -1250,38 +1534,50 @@ export function OpcTagBrowserModal({
   useEffect(() => {
     if (!opcServer) return;
     let cancelled = false;
+    setInitializationPending(true);
+    setInitializationSettled(false);
     disposedRef.current = false;
     async function initialize() {
-      const root = await load(null);
-      if (cancelled || !root) return;
+      try {
+        const root = await load(null);
+        if (cancelled || !root) return;
 
-      const target = initialTag;
-      let revealStatus = searchIndexStatus.data;
-      if (target && !revealStatus && !searchIndexStatus.isError) {
-        revealStatus = (await searchIndexStatus.refetch()).data;
-      }
-      if (
-        target &&
-        hasUsableIndex(revealStatus) &&
-        (await revealInitialTag(root.nodes, target, true, () => cancelled))
-      ) {
-        return;
-      }
+        const target = initialTag;
+        let revealStatus = searchIndexStatus.data;
+        if (target && !revealStatus && !searchIndexStatus.isError) {
+          revealStatus = (await searchIndexStatus.refetch()).data;
+        }
+        if (
+          target &&
+          (await revealInitialTag(
+            root.nodes,
+            target,
+            hasUsableIndex(revealStatus),
+            () => cancelled,
+          ))
+        ) {
+          return;
+        }
 
-      if (!cancelled) {
-        const firstSelectable = root.nodes.find(nodeCanSelect);
-        const firstItemId = firstSelectable
-          ? nodeItemId(firstSelectable)
-          : null;
-        setExpanded(new Set());
-        setSelectedNode(
-          firstSelectable && firstItemId
-            ? {
-                nodeKey: firstSelectable.node_key,
-                itemId: firstItemId,
-              }
-            : null,
-        );
+        if (!cancelled) {
+          const firstSelectable = root.nodes.find(nodeCanSelect);
+          const firstItemId = firstSelectable
+            ? nodeItemId(firstSelectable)
+            : null;
+          setExpanded(new Set());
+          setSelectedNode(
+            firstSelectable && firstItemId
+              ? {
+                  nodeKey: firstSelectable.node_key,
+                  itemId: firstItemId,
+                }
+              : null,
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setInitializationSettled(true);
+        }
       }
     }
     void initialize();
@@ -1310,9 +1606,39 @@ export function OpcTagBrowserModal({
     setActiveSearchIndex(-1);
   }, [indexStatus?.state]);
 
-  useEffect(() => {
-    selectedNodeRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedNode, scopeState, expanded]);
+  useLayoutEffect(() => {
+    if (!initializationPending || !initializationSettled) return;
+    if (!selectedNode) {
+      setInitializationPending(false);
+      return;
+    }
+
+    let frame = 0;
+    let attempts = 0;
+    const settle = () => {
+      attempts += 1;
+      if (
+        scrollSelectedNodeIntoView(
+          treeViewportRef.current,
+          selectedNodeRef.current,
+        )
+      ) {
+        setInitializationPending(false);
+        return;
+      }
+      if (attempts < 60) {
+        frame = window.requestAnimationFrame(settle);
+      }
+    };
+    frame = window.requestAnimationFrame(settle);
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    initializationPending,
+    initializationSettled,
+    selectedNode,
+    scopeState,
+    expanded,
+  ]);
 
   function toggle(node: OpcTagNodeResponse) {
     if (!nodeCanExpand(node)) return;
@@ -1661,7 +1987,7 @@ export function OpcTagBrowserModal({
             className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
           />
           {indexedSearch.isPending && (
-            <Button type="button" onClick={cancelActiveSearch}>
+            <Button type="button" loading onClick={cancelActiveSearch}>
               Cancel
             </Button>
           )}
@@ -1714,6 +2040,7 @@ export function OpcTagBrowserModal({
             selectedNodeRef,
             disabled: busy,
           }}
+          treeViewportRef={treeViewportRef}
           selectedTagPanel={{
             selectedTag,
             busy,
@@ -1726,6 +2053,10 @@ export function OpcTagBrowserModal({
               if (selectedTag) void confirmTag(selectedTag);
             },
           }}
+          initializationPending={initializationPending}
+          initializationMessage={
+            initialTag.trim() ? "Locating saved tag…" : "Loading tags…"
+          }
         />
       </>
     );
