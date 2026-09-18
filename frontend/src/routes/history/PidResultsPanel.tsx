@@ -156,6 +156,7 @@ function ResultRow({
         <td className="px-4 py-3">
           <Button
             variant="primary"
+            loading={isWriting}
             disabled={!canWrite || writePending}
             title={
               isValid

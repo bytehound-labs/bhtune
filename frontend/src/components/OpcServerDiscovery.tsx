@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useOpcServers } from "../api/opc";
 import { userFacingErrorMessage } from "../api/errors";
-import { Button, Modal } from "./ui";
+import { Button, LoadingStatus, Modal } from "./ui";
 
 interface OpcServerDiscoveryProps {
   readonly bridgeHost: string;
@@ -26,7 +26,12 @@ export function OpcServerDiscovery({
   const servers = useOpcServers(bridgeHost, open);
   const serverContent = (() => {
     if (servers.isPending || servers.isFetching) {
-      return <p className="text-sm text-slate-400">Connecting…</p>;
+      return (
+        <LoadingStatus
+          message="Connecting…"
+          className="text-sm text-slate-400"
+        />
+      );
     }
 
     if (servers.isError) {
@@ -66,8 +71,12 @@ export function OpcServerDiscovery({
 
   return (
     <div className="mt-1">
-      <Button onClick={() => setOpen(true)} disabled={servers.isFetching}>
-        {servers.isFetching ? "Loading servers…" : "Browse servers"}
+      <Button
+        onClick={() => setOpen(true)}
+        loading={servers.isFetching}
+        disabled={servers.isFetching}
+      >
+        Browse servers
       </Button>
 
       {open && (

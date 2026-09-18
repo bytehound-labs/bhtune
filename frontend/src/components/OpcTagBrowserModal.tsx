@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -32,7 +33,16 @@ import type { components } from "../api/schema";
 import { SAMPLE_QUALITY_LABELS, SAMPLE_QUALITY_TONE } from "../lib/enumLabels";
 import { deriveTag } from "../lib/opcTags";
 import { formatExactTime, formatTimeUntil } from "../lib/time";
-import { Badge, Button, ConfirmModal, ErrorBanner, Modal } from "./ui";
+import {
+  Badge,
+  Button,
+  ConfirmModal,
+  ErrorBanner,
+  LoadingOverlay,
+  LoadingStatus,
+  Modal,
+  Spinner,
+} from "./ui";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
 type QualityWarning = {
@@ -315,28 +325,16 @@ function noSearchMatchesMessage(
 }
 
 function indexBuildButtonLabel(
-  isPending: boolean,
   indexSearchAvailable: boolean,
   state: OpcSearchIndexStatusResponse["state"] | undefined,
 ): string {
-  if (isPending) return "Building…";
   if (indexSearchAvailable) return "Refresh index";
   if (state === "failed") return "Retry build";
   return "Build index";
 }
 
-function autoRefreshButtonLabel(isPending: boolean, enabled: boolean): string {
-  if (isPending) return "Saving…";
+function autoRefreshButtonLabel(enabled: boolean): string {
   return enabled ? "Disable auto-refresh" : "Enable auto-refresh";
-}
-
-function selectionReadButtonLabel(
-  selectionCheckPending: boolean,
-  readPending: boolean,
-): string {
-  if (selectionCheckPending) return "Checking…";
-  if (readPending) return "Reading…";
-  return "Read selected tag";
 }
 
 function autoRefreshErrorMessage(enabled: boolean): string {
@@ -386,6 +384,35 @@ type TreeLevelProps = Readonly<{
   selectedNodeRef: RefObject<HTMLButtonElement | null>;
   disabled: boolean;
 }>;
+
+function scrollSelectedNodeIntoView(
+  viewport: HTMLDivElement | null,
+  selectedNode: HTMLButtonElement | null,
+): boolean {
+  if (!viewport || !selectedNode) return false;
+
+  const viewportRect = viewport.getBoundingClientRect();
+  const selectedRect = selectedNode.getBoundingClientRect();
+  const visibleTop = viewportRect.top + viewport.clientTop + 4;
+  const visibleBottom =
+    viewportRect.top + viewport.clientTop + viewport.clientHeight - 4;
+
+  if (selectedRect.top < visibleTop) {
+    viewport.scrollTop -= visibleTop - selectedRect.top;
+  } else if (selectedRect.bottom > visibleBottom) {
+    viewport.scrollTop += selectedRect.bottom - visibleBottom;
+  }
+
+  const settledViewportRect = viewport.getBoundingClientRect();
+  const settledSelectedRect = selectedNode.getBoundingClientRect();
+  const settledVisibleTop = settledViewportRect.top + viewport.clientTop + 4;
+  const settledVisibleBottom =
+    settledViewportRect.top + viewport.clientTop + viewport.clientHeight - 4;
+  return (
+    settledSelectedRect.top >= settledVisibleTop &&
+    settledSelectedRect.bottom <= settledVisibleBottom
+  );
+}
 
 type TreeNodeRowProps = Readonly<{
   node: OpcTagNodeResponse;
@@ -547,12 +574,11 @@ function TreeLevel({
 
   if (state.status === "loading" && state.nodes.length === 0) {
     return (
-      <div
+      <LoadingStatus
+        message="Loading…"
+        size="sm"
         className="py-1 text-xs text-slate-500"
-        style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
-      >
-        Loading…
-      </div>
+      />
     );
   }
   if (state.status === "error" && state.nodes.length === 0) {
@@ -621,6 +647,7 @@ function TreeLevel({
           className="py-1 text-xs text-blue-300 hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-50"
           style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
         >
+          {state.status === "loading-more" && <Spinner size="sm" />}
           {state.status === "loading-more" ? "Loading more…" : "Load more"}
         </button>
       )}
@@ -726,47 +753,50 @@ function IndexControls({
             indexStatus?.state === "refreshing" ||
             indexStatus?.state === "deleting"
           }
+          loading={refreshPending}
           onClick={onRefresh}
         >
-          {indexBuildButtonLabel(
-            refreshPending,
-            indexSearchAvailable,
-            indexStatus?.state,
-          )}
+          {indexBuildButtonLabel(indexSearchAvailable, indexStatus?.state)}
         </Button>
         {canCancelBuild && (
-          <Button type="button" disabled={controlPending} onClick={onCancel}>
-            {controlPending ? "Cancelling…" : "Cancel build"}
+          <Button
+            type="button"
+            loading={controlPending}
+            disabled={controlPending}
+            onClick={onCancel}
+          >
+            Cancel build
           </Button>
         )}
         {indexStatus?.state === "deleting" && (
-          <output className="text-xs text-amber-300">
-            Deleting the tag index… browse and direct reads remain available.
-          </output>
+          <LoadingStatus
+            message="Deleting the tag index… browse and direct reads remain available."
+            size="sm"
+            className="text-xs text-amber-300"
+          />
         )}
         {canDelete && (
           <>
             {indexStatus.active_generation > 0 && (
               <Button
                 type="button"
+                loading={autoRefreshPending}
                 disabled={autoRefreshPending || deletePending}
                 onClick={() =>
                   onSetAutoRefresh(!indexStatus.auto_refresh_enabled)
                 }
               >
-                {autoRefreshButtonLabel(
-                  autoRefreshPending,
-                  indexStatus.auto_refresh_enabled,
-                )}
+                {autoRefreshButtonLabel(indexStatus.auto_refresh_enabled)}
               </Button>
             )}
             <Button
               type="button"
               variant="danger"
+              loading={deletePending}
               disabled={deleteDisabled}
               onClick={onDelete}
             >
-              {deletePending ? "Deleting…" : "Delete index"}
+              Delete index
             </Button>
           </>
         )}
@@ -967,11 +997,12 @@ function SelectedTagPanel({
           </p>
 
           <div className="mt-3 flex items-center gap-2">
-            <Button disabled={busy} onClick={onRead}>
-              {selectionReadButtonLabel(
-                selectionCheckPending,
-                testConnection.isPending,
-              )}
+            <Button
+              loading={selectionCheckPending || testConnection.isPending}
+              disabled={busy}
+              onClick={onRead}
+            >
+              Read selected tag
             </Button>
             {testConnection.isSuccess && testConnection.data && (
               <span className="text-xs text-slate-300">
@@ -994,8 +1025,13 @@ function SelectedTagPanel({
 
           <div className="mt-3 flex justify-end gap-2">
             <Button onClick={onCancel}>Cancel</Button>
-            <Button variant="primary" disabled={busy} onClick={onConfirm}>
-              {selectionCheckPending ? "Checking…" : "Select tag"}
+            <Button
+              variant="primary"
+              loading={selectionCheckPending}
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              Select tag
             </Button>
           </div>
         </>
@@ -1008,6 +1044,7 @@ type TagBrowserContentProps = Readonly<{
   indexControls: IndexControlsProps;
   searchResults: IndexedSearchResultsProps;
   tree: TreeLevelProps;
+  treeViewportRef: RefObject<HTMLDivElement | null>;
   selectedTagPanel: SelectedTagPanelProps;
 }>;
 
@@ -1015,13 +1052,18 @@ function TagBrowserContent({
   indexControls,
   searchResults,
   tree,
+  treeViewportRef,
   selectedTagPanel,
 }: TagBrowserContentProps) {
   return (
     <>
       <IndexControls {...indexControls} />
       <IndexedSearchResults {...searchResults} />
-      <div className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2">
+      <div
+        ref={treeViewportRef}
+        data-testid="opc-tag-tree-viewport"
+        className="max-h-64 overflow-y-auto rounded-md border border-slate-800 bg-slate-950 p-2"
+      >
         <TreeLevel {...tree} />
       </div>
       <SelectedTagPanel {...selectedTagPanel} />
@@ -1073,6 +1115,11 @@ export function OpcTagBrowserModal({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
   const selectedNodeRef = useRef<HTMLButtonElement | null>(null);
+  const treeViewportRef = useRef<HTMLDivElement | null>(null);
+  const [initializationPending, setInitializationPending] = useState(
+    Boolean(opcServer),
+  );
+  const [initializationSettled, setInitializationSettled] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const closedSessionIdsRef = useRef<Set<string>>(new Set());
   const disposedRef = useRef(false);
@@ -1441,42 +1488,50 @@ export function OpcTagBrowserModal({
   useEffect(() => {
     if (!opcServer) return;
     let cancelled = false;
+    setInitializationPending(true);
+    setInitializationSettled(false);
     disposedRef.current = false;
     async function initialize() {
-      const root = await load(null);
-      if (cancelled || !root) return;
+      try {
+        const root = await load(null);
+        if (cancelled || !root) return;
 
-      const target = initialTag;
-      let revealStatus = searchIndexStatus.data;
-      if (target && !revealStatus && !searchIndexStatus.isError) {
-        revealStatus = (await searchIndexStatus.refetch()).data;
-      }
-      if (
-        target &&
-        (await revealInitialTag(
-          root.nodes,
-          target,
-          hasUsableIndex(revealStatus),
-          () => cancelled,
-        ))
-      ) {
-        return;
-      }
+        const target = initialTag;
+        let revealStatus = searchIndexStatus.data;
+        if (target && !revealStatus && !searchIndexStatus.isError) {
+          revealStatus = (await searchIndexStatus.refetch()).data;
+        }
+        if (
+          target &&
+          (await revealInitialTag(
+            root.nodes,
+            target,
+            hasUsableIndex(revealStatus),
+            () => cancelled,
+          ))
+        ) {
+          return;
+        }
 
-      if (!cancelled) {
-        const firstSelectable = root.nodes.find(nodeCanSelect);
-        const firstItemId = firstSelectable
-          ? nodeItemId(firstSelectable)
-          : null;
-        setExpanded(new Set());
-        setSelectedNode(
-          firstSelectable && firstItemId
-            ? {
-                nodeKey: firstSelectable.node_key,
-                itemId: firstItemId,
-              }
-            : null,
-        );
+        if (!cancelled) {
+          const firstSelectable = root.nodes.find(nodeCanSelect);
+          const firstItemId = firstSelectable
+            ? nodeItemId(firstSelectable)
+            : null;
+          setExpanded(new Set());
+          setSelectedNode(
+            firstSelectable && firstItemId
+              ? {
+                  nodeKey: firstSelectable.node_key,
+                  itemId: firstItemId,
+                }
+              : null,
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setInitializationSettled(true);
+        }
       }
     }
     void initialize();
@@ -1505,9 +1560,39 @@ export function OpcTagBrowserModal({
     setActiveSearchIndex(-1);
   }, [indexStatus?.state]);
 
-  useEffect(() => {
-    selectedNodeRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedNode, scopeState, expanded]);
+  useLayoutEffect(() => {
+    if (!initializationPending || !initializationSettled) return;
+    if (!selectedNode) {
+      setInitializationPending(false);
+      return;
+    }
+
+    let frame = 0;
+    let attempts = 0;
+    const settle = () => {
+      attempts += 1;
+      if (
+        scrollSelectedNodeIntoView(
+          treeViewportRef.current,
+          selectedNodeRef.current,
+        )
+      ) {
+        setInitializationPending(false);
+        return;
+      }
+      if (attempts < 60) {
+        frame = window.requestAnimationFrame(settle);
+      }
+    };
+    frame = window.requestAnimationFrame(settle);
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    initializationPending,
+    initializationSettled,
+    selectedNode,
+    scopeState,
+    expanded,
+  ]);
 
   function toggle(node: OpcTagNodeResponse) {
     if (!nodeCanExpand(node)) return;
@@ -1856,7 +1941,7 @@ export function OpcTagBrowserModal({
             className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
           />
           {indexedSearch.isPending && (
-            <Button type="button" onClick={cancelActiveSearch}>
+            <Button type="button" loading onClick={cancelActiveSearch}>
               Cancel
             </Button>
           )}
@@ -1909,6 +1994,7 @@ export function OpcTagBrowserModal({
             selectedNodeRef,
             disabled: busy,
           }}
+          treeViewportRef={treeViewportRef}
           selectedTagPanel={{
             selectedTag,
             busy,
@@ -1937,7 +2023,13 @@ export function OpcTagBrowserModal({
         widthClassName="max-w-2xl"
         documentationId="new-tune.opc-tag-browser"
       >
-        {modalContent}
+        <LoadingOverlay
+          active={initializationPending}
+          message={initialTag.trim() ? "Locating saved tag…" : "Loading tags…"}
+          className="min-h-[24rem]"
+        >
+          {modalContent}
+        </LoadingOverlay>
       </Modal>
       {deleteConfirmationOpen && (
         <ConfirmModal

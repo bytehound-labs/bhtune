@@ -47,12 +47,89 @@ const buttonVariants = {
   neutral: "border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800",
 } as const;
 
+type SpinnerSize = "sm" | "md" | "lg";
+
+const spinnerSizes: Record<SpinnerSize, string> = {
+  sm: "h-3.5 w-3.5 border-2",
+  md: "h-5 w-5 border-2",
+  lg: "h-8 w-8 border-[3px]",
+};
+
+/** A decorative CSS-only spinner. Pair it with visible status text for accessibility. */
+export function Spinner({ size = "md" }: { readonly size?: SpinnerSize }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block shrink-0 rounded-full border-slate-600 border-t-emerald-400 motion-safe:animate-spin motion-reduce:animate-none ${spinnerSizes[size]}`}
+    />
+  );
+}
+
+/** An accessible loading message for inline, panel, and dialog operations. */
+export function LoadingStatus({
+  message,
+  size = "md",
+  className = "",
+}: {
+  readonly message: string;
+  readonly size?: SpinnerSize;
+  readonly className?: string;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      className={`flex items-center gap-2 ${className}`}
+    >
+      <Spinner size={size} />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+/**
+ * Covers an active region while keeping its children mounted for layout measurement and
+ * preserving their state. The opaque layer blocks pointer interaction and removes the covered
+ * subtree from the accessibility tree until the operation settles.
+ */
+export function LoadingOverlay({
+  active,
+  message,
+  children,
+  className = "",
+}: {
+  readonly active: boolean;
+  readonly message: string;
+  readonly children: ReactNode;
+  readonly className?: string;
+}) {
+  return (
+    <div className={`relative ${className}`} aria-busy={active || undefined}>
+      <div
+        aria-hidden={active || undefined}
+        className={active ? "pointer-events-none select-none" : undefined}
+      >
+        {children}
+      </div>
+      {active && (
+        <LoadingStatus
+          message={message}
+          size="lg"
+          className="absolute inset-0 z-20 justify-center bg-slate-900/95 px-4 text-sm text-slate-300"
+        />
+      )}
+    </div>
+  );
+}
+
 export function Button({
   children,
   onClick,
   type = "button",
   variant = "neutral",
   disabled = false,
+  loading = false,
   title,
   buttonRef,
 }: {
@@ -61,6 +138,7 @@ export function Button({
   readonly type?: "button" | "submit";
   readonly variant?: keyof typeof buttonVariants;
   readonly disabled?: boolean;
+  readonly loading?: boolean;
   readonly title?: string;
   readonly buttonRef?: RefObject<HTMLButtonElement | null>;
 }) {
@@ -68,12 +146,16 @@ export function Button({
     <button
       type={type}
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       title={title}
       ref={buttonRef}
       className={`rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${buttonVariants[variant]}`}
     >
-      {children}
+      <span className="inline-flex items-center gap-2">
+        {loading && <Spinner size="sm" />}
+        {children}
+      </span>
     </button>
   );
 }
@@ -153,8 +235,8 @@ export function LoadingState({
   readonly message?: string;
 }) {
   return (
-    <div className="rounded-md border border-slate-700 bg-slate-900 px-4 py-8 text-center text-sm text-slate-400">
-      {message}
+    <div className="rounded-md border border-slate-700 bg-slate-900 px-4 py-8 text-sm text-slate-400">
+      <LoadingStatus message={message} className="justify-center" />
     </div>
   );
 }

@@ -736,6 +736,14 @@ logic to replace any final component while preserving the tag path. A new shared
 ui.tsx`) backs the tag browser and is reusable for future modals: closes on Escape, a
 backdrop click, or an explicit close button.
 
+Saved-tag restoration is visually atomic: `OpcTagBrowserModal` keeps the tree mounted for
+measurement, but covers it with the shared `LoadingOverlay` until the exact saved ItemID is
+selected, its gateway-provided path is expanded, and the row is verified inside the inner tree
+viewport. Root errors, unavailable tags, cancellation, and fallback selection must settle this
+phase rather than leave a loading state stuck. Prefer the shared `Spinner`, `LoadingStatus`,
+`LoadingOverlay`, and `Button` loading primitives over local spinners or text-only pending
+feedback when adding related asynchronous UI.
+
 Manually verified against a real running `bhtune-server` plus a temporary, deliberately
 not-committed mock gRPC gateway — a path-aware fake `Bridge` service bound to
 `127.0.0.1:7600`, since the crate's existing `smoke_tests::MockBridgeService` ignores
@@ -4267,6 +4275,13 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
     sample persistence, and total tick work. These diagnostics are intentionally advisory: they
     do not invalidate otherwise finite results, abort a run, or block a valid PID write until
     field evidence supports a stronger policy.
+24. **`[fixed, no flag needed]` Saved OPC tag restoration must settle before it is shown.**
+    `OpcTagBrowserModal` leaves the tree mounted so layout can be measured, but keeps the
+    asynchronous root load, search fallback, breadcrumb expansion, exact selection, and inner
+    viewport scroll behind a shared blocking overlay. The overlay is cleared only after the
+    selected row is rendered and fully visible; root errors, unavailable tags, cancellation, and
+    fallback selection must all clear it deterministically. Reuse shared loading primitives
+    instead of introducing one-off spinners or text-only waits for equivalent frontend work.
 
 ## Documentation contract (`docs-contract`)
 

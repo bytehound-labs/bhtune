@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
  * Regression coverage for the OPC DA server-discovery and tag-browser affordances
@@ -27,6 +27,28 @@ function loopMapping(page: Page) {
 
 function mappingRow(page: Page, label: string) {
   return loopMapping(page).getByRole("group", { name: label, exact: true });
+}
+
+async function expectTreeNodeVisible(
+  node: Locator,
+  treeViewport: Locator,
+): Promise<void> {
+  await expect
+    .poll(() =>
+      node.evaluate((element) => {
+        const viewport = element.closest<HTMLElement>(
+          '[data-testid="opc-tag-tree-viewport"]',
+        );
+        if (!viewport) return false;
+        const nodeRect = element.getBoundingClientRect();
+        const viewportRect = viewport.getBoundingClientRect();
+        const top = viewportRect.top + viewport.clientTop;
+        const bottom = top + viewport.clientHeight;
+        return nodeRect.top >= top && nodeRect.bottom <= bottom;
+      }),
+    )
+    .toBe(true);
+  await expect(treeViewport).toBeVisible();
 }
 
 function browseNode(
@@ -634,6 +656,39 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     ).not.toBeVisible();
   });
 
+  test("shows shared loading feedback while server discovery is pending", async ({
+    page,
+  }) => {
+    let releaseServers: () => void = () => undefined;
+    const serversGate = new Promise<void>((resolve) => {
+      releaseServers = resolve;
+    });
+    await page.route("**/api/opc/servers**", async (route) => {
+      await serversGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ servers: ["Yokogawa.CSHIS_OPC.1"] }),
+      });
+    });
+
+    const browseButton = page.getByRole("button", { name: "Browse servers" });
+    await browseButton.click();
+
+    const dialog = page.getByRole("dialog", {
+      name: "Browse OPC DA servers",
+    });
+    await expect(dialog.getByRole("status")).toContainText("Connecting…");
+    await expect(browseButton).toHaveAttribute("aria-busy", "true");
+    await expect(browseButton).toBeDisabled();
+
+    releaseServers();
+    await expect(
+      dialog.getByRole("button", { name: "Yokogawa.CSHIS_OPC.1" }),
+    ).toBeVisible();
+    await expect(browseButton).not.toHaveAttribute("aria-busy");
+  });
+
   test("shows a connection error when browsing servers with no gateway present", async ({
     page,
   }) => {
@@ -665,6 +720,13 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await expect(
       page.getByText("Unable to load tags at this level."),
     ).toBeVisible();
+    await expect(
+      page
+        .getByRole("dialog", {
+          name: "Browse tags on Matrikon.OPC.Simulation",
+        })
+        .getByRole("status"),
+    ).not.toBeVisible();
 
     await page.getByRole("button", { name: "Close" }).click();
     await expect(
@@ -942,10 +1004,11 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(page.getByRole("button", { name: originalTag })).toBeVisible();
     await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
-    const treeViewport = page.locator("div.max-h-64").first();
-    await expect
-      .poll(() => treeViewport.evaluate((element) => element.scrollTop))
-      .toBeGreaterThan(0);
+    const treeViewport = page.getByTestId("opc-tag-tree-viewport");
+    await expectTreeNodeVisible(
+      page.getByRole("button", { name: originalTag, exact: true }),
+      treeViewport,
+    );
     await page.getByRole("button", { name: originalTag }).click();
     await page.getByRole("button", { name: "Select tag" }).click();
 
@@ -954,10 +1017,164 @@ test.describe("OPC DA server discovery and tag browser (no gateway present)", ()
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(page.getByRole("button", { name: originalTag })).toBeVisible();
     await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
-    await expect
-      .poll(() => treeViewport.evaluate((element) => element.scrollTop))
-      .toBeGreaterThan(0);
+    await expectTreeNodeVisible(
+      page.getByRole("button", { name: originalTag, exact: true }),
+      treeViewport,
+    );
     await expect(page.getByRole("button", { name: "Collapse" })).toHaveCount(2);
+  });
+
+  test("keeps saved-tag restoration covered until the exact row is visible", async ({
+    page,
+  }) => {
+    const originalTag = "FCS0217!204FC03010.PV";
+    let rootRequestSeen = false;
+    let searchRequestSeen = false;
+    let releaseSearch: () => void = () => undefined;
+    const searchGate = new Promise<void>((resolve) => {
+      releaseSearch = resolve;
+    });
+    let releaseLeaf: () => void = () => undefined;
+    const leafGate = new Promise<void>((resolve) => {
+      releaseLeaf = resolve;
+    });
+
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByLabel("Tag name").fill(originalTag);
+    await page.route("**/api/opc/search-index/search**", async (route) => {
+      searchRequestSeen = true;
+      await searchGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          indexedSearchResponse([
+            {
+              item_id: originalTag,
+              display_name: "PV",
+              kind: "item",
+              breadcrumbs: ["FCS0217", "204FC03010"],
+            },
+          ]),
+        ),
+      });
+    });
+    await page.route("**/api/opc/browse**", async (route) => {
+      if (route.request().method() === "DELETE") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ closed: true }),
+        });
+        return;
+      }
+
+      const url = new URL(route.request().url());
+      const parentNodeKey = url.searchParams.get("parent_node_key");
+      if (!parentNodeKey) rootRequestSeen = true;
+      const nodes =
+        parentNodeKey === "fcs0217"
+          ? [browseNode("loop", "204FC03010", "branch")]
+          : parentNodeKey === "loop"
+            ? (() => {
+                return [browseNode("pv", "PV", "item", originalTag)];
+              })()
+            : [
+                ...Array.from({ length: 30 }, (_, index) =>
+                  browseNode(
+                    `filler-${index}`,
+                    `Filler${index}`,
+                    "item",
+                    `Filler${index}`,
+                  ),
+                ),
+                browseNode("fcs0217", "FCS0217", "branch"),
+              ];
+      if (parentNodeKey === "loop") {
+        await leafGate;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(browsePage(nodes)),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    const dialog = page.getByRole("dialog", {
+      name: "Browse tags on Yokogawa.CSHIS_OPC.1",
+    });
+    const restoring = dialog
+      .getByRole("status")
+      .filter({ hasText: "Locating saved tag…" });
+    await expect(restoring).toBeVisible();
+    await expect(
+      dialog.locator('div[aria-hidden="true"]').first(),
+    ).toHaveAttribute("aria-hidden", "true");
+    await expect(dialog.getByRole("button", { name: "Close" })).toBeEnabled();
+
+    await expect.poll(() => rootRequestSeen).toBe(true);
+    await expect.poll(() => searchRequestSeen).toBe(true);
+    releaseSearch();
+    await expect(
+      dialog.locator("button").filter({ hasText: /^FCS0217$/ }),
+    ).toHaveCount(1);
+    await expect(
+      dialog.locator("button").filter({ hasText: /^204FC03010$/ }),
+    ).toHaveCount(1);
+    await expect(restoring).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "PV" })).toHaveCount(0);
+
+    releaseLeaf();
+    const selected = dialog.getByRole("button", { name: "PV", exact: true });
+    await expect(selected).toBeVisible();
+    await expect(dialog.getByText(`Selected: ${originalTag}`)).toBeVisible();
+    await expectTreeNodeVisible(
+      selected,
+      dialog.getByTestId("opc-tag-tree-viewport"),
+    );
+    await expect(restoring).not.toBeVisible();
+  });
+
+  test("keeps the tag-browser loading overlay dismissible during cancellation", async ({
+    page,
+  }) => {
+    let rootRequestSeen = false;
+    let releaseRoot: () => void = () => undefined;
+    const rootGate = new Promise<void>((resolve) => {
+      releaseRoot = resolve;
+    });
+    await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByLabel("Tag name").fill("FCS0217!204FC03010.PV");
+    await page.route("**/api/opc/browse**", async (route) => {
+      if (route.request().method() === "DELETE") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ closed: true }),
+        });
+        return;
+      }
+      rootRequestSeen = true;
+      await rootGate;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "temporary browse failure" }),
+      });
+    });
+
+    await page.getByRole("button", { name: "Browse tags" }).click();
+    const dialog = page.getByRole("dialog", {
+      name: "Browse tags on Yokogawa.CSHIS_OPC.1",
+    });
+    await expect(dialog.getByRole("status")).toContainText(
+      "Locating saved tag…",
+    );
+    await expect.poll(() => rootRequestSeen).toBe(true);
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).not.toBeVisible();
+    releaseRoot();
   });
 
   test("reopens a saved tag with bounded live search when no index is available", async ({

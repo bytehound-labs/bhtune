@@ -2,7 +2,13 @@ import { useRef } from "react";
 import type { RunDetailResponse } from "../../api/runs";
 import { userFacingErrorMessage } from "../../api/errors";
 import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
-import { Badge, Button, ErrorBanner, Modal } from "../../components/ui";
+import {
+  Badge,
+  Button,
+  ErrorBanner,
+  LoadingStatus,
+  Modal,
+} from "../../components/ui";
 import {
   formatNumber,
   type ValidRunResult,
@@ -159,17 +165,11 @@ export function PidActionModal({
         )}
 
         {pending && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="flex items-center gap-3 rounded-lg border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-300"
-          >
-            <span
-              aria-hidden="true"
-              className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400"
-            />
-            <span>{pendingLabel} Do not close this dialog.</span>
-          </div>
+          <LoadingStatus
+            message={`${pendingLabel} Do not close this dialog.`}
+            size="md"
+            className="rounded-lg border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-300"
+          />
         )}
 
         <div className="flex justify-end gap-2">
@@ -178,11 +178,12 @@ export function PidActionModal({
           </Button>
           <Button
             variant={isWrite ? "primary" : "danger"}
+            loading={pending}
             disabled={pending || !tags}
             title={!tags ? "PID destination tags are unavailable." : undefined}
             onClick={onConfirm}
           >
-            {pending ? pendingLabel : primaryLabel}
+            {primaryLabel}
           </Button>
         </div>
       </div>
