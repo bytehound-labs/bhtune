@@ -137,10 +137,10 @@
       "documentation": [
         "docs/guides/web-ui/starting-a-tune.md"
       ],
-      "sha256": "7213e1e6ac886a84e75df53be07ac15dfb7810d576a1b0d3a38a74f9552d1172",
+      "sha256": "fd0186f3ac4024798d141afe384abf581d49fabd72b15f1eee0b99de1bfa1975",
       "width": 1440,
       "height": 1607,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=7213e1e6ac88"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=fd0186f3ac40"
     },
     {
       "id": "full-history",
