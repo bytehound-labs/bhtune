@@ -317,6 +317,7 @@ def _retained_versions(repository: Path, version: str) -> tuple[list[str], list[
 
 
 def synchronize(repository: Path, version: str) -> bool:
+    repository = repository.resolve()
     if stable_version(version) is None:
         return False
     existing_versions, retained = _retained_versions(repository, version)
@@ -327,7 +328,13 @@ def synchronize(repository: Path, version: str) -> bool:
         render_sidebar(repository),
     )
     if existing_versions != retained:
-        versions_path = repository / VERSIONS_FILE
+        versions_path = (repository / VERSIONS_FILE).resolve()
+        try:
+            versions_path.relative_to(repository)
+        except ValueError as error:
+            raise DocsVersionError(
+                f"version metadata path escapes repository: {versions_path}"
+            ) from error
         versions_path.parent.mkdir(parents=True, exist_ok=True)
         versions_path.write_text(json.dumps(retained, indent=2) + "\n", encoding="utf-8")
         changed = True
