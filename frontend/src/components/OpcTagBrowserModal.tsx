@@ -210,6 +210,25 @@ function revealMatchFromLiveSearch(
   };
 }
 
+function rootScopeCandidates(
+  nodes: OpcTagNodeResponse[],
+  target: string,
+): OpcTagNodeResponse[] {
+  return nodes
+    .filter((node) => {
+      const itemId = nodeItemId(node);
+      return (
+        nodeCanExpand(node) &&
+        itemId !== null &&
+        (target === itemId || target.startsWith(itemId))
+      );
+    })
+    .sort(
+      (left, right) =>
+        (nodeItemId(right)?.length ?? 0) - (nodeItemId(left)?.length ?? 0),
+    );
+}
+
 type TextRange = [number, number];
 
 function searchTerms(query: string): string[] {
@@ -1328,23 +1347,33 @@ export function OpcTagBrowserModal({
     return true;
   }
 
-  function rootScopeCandidates(
-    nodes: OpcTagNodeResponse[],
+  async function revealRootScopeCandidate(
+    candidate: OpcTagNodeResponse,
     target: string,
-  ): OpcTagNodeResponse[] {
-    return nodes
-      .filter((node) => {
-        const itemId = nodeItemId(node);
-        return (
-          nodeCanExpand(node) &&
-          itemId !== null &&
-          (target === itemId || target.startsWith(itemId))
-        );
-      })
-      .sort(
-        (left, right) =>
-          (nodeItemId(right)?.length ?? 0) - (nodeItemId(left)?.length ?? 0),
+    isCancelled: () => boolean,
+    controller: AbortController,
+  ): Promise<boolean> {
+    try {
+      const liveMatches = await searchOpcLive({
+        bridgeHost,
+        opcServer,
+        query: target,
+        sessionId: sessionIdRef.current ?? undefined,
+        scopeNodeKey: candidate.node_key,
+        maxResults: 1,
+        signal: controller.signal,
+      });
+      const liveMatch = liveMatches.find(
+        (match) => match.node.item_id === target,
       );
+      if (!liveMatch || isCancelled() || controller.signal.aborted) {
+        return false;
+      }
+      const revealMatch = revealMatchFromLiveSearch(liveMatch, candidate);
+      return revealMatch ? revealSearchMatch(revealMatch, isCancelled) : false;
+    } catch {
+      return false;
+    }
   }
 
   async function revealWithinRootScopes(
@@ -1368,34 +1397,17 @@ export function OpcTagBrowserModal({
         (candidate) => !attemptedScopes.has(candidate.node_key),
       );
       for (const candidate of candidates) {
+        if (isCancelled() || controller.signal.aborted) break;
         attemptedScopes.add(candidate.node_key);
-        try {
-          const liveMatches = await searchOpcLive({
-            bridgeHost,
-            opcServer,
-            query: target,
-            sessionId: sessionIdRef.current ?? undefined,
-            scopeNodeKey: candidate.node_key,
-            maxResults: 1,
-            signal: controller.signal,
-          });
-          const liveMatch = liveMatches.find(
-            (match) => match.node.item_id === target,
-          );
-          if (!liveMatch || isCancelled() || controller.signal.aborted) {
-            continue;
-          }
-          const revealMatch = revealMatchFromLiveSearch(liveMatch, candidate);
-          if (
-            revealMatch &&
-            (await revealSearchMatch(revealMatch, isCancelled))
-          ) {
-            return { revealed: true, foundScope: true };
-          }
-        } catch {
-          if (isCancelled() || controller.signal.aborted) {
-            return { revealed: false, foundScope: true };
-          }
+        if (
+          await revealRootScopeCandidate(
+            candidate,
+            target,
+            isCancelled,
+            controller,
+          )
+        ) {
+          return { revealed: true, foundScope: true };
         }
       }
 
@@ -1422,6 +1434,62 @@ export function OpcTagBrowserModal({
     return { revealed: false, foundScope: attemptedScopes.size > 0 };
   }
 
+  async function revealFromIndexedSearch(
+    target: string,
+    isCancelled: () => boolean,
+    controller: AbortController,
+  ): Promise<boolean> {
+    try {
+      const result = await indexedSearch.mutateAsync({
+        bridgeHost,
+        opcServer,
+        query: target,
+        matchMode: "exact",
+        maxResults: 1,
+        signal: controller.signal,
+      });
+      const match = result.matches.find(
+        (candidate) => candidate.item_id === target,
+      );
+      if (!match || isCancelled() || controller.signal.aborted) {
+        return false;
+      }
+      return revealSearchMatch(
+        revealMatchFromIndexedSearch(match),
+        isCancelled,
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async function revealFromUnscopedLiveSearch(
+    target: string,
+    isCancelled: () => boolean,
+    controller: AbortController,
+  ): Promise<boolean> {
+    try {
+      const liveMatches = await searchOpcLive({
+        bridgeHost,
+        opcServer,
+        query: target,
+        sessionId: sessionIdRef.current ?? undefined,
+        maxResults: 1,
+        signal: controller.signal,
+      });
+      const liveMatch = liveMatches.find(
+        (candidate) => candidate.node.item_id === target,
+      );
+      if (!liveMatch || isCancelled() || controller.signal.aborted) {
+        return false;
+      }
+      const revealMatch = revealMatchFromLiveSearch(liveMatch);
+      return revealMatch ? revealSearchMatch(revealMatch, isCancelled) : false;
+    } catch {
+      return false;
+    }
+  }
+
   async function revealInitialTag(
     rootNodes: OpcTagNodeResponse[],
     target: string,
@@ -1437,29 +1505,11 @@ export function OpcTagBrowserModal({
     const controller = new AbortController();
     searchAbortRef.current = controller;
     try {
-      if (canUseIndexedSearch) {
-        try {
-          const result = await indexedSearch.mutateAsync({
-            bridgeHost,
-            opcServer,
-            query: target,
-            matchMode: "exact",
-            maxResults: 1,
-            signal: controller.signal,
-          });
-          const match = result.matches.find(
-            (candidate) => candidate.item_id === target,
-          );
-          if (match && !isCancelled() && !controller.signal.aborted) {
-            const revealed = await revealSearchMatch(
-              revealMatchFromIndexedSearch(match),
-              isCancelled,
-            );
-            if (revealed) return true;
-          }
-        } catch {
-          if (isCancelled() || controller.signal.aborted) return false;
-        }
+      if (
+        canUseIndexedSearch &&
+        (await revealFromIndexedSearch(target, isCancelled, controller))
+      ) {
+        return true;
       }
 
       if (isCancelled() || controller.signal.aborted) return false;
@@ -1471,21 +1521,7 @@ export function OpcTagBrowserModal({
       );
       if (scoped.revealed || scoped.foundScope) return scoped.revealed;
 
-      const liveMatches = await searchOpcLive({
-        bridgeHost,
-        opcServer,
-        query: target,
-        sessionId: sessionIdRef.current ?? undefined,
-        maxResults: 1,
-        signal: controller.signal,
-      });
-      const liveMatch = liveMatches.find(
-        (candidate) => candidate.node.item_id === target,
-      );
-      if (!liveMatch || isCancelled() || controller.signal.aborted)
-        return false;
-      const revealMatch = revealMatchFromLiveSearch(liveMatch);
-      return revealMatch ? revealSearchMatch(revealMatch, isCancelled) : false;
+      return revealFromUnscopedLiveSearch(target, isCancelled, controller);
     } catch {
       return false;
     } finally {
