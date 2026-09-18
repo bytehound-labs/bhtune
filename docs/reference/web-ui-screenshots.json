@@ -137,10 +137,10 @@
       "documentation": [
         "docs/guides/web-ui/starting-a-tune.md"
       ],
-      "sha256": "78e0a670e820ed2e9bee65dd53651f97d488872f1549432e2ffaf52f3eae2007",
+      "sha256": "7213e1e6ac886a84e75df53be07ac15dfb7810d576a1b0d3a38a74f9552d1172",
       "width": 1440,
       "height": 1607,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=78e0a670e820"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=7213e1e6ac88"
     },
     {
       "id": "full-history",
@@ -243,10 +243,10 @@
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "c5b460b262dfb1dba5a28d034abef5a40a0d23d26330ab8ad908be37ce93fa90",
+      "sha256": "30893d2955fc67236073b8f4bf81fbefa33dbd44fa6ca507fc2cacf1e2044d27",
       "width": 1440,
       "height": 2436,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=c5b460b262df"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=30893d2955fc"
     },
     {
       "id": "full-template-list",
