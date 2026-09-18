@@ -33,6 +33,12 @@ place.
 The create and edit forms use the same grouped fields as the read-only detail view. A user's
 template name is immutable during editing; rename by deleting and recreating it instead.
 
+Deleting a user-owned template uses a styled confirmation dialog. A failed request leaves the
+template in the list and keeps the dialog open with an inline retryable error; the retry is
+performed in that same dialog and only a successful response removes the row. Built-in and
+catalog templates are protected from ordinary user-template deletion flows, and their source
+definitions cause them to return on the next startup if a source-backed row is removed.
+
 {/* web-ui-screenshot: full-template-create */}
 <figure>
   <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=34747585e504">
@@ -47,6 +53,14 @@ template name is immutable during editing; rename by deleting and recreating it 
     <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=94ad5ceae468" alt="BHTune edit-template form with the existing template name locked" />
   </a>
   <figcaption>Edit preserves the template identity; the locked Name field prevents an unsupported rename.</figcaption>
+</figure>
+
+{/* web-ui-screenshot: full-template-delete-confirmation */}
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=1760c25cdd8e">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=1760c25cdd8e" alt="BHTune failed user-template deletion confirmation with an inline retry error" />
+  </a>
+  <figcaption>A failed user-template deletion keeps the row and confirmation dialog intact until the retry succeeds.</figcaption>
 </figure>
 
 For the complete field reference, catalog format, validation rules, and the

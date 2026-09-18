@@ -596,3 +596,62 @@ export function Modal({
     document.body,
   );
 }
+
+export function ConfirmModal({
+  title,
+  children,
+  onCancel,
+  onConfirm,
+  pending,
+  confirmLabel,
+  pendingLabel,
+  errorMessage,
+  confirmVariant = "danger",
+  documentationId,
+}: {
+  readonly title: string;
+  readonly children: ReactNode;
+  readonly onCancel: () => void;
+  readonly onConfirm: () => void;
+  readonly pending: boolean;
+  readonly confirmLabel: string;
+  readonly pendingLabel: string;
+  readonly errorMessage?: string | null;
+  readonly confirmVariant?: keyof typeof buttonVariants;
+  readonly documentationId?: string;
+}) {
+  return (
+    <Modal
+      title={title}
+      onClose={onCancel}
+      dismissible={!pending}
+      documentationId={documentationId}
+    >
+      <div className="space-y-4">
+        <div className="text-sm text-slate-300">{children}</div>
+        {errorMessage && <ErrorBanner message={errorMessage} />}
+        {pending && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-md border border-slate-700 bg-slate-950/60 px-4 py-3 text-sm text-slate-300"
+          >
+            {pendingLabel} Do not close this dialog.
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button onClick={onCancel} disabled={pending} autoFocus={!pending}>
+            Cancel
+          </Button>
+          <Button
+            variant={confirmVariant}
+            onClick={onConfirm}
+            disabled={pending}
+          >
+            {pending ? pendingLabel : confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}

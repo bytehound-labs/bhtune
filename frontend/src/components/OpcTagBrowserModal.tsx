@@ -30,7 +30,7 @@ import type { components } from "../api/schema";
 import { SAMPLE_QUALITY_LABELS, SAMPLE_QUALITY_TONE } from "../lib/enumLabels";
 import { deriveTag } from "../lib/opcTags";
 import { formatExactTime, formatTimeUntil } from "../lib/time";
-import { Badge, Button, ErrorBanner, Modal } from "./ui";
+import { Badge, Button, ConfirmModal, ErrorBanner, Modal } from "./ui";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
 type QualityWarning = {
@@ -745,12 +745,12 @@ function IndexControls({
         )}
       </div>
       {indexStatus?.state === "failed" && indexStatus.last_error && (
-        <output className="text-xs text-red-300">
+        <output className="block text-xs text-red-300">
           Index error: {indexStatus.last_error}
         </output>
       )}
       {!indexSearchAvailable && (
-        <output className="text-xs text-slate-400">
+        <output className="block text-xs text-slate-400">
           {indexUnavailableMessage}
         </output>
       )}
@@ -1032,6 +1032,8 @@ export function OpcTagBrowserModal({
   const [searchResponse, setSearchResponse] =
     useState<OpcSearchIndexResponse | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
   const searchAbortRef = useRef<AbortController | null>(null);
   const searchResultRefs = useRef<Record<number, HTMLButtonElement | null>>({});
@@ -1536,23 +1538,30 @@ export function OpcTagBrowserModal({
     }
   }
 
-  async function deleteIndex() {
-    if (
-      !window.confirm(
-        `Delete the namespace index for ${opcServer}? Search data and enrollment will be removed.`,
-      )
-    ) {
-      return;
-    }
+  function requestDeleteIndex() {
+    deleteSearchIndex.reset();
+    setDeleteError(null);
+    setDeleteConfirmationOpen(true);
+  }
 
-    setSearchError(null);
+  function cancelDeleteIndex() {
+    if (deleteSearchIndex.isPending) return;
+    deleteSearchIndex.reset();
+    setDeleteError(null);
+    setDeleteConfirmationOpen(false);
+  }
+
+  async function confirmDeleteIndex() {
+    if (deleteSearchIndex.isPending) return;
+    setDeleteError(null);
     try {
       await deleteSearchIndex.mutateAsync({ bridgeHost, opcServer });
       setSearchMatches([]);
       setSearchResponse(null);
       await searchIndexStatus.refetch();
+      setDeleteConfirmationOpen(false);
     } catch (err) {
-      setSearchError(
+      setDeleteError(
         userFacingErrorMessage(err, "Unable to delete the tag index."),
       );
     }
@@ -1671,7 +1680,7 @@ export function OpcTagBrowserModal({
             onRefresh: () => void refreshIndex(),
             onCancel: () => void cancelIndexBuild(),
             onSetAutoRefresh: (enabled) => void setAutoRefresh(enabled),
-            onDelete: () => void deleteIndex(),
+            onDelete: requestDeleteIndex,
           }}
           searchResults={{
             searchError,
@@ -1723,13 +1732,39 @@ export function OpcTagBrowserModal({
   }
 
   return (
-    <Modal
-      title={modalTitle}
-      onClose={closeFromSelection}
-      widthClassName="max-w-2xl"
-      documentationId="new-tune.opc-tag-browser"
-    >
-      {modalContent}
-    </Modal>
+    <>
+      <Modal
+        title={modalTitle}
+        onClose={() => {
+          if (!deleteConfirmationOpen) closeFromSelection();
+        }}
+        dismissible={!deleteConfirmationOpen}
+        widthClassName="max-w-2xl"
+        documentationId="new-tune.opc-tag-browser"
+      >
+        {modalContent}
+      </Modal>
+      {deleteConfirmationOpen && (
+        <ConfirmModal
+          title="Delete tag index?"
+          onCancel={cancelDeleteIndex}
+          onConfirm={() => void confirmDeleteIndex()}
+          pending={deleteSearchIndex.isPending}
+          confirmLabel="Delete index"
+          pendingLabel="Deleting index…"
+          errorMessage={deleteError}
+          documentationId="new-tune.opc-tag-browser.delete-confirmation"
+        >
+          <p>
+            Delete the namespace index for <strong>{opcServer}</strong>?
+          </p>
+          <p className="mt-2 text-slate-400">
+            Indexed search data and this server&apos;s index enrollment will be
+            removed. Lazy browsing, direct ItemID entry, live reads, and tuning
+            remain available.
+          </p>
+        </ConfirmModal>
+      )}
+    </>
   );
 }

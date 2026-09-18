@@ -174,12 +174,16 @@ seven-day policy. The browser can refresh immediately, retry a failed first buil
 re-enable future automatic refreshes, and delete the selected index without editing gateway TOML.
 Deletion is coordinated asynchronously: the browser shows `deleting` while gateway cleanup runs
 and returns to `not indexed` when the data and enrollment have been removed.
+Destructive actions use BHTune's styled confirmation dialogs rather than native browser prompts.
+Deleting an index removes its indexed search data and gateway enrollment, but leaves lazy tree
+browsing, direct ItemID entry, live reads, and tuning available; use **Retry build** first when
+a failed build may be recoverable.
 When automatic refresh is enabled, the next scheduled refresh is shown as a relative days-and-hours
 countdown; the exact scheduled time is available by hovering over it.
 Disabling automatic refresh retains the existing searchable data. Without a usable index, the
 global search box is disabled with a compact status message, while lazy tree browsing, direct
 ItemID entry, live reads, and tuning remain available. The browser reports enrollment or build
-failures without treating them as browse failures.
+failures on a separate diagnostic line without treating them as browse failures.
 Browse sessions are closed when the modal exits, and reopening it reveals and scrolls to the saved
 selection when the gateway can resolve its path.
 

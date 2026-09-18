@@ -12,8 +12,8 @@ readings, and PID audit information.
 
 {/* web-ui-screenshot: full-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=7a297945e8b4">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=7a297945e8b4" alt="BHTune Full mode History page with filterable tune-run rows" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=269512c8214e">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=269512c8214e" alt="BHTune Full mode History page with filterable tune-run rows" />
   </a>
   <figcaption>History provides filterable, paginated access to stored runs; open a row for its complete detail and audit trail.</figcaption>
 </figure>
@@ -23,8 +23,8 @@ profile receives the same `404` for another session's run ID.
 
 {/* web-ui-screenshot: demo-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=13ae4427d5d0">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=13ae4427d5d0" alt="BHTune Demo mode visitor-private History page" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=3ce483431f57">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=3ce483431f57" alt="BHTune Demo mode visitor-private History page" />
   </a>
   <figcaption>Demo history uses the same list shape while the server scopes every row to the current anonymous session.</figcaption>
 </figure>
@@ -97,5 +97,19 @@ write and readback failures appear in the page alert and audit table.
 
 The newest successful write offers **Restore previous values** through the same popup. Both
 actions are disabled with a reason unless the run is finished, used OPC DA, has all PID tags,
-and recorded its original server and bridge connection. Export CSV/JSON, Delete tune, and
-Duplicate this run are available from the completed detail page.
+and recorded its original server and bridge connection. Export CSV/JSON, **Delete tune**, and
+**Duplicate this run** are available from the completed detail page. Delete tune opens a styled
+confirmation dialog before it removes the run's persisted samples, calculated results, and PID
+write/audit history; the deletion cannot be undone through the UI. While the request is pending,
+the dialog's confirm, cancel, close, backdrop, and Escape dismissal paths are locked. A failed
+request leaves the dialog open with an inline retryable error and leaves the run in history;
+retrying uses the same dialog and removes the run only after a successful response, then returns
+to `/runs`.
+
+{/* web-ui-screenshot: full-history-delete-confirmation */}
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=c5b460b262df">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=c5b460b262df" alt="BHTune failed completed-run deletion confirmation with an inline retry error" />
+  </a>
+  <figcaption>Run deletion is a retryable, styled confirmation: the failed attempt does not change history, while the successful retry removes the run and navigates back to History.</figcaption>
+</figure>

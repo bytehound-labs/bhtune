@@ -27,7 +27,7 @@ import {
   RunDetailErrors,
   type RunErrorItem,
 } from "./RunDetailSections";
-import { ErrorBanner, LoadingState } from "../../components/ui";
+import { ConfirmModal, ErrorBanner, LoadingState } from "../../components/ui";
 import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
 import type { AppCapabilities } from "../../api/capabilities";
 
@@ -90,6 +90,7 @@ export function RunDetailPage({
   const [notesDirty, setNotesDirty] = useState(false);
   const [pidAction, setPidAction] = useState<PidAction | null>(null);
   const [pidActionAlert, setPidActionAlert] = useState<string | null>(null);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const pidActionPending = writeRun.isPending || revertRun.isPending;
   const pidActionError = (() => {
     if (!pidAction) return null;
@@ -126,14 +127,24 @@ export function RunDetailPage({
   }
 
   function handleDelete() {
-    const confirmed = window.confirm(
-      `Delete tune #${runId}? This removes its recorded measurements and results and cannot be undone.`,
-    );
-    if (confirmed) {
-      deleteRun.mutate(runId, {
-        onSuccess: () => navigate("/runs"),
-      });
-    }
+    deleteRun.reset();
+    setDeleteConfirmationOpen(true);
+  }
+
+  function cancelDelete() {
+    if (deleteRun.isPending) return;
+    deleteRun.reset();
+    setDeleteConfirmationOpen(false);
+  }
+
+  function confirmDelete() {
+    if (deleteRun.isPending) return;
+    deleteRun.mutate(runId, {
+      onSuccess: () => {
+        setDeleteConfirmationOpen(false);
+        navigate("/runs");
+      },
+    });
   }
 
   function duplicateRun() {
@@ -245,7 +256,7 @@ export function RunDetailPage({
     },
     {
       key: "delete",
-      error: deleteRun.error,
+      error: deleteConfirmationOpen ? undefined : deleteRun.error,
       fallback: "Unable to delete the tune.",
     },
     {
@@ -330,6 +341,33 @@ export function RunDetailPage({
             onConfirm={confirmPidAction}
           />
         )}
+      {deleteConfirmationOpen && (
+        <ConfirmModal
+          title="Delete tune?"
+          onCancel={cancelDelete}
+          onConfirm={confirmDelete}
+          pending={deleteRun.isPending}
+          confirmLabel="Delete tune"
+          pendingLabel="Deleting tune…"
+          errorMessage={
+            deleteRun.isError
+              ? userFacingErrorMessage(
+                  deleteRun.error,
+                  "Unable to delete the tune.",
+                )
+              : null
+          }
+          documentationId="history.delete-confirmation"
+        >
+          <p>
+            Delete tune <strong>#{runId}</strong>? This cannot be undone.
+          </p>
+          <p className="mt-2 text-slate-400">
+            Its recorded measurements, calculated results, and PID write history
+            will be removed.
+          </p>
+        </ConfirmModal>
+      )}
     </div>
   );
 }

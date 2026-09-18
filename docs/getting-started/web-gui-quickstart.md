@@ -177,8 +177,8 @@ browser-visible origin.
      direct ItemID entry, live reads, and tuning available. If indexing is not enrolled or is
      still building, the global search field is disabled, but the lazy tag tree and other
      operations remain available. Completed non-fatal inventory diagnostics remain available
-     through the gateway/API and diagnostic CLI; the browser shows a visible message for a failed
-     index state. When automatic refresh is enabled, the next scheduled refresh appears as a
+     through the gateway/API and diagnostic CLI; the browser shows the gateway's failure
+     diagnostic on its own line for a failed index state. When automatic refresh is enabled, the next scheduled refresh appears as a
      relative days-and-hours countdown, with the exact scheduled time available on hover.
 
    - A **Notes** field records optional operator context, observations, or follow-up actions.
@@ -247,9 +247,9 @@ browser-visible origin.
      grey button — unless the run is finished, used the OPC DA driver, has PID constant tags
      configured, and recorded which OPC server/bridge host it connected to.
 
-   - **Export CSV**/**Export JSON** download links and a **Delete tune** button (with a
-     confirmation prompt — deleting a tune also removes its recorded measurements and
-     results, and cannot be undone).
+   - **Export CSV**/**Export JSON** download links and a **Delete tune** button. A styled
+     confirmation dialog explains that deletion also removes the tune's recorded measurements,
+     calculated results, and PID write/audit history; deletion cannot be undone through the UI.
    - A **Duplicate this run** button, returning to the New tune form prefilled from this run's
      tune settings instead of the newest run's; Notes starts blank. It preserves the original
      Template tag, Custom tag, and Fixed value mapping sources, including template-derived

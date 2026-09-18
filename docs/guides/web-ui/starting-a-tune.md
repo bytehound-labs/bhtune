@@ -57,10 +57,25 @@ reopened.
 
 {/* web-ui-screenshot: full-opc-tag-browser */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=025053ef43a4">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=025053ef43a4" alt="BHTune hierarchical OPC tag browser with a selected tag and a successful quality read" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=89107e24dd16">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=89107e24dd16" alt="BHTune hierarchical OPC tag browser with a selected tag and a successful quality read" />
   </a>
   <figcaption>The tag browser expands one level at a time and reads the originally selected item before it is mapped into the loop.</figcaption>
+</figure>
+
+The search-index controls also expose **Delete index** after a completed index build. Deletion
+is intentionally destructive: the first failed request leaves the index and enrollment intact,
+keeps the styled confirmation open, and shows an inline retryable error. Confirming again sends
+one new request without reopening the dialog; only a successful response closes it and changes
+the status to `not indexed`. Lazy browsing, direct ItemID entry, live reads, and tuning remain
+available after the index is removed.
+
+{/* web-ui-screenshot: full-opc-search-index-delete-confirmation */}
+<figure>
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=78e0a670e820">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=78e0a670e820" alt="BHTune failed OPC search-index deletion confirmation with an inline retry error" />
+  </a>
+  <figcaption>A failed index deletion keeps the exact confirmation copy open and retryable; the underlying index state is unchanged until the retry succeeds.</figcaption>
 </figure>
 
 ### Template suffix replacement

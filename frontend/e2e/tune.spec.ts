@@ -287,8 +287,17 @@ test.describe("running a tune", () => {
     const runId = runUrl.match(/\/runs\/(\d+)$/)?.[1];
     expect(runId).toBeTruthy();
 
-    page.once("dialog", (dialog) => void dialog.accept());
     await page.getByRole("button", { name: "Delete tune" }).click();
+    const deleteDialog = page.getByRole("dialog", { name: "Delete tune?" });
+    await expect(deleteDialog).toBeVisible();
+    await expect(
+      deleteDialog.getByText(
+        "Its recorded measurements, calculated results, and PID write history will be removed.",
+      ),
+    ).toBeVisible();
+    await deleteDialog
+      .getByRole("button", { name: "Delete tune", exact: true })
+      .click();
 
     await expect(page).toHaveURL(/\/runs$/);
 
