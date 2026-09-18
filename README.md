@@ -34,6 +34,9 @@ BHTune is designed around a few core principles:
   web GUI for interactive use, both built on the same tuning engine and the same SQLite database.
 - **Stores everything in a plain, open SQLite database.** No encryption, no usage gating, no
   license dongle — just a single database anyone can inspect.
+- **Protects database backup and restore operations.** Snapshots are validated before use,
+  existing databases receive a pre-restore safety copy, replacement is atomic, and the
+  asynchronous server path does not block its executor on filesystem work.
 - **Keeps the schema disposable before v0.1.** Fresh databases use one consolidated migration;
   while no supported external database depends on the pre-release history, that baseline may be
   squashed again. Once v0.1 ships, applied migration history becomes a compatibility contract.

@@ -1527,7 +1527,9 @@ exp(-dt/tau)`) is the exact analytical solution, not an approximation — verifi
   covering this simulates exactly that case rather than the (already self-cleaning) graceful
   case. Finally, `db_path` is reopened via the ordinary `connect()`, so any migrations the
   backup predates are re-applied going forward — restoring an old backup transparently upgrades
-  its schema, the same as opening an old database file normally would.
+  its schema, the same as opening an old database file normally would. Production filesystem
+  checks and replacement use Tokio's asynchronous filesystem APIs; synchronous filesystem
+  calls remain limited to test setup and assertions.
 
 ## OPC DA integration reference (`driver-opcda`)
 
