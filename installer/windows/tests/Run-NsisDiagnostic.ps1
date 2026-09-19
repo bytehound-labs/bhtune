@@ -875,7 +875,10 @@ try {
         -DisplayName 'Unowned OPC DA gateway diagnostic service' `
         -StartupType Manual | Out-Null
     try {
-        Invoke-InstallerDiagnostic -Scenario 'unowned-gateway-service-conflict' -ExpectSuccess:$false | Out-Null
+        Invoke-InstallerDiagnostic `
+            -Scenario 'unowned-gateway-service-conflict' `
+            -AdditionalArguments @('/INSTALL_GATEWAY=1') `
+            -ExpectSuccess:$false | Out-Null
         Assert-NoInstalledState -Paths $paths -AllowGatewayService:$true
         Assert-Diagnostic -Condition ($null -ne (Get-ServiceSnapshot -Name $paths.GatewayServiceName)) -Message 'The installer removed the unowned gateway service.'
     } finally {
@@ -888,7 +891,10 @@ try {
     # untouched until the diagnostic stops that exact PID.
     $listener = Start-DiagnosticPortListener -Port $paths.GatewayPort
     try {
-        Invoke-InstallerDiagnostic -Scenario 'unexpected-gateway-listener-conflict' -ExpectSuccess:$false | Out-Null
+        Invoke-InstallerDiagnostic `
+            -Scenario 'unexpected-gateway-listener-conflict' `
+            -AdditionalArguments @('/INSTALL_GATEWAY=1') `
+            -ExpectSuccess:$false | Out-Null
         Assert-Diagnostic -Condition ($null -eq (Get-ServiceSnapshot -Name $paths.ServiceName)) -Message 'The listener-conflict failure left BhtuneServer behind.'
         Assert-Diagnostic -Condition ($null -eq (Get-ServiceSnapshot -Name $paths.GatewayServiceName)) -Message 'The listener-conflict failure left OpcdaBridgeGateway behind.'
         Assert-Diagnostic -Condition (-not (Test-Path -LiteralPath $paths.InstallRoot)) -Message 'The listener-conflict failure left Program Files content behind.'
