@@ -895,6 +895,7 @@ try {
             -Scenario 'unexpected-gateway-listener-conflict' `
             -AdditionalArguments @('/INSTALL_GATEWAY=1') `
             -ExpectSuccess:$false | Out-Null
+        Write-InstallerFailureEvidence -Scenario 'unexpected-gateway-listener-conflict'
         Assert-Diagnostic -Condition ($null -eq (Get-ServiceSnapshot -Name $paths.ServiceName)) -Message 'The listener-conflict failure left BhtuneServer behind.'
         Assert-Diagnostic -Condition ($null -eq (Get-ServiceSnapshot -Name $paths.GatewayServiceName)) -Message 'The listener-conflict failure left OpcdaBridgeGateway behind.'
         Assert-Diagnostic -Condition (-not (Test-Path -LiteralPath $paths.InstallRoot)) -Message 'The listener-conflict failure left Program Files content behind.'
@@ -904,6 +905,17 @@ try {
         Stop-DiagnosticPortListener -Listener $listener -Port $paths.GatewayPort
     }
     Assert-NoInstalledState -Paths $paths
+    $diagnosticTracePath = Join-Path $paths.InstallerStateRoot 'install-trace.jsonl'
+    Assert-Diagnostic -Condition (Test-Path -LiteralPath $diagnosticTracePath -PathType Leaf) -Message 'The listener-conflict failure leaves its diagnostic trace available for evidence.'
+    $diagnosticFiles = @(
+        Get-ChildItem -LiteralPath $paths.ProgramDataRoot -File -Recurse -Force -ErrorAction Stop |
+            ForEach-Object { $_.FullName.Substring($paths.ProgramDataRoot.Length).TrimStart('\') }
+    )
+    Assert-Diagnostic `
+        -Condition (($diagnosticFiles.Count -eq 1) -and ($diagnosticFiles[0] -ceq 'installer\install-trace.jsonl')) `
+        -Message 'The listener-conflict failure leaves only the expected installer diagnostic trace.'
+    Remove-DiagnosticProgramData -Paths $paths
+    Assert-Diagnostic -Condition (-not (Test-Path -LiteralPath $paths.ProgramDataRoot)) -Message 'The listener-conflict diagnostic evidence is removed after capture.'
     Assert-Diagnostic -Condition ((Get-GatewayFirewallFingerprint) -ceq $firewallBefore) -Message 'The installer created or modified a gateway-related Windows Firewall rule.'
     Write-DiagnosticLog 'SCENARIO_PASS name=unexpected-gateway-listener-conflict'
     Write-DiagnosticLog 'LIFECYCLE_RESULT=PASS scenarios=silent-opt-in,explicit-gateway,opt-out,legacy-add-on,upgrade-state,rollback,uninstall,service-conflict,listener-conflict,firewall'
