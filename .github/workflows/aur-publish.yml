@@ -253,7 +253,7 @@ jobs:
           PKGREL: ${{ inputs.pkgrel }}
         run: |
           set -euo pipefail
-          docker run --rm \
+          docker run --rm -i \
             -e "MODE=$MODE" \
             -e "TAG=$TAG" \
             -e "PKGREL=$PKGREL" \
@@ -383,7 +383,16 @@ jobs:
           test -f /var/lib/bhtune/aur-sentinel
           test ! -e /usr/bin/bhtune
           test ! -e /usr/bin/bhtune-server
+          printf 'Arch validation evidence:\n'
+          find /workspace/aur-evidence -maxdepth 1 -type f -printf '%f\n' | sort
+          test -n "$(find /workspace/aur-evidence -maxdepth 1 -type f -print -quit)"
           ARCH_SCRIPT
+
+      - name: Verify Arch validation evidence
+        run: |
+          set -euo pipefail
+          test -d aur-evidence
+          find aur-evidence -maxdepth 1 -type f -print | sort
 
       - name: Upload generated metadata and fixture
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

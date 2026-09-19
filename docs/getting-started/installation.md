@@ -81,6 +81,8 @@ but leaves `/etc/bhtune` and `/var/lib/bhtune` in place.
 The repository's AUR generator is also usable for validation before publication. It requires
 exactly controlled release-shaped sources, calculates a checksum for every source, and generates
 `.SRCINFO` with non-root `makepkg --printsrcinfo`; `.SRCINFO` is never hand-written.
+The reusable validation workflow uploads the generated metadata and disposable Arch lifecycle
+evidence as workflow artifacts, but dry-run validation never publishes to AUR.
 
 ### Debian or Ubuntu (`.deb`)
 

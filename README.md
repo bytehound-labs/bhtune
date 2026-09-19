@@ -385,10 +385,11 @@ recovery rules, and release-rate limits.
 Linux package definitions are also prepared for the stable release: Debian/Ubuntu `.deb`,
 RPM-based `.rpm`, and the Arch `bhtune-bin` package. The AUR generator and validation workflow
 accept only exact stable `vX.Y.Z` tags for publication; prereleases and arbitrary refs are
-validation-only, and the first AUR publication remains a manual post-release action. Until
-that happens, `bhtune-bin` is not an available AUR package. Debian packages use adaptive
-shared-library dependency discovery and must be built in a Debian-capable environment that
-provides `dpkg-shlibdeps`.
+validation-only, retain generated metadata and Arch lifecycle evidence as workflow artifacts,
+and the first AUR publication remains a manual post-release action. Until that happens,
+`bhtune-bin` is not an available AUR package. Debian packages use adaptive shared-library
+dependency discovery and must be built in a Debian-capable environment that provides
+`dpkg-shlibdeps`.
 
 ### What's still coming
 

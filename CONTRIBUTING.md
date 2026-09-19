@@ -171,7 +171,9 @@ package installation, upgrade, removal, and service-state checks. Generate `.SRC
 `makepkg --printsrcinfo`; never hand-edit it. Publication is intentionally separate from pull
 request validation, requires an exact stable `vX.Y.Z` tag and independently verified release
 evidence, and remains a manual first-release action until the post-release AUR commit has been
-verified.
+verified. The reusable Arch job feeds its validation script to `docker run -i` and writes
+machine-readable evidence through the host-mounted `aur-evidence/` directory; preserve both
+invariants when changing that workflow.
 
 Debian packages use adaptive `depends = "$auto"` metadata and therefore require
 `dpkg-shlibdeps` in the packaging environment. Do not hard-code a dependency list to compensate

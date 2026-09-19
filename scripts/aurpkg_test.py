@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = ROOT / "scripts" / "aurpkg"
 UNIT_PATH = Path("packaging/systemd/bhtune-server.service")
+PRERELEASE_TAG = "v2.4.6-rc.1"
 REQUIRES_MAKEPKG = unittest.skipUnless(
     shutil.which("makepkg"),
     "makepkg is unavailable; metadata rendering tests are skipped",
@@ -158,7 +159,7 @@ class AurPkgTests(unittest.TestCase):
 
     @REQUIRES_MAKEPKG
     def test_dry_run_accepts_prerelease_with_arch_safe_pkgver(self) -> None:
-        result = self.run_generator(tag="v2.4.6-rc.1")
+        result = self.run_generator(tag=PRERELEASE_TAG)
         self.assert_success(result)
         pkgbuild, _ = self.generated_files()
         self.assertIn("pkgver=2.4.6.rc.1", pkgbuild.read_text(encoding="utf-8"))
@@ -166,20 +167,20 @@ class AurPkgTests(unittest.TestCase):
     @REQUIRES_MAKEPKG
     def test_prerelease_explicit_pkgver_must_use_arch_converted_value(self) -> None:
         result = self.run_generator(
-            tag="v2.4.6-rc.1",
+            tag=PRERELEASE_TAG,
             extra=["--pkgver", "2.4.6.rc.1"],
         )
         self.assert_success(result)
 
         result = self.run_generator(
-            tag="v2.4.6-rc.1",
+            tag=PRERELEASE_TAG,
             extra=["--pkgver", "2.4.6_rc.1"],
         )
         self.assert_failure(result, "expected 2.4.6.rc.1")
 
         result = self.run_generator(
-            tag="v2.4.6-rc.1",
-            extra=["--pkgver", "2.4.6-rc.1"],
+            tag=PRERELEASE_TAG,
+            extra=["--pkgver", PRERELEASE_TAG],
         )
         self.assert_failure(result, "package version contains unsafe characters")
 
@@ -285,9 +286,8 @@ class AurPkgTests(unittest.TestCase):
 
     def test_explicit_checksums_must_match_current_inventory(self) -> None:
         manifest = self.manifest()
-        lines = manifest.read_text(encoding="utf-8").splitlines()
-        lines[0] = f"{'0' * 64}  {self.inventory[0].as_posix()}"
-        manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with manifest.open("r+b") as manifest_file:
+            manifest_file.write(b"0" * 64)
         result = self.run_generator(
             dry_run=False,
             extra=[
@@ -406,21 +406,21 @@ class AurPkgTests(unittest.TestCase):
             content,
         )
         self.assertNotIn("/raw/main/", content)
-        source_block = re.search(
-            r"source=\(\n(.*?)\n\)\nsha256sums=\(\n(.*?)\n\)",
-            content,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(source_block)
-        assert source_block is not None
+        source_marker = "source=(\n"
+        checksums_marker = "\n)\nsha256sums=(\n"
+        source_start = content.index(source_marker) + len(source_marker)
+        checksums_start = content.index(checksums_marker, source_start)
+        source_text = content[source_start:checksums_start]
+        checksums_start += len(checksums_marker)
+        checksums_end = content.index("\n)", checksums_start)
         sources = [
             line.strip()
-            for line in source_block.group(1).splitlines()
+            for line in source_text.splitlines()
             if line.strip()
         ]
         hashes = [
             line.strip()
-            for line in source_block.group(2).splitlines()
+            for line in content[checksums_start:checksums_end].splitlines()
             if line.strip()
         ]
         self.assertEqual(len(sources), len(hashes))
