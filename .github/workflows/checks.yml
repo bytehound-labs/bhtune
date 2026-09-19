@@ -423,6 +423,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.installer == 'true'
     uses: ./.github/workflows/windows-installer.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     with:
       mode: dry-run
       source_ref: ${{ github.sha }}

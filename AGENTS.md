@@ -4982,21 +4982,20 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    activation, Cloudflare Tunnel, or Internet rollout is part of the repository change until
    private validation and rollback rehearsals pass.
    Release-time version snapshot generation (`docs-versioning`) is implemented; the first stable
-   snapshot remains pending the approved release. Remaining packaging includes
+   snapshot remains pending the approved release. Packaging includes
    `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
    `release.yml`, but cutting the actual first tag is a deliberate call left to the project
    owner, not automatic — see "`build-matrix`: the release binary matrix" above), a
    Windows NSIS installer (`pkg-windows-installer`, the primary distribution artifact; the
-   installer source and reusable dry-run workflow are implemented, and the full Windows 11
-   lifecycle matrix plus the Windows Server 2016 acceptance subset are green. Both hosts
-   verified service registration, health/version validation, rollback, uninstall preservation,
-   and the expected isolated BHTune listener; Server 2016 also confirmed that the production
+   installer source, reusable dry-run workflow, clean-provenance build, and final lifecycle
+   acceptance are complete. Windows 11 and Windows Server 2016 both verified service
+   registration, health/version validation, rollback, uninstall preservation, and the expected
+   isolated BHTune listener; Server 2016 also confirmed that the production
    `OpcdaBridgeGateway`/`OpcEnum` services, port `7600`, process identity, configuration, and
    index state were unchanged. The earlier delayed-uninstall interruption was not reproduced
    after SCM/WMI hardening, so its original trace has no definitive root-cause diagnosis.
-   The remaining installer work is a clean committed rebuild with recorded source/toolchain/
-   artifact provenance, final repository gates, PR/CI/Sonar completion, and stable-release
-   integration), and `pkg-aur` (already unblocked — it needs the man pages/completions `docs-generated-cli`
+   Stable-release attachment remains deferred until the coordinated release-workflow change,
+   and `pkg-aur` (already unblocked — it needs the man pages/completions `docs-generated-cli`
    produces plus `build-matrix`'s Linux archive, both done).
 10. **History explorer** (low priority, post-v1, done) — mostly a reader of data earlier
     phases already write, so deliberately scheduled after v1. `history-retention` is done:
