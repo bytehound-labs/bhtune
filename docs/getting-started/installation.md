@@ -10,6 +10,13 @@ one exists. Until then, run the published Docker image or build from source. The
 contains the Windows NSIS installer workflow and validation sources; a stable release will attach
 the resulting installer beside the matching Windows archive.
 
+Linux package definitions are prepared for the stable release but are not publicly installable
+until that release's assets exist. The Debian/Ubuntu and RPM packages are produced by the release
+packaging jobs; the `bhtune-bin` AUR metadata is generated and validated by
+`.github/workflows/aur-publish.yml`, with publication restricted to an exact stable `vX.Y.Z`
+tag. Prereleases and arbitrary refs are validation-only, and the first AUR publication is a
+manual post-release step.
+
 ## Run via Docker
 
 The fastest way to try BHTune: a multi-stage image (frontend build → `cargo build --release` →
@@ -32,6 +39,83 @@ volume:
 ```sh
 docker exec bhtune bhtune history list
 ```
+
+## Linux packages
+
+The package formats install the `bhtune` CLI, `bhtune-server`, generated man pages, shell
+completions, and the package-managed systemd unit. Package installation reloads systemd metadata
+but does not enable or start the service. Enable it explicitly after confirming the package and
+configuration:
+
+```sh
+sudo systemctl enable --now bhtune-server
+curl --fail http://127.0.0.1:8787/api/health
+```
+
+The package-managed unit runs the server from `/usr/bin/bhtune-server` with a dynamic service
+identity. Configuration is kept under `/etc/bhtune`, application data and SQLite files under
+`/var/lib/bhtune`, and logs under the configured logging directory. Package upgrades preserve
+the operator's service state: a running service is restarted only when the package lifecycle
+requires it, while a stopped service remains stopped. Removing a package does not delete
+`/etc/bhtune` or `/var/lib/bhtune`; preserve a separate database backup before any destructive
+recovery operation.
+
+### Arch Linux (`bhtune-bin`)
+
+After the first stable release and the first verified AUR publication, install the binary package
+from AUR with a normal non-root `makepkg` workflow:
+
+```sh
+git clone https://aur.archlinux.org/bhtune-bin.git
+cd bhtune-bin
+makepkg -si
+sudo systemctl enable --now bhtune-server
+curl --fail http://127.0.0.1:8787/api/health
+```
+
+The package uses `/usr/bin` for both binaries and installs the unit at
+`/usr/lib/systemd/system/bhtune-server.service`. It does not compile Rust or the frontend, and
+it does not enable or start the service during installation. The package removes its own payload
+but leaves `/etc/bhtune` and `/var/lib/bhtune` in place.
+
+The repository's AUR generator is also usable for validation before publication. It requires
+exactly controlled release-shaped sources, calculates a checksum for every source, and generates
+`.SRCINFO` with non-root `makepkg --printsrcinfo`; `.SRCINFO` is never hand-written.
+The reusable validation workflow uploads the generated metadata and disposable Arch lifecycle
+evidence as workflow artifacts, but dry-run validation never publishes to AUR.
+
+### Debian or Ubuntu (`.deb`)
+
+After a stable release, download the matching `.deb` for the host architecture and verify its
+release checksum before installing it:
+
+```sh
+sudo apt install ./bhtune_<version>_amd64.deb
+sudo systemctl enable --now bhtune-server
+curl --fail http://127.0.0.1:8787/api/health
+```
+
+The Debian metadata uses `depends = "$auto"` so shared-library requirements are derived from the
+actual binaries by Debian's `dpkg-shlibdeps`. Debian packages must therefore be built in a
+Debian-capable packaging environment containing `dpkg-shlibdeps`; an incomplete local build on a
+non-Debian host must not be treated as authoritative if its visible `Depends:` field is empty.
+Do not replace adaptive dependency discovery with a manually copied dependency list.
+
+### RPM-based Linux
+
+After a stable release, install the matching `.rpm` with the distribution's package manager:
+
+```sh
+sudo dnf install ./bhtune-<version>-1.x86_64.rpm
+sudo systemctl enable --now bhtune-server
+curl --fail http://127.0.0.1:8787/api/health
+```
+
+The RPM declares its `systemd` requirement and uses package lifecycle scripts to reload systemd
+metadata. An upgrade uses `systemctl try-restart`, so a service that was stopped remains stopped;
+final removal stops and disables the service but preserves the operator-owned configuration,
+database, SQLite `-wal`/`-shm` companions, and logs. Keep one known-good package and a separate
+database backup when preparing a rollback.
 
 Full-mode Docker access does not require `BHTUNE_ORIGIN`. When no origin is configured, browser
 mutations are accepted only when the browser origin's host and effective port match the request

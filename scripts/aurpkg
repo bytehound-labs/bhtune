@@ -1,0 +1,747 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export LC_ALL=C
+
+# Generate the binary Arch package metadata for BHTune.
+#
+# This script deliberately only renders metadata.  It never downloads release assets,
+# compiles Rust/frontend sources, or pushes to the AUR.  `.SRCINFO` is always produced
+# by makepkg so it cannot drift from the generated PKGBUILD.
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+readonly REPOSITORY_ROOT
+readonly REPOSITORY_URL="https://github.com/bytehound-labs/bhtune"
+readonly ARCHIVE_TARGET="x86_64-unknown-linux-gnu"
+readonly UNIT_RELATIVE_PATH="packaging/systemd/bhtune-server.service"
+readonly STABLE_TAG_PATTERN='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+readonly DRY_RUN_TAG_PATTERN='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)([-+][0-9A-Za-z.-]+)?$'
+readonly PKGVER_PATTERN='^[0-9][A-Za-z0-9.+_]*$'
+readonly HASH_PATTERN='^[0-9A-Fa-f]{64}$'
+readonly RUNTIME_DEPENDENCY_PATTERN='^[A-Za-z0-9][A-Za-z0-9@._+-]*$'
+
+TAG=""
+VERSION_ARG=""
+PKGVER=""
+PKGREL="1"
+OUTPUT_DIR=""
+SOURCE_ROOT="$REPOSITORY_ROOT"
+ARCHIVE_SHA256=""
+ARCHIVE_PATH=""
+ARCHIVE_URL=""
+CHECKSUMS_FILE=""
+RUNTIME_DEPS_FILE=""
+DRY_RUN=0
+STAGE_DIR=""
+INSPECTION_DIR=""
+declare -a DIRECT_SHA_SPECS=()
+declare -a DIRECT_RUNTIME_DEPS=()
+
+declare -a ANCILLARY_PATHS=()
+declare -a MAN_NAMES=()
+declare -a SOURCE_SPECS=()
+declare -a SOURCE_HASHES=()
+declare -a RUNTIME_DEPS=()
+declare -A REQUIRED_PATHS=()
+declare -A CHECKSUMS=()
+
+die() {
+	printf 'aurpkg: error: %s\n' "$*" >&2
+	exit 1
+}
+
+usage() {
+	cat <<'EOF'
+Usage: scripts/aurpkg [options]
+
+Generate a bhtune-bin PKGBUILD and a makepkg-generated .SRCINFO.
+
+Release selection:
+  --tag TAG                    Release tag (for example v0.1.0)
+  --version VALUE              Compatibility alias for --tag; with --tag, sets
+                               the package version when it is a plain X.Y.Z value
+  --pkgver VERSION             Package version; must equal the Arch-safe version
+                               derived from TAG (prerelease '-' becomes '.')
+  --pkgrel NUMBER              Arch package release number (default: 1)
+  --dry-run                    Permit a semver prerelease tag and fixture-derived
+                               checksums; hyphenated prereleases use '.' in pkgver;
+                               publication mode requires explicit hashes
+
+Inputs:
+  --archive-sha256 HASH        SHA-256 of the Linux x86_64 release archive
+  --archive-path PATH          Local fixture archive to hash and/or verify
+  --archive-url URL            Optional explicit URL; must be the exact tag URL
+  --checksums-file PATH        sha256sum-style ancillary checksum manifest
+  --sha256 PATH=HASH           Ancillary checksum override; repeatable
+  --runtime-deps-file PATH     Newline-delimited Arch package names resolved from
+                               ldd/pacman for the release binaries
+  --runtime-dep PACKAGE        Runtime Arch package dependency; repeatable
+  --source-root PATH           Checkout/fixture root for ancillary inventory
+  --output-dir PATH            Directory in which to write PKGBUILD and .SRCINFO
+
+The default mode is publication validation: it accepts only exact stable vX.Y.Z
+tags and requires explicit SHA-256 inputs.  The script never contacts GitHub or
+the AUR.  Runtime dependencies are taken from explicit ldd-derived inputs, or
+resolved from the local archive with ldd and pacman when available; they are never
+guessed.  `makepkg --printsrcinfo` must be available and the script must not run
+as root.
+EOF
+}
+
+has_control_characters() {
+	local value="$1"
+	[[ "$value" =~ [[:cntrl:]] ]]
+}
+
+validate_hash() {
+	local label="$1"
+	local value="$2"
+	has_control_characters "$value" && die "$label contains control characters"
+	[[ "$value" =~ $HASH_PATTERN ]] || die "$label must be a 64-character hexadecimal SHA-256"
+}
+
+validate_runtime_dependency() {
+	local value="$1"
+	has_control_characters "$value" && die "runtime dependency contains control characters"
+	[[ "$value" =~ $RUNTIME_DEPENDENCY_PATTERN ]] ||
+		die "unsafe runtime dependency name: $value"
+}
+
+validate_relative_path() {
+	local value="$1"
+	has_control_characters "$value" && die "unsafe path contains control characters: $value"
+	[[ "$value" != /* ]] || die "unsafe absolute path in checksum input: $value"
+	[[ "$value" != */*//* ]] || die "unsafe path contains an empty component: $value"
+	[[ "$value" != "." && "$value" != .. && "$value" != ../* && "$value" != */../* && "$value" != */.. ]] ||
+		die "unsafe path traversal in checksum input: $value"
+	[[ "$value" != */./* && "$value" != */./ && "$value" != */. ]] ||
+		die "unsafe path contains a current-directory component: $value"
+	[[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._+/-]*$ ]] ||
+		die "unsafe checksum path: $value"
+}
+
+validate_tag() {
+	local tag="$1"
+	has_control_characters "$tag" && die "tag contains control characters"
+	if ((DRY_RUN)); then
+		[[ "$tag" =~ $DRY_RUN_TAG_PATTERN ]] ||
+			die "--tag must be a stable or semver prerelease tag in vX.Y.Z[-suffix] form"
+	else
+		[[ "$tag" =~ $STABLE_TAG_PATTERN ]] ||
+			die "publication mode requires an exact stable tag in vX.Y.Z form"
+	fi
+}
+
+validate_pkgver() {
+	local value="$1"
+	has_control_characters "$value" && die "package version contains control characters"
+	[[ "$value" =~ $PKGVER_PATTERN ]] || die "package version contains unsafe characters: $value"
+}
+
+package_version_for_tag() {
+	local tag="$1"
+	local version="${tag#v}"
+	printf '%s\n' "${version//-/.}"
+}
+
+validate_pkgrel() {
+	[[ "$PKGREL" =~ ^[1-9][0-9]*$ ]] ||
+		die "--pkgrel must be a positive decimal integer"
+}
+
+resolve_existing_path() {
+	local label="$1"
+	local value="$2"
+	has_control_characters "$value" && die "$label contains control characters"
+	[[ -e "$value" ]] || die "$label does not exist: $value"
+	[[ ! -L "$value" ]] || die "$label must not be a symlink: $value"
+	readlink -f -- "$value"
+}
+
+hash_file() {
+	local path="$1"
+	sha256sum -- "$path" | awk '{print tolower($1)}'
+}
+
+add_checksum() {
+	local relative_path="$1"
+	local hash="$2"
+	local origin="$3"
+	validate_relative_path "$relative_path"
+	validate_hash "$origin" "$hash"
+	[[ -n "${REQUIRED_PATHS[$relative_path]+present}" ]] ||
+		die "$origin names an unexpected ancillary path: $relative_path"
+	[[ -z "${CHECKSUMS[$relative_path]+present}" ]] ||
+		die "duplicate checksum for ancillary path: $relative_path"
+	CHECKSUMS["$relative_path"]="${hash,,}"
+}
+
+add_runtime_dependency() {
+	local dependency="$1"
+	validate_runtime_dependency "$dependency"
+	RUNTIME_DEPS+=("$dependency")
+}
+
+parse_checksum_inputs() {
+	if [[ -n "$CHECKSUMS_FILE" ]]; then
+		CHECKSUMS_FILE="$(resolve_existing_path "checksum manifest" "$CHECKSUMS_FILE")"
+		[[ -f "$CHECKSUMS_FILE" ]] || die "checksum manifest is not a regular file"
+
+		local line=""
+		local hash=""
+		local relative_path=""
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			[[ -z "$line" ]] && continue
+			has_control_characters "$line" && die "checksum manifest contains control characters"
+			if [[ "$line" =~ ^([0-9A-Fa-f]{64})[[:space:]]+\*?([^[:space:]]+)$ ]]; then
+				hash="${BASH_REMATCH[1]}"
+				relative_path="${BASH_REMATCH[2]}"
+			elif [[ "$line" =~ ^([^=[:space:]]+)=([0-9A-Fa-f]{64})$ ]]; then
+				relative_path="${BASH_REMATCH[1]}"
+				hash="${BASH_REMATCH[2]}"
+			else
+				die "invalid checksum manifest line: $line"
+			fi
+			add_checksum "$relative_path" "$hash" "checksum manifest"
+		done <"$CHECKSUMS_FILE"
+	fi
+
+	local specification=""
+	for specification in "${DIRECT_SHA_SPECS[@]}"; do
+		[[ "$specification" == *=* ]] || die "--sha256 must use PATH=HASH syntax"
+		relative_path="${specification%%=*}"
+		hash="${specification#*=}"
+		[[ -n "$relative_path" && -n "$hash" ]] || die "--sha256 must use PATH=HASH syntax"
+		add_checksum "$relative_path" "$hash" "--sha256"
+	done
+}
+
+parse_runtime_dependency_file() {
+	local path="$1"
+	local line=""
+	local dependency=""
+
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		has_control_characters "$line" && die "runtime dependency file contains control characters"
+		line="${line#"${line%%[![:space:]]*}"}"
+		line="${line%"${line##*[![:space:]]}"}"
+		[[ -z "$line" || "$line" == \#* ]] && continue
+		dependency="$line"
+		add_runtime_dependency "$dependency"
+	done <"$path"
+}
+
+parse_runtime_dependency_inputs() {
+	RUNTIME_DEPS=()
+
+	if [[ -n "$RUNTIME_DEPS_FILE" ]]; then
+		RUNTIME_DEPS_FILE="$(resolve_existing_path "runtime dependency file" "$RUNTIME_DEPS_FILE")"
+		[[ -f "$RUNTIME_DEPS_FILE" ]] || die "runtime dependency file is not a regular file"
+		parse_runtime_dependency_file "$RUNTIME_DEPS_FILE"
+	fi
+
+	local dependency=""
+	for dependency in "${DIRECT_RUNTIME_DEPS[@]}"; do
+		add_runtime_dependency "$dependency"
+	done
+}
+
+require_source_file() {
+	local relative_path="$1"
+	local path="$SOURCE_ROOT/$relative_path"
+	[[ -f "$path" ]] || die "required source file is missing: $relative_path"
+	[[ ! -L "$path" ]] || die "required source file must not be a symlink: $relative_path"
+	[[ -r "$path" ]] || die "required source file is not readable: $relative_path"
+}
+
+discover_inventory() {
+	local path=""
+	local name=""
+	local man_dir="$SOURCE_ROOT/man"
+	local completion_dir="$SOURCE_ROOT/completions"
+	local unit_path="$UNIT_RELATIVE_PATH"
+
+	# Keep inventory discovery idempotent if this script is sourced or reused by a
+	# long-lived shell. A normal invocation still runs only once, but stale array
+	# contents must never change the generated package.
+	ANCILLARY_PATHS=()
+	MAN_NAMES=()
+	REQUIRED_PATHS=()
+
+	require_source_file "LICENSE"
+	require_source_file "README.md"
+
+	[[ -d "$man_dir" ]] || die "man directory is missing: $man_dir"
+	shopt -s nullglob
+	local man_files=("$man_dir"/*.1)
+	shopt -u nullglob
+	((${#man_files[@]} > 0)) || die "no man/*.1 files found under $man_dir"
+
+	for path in "${man_files[@]}"; do
+		[[ -f "$path" && ! -L "$path" ]] ||
+			die "man inventory contains an unsafe or non-regular file: $path"
+		name="${path##*/}"
+		[[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*\.1$ ]] ||
+			die "unsafe man-page filename: $name"
+		MAN_NAMES+=("$name")
+		ANCILLARY_PATHS+=("man/$name")
+	done
+
+	[[ -d "$completion_dir" ]] || die "completion directory is missing: $completion_dir"
+	local completion=""
+	for completion in bhtune.bash _bhtune bhtune.fish; do
+		require_source_file "completions/$completion"
+		ANCILLARY_PATHS+=("completions/$completion")
+	done
+
+	require_source_file "$unit_path"
+	ANCILLARY_PATHS+=("$unit_path")
+
+	REQUIRED_PATHS=()
+	for path in LICENSE README.md "${ANCILLARY_PATHS[@]}"; do
+		[[ -z "${REQUIRED_PATHS[$path]+present}" ]] ||
+			die "duplicate ancillary inventory path: $path"
+		REQUIRED_PATHS["$path"]=1
+	done
+}
+
+verify_checksum_paths() {
+	local relative_path=""
+	for relative_path in "${!CHECKSUMS[@]}"; do
+		[[ -n "${REQUIRED_PATHS[$relative_path]+present}" ]] ||
+			die "checksum names an unexpected ancillary path: $relative_path"
+	done
+}
+
+resolve_hashes() {
+	local relative_path=""
+	local path=""
+	local actual=""
+	local expected=""
+	local has_explicit=0
+
+	if ((! DRY_RUN)); then
+		[[ -n "$ARCHIVE_SHA256" ]] ||
+			die "publication mode requires --archive-sha256"
+		((${#CHECKSUMS[@]} == ${#REQUIRED_PATHS[@]})) ||
+			die "publication mode requires one checksum for every ancillary file"
+	fi
+
+	if [[ -z "$ARCHIVE_SHA256" && -n "$ARCHIVE_PATH" ]]; then
+		ARCHIVE_SHA256="$(hash_file "$ARCHIVE_PATH")"
+	fi
+	[[ -n "$ARCHIVE_SHA256" ]] || die "an archive SHA-256 is required"
+	validate_hash "archive SHA-256" "$ARCHIVE_SHA256"
+	ARCHIVE_SHA256="${ARCHIVE_SHA256,,}"
+
+	for relative_path in "${!CHECKSUMS[@]}"; do
+		has_explicit=1
+		break
+	done
+
+	for relative_path in LICENSE README.md "${ANCILLARY_PATHS[@]}"; do
+		if [[ -n "${CHECKSUMS[$relative_path]+present}" ]]; then
+			expected="${CHECKSUMS[$relative_path]}"
+		elif ((DRY_RUN)); then
+			expected="$(hash_file "$SOURCE_ROOT/$relative_path")"
+		else
+			die "no checksum supplied for ancillary file: $relative_path"
+		fi
+
+		path="$SOURCE_ROOT/$relative_path"
+		actual="$(hash_file "$path")"
+		[[ "$actual" == "$expected" ]] ||
+			die "SHA-256 mismatch for $relative_path (expected $expected, got $actual)"
+		CHECKSUMS["$relative_path"]="$expected"
+	done
+
+	# Keep shellcheck and future reviewers honest: a dry run may derive all checksums,
+	# but publication mode must always have received explicit ancillary inputs.
+	if ((! DRY_RUN && ! has_explicit)); then
+		die "publication mode requires explicit ancillary checksum inputs"
+	fi
+}
+
+validate_archive() {
+	local expected_url="$REPOSITORY_URL/releases/download/$TAG/bhtune-$TAG-$ARCHIVE_TARGET.tar.gz"
+	has_control_characters "$ARCHIVE_URL" && die "archive URL contains control characters"
+	if [[ -n "$ARCHIVE_URL" && "$ARCHIVE_URL" != "$expected_url" ]]; then
+		if [[ "$ARCHIVE_URL" =~ /refs/heads/(main|master|develop)(/|\.|$) ||
+			"$ARCHIVE_URL" =~ /(raw|tree|blob)/(main|master|develop)(/|$) ||
+			"$ARCHIVE_URL" =~ [\?\&](branch|ref)=(main|master|develop)(&|$) ]]; then
+			die "mutable branch URLs are not allowed for release archives"
+		fi
+		die "--archive-url must be the exact tag-pinned release URL: $expected_url"
+	fi
+	ARCHIVE_URL="$expected_url"
+
+	if [[ -n "$ARCHIVE_PATH" ]]; then
+		ARCHIVE_PATH="$(resolve_existing_path "archive fixture" "$ARCHIVE_PATH")"
+		[[ -f "$ARCHIVE_PATH" ]] || die "archive fixture is not a regular file"
+		local actual_hash
+		actual_hash="$(hash_file "$ARCHIVE_PATH")"
+		[[ -n "$ARCHIVE_SHA256" ]] && validate_hash "archive SHA-256" "$ARCHIVE_SHA256"
+		if [[ -n "$ARCHIVE_SHA256" && "${ARCHIVE_SHA256,,}" != "$actual_hash" ]]; then
+			die "SHA-256 mismatch for archive fixture (expected ${ARCHIVE_SHA256,,}, got $actual_hash)"
+		fi
+	fi
+}
+
+normalize_runtime_dependencies() {
+	local dependency=""
+	local -A unique_dependencies=()
+
+	for dependency in "${RUNTIME_DEPS[@]}"; do
+		unique_dependencies["$dependency"]=1
+	done
+
+	RUNTIME_DEPS=()
+	if ((${#unique_dependencies[@]} > 0)); then
+		mapfile -t RUNTIME_DEPS < <(printf '%s\n' "${!unique_dependencies[@]}" | sort)
+	fi
+}
+
+derive_runtime_dependencies_from_archive() {
+	[[ -n "$ARCHIVE_PATH" ]] ||
+		die "runtime dependencies require --runtime-deps-file, --runtime-dep, or --archive-path"
+	command -v ldd >/dev/null 2>&1 ||
+		die "ldd is required to derive runtime dependencies; pass --runtime-deps-file instead"
+	command -v pacman >/dev/null 2>&1 ||
+		die "pacman is required to map ldd libraries to Arch packages; pass --runtime-deps-file instead"
+	command -v tar >/dev/null 2>&1 ||
+		die "tar is required to inspect the release archive"
+
+	INSPECTION_DIR="$OUTPUT_DIR/.aurpkg-ldd.$BASHPID"
+	[[ ! -e "$INSPECTION_DIR" ]] || die "temporary dependency directory already exists: $INSPECTION_DIR"
+	mkdir -- "$INSPECTION_DIR"
+
+	local archive_listing=""
+	if ! archive_listing="$(tar -tzf "$ARCHIVE_PATH")"; then
+		die "could not list release archive for runtime dependency inspection"
+	fi
+
+	local binary=""
+	local member=""
+	local binary_path=""
+	local ldd_output=""
+	local line=""
+	local library_path=""
+	local owner=""
+	for binary in bhtune bhtune-server; do
+		member=""
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			[[ "${line#./}" == "$binary" ]] || continue
+			member="$line"
+			break
+		done <<<"$archive_listing"
+		[[ -n "$member" ]] ||
+			die "release archive does not contain root-level $binary for ldd inspection"
+
+		binary_path="$INSPECTION_DIR/$binary"
+		if ! tar -xOzf "$ARCHIVE_PATH" "$member" >"$binary_path"; then
+			die "could not extract $binary for ldd inspection"
+		fi
+		[[ -s "$binary_path" ]] ||
+			die "release archive contains an empty $binary"
+		chmod 0755 "$binary_path"
+
+		if ! ldd -- "$binary_path" >"$INSPECTION_DIR/$binary.ldd" 2>&1; then
+			die "ldd failed for $binary; pass an ldd-derived --runtime-deps-file instead"
+		fi
+		ldd_output="$(cat -- "$INSPECTION_DIR/$binary.ldd")"
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			[[ "$line" == *"not found"* ]] &&
+				die "ldd could not resolve a library for $binary: $line"
+
+			library_path=""
+			if [[ "$line" =~ \=\>[[:space:]]+([^[:space:]]+)[[:space:]]+\( ]]; then
+				library_path="${BASH_REMATCH[1]}"
+			elif [[ "$line" =~ ^[[:space:]]*(/[^[:space:]]+)[[:space:]]+\( ]]; then
+				library_path="${BASH_REMATCH[1]}"
+			fi
+			[[ -n "$library_path" ]] || continue
+
+			owner="$(pacman -Qo -- "$library_path" 2>/dev/null | awk 'NR == 1 { print $5 }')"
+			[[ -n "$owner" ]] ||
+				die "could not map ldd library $library_path to an Arch package"
+			add_runtime_dependency "$owner"
+		done <<<"$ldd_output"
+	done
+}
+
+resolve_runtime_dependencies() {
+	parse_runtime_dependency_inputs
+
+	if [[ -z "$RUNTIME_DEPS_FILE" && ${#DIRECT_RUNTIME_DEPS[@]} -eq 0 ]]; then
+		derive_runtime_dependencies_from_archive
+	fi
+	normalize_runtime_dependencies
+}
+
+append_source() {
+	local alias="$1"
+	local url="$2"
+	local relative_path="$3"
+	SOURCE_SPECS+=("$alias::$url")
+	SOURCE_HASHES+=("${CHECKSUMS[$relative_path]}")
+}
+
+cleanup_stage() {
+	if [[ -n "$STAGE_DIR" ]]; then
+		rm -rf -- "$STAGE_DIR"
+	fi
+	if [[ -n "$INSPECTION_DIR" ]]; then
+		rm -rf -- "$INSPECTION_DIR"
+	fi
+}
+
+render_pkgbuild() {
+	local stage_dir="$1"
+	local raw_base="$REPOSITORY_URL/raw/$TAG"
+	local archive_alias="bhtune-$PKGVER-$ARCHIVE_TARGET.tar.gz"
+	local unit_path="$UNIT_RELATIVE_PATH"
+	local name=""
+	local alias=""
+	local relative_path=""
+	local pkgdir_literal=""
+	local pkgname_literal=""
+	local dependency=""
+	local first_dependency=1
+
+	SOURCE_SPECS=()
+	SOURCE_HASHES=()
+	SOURCE_SPECS+=("$archive_alias::$ARCHIVE_URL")
+	SOURCE_HASHES+=("$ARCHIVE_SHA256")
+	append_source "LICENSE" "$raw_base/LICENSE" "LICENSE"
+	append_source "README.md" "$raw_base/README.md" "README.md"
+	for name in "${MAN_NAMES[@]}"; do
+		append_source "man-$name" "$raw_base/man/$name" "man/$name"
+	done
+	append_source "completion-bash" "$raw_base/completions/bhtune.bash" "completions/bhtune.bash"
+	append_source "completion-zsh" "$raw_base/completions/_bhtune" "completions/_bhtune"
+	append_source "completion-fish" "$raw_base/completions/bhtune.fish" "completions/bhtune.fish"
+	append_source "service-bhtune-server.service" "$raw_base/$unit_path" "$unit_path"
+	printf -v pkgdir_literal '%s' $'\044pkgdir'
+	printf -v pkgname_literal '%s' $'\044pkgname'
+
+	{
+		printf '%s\n' "# Maintainer: Mike Boiko <mike@bytehound.ca>"
+		printf '%s\n' "# This file is generated by scripts/aurpkg. Do not edit by hand."
+		printf '\n'
+		printf '%s\n' "pkgname=bhtune-bin"
+		printf 'pkgver=%s\n' "$PKGVER"
+		printf 'pkgrel=%s\n' "$PKGREL"
+		printf '%s\n' "pkgdesc='MRFT PID auto-tuner for industrial control loops'"
+		printf '%s\n' "arch=('x86_64')"
+		printf '%s\n' "url='$REPOSITORY_URL'"
+		printf '%s\n' "license=('AGPL-3.0-or-later')"
+		printf '%s\n' "provides=('bhtune')"
+		printf '%s\n' "conflicts=('bhtune')"
+		printf '%s' "depends=("
+		for dependency in "${RUNTIME_DEPS[@]}"; do
+			if ((first_dependency)); then
+				first_dependency=0
+			else
+				printf ' '
+			fi
+			printf "'%s'" "$dependency"
+		done
+		printf '%s\n' ")"
+		printf '%s\n' "options=('!debug')"
+		printf '\n'
+		printf '%s\n' "source=("
+		for alias in "${SOURCE_SPECS[@]}"; do
+			printf "  '%s'\n" "$alias"
+		done
+		printf '%s\n' ")"
+		printf '%s\n' "sha256sums=("
+		for alias in "${SOURCE_HASHES[@]}"; do
+			printf "  '%s'\n" "$alias"
+		done
+		printf '%s\n' ")"
+		printf '\n'
+		printf '%s\n' "package() {"
+		printf '    install -Dm755 bhtune "%s/usr/bin/bhtune"\n' "$pkgdir_literal"
+		printf '    install -Dm755 bhtune-server "%s/usr/bin/bhtune-server"\n' "$pkgdir_literal"
+		printf '    install -Dm644 LICENSE "%s/usr/share/licenses/%s/LICENSE"\n' "$pkgdir_literal" "$pkgname_literal"
+		printf '    install -Dm644 README.md "%s/usr/share/doc/%s/README.md"\n' "$pkgdir_literal" "$pkgname_literal"
+		for name in "${MAN_NAMES[@]}"; do
+			printf '    install -Dm644 "%s" "%s/usr/share/man/man1/%s"\n' "man-$name" "$pkgdir_literal" "$name"
+		done
+		printf '    install -Dm644 completion-bash "%s/usr/share/bash-completion/completions/bhtune"\n' "$pkgdir_literal"
+		printf '    install -Dm644 completion-zsh "%s/usr/share/zsh/site-functions/_bhtune"\n' "$pkgdir_literal"
+		printf '    install -Dm644 completion-fish "%s/usr/share/fish/vendor_completions.d/bhtune.fish"\n' "$pkgdir_literal"
+		printf '    install -Dm644 service-bhtune-server.service "%s/usr/lib/systemd/system/bhtune-server.service"\n' "$pkgdir_literal"
+		printf '%s\n' "}"
+	} >"$stage_dir/PKGBUILD"
+}
+
+generate() {
+	((EUID != 0)) || die "makepkg --printsrcinfo must be run as a non-root user"
+	command -v makepkg >/dev/null 2>&1 || die "makepkg is required to generate .SRCINFO"
+
+	STAGE_DIR="$OUTPUT_DIR/.aurpkg-stage.$BASHPID"
+	STAGE_DIR="$(mktemp -d -- "$OUTPUT_DIR/.aurpkg-stage.XXXXXX")" ||
+		die "could not create temporary generator directory under $OUTPUT_DIR"
+	trap cleanup_stage EXIT
+
+	render_pkgbuild "$STAGE_DIR"
+	(
+		cd -- "$STAGE_DIR"
+		makepkg --printsrcinfo >.SRCINFO
+	)
+
+	chmod 0644 "$STAGE_DIR/PKGBUILD" "$STAGE_DIR/.SRCINFO"
+	mv -f -- "$STAGE_DIR/PKGBUILD" "$OUTPUT_DIR/PKGBUILD"
+	mv -f -- "$STAGE_DIR/.SRCINFO" "$OUTPUT_DIR/.SRCINFO"
+	trap - EXIT
+	cleanup_stage
+	STAGE_DIR=""
+	printf 'generated %s/PKGBUILD and %s/.SRCINFO\n' "$OUTPUT_DIR" "$OUTPUT_DIR"
+}
+
+parse_args() {
+	while (($# > 0)); do
+		case "$1" in
+		--tag)
+			(($# >= 2)) || die "--tag requires a value"
+			TAG="$2"
+			shift 2
+			;;
+		--version)
+			(($# >= 2)) || die "--version requires a value"
+			VERSION_ARG="$2"
+			shift 2
+			;;
+		--pkgver | --package-version)
+			(($# >= 2)) || die "$1 requires a value"
+			PKGVER="$2"
+			shift 2
+			;;
+		--pkgrel)
+			(($# >= 2)) || die "--pkgrel requires a value"
+			PKGREL="$2"
+			shift 2
+			;;
+		--dry-run)
+			DRY_RUN=1
+			shift
+			;;
+		--archive-sha256)
+			(($# >= 2)) || die "--archive-sha256 requires a value"
+			ARCHIVE_SHA256="$2"
+			shift 2
+			;;
+		--archive-path)
+			(($# >= 2)) || die "--archive-path requires a value"
+			ARCHIVE_PATH="$2"
+			shift 2
+			;;
+		--archive-url)
+			(($# >= 2)) || die "--archive-url requires a value"
+			ARCHIVE_URL="$2"
+			shift 2
+			;;
+		--checksums-file)
+			(($# >= 2)) || die "--checksums-file requires a value"
+			CHECKSUMS_FILE="$2"
+			shift 2
+			;;
+		--sha256)
+			(($# >= 2)) || die "--sha256 requires PATH=HASH"
+			DIRECT_SHA_SPECS+=("$2")
+			shift 2
+			;;
+		--runtime-deps-file)
+			(($# >= 2)) || die "--runtime-deps-file requires a value"
+			RUNTIME_DEPS_FILE="$2"
+			shift 2
+			;;
+		--runtime-dep | --depends)
+			(($# >= 2)) || die "$1 requires a package name"
+			DIRECT_RUNTIME_DEPS+=("$2")
+			shift 2
+			;;
+		--source-root | --fixture-root)
+			(($# >= 2)) || die "$1 requires a value"
+			SOURCE_ROOT="$2"
+			shift 2
+			;;
+		--output-dir)
+			(($# >= 2)) || die "--output-dir requires a value"
+			OUTPUT_DIR="$2"
+			shift 2
+			;;
+		--help | -h)
+			usage
+			exit 0
+			;;
+		*)
+			die "unknown option: $1 (use --help for usage)"
+			;;
+		esac
+	done
+}
+
+main() {
+	parse_args "$@"
+
+	if [[ -n "$VERSION_ARG" ]]; then
+		if [[ -n "$TAG" ]]; then
+			if [[ "$VERSION_ARG" == v* ]]; then
+				[[ "$VERSION_ARG" == "$TAG" ]] ||
+					die "--version tag does not match --tag"
+			elif [[ -z "$PKGVER" ]]; then
+				PKGVER="${VERSION_ARG//-/.}"
+			fi
+		elif [[ "$VERSION_ARG" == v* ]]; then
+			TAG="$VERSION_ARG"
+		else
+			TAG="v$VERSION_ARG"
+			[[ -n "$PKGVER" ]] || PKGVER="${VERSION_ARG//-/.}"
+		fi
+	fi
+
+	[[ -n "$TAG" ]] || die "--tag (or --version) is required"
+	[[ -n "$OUTPUT_DIR" ]] || die "--output-dir is required"
+	validate_tag "$TAG"
+	validate_pkgrel
+
+	local expected_pkgver
+	expected_pkgver="$(package_version_for_tag "$TAG")"
+	if [[ -z "$PKGVER" ]]; then
+		PKGVER="$expected_pkgver"
+	fi
+	validate_pkgver "$PKGVER"
+	[[ "$PKGVER" == "$expected_pkgver" ]] ||
+		die "package version $PKGVER does not match tag $TAG (expected $expected_pkgver)"
+
+	SOURCE_ROOT="$(resolve_existing_path "source root" "$SOURCE_ROOT")"
+	[[ -d "$SOURCE_ROOT" ]] || die "source root is not a directory"
+
+	has_control_characters "$OUTPUT_DIR" && die "output directory contains control characters"
+	[[ ! -L "$OUTPUT_DIR" ]] || die "output directory must not be a symlink: $OUTPUT_DIR"
+	if [[ -e "$OUTPUT_DIR" ]]; then
+		[[ -d "$OUTPUT_DIR" ]] || die "output path is not a directory: $OUTPUT_DIR"
+	else
+		mkdir -p -- "$OUTPUT_DIR"
+	fi
+	OUTPUT_DIR="$(cd -- "$OUTPUT_DIR" && pwd -P)"
+	[[ "$OUTPUT_DIR" != "$SOURCE_ROOT" ]] ||
+		die "output directory must not be the source root"
+	trap cleanup_stage EXIT
+
+	if [[ -n "$ARCHIVE_SHA256" ]]; then
+		validate_hash "archive SHA-256" "$ARCHIVE_SHA256"
+	fi
+	discover_inventory
+	parse_checksum_inputs
+	verify_checksum_paths
+	validate_archive
+	resolve_hashes
+	resolve_runtime_dependencies
+	generate
+}
+
+main "$@"

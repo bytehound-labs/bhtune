@@ -153,6 +153,38 @@ requests receive an explicit successful skip status. Applicable PR analyses must
 `OPEN`/`CONFIRMED` issues; Accepted and False Positive findings require a documented rationale
 and a link to the related pull request or documentation.
 
+### Packaging validation
+
+Packaging changes must keep generated artifacts and disposable package workspaces outside the
+repository. The AUR generator is metadata-only: it does not compile Rust or frontend code,
+contact AUR, or publish anything. Run its network-free regression suite and shell checks before
+opening a packaging pull request:
+
+```sh
+python3 scripts/aurpkg_test.py
+shellcheck scripts/aurpkg
+shfmt -d scripts/aurpkg
+```
+
+Use a disposable Arch environment and a non-root build user for `makepkg --verifysource`,
+package installation, upgrade, removal, and service-state checks. Generate `.SRCINFO` with
+`makepkg --printsrcinfo`; never hand-edit it. Publication is intentionally separate from pull
+request validation, requires an exact stable `vX.Y.Z` tag and independently verified release
+evidence, and remains a manual first-release action until the post-release AUR commit has been
+verified. The reusable Arch job feeds its validation script to `docker run -i` and writes
+machine-readable evidence through the host-mounted `aur-evidence/` directory; preserve both
+invariants when changing that workflow. The regression suite must run with the repository root
+as its working directory because its ancillary-file inventory intentionally uses repository-
+relative paths.
+Package-content assertions use archive-relative paths and accept either `bsdtar`
+leading-path convention (`usr/...` or `./usr/...`).
+
+Debian packages use adaptive `depends = "$auto"` metadata and therefore require
+`dpkg-shlibdeps` in the packaging environment. Do not hard-code a dependency list to compensate
+for an incomplete local package build. Keep `.github/workflows/release.yml` unchanged when
+working on reusable installer or AUR validation/publication workflows; release integration is a
+separate coordination task.
+
 ## Security and compatibility checks
 
 Security workflows run CodeQL, Semgrep, full-history Gitleaks, actionlint, and zizmor. Keep

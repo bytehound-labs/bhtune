@@ -408,10 +408,13 @@ loosening tolerances blindly). `capture-traces` is deliberately closed at this o
 more are planned) and `cleanup-golden-traces`/`e2e-golden-ci`/`core-bug-register` are also done
 — see "Phases and todos" below for what's next.
 
-`pkg-evaluate-others` is now done too: `.deb` and `.rpm` packages (via `cargo-deb` and
-`cargo-generate-rpm`, sharing the same asset set as the Docker image), `cargo-binstall`
+`pkg-evaluate-others` and `pkg-aur` are now done: `.deb` and `.rpm` packages (via `cargo-deb` and
+`cargo-generate-rpm`, sharing the same asset set as the Docker image), the guarded
+`bhtune-bin` AUR generator and reusable validation/publication workflow, `cargo-binstall`
 metadata on `bhtune-cli`, and a prepared-but-inert Homebrew formula awaiting a real tap
-repo and release checksums. `release.yml` gained a new `package-deb-rpm` job, deliberately
+repo and release checksums. The AUR workflow accepts only exact stable `vX.Y.Z` tags for
+publication; prereleases and arbitrary refs are validation-only, and the first publication is
+still a manual post-release action. `release.yml` gained a new `package-deb-rpm` job, deliberately
 separate from the existing per-platform `build` matrix rather than extra steps on its Linux
 leg, because `upload-rust-binary-action` always builds with an explicit `--target`, leaving
 binaries in a target-triple subdirectory the packaging asset paths don't expect. Both new
@@ -3897,6 +3900,18 @@ them.
 **winget remains out of scope.** It requires PR-ing a manifest into Microsoft's community
 repo on every single release, which only makes sense once `pkg-windows-installer`'s NSIS
 installer is itself stable — revisit then, not before.
+
+**`bhtune-bin` publication remains intentionally conditional.** The generator produces a
+binary-only Arch package from an exact stable Linux release archive and immutable tag-pinned
+ancillary files. It generates `.SRCINFO` through non-root `makepkg --printsrcinfo`, validates
+every source checksum and package path, and exercises installation, upgrade, service-state,
+and removal preservation in disposable Arch environments. The reusable workflow supports
+dry-run validation for arbitrary refs without AUR credentials, but publication requires the
+real stable release assets, release evidence, AUR SSH credentials, and a clean expected AUR
+remote. No AUR package is publicly available until the first stable release and manual
+publication have completed. Debian's `depends = "$auto"` remains deliberate: package builds
+must run where `dpkg-shlibdeps` is available rather than substituting a stale hand-maintained
+dependency list.
 
 ## Validation strategy: golden-master replay
 

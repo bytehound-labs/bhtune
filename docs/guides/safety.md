@@ -296,6 +296,27 @@ two-pass cleanup: ProgramData, installer recovery state, and operator data remai
 ownership metadata is removed only after the fixed Program Files tree has been independently
 verified absent.
 
+The Debian, RPM, and Arch package units are package-managed variants of the same hardened
+systemd service and use `/usr/bin/bhtune-server`; the manual archive unit is separate and uses
+`/usr/local/bin/bhtune-server`. Installing any package reloads systemd metadata but does not
+enable or start BHTune. Operators must explicitly run `sudo systemctl enable --now
+bhtune-server` after reviewing the configuration. Package upgrades preserve the previous
+service state, and package removal preserves `/etc/bhtune`, `/var/lib/bhtune`, SQLite sidecars,
+and logs rather than treating them as disposable payload files.
+
+Debian package dependency metadata is intentionally adaptive: `cargo-deb` uses
+`depends = "$auto"` and relies on `dpkg-shlibdeps` in a Debian-capable packaging environment.
+An empty `Depends:` field from a host that lacks that tool is an incomplete packaging result, not
+evidence that the runtime has no shared-library requirements. Do not install such an artifact
+without rebuilding it in the supported Debian environment or independently verifying its
+dependencies.
+
+The Arch `bhtune-bin` package is generated from exact stable release inputs and is not a live
+source build. Its publication workflow rejects prerelease and arbitrary refs, validates every
+source checksum, builds as a non-root Arch user, and never enables or starts the service during
+package installation. Until the first stable release and manual AUR publication exist, use the
+workflow only for validation; do not present `bhtune-bin` as an available public package.
+
 The Windows installer is not Authenticode-signed. SmartScreen may therefore warn about the
 publisher even when the file is intact. Verify the release checksum and, when available, the
 Sigstore bundle and GitHub provenance separately; those checks establish integrity and build
