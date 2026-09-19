@@ -294,6 +294,7 @@ function Start-UninstallFinalizer {
     }
 
     $finalizerRoot = Join-Path $Paths.InstallerStateRoot ("uninstall-finalizer-{0}" -f ([guid]::NewGuid().ToString('N')))
+    Write-InstallerTrace -Stage 'uninstall.finalizer.stage.begin' -Detail $finalizerRoot
     New-Item -ItemType Directory -Path $finalizerRoot -Force | Out-Null
     Assert-NoReparsePointInPath -Path $finalizerRoot -Name 'the uninstall finalizer staging root'
 
@@ -301,6 +302,7 @@ function Start-UninstallFinalizer {
     $finalizerHelper = Join-Path $finalizerRoot 'InstallerSupport.ps1'
     Copy-Item -LiteralPath $script:InstallerScriptPath -Destination $finalizerScript -Force
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'InstallerSupport.ps1') -Destination $finalizerHelper -Force
+    Write-InstallerTrace -Stage 'uninstall.finalizer.stage.complete' -Detail $finalizerRoot
 
     $powershellPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if (-not (Test-Path -LiteralPath $powershellPath -PathType Leaf)) {
@@ -333,12 +335,14 @@ function Start-UninstallFinalizer {
     )
 
     try {
+        Write-InstallerTrace -Stage 'uninstall.finalizer.launch.begin' -Detail $finalizerRoot
         $process = Start-Process `
             -FilePath $powershellPath `
             -ArgumentList $arguments `
             -WindowStyle Hidden `
             -PassThru `
             -ErrorAction Stop
+        Write-InstallerTrace -Stage 'uninstall.finalizer.launch.returned' -Detail ("pid={0}" -f $process.Id)
     } catch {
         throw "Unable to start the bounded uninstall finalizer: $($_.Exception.Message)"
     }
@@ -606,12 +610,17 @@ function Recover-InterruptedTransaction {
             }
         }
         if ($phase -eq 'ServiceRemovePending') {
-            if ($null -eq $service) {
+            $registrationExists = Invoke-ServiceRegistrationQuery -Name $Paths.ServiceName
+            if (-not $registrationExists) {
                 $journal.Phase = 'ServiceRemoved'
                 Write-TransactionJournal -Paths $Paths -Value $journal
                 $phase = 'ServiceRemoved'
-            } elseif (-not (Test-OwnedServiceSnapshot -ServiceSnapshot $service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
-                throw "The interrupted uninstall found an unowned service at '$($Paths.ServiceName)'. Refusing to guess."
+            } else {
+                $service = Get-ServiceSnapshot -Name $Paths.ServiceName
+                if ($null -eq $service -or
+                    -not (Test-OwnedServiceSnapshot -ServiceSnapshot $service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
+                    throw "The interrupted uninstall found an unowned or unverifiable service at '$($Paths.ServiceName)'. Refusing to guess."
+                }
             }
         }
         if ($phase -ne 'Begin' -and
@@ -769,6 +778,7 @@ function Assert-InstallerState {
     $marker = Get-RegistrySnapshot -Path $Paths.MarkerPath
     $uninstall = Get-RegistrySnapshot -Path $Paths.UninstallKeyPath
     $service = Get-ServiceSnapshot -Name $Paths.ServiceName
+    $registrationExists = Invoke-ServiceRegistrationQuery -Name $Paths.ServiceName
     # Treat any pre-existing filesystem object at the fixed root as a
     # conflicting installation.  A file, junction, or other non-directory
     # object must not be removed just because it is not a container.
@@ -827,6 +837,9 @@ function Assert-InstallerState {
             }
         }
         if ($null -eq $service) {
+            if ($registrationExists) {
+                throw "Service '$($Paths.ServiceName)' remains registered but cannot be inspected. Refusing to guess."
+            }
             if (-not $AllowMissingService) {
                 throw "The installer ownership marker exists but service '$($Paths.ServiceName)' is missing."
             }
@@ -866,7 +879,7 @@ function Assert-InstallerState {
         }
     }
 
-    if ($null -ne $service) {
+    if ($null -ne $service -or $registrationExists) {
         throw "Service '$($Paths.ServiceName)' already exists without an installer ownership marker. Stop and uninstall the manually registered service, preserve its data, and rerun the BHTune installer."
     }
     if ($installExists) {
@@ -2508,8 +2521,12 @@ function Invoke-ConservativeUninstall {
     }
 
     if ($phase -eq 'ServiceRemovePending') {
-        $currentService = Get-ServiceSnapshot -Name $Paths.ServiceName
-        if ($null -ne $currentService) {
+        $registrationExists = Invoke-ServiceRegistrationQuery -Name $Paths.ServiceName
+        if ($registrationExists) {
+            $currentService = Get-ServiceSnapshot -Name $Paths.ServiceName
+            if ($null -eq $currentService) {
+                throw "Service '$($Paths.ServiceName)' remains registered but cannot be inspected. Refusing to remove it."
+            }
             if (-not (Test-OwnedServiceSnapshot -ServiceSnapshot $currentService -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
                 throw "Service '$($Paths.ServiceName)' is not the installer-owned LocalService service. Refusing to remove it."
             }
@@ -2637,6 +2654,7 @@ $transactionLock = $null
 try {
     Write-InstallerTrace -Stage 'script.begin' -Detail ("mode={0}; testOnly={1}" -f $Mode, $TestOnly)
     Assert-FailureInjectionPolicy -FailureInjection $FailureInjection -TestOnly ([bool]$TestOnly) | Out-Null
+    Write-InstallerTrace -Stage 'script.options.validated' -Detail ("mode={0}; finalize={1}" -f $Mode, $FinalizeUninstall)
     if ($FinalizeUninstall -and $Mode -ne 'Uninstall') {
         throw 'The uninstall finalization switch is valid only with -Mode Uninstall.'
     }
@@ -2667,12 +2685,15 @@ try {
 
         $versionContract = Assert-InstallerVersionContract -ExpectedVersion $ExpectedVersion -ReleaseTag $ReleaseTag
         $paths = Get-InstallerPaths -InstallRoot $InstallRoot -ProgramDataRoot $ProgramDataRoot
+        Write-InstallerTrace -Stage 'script.paths.resolved' -Detail $paths.InstallRoot
         if (-not [bool]$TestOnly) {
             Assert-InstallerFixedPaths -Paths $paths | Out-Null
         }
         $transactionLock = Enter-InstallerTransactionLock
+        Write-InstallerTrace -Stage 'transaction.lock.acquired' -Detail $paths.InstallerStateRoot
         Assert-InstallerEnvironmentPolicy -Paths $paths | Out-Null
         $recovery = Recover-InterruptedTransaction -Paths $paths -FinalizeUninstall:$false
+        Write-InstallerTrace -Stage 'transaction.recovery.completed' -Detail $(if ($null -eq $recovery) { 'none' } else { [string]$recovery.Action })
         if ($null -ne $recovery -and [string]$recovery.Action -eq 'ResumeUninstall') {
             throw "An uninstall transaction is still finalizing for '$($paths.InstallRoot)'. Wait for the uninstall finalizer to finish, or rerun the uninstaller before installing BHTune again."
         }
@@ -2699,19 +2720,27 @@ try {
             -FailureInjection $FailureInjection
     } else {
         $paths = Get-InstallerPaths -InstallRoot $InstallRoot -ProgramDataRoot $ProgramDataRoot
+        Write-InstallerTrace -Stage 'script.paths.resolved' -Detail $paths.InstallRoot
         if (-not [bool]$TestOnly) {
             Assert-InstallerFixedPaths -Paths $paths | Out-Null
         }
         $transactionLock = Enter-InstallerTransactionLock
+        Write-InstallerTrace -Stage 'transaction.lock.acquired' -Detail $paths.InstallerStateRoot
         Assert-InstallerEnvironmentPolicy -Paths $paths | Out-Null
         $recovery = Recover-InterruptedTransaction `
             -Paths $paths `
             -FinalizeUninstall:([bool]$FinalizeUninstall)
+        Write-InstallerTrace -Stage 'transaction.recovery.completed' -Detail $(if ($null -eq $recovery) { 'none' } else { [string]$recovery.Action })
         if ($null -eq $recovery -or [string]$recovery.Action -ne 'Finalized') {
+            Write-InstallerTrace `
+                -Stage 'uninstall.orchestration.begin' `
+                -Detail ("phase={0}; finalize={1}" -f `
+                    $(if ($null -eq $recovery) { 'none' } else { [string]$recovery.Phase }), $FinalizeUninstall)
             Invoke-ConservativeUninstall `
                 -Paths $paths `
                 -LeaveInstallRoot ([bool]$LeaveInstallRoot) `
                 -FinalizeUninstall ([bool]$FinalizeUninstall)
+            Write-InstallerTrace -Stage 'uninstall.orchestration.end' -Detail $paths.InstallRoot
         }
     }
 

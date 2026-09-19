@@ -205,7 +205,10 @@ registry-facing uninstall state, and exact machine `PATH` entry, then leaves the
 journal and ownership metadata in place while NSIS removes the fixed Program Files tree. A
 guarded finalization pass removes that metadata and the journal only after the tree is verified
 absent; an interrupted or incomplete cleanup therefore remains retryable instead of being
-reported as finished. Uninstall removes only installer-owned binaries and state, and preserves the entire
+reported as finished. Service removal uses a bounded SCM disappearance wait with transient
+service-query retries, which allows older Windows versions to complete delayed service
+deregistration without treating a still-pending removal as success. Uninstall removes only
+installer-owned binaries and state, and preserves the entire
 `%ProgramData%\ByteHound\bhtune\` tree, including configuration, databases, logs, and rollback
 backup. There is no automated data-deletion option.
 

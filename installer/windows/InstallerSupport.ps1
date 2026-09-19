@@ -1538,24 +1538,45 @@ function Remove-RegistryKey {
 function Get-ServiceSnapshot {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Name
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        [int]$RetryCount = 3,
+
+        [Parameter(Mandatory = $false)]
+        [int]$RetryDelayMilliseconds = 250
     )
 
-    $service = Get-WmiObject -Class Win32_Service -Filter ("Name='{0}'" -f $Name) -ErrorAction Stop
-    if ($null -eq $service) {
-        return $null
+    $lastError = $null
+    for ($attempt = 0; $attempt -lt $RetryCount; $attempt++) {
+        try {
+            $service = Get-WmiObject -Class Win32_Service -Filter ("Name='{0}'" -f $Name) -ErrorAction Stop
+            if ($null -eq $service) {
+                return $null
+            }
+
+            return [pscustomobject]@{
+                Exists      = $true
+                Name        = [string]$service.Name
+                State       = [string]$service.State
+                StartMode   = [string]$service.StartMode
+                StartName   = [string]$service.StartName
+                PathName    = [string]$service.PathName
+                DisplayName = [string]$service.DisplayName
+                Description = [string]$service.Description
+            }
+        } catch {
+            $lastError = $_.Exception
+            if ($attempt -lt ($RetryCount - 1)) {
+                Write-InstallerTrace `
+                    -Stage 'service.snapshot.retry' `
+                    -Detail ("name={0}; attempt={1}; error={2}" -f $Name, ($attempt + 1), $lastError.Message)
+                Start-Sleep -Milliseconds $RetryDelayMilliseconds
+            }
+        }
     }
 
-    return [pscustomobject]@{
-        Exists      = $true
-        Name        = [string]$service.Name
-        State       = [string]$service.State
-        StartMode   = [string]$service.StartMode
-        StartName   = [string]$service.StartName
-        PathName    = [string]$service.PathName
-        DisplayName = [string]$service.DisplayName
-        Description = [string]$service.Description
-    }
+    throw "Unable to inspect service '$Name' after $RetryCount attempts: $($lastError.Message)"
 }
 
 function Test-LocalServiceAccount {
@@ -1618,6 +1639,69 @@ function Invoke-ScCommand {
     }
 
     return $output
+}
+
+function Invoke-ServiceRegistrationQuery {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $scPath = Join-Path $env:SystemRoot 'System32\sc.exe'
+    if (-not (Test-Path -LiteralPath $scPath -PathType Leaf)) {
+        throw 'The Windows Service Control Manager command (sc.exe) is unavailable.'
+    }
+
+    $output = (& $scPath query $Name 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        return $true
+    }
+    if ($exitCode -eq 1060) {
+        return $false
+    }
+
+    throw "sc.exe query $Name failed with exit code $exitCode. $output"
+}
+
+function Wait-ServiceRegistrationGone {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 30,
+
+        [Parameter(Mandatory = $false)]
+        [int]$PollMilliseconds = 250
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $attempt = 0
+    $lastError = 'the service is still registered'
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            if (-not (Invoke-ServiceRegistrationQuery -Name $Name)) {
+                Write-InstallerTrace `
+                    -Stage 'service.delete.disappeared' `
+                    -Detail ("name={0}; attempts={1}" -f $Name, ($attempt + 1))
+                return
+            }
+            $lastError = 'the service is still registered'
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+
+        $attempt++
+        if ($attempt -eq 1 -or $attempt % 10 -eq 0) {
+            Write-InstallerTrace `
+                -Stage 'service.delete.poll' `
+                -Detail ("name={0}; attempt={1}; error={2}" -f $Name, $attempt, $lastError)
+        }
+        Start-Sleep -Milliseconds $PollMilliseconds
+    }
+
+    throw "The service '$Name' did not disappear after $TimeoutSeconds seconds: $lastError"
 }
 
 function New-LocalServiceCredential {
@@ -1719,20 +1803,19 @@ function Remove-ServiceByName {
         [string]$Name
     )
 
-    $existing = Get-ServiceSnapshot -Name $Name
-    if ($null -eq $existing) {
+    if (-not (Invoke-ServiceRegistrationQuery -Name $Name)) {
         return
     }
-
-    Invoke-ScCommand -Arguments @('delete', $Name) | Out-Null
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
-        if ($null -eq (Get-ServiceSnapshot -Name $Name)) {
-            return
-        }
-        Start-Sleep -Milliseconds 250
+    $existing = Get-ServiceSnapshot -Name $Name
+    if ($null -eq $existing) {
+        throw "Service '$Name' remains registered but cannot be inspected. Refusing to remove it."
     }
 
-    throw "The service '$Name' did not disappear after deletion."
+    Write-InstallerTrace -Stage 'service.delete.begin' -Detail $Name
+    Invoke-ScCommand -Arguments @('delete', $Name) | Out-Null
+    Write-InstallerTrace -Stage 'service.delete.requested' -Detail $Name
+    Wait-ServiceRegistrationGone -Name $Name
+    Write-InstallerTrace -Stage 'service.delete.end' -Detail $Name
 }
 
 function Wait-ServiceState {

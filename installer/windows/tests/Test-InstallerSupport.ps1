@@ -659,6 +659,7 @@ try {
     $script:MockMarker = $null
     $script:MockUninstall = $null
     $script:MockService = $null
+    $script:MockServiceRegistration = $null
     function Get-RegistrySnapshot {
         param(
             [Parameter(Mandatory = $true)]
@@ -676,6 +677,17 @@ try {
         )
 
         return $script:MockService
+    }
+    function Invoke-ServiceRegistrationQuery {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Name
+        )
+
+        if ($null -ne $script:MockServiceRegistration) {
+            return [bool]$script:MockServiceRegistration
+        }
+        return $null -ne $script:MockService
     }
     $script:RemovedRegistryKeys = @()
     $script:JournalPresentDuringMetadataRemoval = @()
@@ -797,6 +809,14 @@ try {
     Assert-Throws -Action {
         Assert-InstallerState -Paths $journalPaths -AllowMissingInstallRoot:$true
     } -Message 'missing owned service still requires an explicit retry state'
+    $script:MockServiceRegistration = $true
+    Assert-Throws -Action {
+        Assert-InstallerState `
+            -Paths $journalPaths `
+            -AllowMissingService:$true `
+            -AllowMissingInstallRoot:$true
+    } -Message 'owned service registration cannot be treated as absent when WMI inspection is unavailable'
+    $script:MockServiceRegistration = $null
     $ownedMissingState = Assert-InstallerState `
         -Paths $journalPaths `
         -AllowMissingService:$true `
@@ -1095,6 +1115,92 @@ try {
     Assert-True -Condition (@($script:AclCalls | Where-Object { $_ -eq $paths.InstallRoot }).Count -eq 1) -Message 'recreated install roots receive the scoped installer ACL'
     $operatorDescendant = Join-Path $paths.DatabaseDirectory 'operator-owned.db'
     Assert-True -Condition ((Get-InstallerAclTargets -Paths $paths) -notcontains $operatorDescendant) -Message 'operator-owned database descendants are outside ACL targets'
+
+    . $helperPath
+    $script:WmiQueryResults = New-Object System.Collections.Queue
+    [void]$script:WmiQueryResults.Enqueue('transient-error')
+    [void]$script:WmiQueryResults.Enqueue([pscustomobject]@{
+            Name        = 'BhtuneServer'
+            State       = 'Running'
+            StartMode   = 'Auto'
+            StartName   = 'NT AUTHORITY\LocalService'
+            PathName    = 'bhtune-server.exe --config bhtune.toml'
+            DisplayName = 'BHTune Server'
+            Description = 'BHTune HTTP API and embedded web GUI.'
+        })
+    $script:WmiQueryCalls = 0
+    function Get-WmiObject {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Class,
+
+            [Parameter(Mandatory = $true)]
+            [string]$Filter
+        )
+
+        $script:WmiQueryCalls++
+        $next = $script:WmiQueryResults.Dequeue()
+        if ($next -eq 'transient-error') {
+            throw 'temporary WMI query failure'
+        }
+        return $next
+    }
+    $retriedSnapshot = Get-ServiceSnapshot -Name 'BhtuneServer' -RetryCount 3 -RetryDelayMilliseconds 0
+    Assert-Equal -Actual $script:WmiQueryCalls -Expected 2 -Message 'service snapshots retry transient WMI failures'
+    Assert-Equal -Actual $retriedSnapshot.State -Expected 'Running' -Message 'service snapshots return the later WMI result'
+
+    function Get-ServiceSnapshot {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Name
+        )
+
+        return $script:MockService
+    }
+
+    $script:ServiceQueryResults = New-Object System.Collections.Queue
+    [void]$script:ServiceQueryResults.Enqueue($true)
+    [void]$script:ServiceQueryResults.Enqueue($true)
+    [void]$script:ServiceQueryResults.Enqueue($false)
+    $script:ServiceQueryCalls = 0
+    function Invoke-ServiceRegistrationQuery {
+        param([string]$Name)
+        $script:ServiceQueryCalls++
+        return [bool]$script:ServiceQueryResults.Dequeue()
+    }
+    Wait-ServiceRegistrationGone -Name 'BhtuneServer' -TimeoutSeconds 2 -PollMilliseconds 0
+    Assert-Equal -Actual $script:ServiceQueryCalls -Expected 3 -Message 'service removal waits for SCM registration to disappear'
+
+    $script:ServiceQueryResults = New-Object System.Collections.Queue
+    [void]$script:ServiceQueryResults.Enqueue('transient-error')
+    [void]$script:ServiceQueryResults.Enqueue($false)
+    $script:ServiceQueryCalls = 0
+    function Invoke-ServiceRegistrationQuery {
+        param([string]$Name)
+        $script:ServiceQueryCalls++
+        $next = $script:ServiceQueryResults.Dequeue()
+        if ($next -eq 'transient-error') {
+            throw 'temporary SCM query failure'
+        }
+        return [bool]$next
+    }
+    Wait-ServiceRegistrationGone -Name 'BhtuneServer' -TimeoutSeconds 2 -PollMilliseconds 0
+    Assert-Equal -Actual $script:ServiceQueryCalls -Expected 2 -Message 'service removal retries transient SCM query failures'
+
+    $script:ServiceQueryCalls = 0
+    function Invoke-ServiceRegistrationQuery {
+        param([string]$Name)
+        $script:ServiceQueryCalls++
+        return $true
+    }
+    $timeoutMessage = $null
+    try {
+        Wait-ServiceRegistrationGone -Name 'BhtuneServer' -TimeoutSeconds 1 -PollMilliseconds 25
+    } catch {
+        $timeoutMessage = $_.Exception.Message
+    }
+    Assert-True -Condition ($timeoutMessage -like "*did not disappear after 1 seconds*") -Message 'service removal times out when SCM registration remains'
+    Assert-True -Condition ($script:ServiceQueryCalls -gt 0) -Message 'service removal polls SCM before timing out'
 
     Write-Host ("InstallerSupport self-tests passed: {0}" -f $script:Passed)
     exit 0

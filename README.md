@@ -400,6 +400,9 @@ two-pass cleanup and preserves the complete ProgramData tree, including installe
 a genuinely empty clean install has no rollback backup until there is existing data to protect.
 It is not attached to a public release until the first stable release contract is activated. The
 `bhtune-bin` AUR package is a separate follow-on channel and is likewise stable-tag-only.
+Windows uninstall uses a bounded Service Control Manager disappearance wait and a retryable
+finalizer so delayed service deregistration does not remove the ownership journal prematurely;
+ProgramData remains preserved throughout.
 Publishing to [crates.io](https://crates.io), Homebrew, and a few other channels is still an
 open evaluation, not a commitment — see the [roadmap](docs/roadmap.md).
 
