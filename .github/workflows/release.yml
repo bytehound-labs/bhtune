@@ -188,14 +188,30 @@ jobs:
       # itself: confirmed by CI failing here with "Is a directory (os error 21)" on a
       # trailing-slash path that doesn't exist yet, since it then treats the path as a
       # literal (non-existent) *file* target rather than a directory to create.
+      # RPM version syntax does not permit the hyphen used by a SemVer prerelease. Map only
+      # the first prerelease separator to RPM's `~` ordering operator; stable tags retain
+      # the Cargo version unchanged. This changes only RPM metadata, not the archive or
+      # executable version reported by the RC.
       - name: Build .rpm package
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
         run: |
           mkdir -p target/generate-rpm
-          cargo generate-rpm -p crates/bhtune-cli -o target/generate-rpm/
+          rpm_metadata_args=()
+          if [[ "$RELEASE_REF" == refs/tags/*-* ]]; then
+            rpm_version="${RELEASE_REF_NAME#v}"
+            rpm_version="${rpm_version/-/~}"
+            rpm_metadata_args+=(--set-metadata "version = \"$rpm_version\"")
+          fi
+          cargo generate-rpm \
+            -p crates/bhtune-cli \
+            -o target/generate-rpm/ \
+            "${rpm_metadata_args[@]}"
 
-      # Both tools name their output after the crate's own name/version (e.g.
-      # bhtune_0.1.0-1_amd64.deb, bhtune-0.1.0-1.x86_64.rpm), so every release already
-      # produces distinctly-named files with no manual rename step needed.
+      # Both tools name their output after the crate's own name/version. Stable releases use
+      # bhtune_0.1.0-1_amd64.deb and bhtune-0.1.0-1.x86_64.rpm; an RC RPM uses the RPM-safe
+      # version bhtune-0.1.0~rc.1-1.x86_64.rpm.
       - name: Upload to release
         if: github.event_name == 'push'
         env:
