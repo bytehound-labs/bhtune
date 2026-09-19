@@ -201,7 +201,8 @@ jobs:
           rpm_metadata_args=()
           if [[ "$RELEASE_REF" == refs/tags/*-* ]]; then
             rpm_version="${RELEASE_REF_NAME#v}"
-            rpm_version="${rpm_version/-/~}"
+            # Escape the tilde so Bash does not expand it to the runner home directory.
+            rpm_version="${rpm_version/-/\~}"
             rpm_metadata_args+=(--set-metadata "version = \"$rpm_version\"")
           fi
           cargo generate-rpm \
