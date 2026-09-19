@@ -133,8 +133,12 @@ manifest from the downloaded file.
 For an individual archive, its published `.sha256` file can also be checked directly:
 
 ```sh
-sha256sum -c bhtune-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c bhtune-vX.Y.Z-x86_64-unknown-linux-gnu.sha256
 ```
+
+The per-archive checksum filename omits the archive extension. The hosted canary installs the
+Debian package as a local path with a `./` prefix for the same reason: without that prefix,
+`apt-get` interprets `dist/package.deb` as a package/version selector instead of a local file.
 
 ## 4. Verify Sigstore bundles
 
