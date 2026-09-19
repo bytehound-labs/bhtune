@@ -300,6 +300,8 @@ Get-Acl "$env:ProgramFiles\ByteHound\bhtune"
 Get-Acl "$env:ProgramData\ByteHound\bhtune"
 Get-CimInstance Win32_Service -Filter "Name='OpcdaBridgeGateway'"
 Get-NetTCPConnection -State Listen -LocalPort 7600
+& "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json gateway-info `
+  --bridge-host 127.0.0.1:7600
 & "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json servers `
   --bridge-host 127.0.0.1:7600
 ```
@@ -308,8 +310,11 @@ The first command verifies the gateway-free silent default; the second invocatio
 adds the gateway. The BHTune service must run as `NT AUTHORITY\LocalService`. The gateway must
 run as `LocalSystem` from the managed executable, use the managed configuration/log arguments,
 register for automatic start, and own every TCP `7600` listener. At least one listener must bind
-`0.0.0.0:7600`. `bhtune opc --output json servers` must produce valid JSON; an empty `servers`
-array is valid on a host with no registered OPC DA servers.
+`0.0.0.0:7600`. `bhtune opc --output json gateway-info` must report the pinned application
+version and compatible core, namespace, and indexed-search protocol ranges without requiring
+OPCEnum or a registered OPC DA server. `bhtune opc --output json servers` is a separate
+target-host integration check; an empty `servers` array is valid on a host with no registered
+OPC DA servers.
 
 Verify the embedded upstream release record independently:
 

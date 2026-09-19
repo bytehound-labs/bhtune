@@ -423,8 +423,8 @@ backup. Once installer-managed data exists, upgrades retain exactly one verified
 under the ProgramData installer state directory; the existing backup is replaced only after the
 new manifest has been verified.
 
-Silent installs use the same ownership, health, listener, gateway smoke, and rollback checks as
-interactive installs. `/START_GATEWAY` controls the final state only for a new gateway
+Silent installs use the same ownership, health, listener, gateway compatibility, and rollback
+checks as interactive installs. `/START_GATEWAY` controls the final state only for a new gateway
 installation or add-on; a managed gateway upgrade preserves its prior running/stopped state.
 An installation that predates gateway support, or that previously opted out, remains
 gateway-free until `/INSTALL_GATEWAY=1` is supplied. Once the gateway is installer-owned,
@@ -478,12 +478,16 @@ After installation, verify both services when the gateway component was selected
 sc.exe qc BhtuneServer
 sc.exe qc OpcdaBridgeGateway
 Invoke-RestMethod http://127.0.0.1:8787/api/health
+& "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json gateway-info `
+  --bridge-host 127.0.0.1:7600
 & "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json servers `
   --bridge-host 127.0.0.1:7600
 ```
 
-The final command must return valid JSON; an empty `servers` array is valid when no OPC DA
-servers are registered on the gateway host.
+`gateway-info` must report the pinned application version and compatible core, namespace, and
+indexed-search protocol ranges. It does not contact an OPC server, so it is the installer-level
+gateway validation even on a host without OPCEnum. `servers` is a separate target-host check;
+its empty array is valid when no OPC DA servers are registered.
 
 #### Manual archive installation
 

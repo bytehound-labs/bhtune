@@ -28,8 +28,8 @@ Before an installation is accepted for operator use, verify all of the following
   - every TCP `7600` listener belongs to its SCM process and at least one listener binds
     `0.0.0.0:7600`;
   - the installed gateway hash matches its embedded release contract; and
-  - `bhtune opc --output json servers --bridge-host 127.0.0.1:7600` returns valid JSON,
-    including a valid empty `servers` array when no OPC DA server is registered.
+  - `bhtune opc --output json gateway-info --bridge-host 127.0.0.1:7600` reports the pinned
+    application version and compatible core, namespace, and indexed-search protocol ranges.
 
 The browser health indicator confirms only that the BHTune HTTP service responds. It does not
 test the OPC DA gateway, a controller, or a tag.
@@ -90,6 +90,8 @@ Get-Service OpcdaBridgeGateway
 sc.exe qc OpcdaBridgeGateway
 Get-CimInstance Win32_Service -Filter "Name='OpcdaBridgeGateway'"
 Get-NetTCPConnection -State Listen -LocalPort 7600
+& "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json gateway-info `
+  --bridge-host 127.0.0.1:7600
 & "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json servers `
   --bridge-host 127.0.0.1:7600
 Get-ChildItem "$env:ProgramData\ByteHound\bhtune\gateway\logs"
@@ -97,7 +99,9 @@ Get-ChildItem "$env:ProgramData\ByteHound\bhtune\gateway\logs"
 
 The gateway is unauthenticated and binds `0.0.0.0:7600`. The installer deliberately leaves
 Windows Firewall unchanged. Do not add a firewall rule unless off-host gateway access on a
-trusted OT network is required and explicitly approved.
+trusted OT network is required and explicitly approved. `gateway-info` validates the gateway
+without contacting OPCEnum or an OPC server. `servers` is the separate OPC-host availability
+check and may return an empty array on a host without registered servers.
 
 ### Linux systemd
 

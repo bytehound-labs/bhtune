@@ -395,6 +395,57 @@ exit 7
     $checkedInContract = Assert-GatewayReleaseContract -ContractPath $checkedInContractPath
     Assert-Equal -Actual $checkedInContract.tag -Expected 'opcda-bridge-gateway-v0.5.9' -Message 'the pinned gateway release tag is stable and exact'
     Assert-Equal -Actual $checkedInContract.archive.sha256 -Expected 'd372ff30d6fb61b66767a63aa5bee4548d7c6c1052800f1369fc34f57ab25f30' -Message 'the pinned gateway archive checksum is exact'
+    $gatewayInfoJson = '{"application_version":"0.5.9","compatibility_schema_version":1,"features":[{"feature":"core","min_version":1,"max_version":1},{"feature":"namespace","min_version":2,"max_version":2},{"feature":"indexed_search","min_version":2,"max_version":2}]}'
+    $gatewayInfo = Assert-GatewayInfoPayload -Json $gatewayInfoJson -Contract $checkedInContract
+    Assert-Equal -Actual $gatewayInfo.application_version -Expected '0.5.9' -Message 'gateway-wide handshake accepts the pinned version and protocols'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace('"application_version":"0.5.9"', '"application_version":"0.5.8"')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects a different running version'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace('"compatibility_schema_version":1', '"compatibility_schema_version":2')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects an unsupported compatibility schema'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace('"min_version":1,"max_version":1', '"min_version":2,"max_version":2')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects an unsupported protocol range'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace(',{"feature":"indexed_search","min_version":2,"max_version":2}', '')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects a missing required protocol'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace('{"feature":"core","min_version":1,"max_version":1}', '{"feature":"core","min_version":1,"max_version":1},{"feature":"core","min_version":1,"max_version":1}')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects a duplicate required protocol'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload -Json 'not-json' -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects malformed JSON'
+
+    Write-TestFile -Path $paths.CliExecutable -Content 'fixture CLI'
+    Write-TestFile -Path $paths.GatewayReleasePath -Content (Get-Content -LiteralPath $checkedInContractPath -Raw)
+    $script:GatewaySmokeArguments = $null
+    function Invoke-CapturedProcess {
+        param(
+            [string]$FilePath,
+            [string]$Arguments,
+            [int]$TimeoutMilliseconds
+        )
+        $script:GatewaySmokeArguments = $Arguments
+        return [pscustomobject]@{
+            ExitCode = 0
+            StdOut   = $gatewayInfoJson
+            StdErr   = ''
+        }
+    }
+    $gatewaySmoke = Invoke-GatewaySmokeCheck -Paths $paths
+    Assert-Equal -Actual $gatewaySmoke.application_version -Expected '0.5.9' -Message 'gateway smoke validates the gateway-wide handshake'
+    Assert-Equal -Actual $script:GatewaySmokeArguments -Expected 'opc --output json gateway-info --bridge-host 127.0.0.1:7600' -Message 'gateway smoke does not require OPC server enumeration'
 
     $gatewayPayloadRoot = Join-Path $script:WorkRoot 'gateway-payload'
     New-Item -ItemType Directory -Path $gatewayPayloadRoot -Force | Out-Null
@@ -1231,7 +1282,7 @@ exit 7
     function Invoke-GatewaySmokeCheck {
         param([psobject]$Paths)
         $script:GatewaySmokeChecks++
-        return [pscustomobject]@{ servers = @() }
+        return [pscustomobject]@{ application_version = '0.5.9' }
     }
     $journalGatewayCommand = Get-ExpectedGatewayServiceCommandLine `
         -ExecutablePath $journalPaths.GatewayExecutable `

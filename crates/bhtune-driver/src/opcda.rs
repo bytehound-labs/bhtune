@@ -33,6 +33,41 @@ pub const DEFAULT_SEARCH_MAX_RESULTS: u32 = opcda_bridge::DEFAULT_SEARCH_MAX_RES
 /// Default maximum number of matches requested from the persistent namespace index.
 pub const DEFAULT_INDEX_SEARCH_MAX_RESULTS: u32 = opcda_bridge::DEFAULT_INDEX_SEARCH_MAX_RESULTS;
 
+/// A gateway-wide protocol feature reported by `opcda-bridge`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpcDaGatewayFeature {
+    Core,
+    Namespace,
+    IndexedSearch,
+}
+
+impl OpcDaGatewayFeature {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Namespace => "namespace",
+            Self::IndexedSearch => "indexed_search",
+        }
+    }
+}
+
+/// One gateway-wide protocol feature and the inclusive versions it supports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpcDaGatewayFeatureSupport {
+    pub feature: OpcDaGatewayFeature,
+    pub min_version: u32,
+    pub max_version: u32,
+}
+
+/// Gateway-wide metadata available without contacting an OPC DA server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpcDaGatewayInfo {
+    pub application_version: String,
+    pub compatibility_schema_version: u32,
+    pub features: Vec<OpcDaGatewayFeatureSupport>,
+}
+
 /// A cancellable stream of typed namespace-search events.
 #[derive(Debug)]
 pub struct DriverSearchStream {
@@ -212,6 +247,39 @@ impl OpcDaDriver {
             .map_err(|err| map_bridge_error_for(err, "indexed search"))
             .map(search_index_response_from_bridge)
     }
+}
+
+/// Queries gateway-wide version and protocol metadata without contacting an OPC DA server.
+///
+/// This is the appropriate connectivity probe for a newly installed gateway because it works
+/// before an OPC DA server or OPCEnum is installed on the gateway host.
+pub async fn get_opcda_gateway_info(bridge_host: &str) -> DriverResult<OpcDaGatewayInfo> {
+    let mut client = opcda_bridge::Client::connect(bridge_host)
+        .await
+        .map_err(|err| map_bridge_error_for(err, "connect to OPC DA bridge"))?;
+    let info = client
+        .gateway_info()
+        .await
+        .map_err(|err| map_bridge_error_for(err, "gateway information"))?;
+    Ok(OpcDaGatewayInfo {
+        application_version: info.application_version,
+        compatibility_schema_version: info.compatibility_schema_version,
+        features: info
+            .features
+            .into_iter()
+            .map(|support| OpcDaGatewayFeatureSupport {
+                feature: match support.feature {
+                    opcda_bridge::CompatibilityFeature::Core => OpcDaGatewayFeature::Core,
+                    opcda_bridge::CompatibilityFeature::Namespace => OpcDaGatewayFeature::Namespace,
+                    opcda_bridge::CompatibilityFeature::IndexedSearch => {
+                        OpcDaGatewayFeature::IndexedSearch
+                    }
+                },
+                min_version: support.versions.min,
+                max_version: support.versions.max,
+            })
+            .collect(),
+    })
 }
 
 /// Lists the OPC DA servers registered on the `opcda-bridge` gateway's own host at
@@ -1115,6 +1183,12 @@ mod tests {
         let err = list_opcda_servers("127.0.0.1:1").await.unwrap_err();
         assert!(matches!(err, DriverError::Connect(_)));
     }
+
+    #[tokio::test]
+    async fn get_opcda_gateway_info_connect_failure_maps_to_driver_error_connect() {
+        let err = get_opcda_gateway_info("127.0.0.1:1").await.unwrap_err();
+        assert!(matches!(err, DriverError::Connect(_)));
+    }
 }
 
 /// End-to-end smoke tests against a minimal mock `Bridge` gRPC service. These prove the typed
@@ -1132,10 +1206,11 @@ mod smoke_tests {
         GetCapabilitiesResponse, GetGatewayInfoRequest, GetGatewayInfoResponse,
         GetSearchIndexStatusRequest, IndexedSearchMatch as ProtoIndexedSearchMatch,
         ListServersRequest, ListServersResponse, NamespaceOrganization as ProtoOrganization,
-        ReadRequest, ReadResponse, RefreshSearchIndexRequest, SearchEvent as ProtoSearchEvent,
-        SearchIndexResponse as ProtoSearchIndexResponse, SearchIndexState as ProtoSearchIndexState,
-        SearchIndexStatus as ProtoSearchIndexStatus, SearchProgress as ProtoSearchProgress,
-        TagValue as ProtoTagValue, WriteRequest, WriteResponse,
+        ProtocolFeature, ProtocolFeatureKind, ReadRequest, ReadResponse, RefreshSearchIndexRequest,
+        SearchEvent as ProtoSearchEvent, SearchIndexResponse as ProtoSearchIndexResponse,
+        SearchIndexState as ProtoSearchIndexState, SearchIndexStatus as ProtoSearchIndexStatus,
+        SearchProgress as ProtoSearchProgress, TagValue as ProtoTagValue, WriteRequest,
+        WriteResponse,
     };
     use std::net::SocketAddr;
     use tokio::sync::mpsc;
@@ -1559,6 +1634,70 @@ mod smoke_tests {
             .await
             .unwrap();
         assert_eq!(response.into_inner().application_version, "test-gateway");
+    }
+
+    #[tokio::test]
+    async fn gateway_info_reports_gateway_wide_protocols_without_an_opc_server() {
+        let host = start_mock_server(MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "0.5.9".into(),
+                compatibility_schema_version: 1,
+                features: vec![
+                    ProtocolFeature {
+                        kind: ProtocolFeatureKind::Core as i32,
+                        min_version: 1,
+                        max_version: 1,
+                    },
+                    ProtocolFeature {
+                        kind: ProtocolFeatureKind::Namespace as i32,
+                        min_version: 2,
+                        max_version: 3,
+                    },
+                    ProtocolFeature {
+                        kind: ProtocolFeatureKind::IndexedSearch as i32,
+                        min_version: 2,
+                        max_version: 2,
+                    },
+                ],
+            },
+            ..Default::default()
+        })
+        .await;
+
+        assert_eq!(
+            get_opcda_gateway_info(&host).await.unwrap(),
+            OpcDaGatewayInfo {
+                application_version: "0.5.9".into(),
+                compatibility_schema_version: 1,
+                features: vec![
+                    OpcDaGatewayFeatureSupport {
+                        feature: OpcDaGatewayFeature::Core,
+                        min_version: 1,
+                        max_version: 1,
+                    },
+                    OpcDaGatewayFeatureSupport {
+                        feature: OpcDaGatewayFeature::Namespace,
+                        min_version: 2,
+                        max_version: 3,
+                    },
+                    OpcDaGatewayFeatureSupport {
+                        feature: OpcDaGatewayFeature::IndexedSearch,
+                        min_version: 2,
+                        max_version: 2,
+                    },
+                ],
+            }
+        );
+        assert_eq!(
+            get_opcda_gateway_info(&host)
+                .await
+                .unwrap()
+                .features
+                .into_iter()
+                .map(|support| support.feature.as_str())
+                .collect::<Vec<_>>(),
+            vec!["core", "namespace", "indexed_search"]
+        );
     }
 
     #[tokio::test]

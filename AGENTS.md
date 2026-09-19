@@ -654,18 +654,22 @@ fields except Notes in SQLite and restores them across reloads. The frontend tre
 responses from a server without the draft route as an empty draft during upgrades, while
 unexpected storage failures remain visible.
 
-Phase 7.5's `driver-list-servers` is also done: a new `bhtune_driver::opcda::list_opcda_servers
-(bridge_host)` free function, re-exported at the crate root. It is deliberately **not** a
-`Driver`/`OpcDaDriver` method — server discovery is a _pre-connection_ operation (it needs
-only a bridge host, not the OPC DA server ProgID that `OpcDaDriver::connect` requires, and
-that discovery exists to help a caller find in the first place), so it connects for the one
-`list_servers` RPC and drops the connection immediately afterward rather than reusing
-`OpcDaDriver`'s held session. Note for anyone reading the wire calls: `opcda_bridge::
+Phase 7.5's `driver-list-servers` is also done: the re-exported
+`bhtune_driver::opcda::get_opcda_gateway_info(bridge_host)` and
+`list_opcda_servers(bridge_host)` free functions cover gateway-wide compatibility metadata and
+OPC DA server discovery. They are deliberately **not** `Driver`/`OpcDaDriver` methods — both
+are pre-connection operations requiring only a bridge host, not the OPC DA server ProgID that
+`OpcDaDriver::connect` requires. `get_opcda_gateway_info` calls only the gateway-wide metadata
+RPC and therefore works before OPCEnum or an OPC DA server is available; `list_opcda_servers`
+connects for one discovery RPC and drops the connection immediately afterward. Note for anyone
+reading the wire calls: `opcda_bridge::
 Client::list_servers` always sends `host: "localhost"`, i.e. it lists servers registered on
 _the gateway's own_ machine, not on whatever machine bhtune itself runs on — exactly right
 for this topology (the gateway runs next to the OPC DA server), and worth knowing so it's
-never mistaken for a bug. On the CLI side, `bhtune opc servers [--bridge-host <HOST>]` fills
-the one gap in the existing `opc read`/`write`/`browse` diagnostic family — it was previously
+never mistaken for a bug. On the CLI side, `bhtune opc gateway-info` reports the application
+version and core/namespace/indexed-search ranges without contacting an OPC server, while
+`bhtune opc servers [--bridge-host <HOST>]` fills the discovery gap in the existing
+`opc read`/`write`/`browse` diagnostic family — it was previously
 impossible to discover a server's ProgID from bhtune at all, forcing a round-trip to
 `opcda-bridge-client`'s own CLI just to find out what to pass to `--server`. Both the shared
 smoke-test mock gateway (`bhtune-driver::opcda`'s own `smoke_tests` module) and
@@ -807,8 +811,9 @@ keeps expandable-and-selectable nodes usable, and uses the persistent index for 
 debounced fzf-style search. Search exposes ranked exact ItemIDs, breadcrumbs, index state/
 progress, and `has_more`; stale or partial results are labeled rather than presented as an
 authoritative no-match. It uses gateway breadcrumbs/search to reveal a saved selection and never
-splits `.`, `!`, or `/` to guess hierarchy. The CLI mirrors this with `bhtune opc servers`,
-paged `bhtune opc browse` (or explicit `--all` draining), live `bhtune opc search`, and
+splits `.`, `!`, or `/` to guess hierarchy. The CLI mirrors this with
+`bhtune opc gateway-info`, `bhtune opc servers`, paged `bhtune opc browse` (or explicit
+`--all` draining), live `bhtune opc search`, and
 `bhtune opc search-index status|search|refresh|control`; progress and warnings stay on stderr so
 JSON output remains machine-readable. CLI browse sessions remain open for continuation after a
 page is printed and are released with `bhtune opc close <session-id>`.
@@ -1784,12 +1789,13 @@ TemplateInUse`) and a note that a `Builtin`/`Catalog`-origin template will simpl
   (`safety-writeback-rollback`).
 - **`bhtune export <run_id>`** — exports one run's recorded samples as CSV or JSON
   (`--format`), to stdout or `--output <path>`.
-- **`bhtune opc servers|read|write|browse|search`** — low-level passthrough
+- **`bhtune opc gateway-info|servers|read|write|browse|search`** — low-level passthrough
   straight to the `opcda-bridge` gateway (via `opcda_bridge::Client`, bypassing the tuning
-  engine entirely) for diagnostics. `browse` returns one bounded page by default and accepts
-  opaque session/node/page-token values; `--all` explicitly drains continuation pages.
-  `search` reports progressive matches and completion/truncation metadata while keeping
-  machine-readable JSON on stdout.
+  engine entirely) for diagnostics. `gateway-info` reports gateway-wide application and
+  protocol metadata without contacting an OPC server. `browse` returns one bounded page by
+  default and accepts opaque session/node/page-token values; `--all` explicitly drains
+  continuation pages. `search` reports progressive matches and completion/truncation metadata
+  while keeping machine-readable JSON on stdout.
 
 **What `cli-commands` deliberately does not cover** — each shipped as its own later phase,
 not an oversight: `tracing`-based structured logging shipped separately as `cli-logging` —
@@ -3715,7 +3721,10 @@ backup/replacement. The one verified rollback snapshot includes BHTune Program F
 complete gateway ProgramData tree; recursive capture rejects reparse points and rechecks each
 source before copying. A candidate gateway is hash/version/architecture/configuration checked,
 registered, transiently started, listener-validated, and smoke-tested with
-`bhtune opc --output json servers --bridge-host 127.0.0.1:7600`; an empty server list is valid.
+`bhtune opc --output json gateway-info --bridge-host 127.0.0.1:7600`. The installer compares
+the returned application version and core/namespace/indexed-search protocol ranges with the
+embedded release contract. This gateway-wide RPC does not contact OPCEnum or an OPC DA server;
+actual server enumeration and read-only tag access remain target-host acceptance checks.
 Failure restores payloads, data, service definitions, and prior states. Uninstall removes only
 marker-proven service registrations and Program Files payloads and preserves all ProgramData.
 The narrow pre-journal window can leave only empty fixed directories after power loss; no

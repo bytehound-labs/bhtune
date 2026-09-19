@@ -2822,18 +2822,65 @@ function Invoke-GatewaySmokeCheck {
 
     $result = Invoke-CapturedProcess `
         -FilePath $Paths.CliExecutable `
-        -Arguments 'opc --output json servers --bridge-host 127.0.0.1:7600' `
+        -Arguments 'opc --output json gateway-info --bridge-host 127.0.0.1:7600' `
         -TimeoutMilliseconds $TimeoutMilliseconds
     if ($result.ExitCode -ne 0) {
         throw "The OPC DA gateway smoke check failed with exit code $($result.ExitCode): $($result.StdOut) $($result.StdErr)"
     }
+
+    $contract = Assert-GatewayReleaseContract -ContractPath $Paths.GatewayReleasePath
+    return Assert-GatewayInfoPayload -Json $result.StdOut -Contract $contract
+}
+
+function Assert-GatewayInfoPayload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Json,
+
+        [Parameter(Mandatory = $true)]
+        [psobject]$Contract
+    )
+
     try {
-        $payload = $result.StdOut | ConvertFrom-Json -ErrorAction Stop
+        $payload = $Json | ConvertFrom-Json -ErrorAction Stop
     } catch {
         throw "The OPC DA gateway smoke check did not return valid JSON: $($_.Exception.Message)"
     }
-    if ($null -eq $payload.PSObject.Properties['servers']) {
-        throw "The OPC DA gateway smoke check JSON did not contain a servers array."
+    if ([string]$payload.application_version -cne [string]$Contract.version) {
+        throw "The running OPC DA gateway reports version '$($payload.application_version)' instead of '$($Contract.version)'."
+    }
+    if ([int]$payload.compatibility_schema_version -ne 1) {
+        throw "The running OPC DA gateway reports unsupported compatibility schema '$($payload.compatibility_schema_version)'."
+    }
+    if ($null -eq $payload.PSObject.Properties['features']) {
+        throw 'The OPC DA gateway smoke check JSON did not contain protocol features.'
+    }
+
+    $expectedProtocols = @(
+        [pscustomobject]@{
+            Name    = 'core'
+            Version = [int]$Contract.compatibility.core_protocol
+        },
+        [pscustomobject]@{
+            Name    = 'namespace'
+            Version = [int]$Contract.compatibility.namespace_protocol
+        },
+        [pscustomobject]@{
+            Name    = 'indexed_search'
+            Version = [int]$Contract.compatibility.indexed_search_protocol
+        }
+    )
+    foreach ($expected in $expectedProtocols) {
+        $matches = @($payload.features | Where-Object { [string]$_.feature -ceq $expected.Name })
+        if ($matches.Count -ne 1) {
+            throw "The OPC DA gateway smoke check expected exactly one '$($expected.Name)' protocol feature."
+        }
+        $minimum = [int]$matches[0].min_version
+        $maximum = [int]$matches[0].max_version
+        if ($minimum -lt 1 -or $maximum -lt $minimum -or
+            $expected.Version -lt $minimum -or $expected.Version -gt $maximum) {
+            throw "The running OPC DA gateway does not support required $($expected.Name) protocol version $($expected.Version)."
+        }
     }
 
     return $payload

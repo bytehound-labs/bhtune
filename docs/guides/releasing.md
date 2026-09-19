@@ -100,8 +100,9 @@ upstream checksum and Sigstore evidence, GitHub provenance, exact archive conten
 SHA-256 and 32-bit PE architecture, version, and compatibility metadata. Its SYSTEM lifecycle
 diagnostic must cover the gateway-free silent default, explicit gateway installation, gateway
 add-on ending stopped, running/stopped managed upgrades, two-service rollback,
-ProgramData-preserving uninstall, unowned service and listener conflicts, a valid empty server
-list on a vanilla runner, and an unchanged Windows Firewall fingerprint.
+ProgramData-preserving uninstall, unowned service and listener conflicts, a gateway-wide
+version/protocol handshake on a vanilla runner without OPCEnum, and an unchanged Windows
+Firewall fingerprint.
 
 Updating the bundled gateway is a reviewed source change, not a release-time lookup:
 

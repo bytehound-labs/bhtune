@@ -3,10 +3,10 @@
 //! gateway connectivity and confirming tag names before starting a real test.
 
 use bhtune_driver::{
-    BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, Driver, OpcDaDriver, Quality,
-    SearchEvent, SearchIndexControlAction, SearchIndexRequest, SearchIndexResponse,
-    SearchIndexStatus, SearchMatch, SearchRequest, TagWrite, close_opcda_browse_session,
-    list_opcda_servers,
+    BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, Driver, OpcDaDriver,
+    OpcDaGatewayInfo, Quality, SearchEvent, SearchIndexControlAction, SearchIndexRequest,
+    SearchIndexResponse, SearchIndexStatus, SearchMatch, SearchRequest, TagWrite,
+    close_opcda_browse_session, get_opcda_gateway_info, list_opcda_servers,
 };
 
 use crate::args::{OpcCommand, OpcSearchMatchModeArg, SearchIndexCommand};
@@ -22,6 +22,10 @@ pub async fn run_with_output(
     output: OutputFormat,
 ) -> anyhow::Result<()> {
     match command {
+        OpcCommand::GatewayInfo { bridge_host } => {
+            let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
+            gateway_info_with_output(&bridge_host, output).await
+        }
         OpcCommand::Servers { bridge_host } => {
             let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
             servers_with_output(&bridge_host, output).await
@@ -174,6 +178,50 @@ async fn run_search_index_command(
             print_search_index_status(&status, output)
         }
     }
+}
+
+#[cfg(test)]
+async fn gateway_info(bridge_host: &str) -> anyhow::Result<()> {
+    gateway_info_with_output(bridge_host, OutputFormat::Table).await
+}
+
+async fn gateway_info_with_output(bridge_host: &str, output: OutputFormat) -> anyhow::Result<()> {
+    let info = get_opcda_gateway_info(bridge_host).await?;
+    if output == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&gateway_info_json(&info))?
+        );
+        return Ok(());
+    }
+    println!("Application version: {}", info.application_version);
+    println!(
+        "Compatibility schema: {}",
+        info.compatibility_schema_version
+    );
+    for feature in info.features {
+        println!(
+            "{}: {}-{}",
+            feature.feature.as_str(),
+            feature.min_version,
+            feature.max_version
+        );
+    }
+    Ok(())
+}
+
+fn gateway_info_json(info: &OpcDaGatewayInfo) -> serde_json::Value {
+    serde_json::json!({
+        "application_version": info.application_version,
+        "compatibility_schema_version": info.compatibility_schema_version,
+        "features": info.features.iter().map(|feature| {
+            serde_json::json!({
+                "feature": feature.feature.as_str(),
+                "min_version": feature.min_version,
+                "max_version": feature.max_version,
+            })
+        }).collect::<Vec<_>>(),
+    })
 }
 
 #[cfg(test)]
@@ -762,11 +810,54 @@ mod tests {
     use crate::args::SearchIndexControlActionArg;
     use crate::test_support::{MockBridgeService, start_mock_server};
     use opcda_bridge_proto::bridge::{
-        BrowseNode, BrowseNodeKind, BrowsePage, ListServersResponse, ReadResponse, SearchCompleted,
+        BrowseNode, BrowseNodeKind, BrowsePage, GetGatewayInfoResponse, ListServersResponse,
+        ProtocolFeature, ProtocolFeatureKind, ReadResponse, SearchCompleted,
         SearchEvent as ProtoSearchEvent, SearchIndexResponse as ProtoSearchIndexResponse,
         SearchIndexState as ProtoSearchIndexState, SearchIndexStatus as ProtoSearchIndexStatus,
         SearchProgress, TagValue as ProtoTagValue, WriteResponse, search_event,
     };
+
+    #[tokio::test]
+    async fn gateway_info_reports_gateway_wide_metadata_in_both_formats() {
+        let (host, server) = start_mock_server(MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "0.5.9".into(),
+                compatibility_schema_version: 1,
+                features: vec![ProtocolFeature {
+                    kind: ProtocolFeatureKind::Core as i32,
+                    min_version: 1,
+                    max_version: 2,
+                }],
+            },
+            ..Default::default()
+        })
+        .await;
+
+        gateway_info(&host).await.unwrap();
+        gateway_info_with_output(&host, OutputFormat::Json)
+            .await
+            .unwrap();
+        assert_eq!(
+            gateway_info_json(&get_opcda_gateway_info(&host).await.unwrap()),
+            serde_json::json!({
+                "application_version": "0.5.9",
+                "compatibility_schema_version": 1,
+                "features": [{
+                    "feature": "core",
+                    "min_version": 1,
+                    "max_version": 2,
+                }],
+            })
+        );
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gateway_info_connect_failure_surfaces_as_an_error() {
+        let err = gateway_info("127.0.0.1:1").await.unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
 
     #[tokio::test]
     async fn servers_prints_every_registered_server_from_a_mock_gateway() {
@@ -973,7 +1064,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_dispatches_servers_read_write_and_browse() {
+    async fn run_dispatches_gateway_info_servers_read_write_and_browse() {
         let close_browse_session_calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let (host, server) = start_mock_server(MockBridgeService {
             list_servers_response: ListServersResponse {
@@ -1002,6 +1093,15 @@ mod tests {
         })
         .await;
         let config = crate::config::BhtuneConfig::default();
+
+        run(
+            OpcCommand::GatewayInfo {
+                bridge_host: Some(host.clone()),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
 
         run(
             OpcCommand::Servers {
