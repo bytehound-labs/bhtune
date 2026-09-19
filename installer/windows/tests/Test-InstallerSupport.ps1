@@ -1932,6 +1932,37 @@ exit 7
     Assert-True -Condition ($timeoutMessage -like "*did not disappear after 1 seconds*") -Message 'service removal times out when SCM registration remains'
     Assert-True -Condition ($script:ServiceQueryCalls -gt 0) -Message 'service removal polls SCM before timing out'
 
+    $script:TcpListenerQueryUsedLocalPort = $false
+    function Get-NetTCPConnection {
+        param(
+            [string]$State,
+            [int]$LocalPort,
+            [object]$ErrorAction
+        )
+
+        $script:TcpListenerQueryUsedLocalPort = $PSBoundParameters.ContainsKey('LocalPort')
+        if ($script:TcpListenerQueryUsedLocalPort) {
+            throw 'a LocalPort CIM filter reports no matching objects as an error'
+        }
+        return @(
+            [pscustomobject]@{
+                LocalAddress  = '127.0.0.1'
+                LocalPort     = 5985
+                OwningProcess = 1111
+            },
+            [pscustomobject]@{
+                LocalAddress  = '0.0.0.0'
+                LocalPort     = 7600
+                OwningProcess = 4242
+            }
+        )
+    }
+    $filteredListeners = @(Get-TcpListenerSnapshots -Port 7600)
+    Assert-True -Condition (-not $script:TcpListenerQueryUsedLocalPort) -Message 'TCP listener inspection avoids the no-match LocalPort CIM query'
+    Assert-Equal -Actual $filteredListeners.Count -Expected 1 -Message 'TCP listener inspection filters the requested port in PowerShell'
+    Assert-Equal -Actual $filteredListeners[0].OwningProcess -Expected 4242 -Message 'TCP listener inspection preserves the owning process'
+    Remove-Item function:Get-NetTCPConnection
+
     $listenerService = [pscustomobject]@{
         Exists    = $true
         State     = 'Running'

@@ -2563,7 +2563,10 @@ function Get-TcpListenerSnapshots {
     )
 
     try {
-        $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop)
+        $listeners = @(
+            Get-NetTCPConnection -State Listen -ErrorAction Stop |
+                Where-Object { [int]$_.LocalPort -eq $Port }
+        )
     } catch {
         throw "Unable to inspect TCP port $Port listeners: $($_.Exception.Message)"
     }
