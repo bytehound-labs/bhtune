@@ -32,6 +32,30 @@ if (-not (Get-Variable -Name InstallerTracePath -Scope Script -ErrorAction Silen
     $script:InstallerTracePath = ''
 }
 
+function Get-SnapshotValue {
+    param(
+        [Parameter(Mandatory = $false)]
+        [psobject]$Snapshot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    if ($null -eq $Snapshot) {
+        return $null
+    }
+
+    if ($Snapshot -is [System.Collections.IDictionary]) {
+        return $Snapshot[$Name]
+    }
+
+    $property = $Snapshot.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
 function Write-InstallerTrace {
     param(
         [Parameter(Mandatory = $true)]

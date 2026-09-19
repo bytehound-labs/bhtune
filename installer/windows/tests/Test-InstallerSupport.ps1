@@ -145,6 +145,12 @@ try {
     Assert-True -Condition (Test-SupportedInstallerSchemaVersion -Version 2) -Message 'legacy schema-v2 installer state remains readable'
     Assert-True -Condition (Test-SupportedInstallerSchemaVersion -Version 3) -Message 'gateway-aware schema-v3 installer state is supported'
     Assert-True -Condition (-not (Test-SupportedInstallerSchemaVersion -Version 1)) -Message 'unsupported installer schemas are rejected'
+    $objectSnapshot = [pscustomobject]@{ Value = 'object-value' }
+    $dictionarySnapshot = [ordered]@{ Value = 'dictionary-value' }
+    Assert-Equal -Actual (Get-SnapshotValue -Snapshot $objectSnapshot -Name 'Value') -Expected 'object-value' -Message 'object snapshot values are available to every installer caller'
+    Assert-Equal -Actual (Get-SnapshotValue -Snapshot $dictionarySnapshot -Name 'Value') -Expected 'dictionary-value' -Message 'dictionary snapshot values are available to every installer caller'
+    Assert-Null -Actual (Get-SnapshotValue -Snapshot $objectSnapshot -Name 'Missing') -Message 'missing object snapshot values remain null'
+    Assert-Null -Actual (Get-SnapshotValue -Snapshot $null -Name 'Value') -Message 'null snapshots remain null'
     Assert-True -Condition (Test-SafeRollbackRelativePath -RelativePath 'install\bhtune.exe') -Message 'normalized rollback paths are accepted'
     foreach ($unsafePath in @(
             '',
@@ -719,7 +725,6 @@ exit 7
                 -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs')) -Message 'gateway services outside LocalSystem are rejected'
 
     foreach ($functionName in @(
-            'Get-SnapshotValue',
             'Write-TextFile',
             'Write-JsonFile',
             'Enter-InstallerTransactionLock',

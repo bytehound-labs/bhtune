@@ -100,30 +100,6 @@ $InstallGateway = ConvertTo-InstallerBoolean -Value $InstallGateway -Name 'Insta
 $StartGateway = ConvertTo-InstallerBoolean -Value $StartGateway -Name 'StartGateway'
 $CustomDbBackupConfirmed = ConvertTo-InstallerBoolean -Value $CustomDbBackupConfirmed -Name 'CustomDbBackupConfirmed'
 
-function Get-SnapshotValue {
-    param(
-        [Parameter(Mandatory = $false)]
-        [psobject]$Snapshot,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Name
-    )
-
-    if ($null -eq $Snapshot) {
-        return $null
-    }
-
-    if ($Snapshot -is [System.Collections.IDictionary]) {
-        return $Snapshot[$Name]
-    }
-
-    $property = $Snapshot.PSObject.Properties[$Name]
-    if ($null -eq $property) {
-        return $null
-    }
-    return $property.Value
-}
-
 function Write-TextFile {
     param(
         [Parameter(Mandatory = $true)]
