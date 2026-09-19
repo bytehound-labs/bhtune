@@ -319,20 +319,22 @@ jobs:
             bash -c 'cd /tmp/aur-build && makepkg --printsrcinfo > .SRCINFO.generated && diff -u .SRCINFO .SRCINFO.generated && makepkg --verifysource && makepkg --nodeps --noconfirm'
           pkg1="$(find /tmp/aur-pkgdest -maxdepth 1 -type f -name '*.pkg.tar.zst' -print -quit)"
           [[ -n "$pkg1" ]] || { echo "makepkg did not produce a package" >&2; exit 1; }
-          cp -f "$pkg1" /workspace/aur-evidence/
+          pkg1_saved="/workspace/aur-evidence/$(basename "$pkg1")"
+          cp -f "$pkg1" "$pkg1_saved"
           pacman -Qip "$pkg1" | tee /workspace/aur-evidence/package-info.txt
           bsdtar -tf "$pkg1" | tee /workspace/aur-evidence/package-files.txt
-          grep -Fx './usr/bin/bhtune' /workspace/aur-evidence/package-files.txt
-          grep -Fx './usr/bin/bhtune-server' /workspace/aur-evidence/package-files.txt
-          grep -Fx './usr/lib/systemd/system/bhtune-server.service' /workspace/aur-evidence/package-files.txt
-          grep -Fx './usr/share/bash-completion/completions/bhtune' /workspace/aur-evidence/package-files.txt
-          grep -Fx './usr/share/zsh/site-functions/_bhtune' /workspace/aur-evidence/package-files.txt
-          grep -Fx './usr/share/fish/vendor_completions.d/bhtune.fish' /workspace/aur-evidence/package-files.txt
-          ! grep -q '/usr/local/' /workspace/aur-evidence/package-files.txt
+          grep -Eq '^(\./)?usr/bin/bhtune$' /workspace/aur-evidence/package-files.txt
+          grep -Eq '^(\./)?usr/bin/bhtune-server$' /workspace/aur-evidence/package-files.txt
+          grep -Eq '^(\./)?usr/lib/systemd/system/bhtune-server\.service$' /workspace/aur-evidence/package-files.txt
+          grep -Eq '^(\./)?usr/share/bash-completion/completions/bhtune$' /workspace/aur-evidence/package-files.txt
+          grep -Eq '^(\./)?usr/share/zsh/site-functions/_bhtune$' /workspace/aur-evidence/package-files.txt
+          grep -Eq '^(\./)?usr/share/fish/vendor_completions\.d/bhtune\.fish$' /workspace/aur-evidence/package-files.txt
+          ! grep -Eq '(^|/)(usr/local)/' /workspace/aur-evidence/package-files.txt
 
           rm -rf /tmp/aur-build /tmp/aur-pkgdest
           mkdir -p /tmp/aur-build /tmp/aur-pkgdest
           cp -f /workspace/aur-metadata-pkgrel2/PKGBUILD /tmp/aur-build/
+          chown -R aur-builder:aur-builder /tmp/aur-build /tmp/aur-pkgdest
           runuser -u aur-builder -- env \
             HOME=/tmp/aur-home SRCDEST=/tmp/aur-srcdest PKGDEST=/tmp/aur-pkgdest \
             bash -c 'cd /tmp/aur-build && makepkg --verifysource && makepkg --nodeps --noconfirm'
@@ -340,7 +342,7 @@ jobs:
           [[ -n "$pkg2" ]] || { echo "makepkg did not produce the pkgrel 2 package" >&2; exit 1; }
           cp -f "$pkg2" /workspace/aur-evidence/
 
-          pacman -U --noconfirm "$pkg1"
+          pacman -U --noconfirm "$pkg1_saved"
           test ! -e /etc/systemd/system/multi-user.target.wants/bhtune-server.service
           systemctl enable --root=/ bhtune-server.service
           test -L /etc/systemd/system/multi-user.target.wants/bhtune-server.service

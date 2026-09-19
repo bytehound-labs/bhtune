@@ -176,6 +176,8 @@ machine-readable evidence through the host-mounted `aur-evidence/` directory; pr
 invariants when changing that workflow. The regression suite must run with the repository root
 as its working directory because its ancillary-file inventory intentionally uses repository-
 relative paths.
+Package-content assertions use archive-relative paths and accept either `bsdtar`
+leading-path convention (`usr/...` or `./usr/...`).
 
 Debian packages use adaptive `depends = "$auto"` metadata and therefore require
 `dpkg-shlibdeps` in the packaging environment. Do not hard-code a dependency list to compensate
