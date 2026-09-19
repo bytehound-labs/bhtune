@@ -45,6 +45,11 @@ bhtune_X.Y.Z-1_amd64.deb
 bhtune-X.Y.Z-1.x86_64.rpm
 ```
 
+For a prerelease tag such as `v0.1.0-rc.1`, the RPM package uses the RPM-safe version
+`0.1.0~rc.1`, so its filename is `bhtune-0.1.0~rc.1-1.x86_64.rpm`. This packaging-only
+normalization does not change the version reported by the binaries or embedded in the other
+release assets.
+
 The exact package filenames are authoritative; do not rename an asset before verification.
 The archive contains both `bhtune` and `bhtune-server`, plus `LICENSE` and `README.md`.
 

@@ -286,8 +286,8 @@ the normal web page.
 
 ## Installation
 
-No `v0.1.0` tag has been cut yet, so there are no versioned release archives. Two ways to run
-BHTune today:
+No stable `v0.1.0` tag has been cut. Prerelease artifacts are validation-only and are not
+supported for production installation. Two ways to run BHTune:
 
 ### Docker
 

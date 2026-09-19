@@ -97,7 +97,10 @@ RC creation and validation.
 5. Require the canary to verify the asset inventory, checksums, SBOM, provenance, Sigstore
    evidence, archive execution, `--version`, simulator behavior, loopback server health/UI
    responses, and Linux package installation. macOS and Windows run their matching archive and
-   runtime checks; the Windows check remains CLI-only.
+   runtime checks; the Windows check remains CLI-only. For prerelease RPMs, the workflow maps
+   the SemVer prerelease separator to RPM's ordering syntax (for example,
+   `0.1.0-rc.1` becomes the RPM version `0.1.0~rc.1`); archives and executables retain the
+   exact `0.1.0-rc.1` version.
 6. Retain the evidence before removing the temporary branch. Keep the public RC tag and release
    as the tested reference for the stable release.
 
