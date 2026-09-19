@@ -792,16 +792,29 @@ try {
     $externalDatabase = Join-Path $externalRoot 'bhtune-external.db'
     Stop-InstallerService | Out-Null
     Write-DiagnosticLog 'ROLLBACK_PREP_BHTUNE_STOPPED=True'
+    Write-DiagnosticLog 'ROLLBACK_PREP_DATABASE_ASSERT_BEGIN=True'
     Assert-Diagnostic -Condition (Test-Path -LiteralPath $paths.DatabasePath -PathType Leaf) -Message 'The managed database was not created before the external-database rollback scenario.'
+    Write-DiagnosticLog 'ROLLBACK_PREP_DATABASE_ASSERT_END=True'
+    Write-DiagnosticLog 'ROLLBACK_PREP_DATABASE_COPY_BEGIN=True'
     Copy-Item -LiteralPath $paths.DatabasePath -Destination $externalDatabase -Force
+    Write-DiagnosticLog 'ROLLBACK_PREP_DATABASE_COPY_END=True'
+    Write-DiagnosticLog 'ROLLBACK_PREP_CONFIG_READ_BEGIN=True'
     $configText = Get-Content -LiteralPath $paths.ConfigPath -Raw
+    Write-DiagnosticLog 'ROLLBACK_PREP_CONFIG_READ_END=True'
     $externalConfigLine = 'db = "{0}"' -f (ConvertTo-TomlPath -Path $externalDatabase)
     $updatedConfig = [regex]::Replace($configText, '(?m)^db\s*=\s*"[^"]*"\s*$', $externalConfigLine)
     Assert-Diagnostic -Condition ($updatedConfig -cne $configText) -Message 'The external database path could not be applied to bhtune.toml.'
+    Write-DiagnosticLog 'ROLLBACK_PREP_CONFIG_WRITE_BEGIN=True'
     Write-TextFile -Path $paths.ConfigPath -Content $updatedConfig
+    Write-DiagnosticLog 'ROLLBACK_PREP_CONFIG_WRITE_END=True'
+    Write-DiagnosticLog 'ROLLBACK_PREP_BHTUNE_START_BEGIN=True'
     Start-InstallerService | Out-Null
+    Write-DiagnosticLog 'ROLLBACK_PREP_BHTUNE_START_END=True'
+    Write-DiagnosticLog 'ROLLBACK_PREP_HEALTH_WAIT_BEGIN=True'
     Wait-ForHealth -Uri 'http://127.0.0.1:8787/api/health' -Version $ExpectedVersion -Timeout $TimeoutSeconds
+    Write-DiagnosticLog 'ROLLBACK_PREP_HEALTH_WAIT_END=True'
     Write-DiagnosticLog 'ROLLBACK_PREP_EXTERNAL_DATABASE_ACTIVE=True'
+    Write-DiagnosticLog 'ROLLBACK_PREP_GATEWAY_STOP_BEGIN=True'
     Stop-InstallerGatewayService -Paths $paths | Out-Null
     Write-DiagnosticLog 'ROLLBACK_PREP_GATEWAY_STOPPED=True'
 
