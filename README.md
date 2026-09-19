@@ -420,7 +420,9 @@ open evaluation, not a commitment — see the [roadmap](docs/roadmap.md).
 
 For platform-specific prerequisites, service behavior, state locations, upgrade/rollback
 boundaries, and package removal semantics, see the
-[installation guide](docs/getting-started/installation.md) and
+[installation guide](docs/getting-started/installation.md), the
+[operator runbook](docs/guides/operator-runbook.md), the
+[release-verification guide](docs/guides/release-verification.md), and the
 [safety guide](docs/guides/safety.md).
 
 ### Running the server

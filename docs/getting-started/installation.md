@@ -17,53 +17,101 @@ packaging jobs; the `bhtune-bin` AUR metadata is generated and validated by
 tag. Prereleases and arbitrary refs are validation-only, and the first AUR publication is a
 manual post-release step.
 
-## Run via Docker
+## Choose and verify a distribution path
 
-The fastest way to try BHTune: a multi-stage image (frontend build → `cargo build --release` →
-slim Debian runtime) is published to
-[GHCR](https://github.com/bytehound-labs/bhtune/pkgs/container/bhtune) on every push to `main`
-(tagged `edge`), and additionally under the version and `latest` once a release tag exists. No
-Rust toolchain, pnpm, or C compiler needed on the host — just Docker:
+Before installing a stable release asset, use the
+[release-verification guide](../guides/release-verification.md) to verify its checksum,
+Sigstore bundle, and provenance evidence. A checksum proves that the downloaded bytes match the
+published digest; Sigstore and GitHub provenance verify different parts of the build identity.
+Do not treat a successful health check as evidence that a live plant is safe to tune.
 
-```sh
-docker run -d --name bhtune \
-  -p 8787:8787 \
-  -v bhtune-data:/var/lib/bhtune \
-  ghcr.io/bytehound-labs/bhtune:edge
+| Path            | Artifact or source                                                           | Service model                                       | Persistent state                                 |
+| --------------- | ---------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------ |
+| Windows NSIS    | `bhtune-vX.Y.Z-windows-x86_64-installer.exe` after stable release activation | `BhtuneServer`, `LocalService`                      | `%ProgramData%\ByteHound\bhtune\`                |
+| Windows archive | Windows release archive                                                      | Manual SCM registration, `LocalSystem`              | Explicit `--config` path recommended             |
+| Arch            | `bhtune-bin` after the first verified AUR publication                        | systemd, `DynamicUser`                              | `/etc/bhtune`, `/var/lib/bhtune`                 |
+| Debian/Ubuntu   | `.deb` from the stable release                                               | systemd, `DynamicUser`                              | `/etc/bhtune`, `/var/lib/bhtune`                 |
+| RPM Linux       | `.rpm` from the stable release                                               | systemd, `DynamicUser`                              | `/etc/bhtune`, `/var/lib/bhtune`                 |
+| Portable Linux  | Linux release archive                                                        | Manual systemd unit or foreground process           | Operator-selected paths                          |
+| macOS           | Apple Silicon release archive                                                | Supplied launchd LaunchDaemon or foreground process | `/usr/local/etc/bhtune`, `/usr/local/var/bhtune` |
+| Docker          | GHCR `edge` or stable version tag                                            | Container process                                   | Docker volume at `/var/lib/bhtune`               |
+
+The NSIS installer, AUR package, and stable package assets are prepared in the repository but are
+not publicly installable until the first stable release and its publication steps are complete.
+
+## Windows NSIS installer
+
+After stable-release activation, run the verified installer as an administrator. It installs
+`bhtune.exe` and `bhtune-server.exe` under `%ProgramFiles%\ByteHound\bhtune\`, creates an
+automatic `BhtuneServer` service as `NT AUTHORITY\LocalService`, and stores configuration, data,
+logs, and one verified rollback backup under `%ProgramData%\ByteHound\bhtune\`. It starts the
+service by default and verifies both `/api/health` and the installed version.
+
+Silent installation supports `/S`, `/ADD_TO_PATH=0`, `/START_SERVICE=0`, and
+`/CUSTOM_DB_BACKUP_CONFIRMED=1`. The last flag is only for an external database that the
+operator has backed up independently; the installer never claims ownership of that database.
+The installer does not create firewall rules or expose the OPC gateway.
+
+Upgrades preserve the previous service running/stopped state and retain exactly one verified
+rollback backup. The automatic database boundary covers only the installer-managed ProgramData
+database and its `-wal`/`-shm` companions. An external, malformed, relative, ambiguous, missing,
+or inaccessible path fails closed before the service is stopped. Uninstall removes only the
+installer-owned Program Files/service/shortcut state and preserves the entire ProgramData tree.
+See the [operator runbook](../guides/operator-runbook.md#1-installation-acceptance) for acceptance,
+rollback, and incident procedures.
+
+## Windows release archive
+
+The Windows archive is the fallback when NSIS is not available. Verify the archive before
+extracting it, keep the two binaries together, and use an explicit absolute config with absolute
+database and log paths before registering the service:
+
+```powershell
+New-Item -ItemType Directory -Force C:\ProgramData\bhtune | Out-Null
+@'
+db = 'C:\ProgramData\bhtune\bhtune.db'
+
+[log]
+dir = 'C:\ProgramData\bhtune\logs'
+'@ | Set-Content -Encoding utf8 C:\ProgramData\bhtune\bhtune.toml
+& .\bhtune-server.exe --config C:\ProgramData\bhtune\bhtune.toml install
+& .\bhtune-server.exe start
+& .\bhtune-server.exe status
+Invoke-RestMethod http://127.0.0.1:8787/api/health
 ```
 
-Open `http://localhost:8787` for the web GUI. The image bundles both binaries, so the headless
-CLI is available the same way, sharing the running server's database through the mounted
-volume:
-
-```sh
-docker exec bhtune bhtune history list
-```
+The manual `install` command registers `BhtuneServer` as `LocalSystem`, unlike the NSIS
+installer's `LocalService` service. Pinning `--config` is essential because Windows service
+accounts resolve `%APPDATA%` differently from an interactive user. The manual path has no
+installer transaction or automatic database backup: stop the service before replacing binaries,
+retain the previous archive for rollback, and treat the database plus `-wal`/`-shm` files as one
+copy unit. `bhtune-server.exe uninstall` removes the manual service but does not delete the
+operator's config or database.
 
 ## Linux packages
 
-The package formats install the `bhtune` CLI, `bhtune-server`, generated man pages, shell
-completions, and the package-managed systemd unit. Package installation reloads systemd metadata
-but does not enable or start the service. Enable it explicitly after confirming the package and
-configuration:
+The `.deb`, `.rpm`, and `bhtune-bin` packages install the `bhtune` CLI, `bhtune-server`,
+generated man pages, shell completions, and the canonical `/usr/bin/bhtune-server` systemd unit.
+They reload systemd metadata but do not enable or start the service. Enable it explicitly after
+verifying the configuration:
 
 ```sh
 sudo systemctl enable --now bhtune-server
 curl --fail http://127.0.0.1:8787/api/health
+bhtune simulate --output json > /tmp/bhtune-simulator.json
 ```
 
-The package-managed unit runs the server from `/usr/bin/bhtune-server` with a dynamic service
-identity. Configuration is kept under `/etc/bhtune`, application data and SQLite files under
-`/var/lib/bhtune`, and logs under the configured logging directory. Package upgrades preserve
-the operator's service state: a running service is restarted only when the package lifecycle
-requires it, while a stopped service remains stopped. Removing a package does not delete
-`/etc/bhtune` or `/var/lib/bhtune`; preserve a separate database backup before any destructive
-recovery operation.
+The package-managed unit uses `DynamicUser=true`, `/etc/bhtune` for configuration, and
+`/var/lib/bhtune` for the database and logs. It binds to localhost by default and does not
+create firewall rules. Use `systemctl status bhtune-server` and
+`journalctl -u bhtune-server -f` for service diagnostics. Upgrades preserve configuration,
+database, logs, and the service's running/stopped state; keep one known-good package and a
+separate database backup for rollback. Removal preserves `/etc/bhtune` and `/var/lib/bhtune`,
+including SQLite sidecars.
 
 ### Arch Linux (`bhtune-bin`)
 
-After the first stable release and the first verified AUR publication, install the binary package
-from AUR with a normal non-root `makepkg` workflow:
+After the first stable release and verified AUR publication:
 
 ```sh
 git clone https://aur.archlinux.org/bhtune-bin.git
@@ -73,21 +121,18 @@ sudo systemctl enable --now bhtune-server
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
-The package uses `/usr/bin` for both binaries and installs the unit at
-`/usr/lib/systemd/system/bhtune-server.service`. It does not compile Rust or the frontend, and
-it does not enable or start the service during installation. The package removes its own payload
-but leaves `/etc/bhtune` and `/var/lib/bhtune` in place.
-
-The repository's AUR generator is also usable for validation before publication. It requires
-exactly controlled release-shaped sources, calculates a checksum for every source, and generates
-`.SRCINFO` with non-root `makepkg --printsrcinfo`; `.SRCINFO` is never hand-written.
-The reusable validation workflow uploads the generated metadata and disposable Arch lifecycle
-evidence as workflow artifacts, but dry-run validation never publishes to AUR.
+The package uses `/usr/bin`, installs the unit at
+`/usr/lib/systemd/system/bhtune-server.service`, and never compiles Rust or the frontend. For
+an upgrade, review the generated `PKGBUILD`/`.SRCINFO`, keep the service state in mind, and
+retain the previous package until the new version passes its health and simulator checks. The
+repository's generator validates exact tagged sources and checksums; `.SRCINFO` is generated by
+non-root `makepkg --printsrcinfo`, never hand-written. Dry-run workflow validation never
+publishes to AUR. Verify the exact remote commit after the first publication as described in the
+[release-verification guide](../guides/release-verification.md#9-verify-the-aur-commit).
 
 ### Debian or Ubuntu (`.deb`)
 
-After a stable release, download the matching `.deb` for the host architecture and verify its
-release checksum before installing it:
+After a stable release, verify the matching `.deb` and install it:
 
 ```sh
 sudo apt install ./bhtune_<version>_amd64.deb
@@ -95,15 +140,15 @@ sudo systemctl enable --now bhtune-server
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
-The Debian metadata uses `depends = "$auto"` so shared-library requirements are derived from the
-actual binaries by Debian's `dpkg-shlibdeps`. Debian packages must therefore be built in a
-Debian-capable packaging environment containing `dpkg-shlibdeps`; an incomplete local build on a
-non-Debian host must not be treated as authoritative if its visible `Depends:` field is empty.
-Do not replace adaptive dependency discovery with a manually copied dependency list.
+The Debian metadata uses `depends = "$auto"` so shared-library requirements come from the actual
+binaries through `dpkg-shlibdeps`. A package built on a non-Debian host with an empty
+`Depends:` field is not authoritative; do not replace adaptive dependency discovery with a
+hand-copied list. To roll back, stop or downgrade with the prior verified `.deb`, then recheck
+the health endpoint and preserve the database backup.
 
 ### RPM-based Linux
 
-After a stable release, install the matching `.rpm` with the distribution's package manager:
+After a stable release, verify and install the matching RPM:
 
 ```sh
 sudo dnf install ./bhtune-<version>-1.x86_64.rpm
@@ -111,21 +156,118 @@ sudo systemctl enable --now bhtune-server
 curl --fail http://127.0.0.1:8787/api/health
 ```
 
-The RPM declares its `systemd` requirement and uses package lifecycle scripts to reload systemd
-metadata. An upgrade uses `systemctl try-restart`, so a service that was stopped remains stopped;
-final removal stops and disables the service but preserves the operator-owned configuration,
-database, SQLite `-wal`/`-shm` companions, and logs. Keep one known-good package and a separate
-database backup when preparing a rollback.
+The RPM declares its systemd requirement and reloads systemd metadata through package lifecycle
+scripts. `systemctl try-restart` preserves a stopped service during upgrades; final removal
+stops/disables the service but preserves configuration, database, SQLite sidecars, and logs.
+Keep the prior RPM and a separate database backup until the new version is accepted.
 
-Full-mode Docker access does not require `BHTUNE_ORIGIN`. When no origin is configured, browser
-mutations are accepted only when the browser origin's host and effective port match the request
-`Host`, so the same image works through `localhost`, a LAN hostname, or a LAN address. Set
-`BHTUNE_ORIGIN` (or the `origin` config key) when a reverse proxy rewrites `Host` or when a
-single external origin must be pinned. This is CSRF protection, not authentication; keep
-non-loopback Full-mode deployments on a trusted network.
+## Portable Linux release archive
 
-When OPC DA gateway names are maintained in the Linux host's `/etc/hosts` file, bind that
-file into the container so the server resolves the same names as the host:
+Verify and extract the stable `x86_64-unknown-linux-gnu` archive into a versioned directory,
+then install the binaries and the separate manual systemd unit:
+
+```sh
+tag=vX.Y.Z
+sudo mkdir -p /opt/bhtune/X.Y.Z
+sudo tar -xzf bhtune-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz \
+  -C /opt/bhtune/X.Y.Z
+sudo install -m755 /opt/bhtune/X.Y.Z/bhtune /usr/local/bin/bhtune
+sudo install -m755 /opt/bhtune/X.Y.Z/bhtune-server /usr/local/bin/bhtune-server
+curl --fail --location --output /tmp/bhtune-server.service \
+  "https://raw.githubusercontent.com/bytehound-labs/bhtune/$tag/packaging/systemd/manual/bhtune-server.service"
+sudo install -Dm644 /tmp/bhtune-server.service \
+  /etc/systemd/system/bhtune-server.service
+rm -f /tmp/bhtune-server.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now bhtune-server
+curl --fail http://127.0.0.1:8787/api/health
+```
+
+The release archive contains the binaries and product documentation, but not service-manager
+templates. Fetch the manual unit from the same immutable release tag as the archive, inspect it
+before installation, and then use it as shown above. The manual unit uses
+`/usr/local/bin/bhtune-server`, `DynamicUser=true`,
+`/etc/bhtune`, and `/var/lib/bhtune`; it is intentionally separate from package-managed units.
+Keep the previous versioned directory and binary until health and simulator checks pass. A
+rollback is a service stop, replacement of the two `/usr/local/bin` binaries with the previous
+verified pair, followed by `systemctl start` and a health check. Package removal semantics do
+not apply to this path: remove only files you installed, and preserve the data directories
+unless a separately verified backup and explicit destructive decision exist.
+
+## macOS release archive
+
+The release matrix currently provides an Apple Silicon archive. Verify and extract it, install
+the server under `/usr/local/bin`, and use the supplied LaunchDaemon template:
+
+```sh
+tag=vX.Y.Z
+sudo install -m755 bhtune /usr/local/bin/bhtune
+sudo install -m755 bhtune-server /usr/local/bin/bhtune-server
+sudo mkdir -p /usr/local/etc/bhtune /usr/local/var/bhtune /usr/local/var/log
+curl --fail --location --output /tmp/com.bytehound-labs.bhtune-server.plist \
+  "https://raw.githubusercontent.com/bytehound-labs/bhtune/$tag/packaging/launchd/com.bytehound-labs.bhtune-server.plist"
+sudo install -m644 /tmp/com.bytehound-labs.bhtune-server.plist \
+  /Library/LaunchDaemons/
+rm -f /tmp/com.bytehound-labs.bhtune-server.plist
+sudo launchctl bootstrap system \
+  /Library/LaunchDaemons/com.bytehound-labs.bhtune-server.plist
+curl --fail http://127.0.0.1:8787/api/health
+```
+
+The release archive contains the binaries and product documentation, but not the LaunchDaemon
+template. Fetch the plist from the same immutable release tag as the archive and inspect it
+before installation. The LaunchDaemon runs at boot and restarts the server, stores configuration under
+`/usr/local/etc/bhtune`, data under `/usr/local/var/bhtune`, and bootstrap/panic output under
+`/usr/local/var/log`. On Apple Silicon Homebrew-style layouts, adjust the plist's binary path
+consistently if `/opt/homebrew` is preferred. Inspect it with
+`sudo launchctl print system/com.bytehound-labs.bhtune-server`; stop it with
+`sudo launchctl bootout system/com.bytehound-labs.bhtune-server`. For an upgrade, boot it out,
+retain the previous binary, replace both binaries as one versioned pair, bootstrap again, and
+run the health and simulator checks. There is no package-managed rollback or data deletion;
+preserve `/usr/local/var/bhtune` explicitly.
+
+## Run via Docker
+
+A multi-stage image (frontend build → `cargo build --release` → slim Debian runtime) is
+published to [GHCR](https://github.com/bytehound-labs/bhtune/pkgs/container/bhtune) on every
+push to `main` as `edge`, and under version tags plus `latest` after a release tag. For a
+pre-release smoke test, `edge` is the available image; use the immutable version tag for a
+stable deployment after release activation:
+
+```sh
+docker pull ghcr.io/bytehound-labs/bhtune:edge
+docker run -d --name bhtune \
+  -p 8787:8787 \
+  -v bhtune-data:/var/lib/bhtune \
+  ghcr.io/bytehound-labs/bhtune:edge
+curl --fail http://127.0.0.1:8787/api/health
+docker exec bhtune bhtune simulate --output json
+```
+
+The image bundles both binaries, sets `BHTUNE_BIND=0.0.0.0:8787` and
+`BHTUNE_DB=/var/lib/bhtune/bhtune.db`, and requires explicit host port publication. Full-mode
+browser mutations still need a trusted network; `BHTUNE_ORIGIN` is needed when a reverse proxy
+rewrites `Host` or a single external origin must be pinned. This is CSRF protection, not
+authentication.
+
+To upgrade, pull the new image, stop/remove only the container, and reuse the same volume:
+
+```sh
+docker pull ghcr.io/bytehound-labs/bhtune:<version>
+docker rm -f bhtune
+docker run -d --name bhtune \
+  -p 8787:8787 \
+  -v bhtune-data:/var/lib/bhtune \
+  ghcr.io/bytehound-labs/bhtune:<version>
+```
+
+Keep the previous image tag or digest until the new health and simulator checks pass. A
+rollback repeats the run command with that prior tag. `docker stop`/`docker rm` do not remove
+`bhtune-data`; `docker volume rm bhtune-data` is destructive and must follow an explicit,
+verified database backup. Use `docker logs -f bhtune` for container output.
+
+When OPC DA gateway names are maintained in the Linux host's `/etc/hosts`, bind that file into
+the container so the server resolves the same names as the host:
 
 ```sh
 docker run -d --name bhtune \
@@ -135,18 +277,10 @@ docker run -d --name bhtune \
   ghcr.io/bytehound-labs/bhtune:edge
 ```
 
-Docker does not copy arbitrary host `/etc/hosts` entries into containers automatically. The
-bind mount is intended for Linux hosts that use local aliases such as `yok3`; it also exposes
-the host's other hosts-file entries to the container. On Docker Desktop, or when aliases are
-provided by DNS instead, use the platform's DNS configuration or explicit `--add-host` entries
-instead. The public simulator Demo deployment does not need OPC gateway host mappings.
-
-The image sets `BHTUNE_BIND=0.0.0.0:8787` and `BHTUNE_DB=/var/lib/bhtune/bhtune.db` as its own
-defaults — see [`Dockerfile`](https://github.com/bytehound-labs/bhtune/blob/main/Dockerfile)
-for the full build and [Configuration precedence](../reference/config.md) for how to override
-either with `docker run -e`. This is a secondary distribution channel aimed at IT-managed Linux
-hosts; a Windows installer is the primary path for this project's actual users, since OT sites
-frequently prohibit or simply lack container runtimes.
+Docker does not copy arbitrary host `/etc/hosts` entries into containers automatically. On
+Docker Desktop, or when aliases are provided by DNS, use the platform's DNS configuration or
+explicit `--add-host` entries instead. The public simulator Demo deployment does not need OPC
+gateway host mappings.
 
 Skip to [Prerequisites](#prerequisites) below to build from source instead.
 
@@ -393,3 +527,9 @@ the binary path in the plist to match). Check on it with
   line, no plant connection required.
 - [Web GUI quickstart](web-gui-quickstart.md) — run the server and drive a
   tune from a browser.
+- [Operator runbook](../guides/operator-runbook.md) — service control, smoke tests, upgrades,
+  rollback, backups, and incident response.
+- [Safety guide](../guides/safety.md) — live-loop guardrails, database boundaries, and recovery
+  requirements.
+- [Release verification](../guides/release-verification.md) — checksums, Sigstore, provenance,
+  SBOM, installer, and AUR evidence.
