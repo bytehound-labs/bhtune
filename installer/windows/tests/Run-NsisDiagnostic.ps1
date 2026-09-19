@@ -789,6 +789,14 @@ try {
     $externalRoot = Join-Path $env:ProgramData 'ByteHound\bhtune-installer-diagnostic-external'
     Assert-Diagnostic -Condition (-not (Test-Path -LiteralPath $externalRoot)) -Message "The external-database diagnostic root already exists: $externalRoot"
     New-Item -ItemType Directory -Path $externalRoot -Force | Out-Null
+    # The scheduled diagnostic runs as SYSTEM, while BhtuneServer runs as
+    # LocalService.  Make the synthetic external database fixture accessible
+    # to the same service account as the installer-managed database root.
+    Set-InstallerAclPath `
+        -Path $externalRoot `
+        -LocalServiceRights 'M' `
+        -Directory $true
+    Write-DiagnosticLog 'ROLLBACK_PREP_EXTERNAL_DATABASE_ACL=LocalService:Modify'
     $externalDatabase = Join-Path $externalRoot 'bhtune-external.db'
     Stop-InstallerService | Out-Null
     Write-DiagnosticLog 'ROLLBACK_PREP_BHTUNE_STOPPED=True'
@@ -900,6 +908,47 @@ try {
         $service = Get-ServiceSnapshot -Name $paths.ServiceName
         if ($null -ne $service) {
             Write-DiagnosticLog "FAILURE_SERVICE_STATE=$($service.State)"
+            Write-DiagnosticLog "FAILURE_SERVICE_PATH=$($service.PathName)"
+            Write-DiagnosticLog "FAILURE_SERVICE_ACCOUNT=$($service.StartName)"
+        }
+        try {
+            $scStatus = Get-ServiceControlStatus -Name $paths.ServiceName -TimeoutMilliseconds 5000
+            if ($null -eq $scStatus) {
+                Write-DiagnosticLog 'FAILURE_SC_STATUS=Absent'
+            } else {
+                Write-DiagnosticLog (
+                    'FAILURE_SC_STATUS state={0} pid={1} win32_exit={2} service_exit={3} checkpoint={4} wait_hint={5}' -f
+                    $scStatus.State,
+                    $scStatus.ProcessId,
+                    $scStatus.Win32ExitCode,
+                    $scStatus.ServiceExitCode,
+                    $scStatus.Checkpoint,
+                    $scStatus.WaitHint
+                )
+                if ($scStatus.ProcessId -gt 0) {
+                    Write-ProcessSnapshot -ProcessId $scStatus.ProcessId
+                    Write-DescendantSnapshots -RootProcessId $scStatus.ProcessId
+                }
+            }
+        } catch {
+            Write-DiagnosticLog "FAILURE_SC_STATUS_ERROR=$($_.Exception.ToString())"
+        }
+
+        foreach ($logDirectory in @($paths.LogDirectory, $paths.GatewayLogDirectory)) {
+            if (-not (Test-Path -LiteralPath $logDirectory -PathType Container)) {
+                continue
+            }
+            foreach ($logFile in @(Get-ChildItem -LiteralPath $logDirectory -File -Force -ErrorAction SilentlyContinue)) {
+                Write-DiagnosticLog "FAILURE_LOG_FILE=$($logFile.FullName)"
+                try {
+                    $tail = @(Get-Content -LiteralPath $logFile.FullName -Tail 80 -ErrorAction Stop)
+                    foreach ($line in $tail) {
+                        Write-DiagnosticLog "FAILURE_LOG_CONTENT=$line"
+                    }
+                } catch {
+                    Write-DiagnosticLog "FAILURE_LOG_READ_ERROR path=$($logFile.FullName) error=$($_.Exception.Message)"
+                }
+            }
         }
     } catch {
         Write-DiagnosticLog "FAILURE_SNAPSHOT_ERROR=$($_.Exception.Message)"
