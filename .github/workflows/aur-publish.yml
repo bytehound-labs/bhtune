@@ -304,6 +304,7 @@ jobs:
           shellcheck /workspace/scripts/aurpkg
           shfmt -d /workspace/scripts/aurpkg
 
+          cd /workspace
           runuser -u aur-builder -- env HOME=/tmp/aur-home \
             python /workspace/scripts/aurpkg_test.py
 

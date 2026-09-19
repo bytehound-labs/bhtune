@@ -173,7 +173,9 @@ request validation, requires an exact stable `vX.Y.Z` tag and independently veri
 evidence, and remains a manual first-release action until the post-release AUR commit has been
 verified. The reusable Arch job feeds its validation script to `docker run -i` and writes
 machine-readable evidence through the host-mounted `aur-evidence/` directory; preserve both
-invariants when changing that workflow.
+invariants when changing that workflow. The regression suite must run with the repository root
+as its working directory because its ancillary-file inventory intentionally uses repository-
+relative paths.
 
 Debian packages use adaptive `depends = "$auto"` metadata and therefore require
 `dpkg-shlibdeps` in the packaging environment. Do not hard-code a dependency list to compensate
