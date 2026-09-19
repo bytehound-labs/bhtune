@@ -322,6 +322,18 @@ publisher even when the file is intact. Verify the release checksum and, when av
 Sigstore bundle and GitHub provenance separately; those checks establish integrity and build
 provenance, not Windows publisher trust.
 
+If an upgrade health check fails, leave the affected service stopped or in the installer-reported
+rollback state and preserve the installer log, service definition, health response, and database
+files. Do not repeatedly rerun an upgrade against the same live database while the failure is
+unexplained. For an NSIS installation, the installer reports rollback success only after the
+restored service answers the expected health/version check; if that check also fails, treat the
+rollback as incomplete, inspect the preserved ProgramData rollback directory, and restore the
+database plus `-wal`/`-shm` companions only while the service is stopped. For package or manual
+archive installs, keep the prior verified package/archive and restore the binaries as a matched
+pair, then start the service and verify `/api/health` before considering the recovery complete.
+The [operator runbook](operator-runbook.md#12-incident-response) lists the evidence to collect and
+the bounded recovery sequence.
+
 The frontend development server is also unauthenticated. It binds all local interfaces so a
 trusted host can use `http://asus:5173`, and proxies browser API requests to the local
 `bhtune-server`; use this development-only path only on the same trusted network.

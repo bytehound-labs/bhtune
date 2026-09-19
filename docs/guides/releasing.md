@@ -15,14 +15,14 @@ until the approved RC has passed its canary.
 
 ## Ownership
 
-| Responsibility | Owner |
-| --- | --- |
-| Product version, product tag, and root `CHANGELOG.md` | `bhtune-cli` through `release-plz` |
-| Release preparation PR | `.github/workflows/release-plz.yml` |
-| Release PR integrity status | `.github/workflows/release-integrity.yml` |
-| Protected-branch squash auto-merge request | `.github/workflows/auto-merge.yml` |
-| GitHub Release and release assets | `.github/workflows/release.yml` |
-| Prerelease artifact and platform acceptance | `.github/workflows/release-canary.yml` |
+| Responsibility                                        | Owner                                     |
+| ----------------------------------------------------- | ----------------------------------------- |
+| Product version, product tag, and root `CHANGELOG.md` | `bhtune-cli` through `release-plz`        |
+| Release preparation PR                                | `.github/workflows/release-plz.yml`       |
+| Release PR integrity status                           | `.github/workflows/release-integrity.yml` |
+| Protected-branch squash auto-merge request            | `.github/workflows/auto-merge.yml`        |
+| GitHub Release and release assets                     | `.github/workflows/release.yml`           |
+| Prerelease artifact and platform acceptance           | `.github/workflows/release-canary.yml`    |
 
 `release-plz` is configured as git-only. It does not publish BHTune crates to crates.io and does
 not create GitHub Releases. The `release.yml` workflow is the only workflow that creates a GitHub
@@ -146,3 +146,9 @@ Docusaurus site remains unversioned and does not show a version selector.
   documentation. Never add a registry token to the git-only release flow.
 - Never create a public RC, enable the kill switch, or cut `v0.1.0` without explicit maintainer
   approval.
+
+For the evidence review after a release or canary completes, use the
+[release-verification guide](release-verification.md). For installation, service-state,
+database, and operator recovery procedures, use the
+[installation guide](../getting-started/installation.md) and
+[operator runbook](operator-runbook.md).
