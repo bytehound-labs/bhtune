@@ -216,6 +216,39 @@ function Assert-Diagnostic {
     }
 }
 
+function Write-InstallerFailureEvidence {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Scenario
+    )
+
+    try {
+        $paths = Get-InstallerPaths
+        $tracePath = Join-Path $paths.InstallerStateRoot 'install-trace.jsonl'
+        Write-DiagnosticLog "INSTALL_FAILURE_STATE_BEGIN scenario=$Scenario"
+        Write-DiagnosticLog "INSTALL_ROOT_EXISTS=$(Test-Path -LiteralPath $paths.InstallRoot)"
+        Write-DiagnosticLog "PROGRAM_DATA_ROOT_EXISTS=$(Test-Path -LiteralPath $paths.ProgramDataRoot)"
+        foreach ($serviceName in @($paths.ServiceName, $paths.GatewayServiceName)) {
+            $service = Get-ServiceSnapshot -Name $serviceName
+            Write-DiagnosticLog ("INSTALL_FAILURE_SERVICE name={0} snapshot={1}" -f `
+                    $serviceName,
+                    ($service | ConvertTo-Json -Depth 8 -Compress))
+        }
+        if (Test-Path -LiteralPath $tracePath -PathType Leaf) {
+            Write-DiagnosticLog "INSTALL_TRACE_BEGIN path=$tracePath"
+            foreach ($line in @(Get-Content -LiteralPath $tracePath -ErrorAction Stop)) {
+                Write-DiagnosticLog "INSTALL_TRACE $line"
+            }
+            Write-DiagnosticLog 'INSTALL_TRACE_END'
+        } else {
+            Write-DiagnosticLog "INSTALL_TRACE_MISSING path=$tracePath"
+        }
+        Write-DiagnosticLog "INSTALL_FAILURE_STATE_END scenario=$Scenario"
+    } catch {
+        Write-DiagnosticLog "INSTALL_FAILURE_EVIDENCE_ERROR scenario=$Scenario error=$($_.Exception.Message)"
+    }
+}
+
 function Invoke-InstallerDiagnostic {
     param(
         [Parameter(Mandatory = $true)]
@@ -240,6 +273,9 @@ function Invoke-InstallerDiagnostic {
     Write-ProcessSnapshot -ProcessId $process.Id
     $exitCode = Wait-ProcessExit -Process $process -Timeout $TimeoutSeconds
     Write-DiagnosticLog "INSTALLER_EXIT_CODE scenario=$Scenario code=$exitCode"
+    if (($ExpectSuccess -and $exitCode -ne 0) -or (-not $ExpectSuccess -and $exitCode -eq 0)) {
+        Write-InstallerFailureEvidence -Scenario $Scenario
+    }
     if ($ExpectSuccess) {
         Assert-Diagnostic -Condition ($exitCode -eq 0) -Message "Scenario '$Scenario' failed with installer exit code $exitCode."
     } else {
