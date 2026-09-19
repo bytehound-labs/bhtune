@@ -1,0 +1,492 @@
+name: AUR package
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "dry-run validates a fixture; publish updates the stable AUR package"
+        required: false
+        type: string
+        default: dry-run
+      source_ref:
+        description: "Checkout ref used for dry-run fixture builds"
+        required: false
+        type: string
+        default: main
+      tag:
+        description: "Stable tag for publication, or semver prerelease tag for dry-run"
+        required: false
+        type: string
+        default: v0.1.0-rc.1
+      pkgrel:
+        description: "Arch package release number"
+        required: false
+        type: string
+        default: "1"
+    secrets:
+      AUR_SSH_KEY:
+        required: false
+      AUR_KNOWN_HOSTS:
+        required: false
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Validate a fixture or publish a stable package to AUR"
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - publish
+        default: dry-run
+      source_ref:
+        description: "Checkout ref used for dry-run fixture builds"
+        required: false
+        type: string
+        default: main
+      tag:
+        description: "Stable tag for publication, or semver prerelease tag for dry-run"
+        required: true
+        type: string
+        default: v0.1.0-rc.1
+      pkgrel:
+        description: "Arch package release number"
+        required: true
+        type: string
+        default: "1"
+
+concurrency:
+  group: aur-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Build and validate bhtune-bin
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Validate workflow inputs
+        env:
+          MODE: ${{ inputs.mode }}
+          TAG: ${{ inputs.tag }}
+          PKGREL: ${{ inputs.pkgrel }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            dry-run)
+              [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)([-+][0-9A-Za-z.-]+)?$ ]] ||
+                { echo "dry-run requires a semver tag such as v0.1.0-rc.1" >&2; exit 1; }
+              ;;
+            publish)
+              [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+                { echo "publish requires an exact stable tag in vX.Y.Z form" >&2; exit 1; }
+              ;;
+            *)
+              echo "mode must be dry-run or publish" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$PKGREL" =~ ^[1-9][0-9]*$ ]] ||
+            { echo "pkgrel must be a positive decimal integer" >&2; exit 1; }
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.mode == 'publish' && inputs.tag || inputs.source_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518
+        with:
+          tool: protoc
+
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+        with:
+          runtime: node@lts
+          cache: true
+
+      - name: Resolve and verify workspace version
+        id: version
+        env:
+          MODE: ${{ inputs.mode }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          workspace_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "bhtune-cli"))'
+          )"
+          tag_version="${TAG#v}"
+          tag_base="${tag_version%%[-+]*}"
+          [[ "$tag_base" == "$workspace_version" ]] ||
+            { echo "tag $TAG does not match workspace version $workspace_version" >&2; exit 1; }
+          if [[ "$MODE" == publish && "$tag_version" != "$workspace_version" ]]; then
+            echo "publish tags must exactly match workspace version $workspace_version" >&2
+            exit 1
+          fi
+          echo "workspace_version=$workspace_version" >>"$GITHUB_OUTPUT"
+
+      - name: Prepare release archive or controlled dry-run fixture
+        env:
+          MODE: ${{ inputs.mode }}
+          TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p aur-fixture aur-release
+          if [[ "$MODE" == dry-run ]]; then
+            pnpm --filter bhtune-frontend run build
+            cargo build --release --locked -p bhtune-cli -p bhtune-server
+            payload="aur-fixture/payload"
+            mkdir -p "$payload"
+            install -m755 target/release/bhtune "$payload/bhtune"
+            install -m755 target/release/bhtune-server "$payload/bhtune-server"
+            install -m644 LICENSE README.md "$payload/"
+            archive="aur-fixture/bhtune-$TAG-x86_64-unknown-linux-gnu.tar.gz"
+            tar -C "$payload" -czf "$archive" .
+            echo "ARCHIVE=$archive" >>"$GITHUB_ENV"
+          else
+            archive_name="bhtune-$TAG-x86_64-unknown-linux-gnu.tar.gz"
+            gh release download "$TAG" \
+              --repo "$REPOSITORY" \
+              --dir aur-release \
+              --pattern "$archive_name" \
+              --pattern "release-assets.sha256" \
+              --pattern "release-provenance.bundle.json" \
+              --pattern "$archive_name.sigstore.json"
+            archive="aur-release/$archive_name"
+            [[ -f "$archive" ]] || { echo "stable Linux archive was not downloaded" >&2; exit 1; }
+            [[ -f aur-release/release-assets.sha256 ]] ||
+              { echo "release-assets.sha256 is required" >&2; exit 1; }
+            [[ -f "aur-release/$archive_name.sigstore.json" ]] ||
+              { echo "the Linux archive Sigstore bundle is required" >&2; exit 1; }
+            [[ -f aur-release/release-provenance.bundle.json ]] ||
+              { echo "release-provenance.bundle.json is required" >&2; exit 1; }
+            archive_hash="$(
+              awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; exit }' \
+                aur-release/release-assets.sha256
+            )"
+            [[ "$archive_hash" =~ ^[0-9A-Fa-f]{64}$ ]] ||
+              { echo "no valid checksum was found for $archive_name" >&2; exit 1; }
+            echo "ARCHIVE=$archive" >>"$GITHUB_ENV"
+            echo "ARCHIVE_SHA256=$archive_hash" >>"$GITHUB_ENV"
+          fi
+
+      - name: Install Cosign
+        if: inputs.mode == 'publish'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac
+
+      - name: Verify stable release evidence
+        if: inputs.mode == 'publish'
+        env:
+          TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive_name="bhtune-$TAG-x86_64-unknown-linux-gnu.tar.gz"
+          gh attestation verify aur-release/release-assets.sha256 \
+            --repo "$REPOSITORY" \
+            --bundle aur-release/release-provenance.bundle.json \
+            --signer-workflow "$REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$TAG" \
+            --cert-oidc-issuer 'https://token.actions.githubusercontent.com'
+          cosign verify-blob \
+            --bundle "aur-release/$archive_name.sigstore.json" \
+            --certificate-identity "https://github.com/$REPOSITORY/.github/workflows/release.yml@refs/tags/$TAG" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "aur-release/$archive_name"
+
+      - name: Prepare AUR source cache for Arch
+        env:
+          MODE: ${{ inputs.mode }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p aur-cache
+          tag_version="${TAG#v}"
+          pkgver="${tag_version//-/.}"
+          archive_alias="bhtune-$pkgver-x86_64-unknown-linux-gnu.tar.gz"
+          cp -f -- "$ARCHIVE" "aur-cache/$archive_alias"
+
+          while IFS= read -r path; do
+            case "$path" in
+              LICENSE|README.md)
+                cache_name="${path##*/}"
+                ;;
+              man/*.1)
+                cache_name="man-${path##*/}"
+                ;;
+              completions/bhtune.bash)
+                cache_name="completion-bash"
+                ;;
+              completions/_bhtune)
+                cache_name="completion-zsh"
+                ;;
+              completions/bhtune.fish)
+                cache_name="completion-fish"
+                ;;
+              packaging/systemd/bhtune-server.service)
+                cache_name="service-bhtune-server.service"
+                ;;
+              *)
+                echo "unexpected ancillary path: $path" >&2
+                exit 1
+                ;;
+            esac
+            cp -f -- "$path" "aur-cache/$cache_name"
+          done < <(
+            printf '%s\n' LICENSE README.md packaging/systemd/bhtune-server.service
+            find man -maxdepth 1 -type f -name '*.1' -print | sort
+            printf '%s\n' completions/bhtune.bash completions/_bhtune completions/bhtune.fish
+          )
+
+      - name: Validate generator and build the package in Arch
+        env:
+          MODE: ${{ inputs.mode }}
+          TAG: ${{ inputs.tag }}
+          PKGREL: ${{ inputs.pkgrel }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e "MODE=$MODE" \
+            -e "TAG=$TAG" \
+            -e "PKGREL=$PKGREL" \
+            -e "ARCHIVE=$ARCHIVE" \
+            -e "ARCHIVE_SHA256=${ARCHIVE_SHA256:-}" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            archlinux:base-devel \
+            bash -s <<'ARCH_SCRIPT'
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed systemd shellcheck shfmt python curl
+          HOST_UID="$(stat -c '%u' /workspace)"
+          useradd --create-home --uid "$HOST_UID" aur-builder
+
+          mkdir -p /workspace/aur-metadata /workspace/aur-metadata-pkgrel2
+          chown -R aur-builder:aur-builder /workspace/aur-metadata /workspace/aur-metadata-pkgrel2
+          runuser -u aur-builder -- env \
+            MODE="$MODE" TAG="$TAG" PKGREL="$PKGREL" ARCHIVE="$ARCHIVE" \
+            ARCHIVE_SHA256="$ARCHIVE_SHA256" bash -s <<'AUR_METADATA'
+          set -euo pipefail
+          cd /workspace
+          sha_args=()
+          while IFS= read -r path; do
+            hash="$(sha256sum "$path" | awk '{print tolower($1)}')"
+            sha_args+=(--sha256 "$path=$hash")
+          done < <(
+            printf '%s\n' LICENSE README.md packaging/systemd/bhtune-server.service
+            find man -maxdepth 1 -type f -name '*.1' -print | sort
+            printf '%s\n' completions/bhtune.bash completions/_bhtune completions/bhtune.fish
+          )
+
+          common_args=(
+            --tag "$TAG"
+            --archive-path "/workspace/$ARCHIVE"
+            --source-root /workspace
+            --pkgrel "$PKGREL"
+          )
+          if [[ "$MODE" == dry-run ]]; then
+            common_args+=(--dry-run)
+          else
+            common_args+=(--archive-sha256 "$ARCHIVE_SHA256")
+          fi
+          /workspace/scripts/aurpkg "${common_args[@]}" \
+            --output-dir /workspace/aur-metadata "${sha_args[@]}"
+          /workspace/scripts/aurpkg "${common_args[@]}" --pkgrel 2 \
+            --output-dir /workspace/aur-metadata-pkgrel2 "${sha_args[@]}"
+          AUR_METADATA
+
+          shellcheck /workspace/scripts/aurpkg
+          shfmt -d /workspace/scripts/aurpkg
+
+          runuser -u aur-builder -- env HOME=/tmp/aur-home \
+            python /workspace/scripts/aurpkg_test.py
+
+          mkdir -p /tmp/aur-build /tmp/aur-srcdest /tmp/aur-pkgdest /workspace/aur-evidence
+          cp -f /workspace/aur-metadata/PKGBUILD /tmp/aur-build/
+          cp -f /workspace/aur-metadata/.SRCINFO /tmp/aur-build/
+          cp -f /workspace/aur-cache/* /tmp/aur-srcdest/
+          chown -R aur-builder:aur-builder /tmp/aur-build /tmp/aur-srcdest /tmp/aur-pkgdest
+
+          runuser -u aur-builder -- env \
+            HOME=/tmp/aur-home SRCDEST=/tmp/aur-srcdest PKGDEST=/tmp/aur-pkgdest \
+            bash -c 'cd /tmp/aur-build && makepkg --printsrcinfo > .SRCINFO.generated && diff -u .SRCINFO .SRCINFO.generated && makepkg --verifysource && makepkg --nodeps --noconfirm'
+          pkg1="$(find /tmp/aur-pkgdest -maxdepth 1 -type f -name '*.pkg.tar.zst' -print -quit)"
+          [[ -n "$pkg1" ]] || { echo "makepkg did not produce a package" >&2; exit 1; }
+          cp -f "$pkg1" /workspace/aur-evidence/
+          pacman -Qip "$pkg1" | tee /workspace/aur-evidence/package-info.txt
+          bsdtar -tf "$pkg1" | tee /workspace/aur-evidence/package-files.txt
+          grep -Fx './usr/bin/bhtune' /workspace/aur-evidence/package-files.txt
+          grep -Fx './usr/bin/bhtune-server' /workspace/aur-evidence/package-files.txt
+          grep -Fx './usr/lib/systemd/system/bhtune-server.service' /workspace/aur-evidence/package-files.txt
+          grep -Fx './usr/share/bash-completion/completions/bhtune' /workspace/aur-evidence/package-files.txt
+          grep -Fx './usr/share/zsh/site-functions/_bhtune' /workspace/aur-evidence/package-files.txt
+          grep -Fx './usr/share/fish/vendor_completions.d/bhtune.fish' /workspace/aur-evidence/package-files.txt
+          ! grep -q '/usr/local/' /workspace/aur-evidence/package-files.txt
+
+          rm -rf /tmp/aur-build /tmp/aur-pkgdest
+          mkdir -p /tmp/aur-build /tmp/aur-pkgdest
+          cp -f /workspace/aur-metadata-pkgrel2/PKGBUILD /tmp/aur-build/
+          runuser -u aur-builder -- env \
+            HOME=/tmp/aur-home SRCDEST=/tmp/aur-srcdest PKGDEST=/tmp/aur-pkgdest \
+            bash -c 'cd /tmp/aur-build && makepkg --verifysource && makepkg --nodeps --noconfirm'
+          pkg2="$(find /tmp/aur-pkgdest -maxdepth 1 -type f -name '*.pkg.tar.zst' -print -quit)"
+          [[ -n "$pkg2" ]] || { echo "makepkg did not produce the pkgrel 2 package" >&2; exit 1; }
+          cp -f "$pkg2" /workspace/aur-evidence/
+
+          pacman -U --noconfirm "$pkg1"
+          test ! -e /etc/systemd/system/multi-user.target.wants/bhtune-server.service
+          systemctl enable --root=/ bhtune-server.service
+          test -L /etc/systemd/system/multi-user.target.wants/bhtune-server.service
+          systemctl disable --root=/ bhtune-server.service
+
+          mkdir -p /etc/bhtune /var/lib/bhtune
+          printf 'sentinel-config\n' >/etc/bhtune/aur-sentinel
+          printf 'sentinel-data\n' >/var/lib/bhtune/aur-sentinel
+          pacman -U --noconfirm "$pkg2"
+          grep -Fx 'sentinel-config' /etc/bhtune/aur-sentinel
+          grep -Fx 'sentinel-data' /var/lib/bhtune/aur-sentinel
+
+          mkdir -p /tmp/bhtune-package-home
+          BHTUNE_BIND=127.0.0.1:18787 \
+          BHTUNE_DB=/tmp/bhtune-package.db \
+          HOME=/tmp/bhtune-package-home \
+          /usr/bin/bhtune-server >/tmp/bhtune-package-server.log 2>&1 &
+          server_pid=$!
+          cleanup_server() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup_server EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18787/api/health |
+              python -c 'import json,sys; value=json.load(sys.stdin); assert value["status"] == "ok"; assert value["version"]'
+            then
+              break
+            fi
+            [[ "$attempt" -lt 60 ]] || {
+              cat /tmp/bhtune-package-server.log >&2
+              exit 1
+            }
+            sleep 1
+          done
+          cleanup_server
+          trap - EXIT
+
+          pacman -R --noconfirm bhtune-bin
+          test -f /etc/bhtune/aur-sentinel
+          test -f /var/lib/bhtune/aur-sentinel
+          test ! -e /usr/bin/bhtune
+          test ! -e /usr/bin/bhtune-server
+          ARCH_SCRIPT
+
+      - name: Upload generated metadata and fixture
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aur-package-metadata
+          path: |
+            aur-metadata/
+            aur-metadata-pkgrel2/
+            aur-fixture/
+            aur-release/
+            aur-cache/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Arch validation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: aur-package-evidence
+          path: aur-evidence/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish bhtune-bin to AUR
+    needs: validate
+    if: inputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Require publication credentials
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ -n "$AUR_SSH_KEY" ]] || { echo "AUR SSH key is required for publish mode" >&2; exit 1; }
+          [[ -n "$AUR_KNOWN_HOSTS" ]] ||
+            { echo "a pinned aur.archlinux.org known_hosts entry is required" >&2; exit 1; }
+
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: aur-package-metadata
+          path: aur-artifact
+
+      - name: Publish only generated metadata
+        env:
+          TAG: ${{ inputs.tag }}
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          temp_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf -- "$temp_dir"
+          }
+          trap cleanup EXIT
+
+          printf '%s\n' "$AUR_SSH_KEY" >"$temp_dir/id_ed25519"
+          printf '%s\n' "$AUR_KNOWN_HOSTS" >"$temp_dir/known_hosts"
+          chmod 600 "$temp_dir/id_ed25519" "$temp_dir/known_hosts"
+          cat >"$temp_dir/ssh_config" <<EOF
+          Host aur.archlinux.org
+              HostName aur.archlinux.org
+              User aur
+              IdentityFile $temp_dir/id_ed25519
+              UserKnownHostsFile $temp_dir/known_hosts
+              StrictHostKeyChecking yes
+              IdentitiesOnly yes
+              BatchMode yes
+          EOF
+
+          export GIT_SSH_COMMAND="ssh -F $temp_dir/ssh_config"
+          git clone ssh://aur@aur.archlinux.org/bhtune-bin.git "$temp_dir/aur"
+          cd "$temp_dir/aur"
+          git status --short
+          if git ls-files | grep -vE '^(PKGBUILD|\.SRCINFO)$'; then
+            echo "AUR repository contains unexpected tracked files" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+            echo "AUR repository is not clean after clone" >&2
+            exit 1
+          fi
+
+          cp "$GITHUB_WORKSPACE/aur-artifact/aur-metadata/PKGBUILD" .
+          cp "$GITHUB_WORKSPACE/aur-artifact/aur-metadata/.SRCINFO" .
+          if git diff --name-only | grep -vE '^(PKGBUILD|\.SRCINFO)$'; then
+            echo "generated changes escaped PKGBUILD/.SRCINFO" >&2
+            exit 1
+          fi
+          git config user.name "Mike Boiko"
+          git config user.email "mike@bytehound.ca"
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "AUR already contains the generated metadata"
+            exit 0
+          fi
+          git commit -m "Update bhtune-bin for $TAG"
+          git push origin HEAD:master
+          expected="$(git rev-parse HEAD)"
+          actual="$(git ls-remote origin refs/heads/master | awk '{print $1}')"
+          [[ "$actual" == "$expected" ]] ||
+            { echo "AUR push verification failed: expected $expected, got $actual" >&2; exit 1; }

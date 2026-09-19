@@ -252,6 +252,19 @@ jobs:
       - name: Assemble publishable packages
         run: cargo package --workspace --locked --no-verify
 
+  aur:
+    name: AUR package validation
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
+    uses: ./.github/workflows/aur-publish.yml
+    permissions:
+      contents: read
+    with:
+      mode: dry-run
+      source_ref: ${{ github.sha }}
+      tag: v0.1.0-rc.1
+      pkgrel: "1"
+
   msrv:
     name: MSRV
     needs: changes
@@ -441,6 +454,7 @@ jobs:
         check,
         windows,
         package,
+        aur,
         msrv,
         frontend,
         screenshots,
@@ -482,6 +496,7 @@ jobs:
           SCREENSHOTS_RESULT: ${{ needs.screenshots.result }}
           WEBSITE_RESULT: ${{ needs.website.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
+          AUR_RESULT: ${{ needs.aur.result }}
           KNIP_CHANGED: ${{ needs.changes.outputs.knip }}
           KNIP_RESULT: ${{ needs.knip.result }}
           INSTALLER_CHANGED: ${{ needs.changes.outputs.installer }}
@@ -515,6 +530,11 @@ jobs:
 
           if [[ "$PACKAGE_CHANGED" == "true" && "$PACKAGE_RESULT" != "success" ]]; then
             echo "Package verification ended with: $PACKAGE_RESULT"
+            failed=1
+          fi
+
+          if [[ "$PACKAGE_CHANGED" == "true" && "$AUR_RESULT" != "success" ]]; then
+            echo "AUR package validation ended with: $AUR_RESULT"
             failed=1
           fi
 

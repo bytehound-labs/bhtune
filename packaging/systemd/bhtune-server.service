@@ -1,43 +1,14 @@
-# bhtune-server systemd unit (Linux)
+# bhtune-server systemd unit for package-managed installs (Linux)
 #
-# Install and enable:
-#   sudo install -Dm644 packaging/systemd/bhtune-server.service \
-#       /etc/systemd/system/bhtune-server.service
-#   sudo systemctl daemon-reload
+# This is the canonical unit shared by the .deb, .rpm, and AUR packages. Those packages
+# install the binary at `/usr/bin/bhtune-server` and this unit at
+# `/usr/lib/systemd/system/bhtune-server.service`. Package installation never enables or
+# starts the service; an operator explicitly runs:
+#
 #   sudo systemctl enable --now bhtune-server
 #
-# Check on it:
-#   systemctl status bhtune-server
-#   journalctl -u bhtune-server -f
-#
-# `ExecStart` below assumes the released binary was installed to
-# `/usr/local/bin/bhtune-server` (matching `pkg-aur`/a manual `install`); adjust the path if
-# yours lives elsewhere. A `.deb`/`.rpm` install uses `/usr/bin/bhtune-server` instead --
-# see the `deb/bhtune-server.service` sibling file, which `cargo-deb`/`cargo-generate-rpm`
-# install automatically (`pkg-evaluate-others`).
-#
-# `DynamicUser=true` creates an ephemeral, unprivileged, non-shell system user/group for this
-# unit's lifetime -- there is no separate `useradd`/postinst step to run first, which is also
-# true of the `.deb`/`.rpm` variant (`pkg-evaluate-others`): both packaging paths lean on this
-# instead of a maintainer-script-created system user. `StateDirectory=`/
-# `ConfigurationDirectory=` have systemd create and `chown` the two
-# directories below to that dynamic user before this unit ever starts, so `bhtune-server`
-# itself never needs root or a manual `mkdir`/`chown` to write its database and logs.
-#
-# `XDG_CONFIG_HOME`/`XDG_DATA_HOME` below are what actually steer bhtune's own path
-# resolution (see `bhtune_cli::config::{config_path_from, default_db_path_from,
-# default_log_dir_from}`) onto the FHS-standard locations `ConfigurationDirectory=`/
-# `StateDirectory=` just created, without bhtune needing any systemd-specific code of its
-# own -- the same environment variables work identically for a plain `XDG_CONFIG_HOME=/etc
-# XDG_DATA_HOME=/var/lib bhtune-server` run by hand, with no systemd involved at all.
-#
-# This resolves to:
-#   config: /etc/bhtune/bhtune.toml       (optional -- a missing file just means "defaults")
-#   data:   /var/lib/bhtune/bhtune.db
-#           /var/lib/bhtune/logs/
-#
-# To pin an explicit config path instead (e.g. a non-default location), add
-# `ExecStart=... --config /path/to/bhtune.toml` -- see `bhtune-server --help`.
+# The manual archive-install unit remains at `packaging/systemd/manual/bhtune-server.service`
+# and uses `/usr/local/bin/bhtune-server`.
 
 [Unit]
 Description=BHTune Server -- MRFT PID auto-tuning HTTP API and web GUI
@@ -47,7 +18,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/bhtune-server
+ExecStart=/usr/bin/bhtune-server
 Restart=on-failure
 RestartSec=5
 

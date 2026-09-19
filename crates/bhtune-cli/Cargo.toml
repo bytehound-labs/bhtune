@@ -164,7 +164,7 @@ priority = "optional"
 # before `systemctl start bhtune-server` even saw the unit). This is a `[package.metadata.
 # deb]`-level key, not a `systemd-units` sub-table key (`cargo-deb` rejects it there with
 # `deny_unknown_fields`) -- see `cargo-deb`'s own `systemd.md`.
-maintainer-scripts = "../../packaging/systemd/deb"
+maintainer-scripts = "../../packaging/systemd"
 assets = [
   [
     "target/release/bhtune",
@@ -203,12 +203,12 @@ assets = [
   ],
 ]
 
-# Picked up automatically from `../../packaging/systemd/deb/bhtune-server.service` via
-# `unit-name` below -- see that file's own header comment for why the `.deb`/`.rpm`
-# packaging path needs a variant distinct from the AUR/manual-install unit (different
-# `ExecStart` binary path: `/usr/bin/` vs `/usr/local/bin/`).
+# Picked up automatically from the canonical package-managed unit at
+# `../../packaging/systemd/bhtune-server.service` via `unit-name` below. The separate
+# manual archive-install unit remains under `packaging/systemd/manual/` and uses
+# `/usr/local/bin/bhtune-server`.
 [package.metadata.deb.systemd-units]
-unit-scripts = "../../packaging/systemd/deb"
+unit-scripts = "../../packaging/systemd"
 unit-name = "bhtune-server"
 enable = false
 start = false
@@ -249,7 +249,7 @@ assets = [
   { source = "completions/bhtune.fish", dest = "/usr/share/fish/vendor_completions.d/bhtune.fish", mode = "644" },
   { source = "README.md", dest = "/usr/share/doc/bhtune/README.md", mode = "644", doc = true },
   { source = "LICENSE", dest = "/usr/share/doc/bhtune/LICENSE", mode = "644", doc = true },
-  { source = "packaging/systemd/deb/bhtune-server.service", dest = "/usr/lib/systemd/system/bhtune-server.service", mode = "644" },
+  { source = "packaging/systemd/bhtune-server.service", dest = "/usr/lib/systemd/system/bhtune-server.service", mode = "644" },
 ]
 
 # `cargo-generate-rpm` has no `cargo-deb`-style automatic `systemd-units` integration (no
@@ -266,10 +266,9 @@ assets = [
 # standard scriptlet argument convention -- see the Fedora Packaging Guidelines'
 # Scriptlets page.
 post_install_script = '''
-if [ $1 -eq 1 ] ; then
-    # Initial installation: apply distro preset policy (enable or leave disabled)
-    systemctl preset bhtune-server.service >/dev/null 2>&1 || :
-fi
+# Package installation must not enable or start the service. Reloading makes the newly
+# installed unit visible without changing the operator's enabled/running state.
+systemctl daemon-reload >/dev/null 2>&1 || :
 '''
 pre_uninstall_script = '''
 if [ $1 -eq 0 ] ; then

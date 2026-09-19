@@ -382,6 +382,14 @@ to [crates.io](https://crates.io). See the
 [release automation guide](docs/guides/releasing.md) for the RC procedure, activation gates,
 recovery rules, and release-rate limits.
 
+Linux package definitions are also prepared for the stable release: Debian/Ubuntu `.deb`,
+RPM-based `.rpm`, and the Arch `bhtune-bin` package. The AUR generator and validation workflow
+accept only exact stable `vX.Y.Z` tags for publication; prereleases and arbitrary refs are
+validation-only, and the first AUR publication remains a manual post-release action. Until
+that happens, `bhtune-bin` is not an available AUR package. Debian packages use adaptive
+shared-library dependency discovery and must be built in a Debian-capable environment that
+provides `dpkg-shlibdeps`.
+
 ### What's still coming
 
 Once a version tag is pushed, release tooling already in place
@@ -399,12 +407,20 @@ without guessing, when the installer is invoked again. Windows uninstall uses a 
 two-pass cleanup and preserves the complete ProgramData tree, including installer recovery state;
 a genuinely empty clean install has no rollback backup until there is existing data to protect.
 It is not attached to a public release until the first stable release contract is activated. The
-`bhtune-bin` AUR package is a separate follow-on channel and is likewise stable-tag-only.
+`bhtune-bin` generator and reusable AUR workflow are ready as a separate follow-on channel and
+are likewise stable-tag-only. The first publication is intentionally manual after the exact
+stable Linux archive and release evidence have been independently verified; no AUR package is
+promised before that publication.
 Windows uninstall uses a bounded Service Control Manager disappearance wait and a retryable
 finalizer so delayed service deregistration does not remove the ownership journal prematurely;
 ProgramData remains preserved throughout.
 Publishing to [crates.io](https://crates.io), Homebrew, and a few other channels is still an
 open evaluation, not a commitment — see the [roadmap](docs/roadmap.md).
+
+For platform-specific prerequisites, service behavior, state locations, upgrade/rollback
+boundaries, and package removal semantics, see the
+[installation guide](docs/getting-started/installation.md) and
+[safety guide](docs/guides/safety.md).
 
 ### Running the server
 
