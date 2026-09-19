@@ -153,7 +153,8 @@ def _verify_evidence(assets_dir: Path, product_assets: list[Path]) -> tuple[Path
 
 def _verify_archive_checksums(assets_dir: Path, archives: dict[str, Path]) -> None:
     for archive in archives.values():
-        checksum_path = assets_dir / f"{archive.name}.sha256"
+        suffix = ".zip" if archive.name.endswith(".zip") else ".tar.gz"
+        checksum_path = assets_dir / f"{archive.name[:-len(suffix)]}.sha256"
         if not checksum_path.is_file():
             raise ArtifactVerificationError(
                 f"missing published checksum file for {archive.name}"

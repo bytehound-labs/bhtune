@@ -45,10 +45,15 @@ bhtune_X.Y.Z-1_amd64.deb
 bhtune-X.Y.Z-1.x86_64.rpm
 ```
 
-For a prerelease tag such as `v0.1.0-rc.1`, the RPM package uses the RPM-safe version
-`0.1.0~rc.1`, so its filename is `bhtune-0.1.0~rc.1-1.x86_64.rpm`. This packaging-only
-normalization does not change the version reported by the binaries or embedded in the other
-release assets.
+For a prerelease tag such as `v0.1.0-rc.1`, package asset filenames normalize the prerelease
+separator to a dot: `bhtune_0.1.0.rc.1-1_amd64.deb` and
+`bhtune-0.1.0.rc.1-1.x86_64.rpm`. The RPM metadata still uses the RPM-safe version
+`0.1.0~rc.1`; this packaging-only normalization does not change the version reported by the
+binaries or embedded in the other release assets.
+
+Per-archive checksum assets omit the archive extension. For example, the checksum for
+`bhtune-v0.1.0-rc.1-x86_64-unknown-linux-gnu.tar.gz` is
+`bhtune-v0.1.0-rc.1-x86_64-unknown-linux-gnu.sha256`.
 
 The exact package filenames are authoritative; do not rename an asset before verification.
 The archive contains both `bhtune` and `bhtune-server`, plus `LICENSE` and `README.md`.
