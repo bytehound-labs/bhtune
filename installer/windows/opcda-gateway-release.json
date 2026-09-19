@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "repository": "bytehound-labs/opcda-bridge",
+  "tag": "opcda-bridge-gateway-v0.5.9",
+  "source_commit": "23b7487dda1da9e4e84ee5c48277785cbfc6519e",
+  "version": "0.5.9",
+  "archive": {
+    "name": "opcda-bridge-gateway-windows-x86.zip",
+    "sha256": "d372ff30d6fb61b66767a63aa5bee4548d7c6c1052800f1369fc34f57ab25f30",
+    "contents": ["opcda-bridge-gateway.exe"]
+  },
+  "executable": {
+    "name": "opcda-bridge-gateway.exe",
+    "sha256": "9a4b84ae22c439c4e07811a11ed39d9443d4c88ce475f952780675d5c3be8dbd",
+    "target": "i686-pc-windows-msvc",
+    "pe_machine": "I386"
+  },
+  "release_workflow": {
+    "path": ".github/workflows/release.yml",
+    "blob_sha": "862f6bcfb0d99be67822b651c652346c3a19ad66",
+    "builder_id": "https://github.com/bytehound-labs/opcda-bridge/.github/workflows/release.yml@refs/tags/opcda-bridge-gateway-v0.5.9"
+  },
+  "upstream_evidence": {
+    "checksums": "release-assets.sha256",
+    "archive_sigstore_bundle": "opcda-bridge-gateway-windows-x86.zip.sigstore.json",
+    "provenance": "attestation.json",
+    "compatibility": "compatibility.json"
+  },
+  "compatibility": {
+    "release_line": "indexed-on-demand",
+    "min_version": "0.5.0",
+    "max_version": "0.999.999",
+    "core_protocol": 1,
+    "namespace_protocol": 2,
+    "indexed_search_protocol": 2
+  }
+}

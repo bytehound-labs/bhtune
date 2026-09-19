@@ -434,7 +434,24 @@ json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:bhtune-opc-command-$line[1]:"
         case $line[1] in
-            (servers)
+            (gateway-info)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[(default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via \`BHTUNE_BRIDGE_HOST\` or the config file'\''s \`bridge_host\` key.)]:BRIDGE_HOST:_default' \
+'--output=[How to print OPC diagnostic results]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--retention-days=[Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default\: unset -- retain forever). CLI > \`BHTUNE_RETENTION_DAYS\` env var > \`retention_days\` in the config file > (no default) -- see \`crate\:\:config\:\:resolve_retention_days\`. \`bhtune history prune\` applies the same policy on demand, with a \`--dry-run\` preview, instead of waiting for the next startup]:RETENTION_DAYS:_default' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(servers)
 _arguments "${_arguments_options[@]}" : \
 '--bridge-host=[(default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via \`BHTUNE_BRIDGE_HOST\` or the config file'\''s \`bridge_host\` key.)]:BRIDGE_HOST:_default' \
 '--output=[How to print OPC diagnostic results]:OUTPUT:((table\:"Human-readable text (default)"
@@ -710,7 +727,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:bhtune-opc-help-command-$line[1]:"
         case $line[1] in
-            (servers)
+            (gateway-info)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(servers)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -882,7 +903,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:bhtune-help-opc-command-$line[1]:"
         case $line[1] in
-            (servers)
+            (gateway-info)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(servers)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1029,6 +1054,7 @@ _bhtune__subcmd__help__subcmd__history__subcmd__show_commands() {
 (( $+functions[_bhtune__subcmd__help__subcmd__opc_commands] )) ||
 _bhtune__subcmd__help__subcmd__opc_commands() {
     local commands; commands=(
+'gateway-info:Report gateway-wide version and protocol information without contacting an OPC server' \
 'servers:List the OPC DA servers registered on the bridge gateway'\''s host' \
 'read:Read one or more tags' \
 'write:Write a value to one tag' \
@@ -1048,6 +1074,11 @@ _bhtune__subcmd__help__subcmd__opc__subcmd__browse_commands() {
 _bhtune__subcmd__help__subcmd__opc__subcmd__close_commands() {
     local commands; commands=()
     _describe -t commands 'bhtune help opc close commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__gateway-info_commands] )) ||
+_bhtune__subcmd__help__subcmd__opc__subcmd__gateway-info_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help opc gateway-info commands' commands "$@"
 }
 (( $+functions[_bhtune__subcmd__help__subcmd__opc__subcmd__read_commands] )) ||
 _bhtune__subcmd__help__subcmd__opc__subcmd__read_commands() {
@@ -1215,6 +1246,7 @@ _bhtune__subcmd__history__subcmd__show_commands() {
 (( $+functions[_bhtune__subcmd__opc_commands] )) ||
 _bhtune__subcmd__opc_commands() {
     local commands; commands=(
+'gateway-info:Report gateway-wide version and protocol information without contacting an OPC server' \
 'servers:List the OPC DA servers registered on the bridge gateway'\''s host' \
 'read:Read one or more tags' \
 'write:Write a value to one tag' \
@@ -1236,9 +1268,15 @@ _bhtune__subcmd__opc__subcmd__close_commands() {
     local commands; commands=()
     _describe -t commands 'bhtune opc close commands' commands "$@"
 }
+(( $+functions[_bhtune__subcmd__opc__subcmd__gateway-info_commands] )) ||
+_bhtune__subcmd__opc__subcmd__gateway-info_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc gateway-info commands' commands "$@"
+}
 (( $+functions[_bhtune__subcmd__opc__subcmd__help_commands] )) ||
 _bhtune__subcmd__opc__subcmd__help_commands() {
     local commands; commands=(
+'gateway-info:Report gateway-wide version and protocol information without contacting an OPC server' \
 'servers:List the OPC DA servers registered on the bridge gateway'\''s host' \
 'read:Read one or more tags' \
 'write:Write a value to one tag' \
@@ -1259,6 +1297,11 @@ _bhtune__subcmd__opc__subcmd__help__subcmd__browse_commands() {
 _bhtune__subcmd__opc__subcmd__help__subcmd__close_commands() {
     local commands; commands=()
     _describe -t commands 'bhtune opc help close commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__gateway-info_commands] )) ||
+_bhtune__subcmd__opc__subcmd__help__subcmd__gateway-info_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune opc help gateway-info commands' commands "$@"
 }
 (( $+functions[_bhtune__subcmd__opc__subcmd__help__subcmd__help_commands] )) ||
 _bhtune__subcmd__opc__subcmd__help__subcmd__help_commands() {

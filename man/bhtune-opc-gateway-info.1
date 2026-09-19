@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-opc-gateway-info 1  "bhtune-opc-gateway-info "
+.SH NAME
+bhtune\-opc\-gateway\-info \- Report gateway\-wide version and protocol information without contacting an OPC server
+.SH SYNOPSIS
+\fBbhtune\-opc\-gateway\-info\fR [\fB\-\-bridge\-host\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.SH DESCRIPTION
+Report gateway\-wide version and protocol information without contacting an OPC server
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+(default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file\*(Aqs `bridge_host` key.)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

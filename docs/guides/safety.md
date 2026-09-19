@@ -259,6 +259,20 @@ proxy rewrites `Host` or when one external browser origin must be pinned. Reques
 `Origin` remain available for CLI/curl compatibility. This policy does not authenticate users,
 authorize operators, or make an unauthenticated non-loopback deployment safe to expose publicly.
 
+The optional Windows-installer gateway has a different network contract. It runs as
+`LocalSystem`, is unauthenticated, and listens on `0.0.0.0:7600` so BHTune and approved remote
+clients can reach native OPC DA/DCOM on that host. Interactive installation displays this
+warning before a clean install selects the component; silent clean installation requires
+`/INSTALL_GATEWAY=1`. The installer never creates or modifies a Windows Firewall rule.
+Selecting the component is therefore not authorization to expose TCP `7600` beyond a trusted OT
+network.
+
+The installer refuses to adopt an existing unowned `OpcdaBridgeGateway` registration, overwrite
+unexpected content in its managed Program Files directory, or proceed while TCP `7600` has an
+unexpected listener. Do not work around those checks by deleting services, terminating
+processes by name, or changing ownership metadata. Resolve the existing deployment explicitly
+and preserve its configuration/data first.
+
 ## Packaging and database recovery boundaries
 
 The Windows NSIS installer keeps exactly one verified rollback backup under
@@ -270,6 +284,13 @@ configuration, including its `-wal` and `-shm` companions when present. The inst
 that path before stopping the service; it refuses malformed, relative, ambiguous, or external
 database paths by default.
 
+When the optional gateway is installer-owned, both Windows services participate in one
+transaction. The installer stops them before replacement, snapshots the gateway executable and
+the complete gateway ProgramData subtree, validates the candidate service/listener/read-only
+smoke path, and restores both service definitions, data, and prior running/stopped states on
+failure. Gateway configuration, index database and SQLite sidecars, build metadata, logs, and
+rollback evidence remain inside this boundary even when BHTune uses an external database.
+
 An operator who prepares an existing external database file and independently backs it up can
 explicitly acknowledge that boundary with `/CUSTOM_DB_BACKUP_CONFIRMED=1`. A missing or
 inaccessible external file, or a path that names a directory, fails closed before the installer
@@ -279,22 +300,24 @@ database remains operator-owned: the installer does not claim to have backed it 
 to roll it back. A failed health/version validation, including validation of the restored service
 after rollback, still requires checking that database and the service manually.
 
-The NSIS-installed service runs as `NT AUTHORITY\LocalService`. An external database therefore
-needs service-account access on both the existing database file and its parent directory, including
-permission to create or update SQLite's `-wal` and `-shm` sidecars. Elevated installer access is
-not evidence that the service can use an operator-owned path; the installer leaves those ACLs
-unchanged and the startup health check is the definitive validation. Grant only the minimum
-access required for the service, and independently back up the database before acknowledging the
-override.
+The NSIS-installed BHTune service runs as `NT AUTHORITY\LocalService`. An external database
+therefore needs service-account access on both the existing database file and its parent
+directory, including permission to create or update SQLite's `-wal` and `-shm` sidecars.
+Elevated installer access is not evidence that the service can use an operator-owned path; the
+installer leaves those ACLs unchanged and the startup health check is the definitive validation.
+Grant only the minimum access required for the service, and independently back up the database
+before acknowledging the override. The optional gateway runs separately as `LocalSystem`,
+matching the upstream native OPC DA/DCOM service contract.
 
 Linux packages preserve `/etc/bhtune` and `/var/lib/bhtune` across upgrades and removal; they do
 not silently delete operator data. Docker deployments have the same boundary through the mounted
 `/var/lib/bhtune` volume. For every packaging path, stop the service before copying or restoring a
 SQLite database and keep the database, `-wal`, and `-shm` files together. Package installers do
-not create firewall rules or widen BHTune's loopback bind. Windows uninstall uses a guarded
-two-pass cleanup: ProgramData, installer recovery state, and operator data remain in place, while
-ownership metadata is removed only after the fixed Program Files tree has been independently
-verified absent.
+not create firewall rules or widen BHTune's loopback bind. The optional Windows gateway retains
+its explicit all-interface bind without adding a firewall rule. Windows uninstall uses a guarded
+two-pass cleanup: ProgramData, gateway configuration/index/logs, installer recovery state, and
+operator data remain in place, while ownership metadata is removed only after the fixed Program
+Files tree has been independently verified absent.
 
 The Debian, RPM, and Arch package units are package-managed variants of the same hardened
 systemd service and use `/usr/bin/bhtune-server`; the manual archive unit is separate and uses
@@ -322,12 +345,14 @@ publisher even when the file is intact. Verify the release checksum and, when av
 Sigstore bundle and GitHub provenance separately; those checks establish integrity and build
 provenance, not Windows publisher trust.
 
-If an upgrade health check fails, leave the affected service stopped or in the installer-reported
-rollback state and preserve the installer log, service definition, health response, and database
-files. Do not repeatedly rerun an upgrade against the same live database while the failure is
-unexplained. For an NSIS installation, the installer reports rollback success only after the
-restored service answers the expected health/version check; if that check also fails, treat the
-rollback as incomplete, inspect the preserved ProgramData rollback directory, and restore the
+If an upgrade health check fails, leave the affected services stopped or in the
+installer-reported rollback state and preserve the installer log, service definitions, health
+response, gateway listener/process evidence, and database files. Do not repeatedly rerun an
+upgrade against the same live database while the failure is unexplained. For an NSIS
+installation, the installer reports rollback success only after the restored BHTune service
+answers the expected health/version check and a previously running gateway passes its bounded
+read-only smoke check; if either check fails, treat the rollback as incomplete, inspect the
+preserved ProgramData rollback directory, and restore the
 database plus `-wal`/`-shm` companions only while the service is stopped. For package or manual
 archive installs, keep the prior verified package/archive and restore the binaries as a matched
 pair, then start the service and verify `/api/health` before considering the recovery complete.

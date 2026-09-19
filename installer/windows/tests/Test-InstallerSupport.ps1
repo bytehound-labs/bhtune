@@ -142,6 +142,15 @@ try {
     Assert-Equal -Actual (Get-VersionFromStableTag -Tag 'v2.4.6') -Expected '2.4.6' -Message 'stable tag parsing returns the version'
     Assert-Throws -Action { Get-VersionFromStableTag -Tag 'release-2.4.6' } -Message 'non-stable tags are rejected'
     Assert-Throws -Action { Assert-InstallerVersionContract -ExpectedVersion '1.2.3' -ReleaseTag 'v1.2.4' } -Message 'mismatched release tags are rejected'
+    Assert-True -Condition (Test-SupportedInstallerSchemaVersion -Version 2) -Message 'legacy schema-v2 installer state remains readable'
+    Assert-True -Condition (Test-SupportedInstallerSchemaVersion -Version 3) -Message 'gateway-aware schema-v3 installer state is supported'
+    Assert-True -Condition (-not (Test-SupportedInstallerSchemaVersion -Version 1)) -Message 'unsupported installer schemas are rejected'
+    $objectSnapshot = [pscustomobject]@{ Value = 'object-value' }
+    $dictionarySnapshot = [ordered]@{ Value = 'dictionary-value' }
+    Assert-Equal -Actual (Get-SnapshotValue -Snapshot $objectSnapshot -Name 'Value') -Expected 'object-value' -Message 'object snapshot values are available to every installer caller'
+    Assert-Equal -Actual (Get-SnapshotValue -Snapshot $dictionarySnapshot -Name 'Value') -Expected 'dictionary-value' -Message 'dictionary snapshot values are available to every installer caller'
+    Assert-Null -Actual (Get-SnapshotValue -Snapshot $objectSnapshot -Name 'Missing') -Message 'missing object snapshot values remain null'
+    Assert-Null -Actual (Get-SnapshotValue -Snapshot $null -Name 'Value') -Message 'null snapshots remain null'
     Assert-True -Condition (Test-SafeRollbackRelativePath -RelativePath 'install\bhtune.exe') -Message 'normalized rollback paths are accepted'
     foreach ($unsafePath in @(
             '',
@@ -168,6 +177,11 @@ try {
     $paths = Get-InstallerPaths -InstallRoot (Join-Path $script:WorkRoot 'ProgramFiles\ByteHound\bhtune') -ProgramDataRoot (Join-Path $script:WorkRoot 'ProgramData\ByteHound\bhtune')
     Assert-Equal -Actual $paths.ConfigPath -Expected (Join-Path $script:WorkRoot 'ProgramData\ByteHound\bhtune\bhtune.toml') -Message 'fixed config path is derived from ProgramData'
     Assert-Equal -Actual $paths.ServiceName -Expected 'BhtuneServer' -Message 'service name is fixed'
+    Assert-Equal -Actual $paths.GatewayExecutable -Expected (Join-Path $script:WorkRoot 'ProgramFiles\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe') -Message 'gateway executable path is fixed below the installer root'
+    Assert-Equal -Actual $paths.GatewayConfigPath -Expected (Join-Path $script:WorkRoot 'ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml') -Message 'gateway config path is fixed below ProgramData'
+    Assert-Equal -Actual $paths.GatewayDatabasePath -Expected (Join-Path $script:WorkRoot 'ProgramData\ByteHound\bhtune\gateway\data\index.sqlite3') -Message 'gateway index path is fixed below ProgramData'
+    Assert-Equal -Actual $paths.GatewayServiceName -Expected 'OpcdaBridgeGateway' -Message 'gateway service name is fixed'
+    Assert-Equal -Actual $paths.GatewayPort -Expected 7600 -Message 'gateway listener port is fixed'
     $oldProgramW6432 = $env:ProgramW6432
     $oldProgramFiles = $env:ProgramFiles
     $oldProgramData = $env:ProgramData
@@ -200,6 +214,45 @@ try {
     $defaultConfig = Get-DefaultConfigContent -DatabasePath $paths.DatabasePath -LogDirectory $paths.LogDirectory
     Assert-True -Condition ($defaultConfig.Contains('bind = "127.0.0.1:8787"')) -Message 'default config binds localhost'
     Assert-True -Condition ($defaultConfig.Contains('db = "')) -Message 'default config declares the database'
+    $defaultGatewayConfig = Get-DefaultGatewayConfigContent `
+        -DatabasePath $paths.GatewayDatabasePath `
+        -LogDirectory $paths.GatewayLogDirectory
+    Assert-True -Condition ($defaultGatewayConfig.Contains('port = 7600')) -Message 'default gateway config pins the managed listener port'
+    Assert-True -Condition ($defaultGatewayConfig.Contains(($paths.GatewayDatabasePath.Replace('\', '/')))) -Message 'default gateway config pins the managed index database'
+    Assert-True -Condition ($defaultGatewayConfig.Contains(($paths.GatewayLogDirectory.Replace('\', '/')))) -Message 'default gateway config pins the managed log directory'
+    Write-TestFile -Path $paths.GatewayConfigPath -Content $defaultGatewayConfig
+    Assert-True -Condition (Assert-GatewayConfigPolicy `
+            -ConfigPath $paths.GatewayConfigPath `
+            -ExpectedDatabasePath $paths.GatewayDatabasePath `
+            -ExpectedLogDirectory $paths.GatewayLogDirectory) -Message 'default gateway config satisfies the managed policy'
+    Write-TestFile -Path $paths.GatewayConfigPath -Content ($defaultGatewayConfig.Replace('port = 7600', 'port = 7601'))
+    Assert-Throws -Action {
+        Assert-GatewayConfigPolicy `
+            -ConfigPath $paths.GatewayConfigPath `
+            -ExpectedDatabasePath $paths.GatewayDatabasePath `
+            -ExpectedLogDirectory $paths.GatewayLogDirectory
+    } -Message 'gateway config drift from the managed port is rejected'
+    Write-TestFile -Path $paths.GatewayConfigPath -Content ($defaultGatewayConfig.Replace(
+            $paths.GatewayDatabasePath.Replace('\', '/'),
+            (Join-Path $script:WorkRoot 'external\gateway-index.sqlite3').Replace('\', '/')
+        ))
+    Assert-Throws -Action {
+        Assert-GatewayConfigPolicy `
+            -ConfigPath $paths.GatewayConfigPath `
+            -ExpectedDatabasePath $paths.GatewayDatabasePath `
+            -ExpectedLogDirectory $paths.GatewayLogDirectory
+    } -Message 'gateway config drift from the managed index path is rejected'
+    Write-TestFile -Path $paths.GatewayConfigPath -Content ($defaultGatewayConfig.Replace(
+            $paths.GatewayLogDirectory.Replace('\', '/'),
+            (Join-Path $script:WorkRoot 'external\gateway-logs').Replace('\', '/')
+        ))
+    Assert-Throws -Action {
+        Assert-GatewayConfigPolicy `
+            -ConfigPath $paths.GatewayConfigPath `
+            -ExpectedDatabasePath $paths.GatewayDatabasePath `
+            -ExpectedLogDirectory $paths.GatewayLogDirectory
+    } -Message 'gateway config drift from the managed log path is rejected'
+    Remove-Item -LiteralPath $paths.GatewayConfigPath -Force
     $configPath = Join-Path $script:WorkRoot 'config\bhtune.toml'
     Write-TestFile -Path $configPath -Content $defaultConfig
     $policy = Get-DatabasePolicy -ConfigPath $configPath -DefaultDatabasePath $paths.DatabasePath
@@ -303,7 +356,147 @@ try {
     Assert-Throws -Action { Assert-PayloadLayout -PayloadRoot $payloadRoot } -Message 'incomplete payload layouts are rejected'
     Assert-Equal -Actual (Get-VersionFromProcessOutput -Output 'bhtune 3.2.1') -Expected '3.2.1' -Message 'process version output is parsed'
     Assert-Equal -Actual (Get-VersionFromProcessOutput -Output 'bhtune-server v3.2.1') -Expected '3.2.1' -Message 'server process version output is parsed'
+    Assert-Equal -Actual (Get-VersionFromProcessOutput -Output 'opcda-bridge-gateway 0.5.9') -Expected '0.5.9' -Message 'gateway process version output is parsed'
     Assert-Null -Actual (Get-VersionFromProcessOutput -Output 'warning: bhtune 3.2.1 payload') -Message 'unstructured version output is rejected'
+
+    $largeOutputScript = Join-Path $script:WorkRoot 'large-output.ps1'
+    Write-TestFile -Path $largeOutputScript -Content @'
+[Console]::Out.Write(('O' * 262144))
+[Console]::Error.Write(('E' * 262144))
+exit 7
+'@
+    $powerShellHost = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $captured = Invoke-CapturedProcess `
+        -FilePath $powerShellHost `
+        -Arguments ('-NoLogo -NoProfile -NonInteractive -File "{0}"' -f $largeOutputScript) `
+        -TimeoutMilliseconds 10000
+    Assert-Equal -Actual $captured.ExitCode -Expected 7 -Message 'captured processes preserve nonzero exit codes'
+    Assert-Equal -Actual $captured.StdOut.Length -Expected 262144 -Message 'captured processes drain large stdout without deadlocking'
+    Assert-Equal -Actual $captured.StdErr.Length -Expected 262144 -Message 'captured processes drain large stderr without deadlocking'
+
+    $nsiSource = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'bhtune-installer.nsi') -Raw
+    Assert-True `
+        -Condition $nsiSource.Contains('Function ApplySilentGatewayDefault') `
+        -Message 'the NSIS installer defines a silent gateway default policy'
+    Assert-True `
+        -Condition $nsiSource.Contains('IfSilent silentGatewayDefault applySilentGatewayDefaultDone') `
+        -Message 'silent installs take the explicit gateway opt-in path'
+    Assert-True `
+        -Condition $nsiSource.Contains('StrCpy $InstallGateway "1"') `
+        -Message 'interactive clean installs keep the gateway selected by default'
+    Assert-True `
+        -Condition (
+            $nsiSource.IndexOf('Call ApplySilentGatewayDefault', [System.StringComparison]::Ordinal) -lt
+            $nsiSource.IndexOf('Call ParseInstallerOptions', [System.StringComparison]::Ordinal)
+        ) `
+        -Message 'explicit silent command-line options override the safe gateway default'
+
+    $checkedInContractPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'opcda-gateway-release.json'
+    $checkedInContract = Assert-GatewayReleaseContract -ContractPath $checkedInContractPath
+    Assert-Equal -Actual $checkedInContract.tag -Expected 'opcda-bridge-gateway-v0.5.9' -Message 'the pinned gateway release tag is stable and exact'
+    Assert-Equal -Actual $checkedInContract.archive.sha256 -Expected 'd372ff30d6fb61b66767a63aa5bee4548d7c6c1052800f1369fc34f57ab25f30' -Message 'the pinned gateway archive checksum is exact'
+    $gatewayInfoJson = '{"application_version":"0.5.9","compatibility_schema_version":1,"features":[{"feature":"core","min_version":1,"max_version":1},{"feature":"namespace","min_version":2,"max_version":2},{"feature":"indexed_search","min_version":2,"max_version":2}]}'
+    $gatewayInfo = Assert-GatewayInfoPayload -Json $gatewayInfoJson -Contract $checkedInContract
+    Assert-Equal -Actual $gatewayInfo.application_version -Expected '0.5.9' -Message 'gateway-wide handshake accepts the pinned version and protocols'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace('"application_version":"0.5.9"', '"application_version":"0.5.8"')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects a different running version'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace('"compatibility_schema_version":1', '"compatibility_schema_version":2')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects an unsupported compatibility schema'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace('"min_version":1,"max_version":1', '"min_version":2,"max_version":2')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects an unsupported protocol range'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace(',{"feature":"indexed_search","min_version":2,"max_version":2}', '')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects a missing required protocol'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload `
+            -Json ($gatewayInfoJson.Replace('{"feature":"core","min_version":1,"max_version":1}', '{"feature":"core","min_version":1,"max_version":1},{"feature":"core","min_version":1,"max_version":1}')) `
+            -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects a duplicate required protocol'
+    Assert-Throws -Action {
+        Assert-GatewayInfoPayload -Json 'not-json' -Contract $checkedInContract
+    } -Message 'gateway-wide handshake rejects malformed JSON'
+
+    Write-TestFile -Path $paths.CliExecutable -Content 'fixture CLI'
+    Write-TestFile -Path $paths.GatewayReleasePath -Content (Get-Content -LiteralPath $checkedInContractPath -Raw)
+    $script:GatewaySmokeArguments = $null
+    function Invoke-CapturedProcess {
+        param(
+            [string]$FilePath,
+            [string]$Arguments,
+            [int]$TimeoutMilliseconds
+        )
+        $script:GatewaySmokeArguments = $Arguments
+        return [pscustomobject]@{
+            ExitCode = 0
+            StdOut   = $gatewayInfoJson
+            StdErr   = ''
+        }
+    }
+    $gatewaySmoke = Invoke-GatewaySmokeCheck -Paths $paths
+    Assert-Equal -Actual $gatewaySmoke.application_version -Expected '0.5.9' -Message 'gateway smoke validates the gateway-wide handshake'
+    Assert-Equal -Actual $script:GatewaySmokeArguments -Expected 'opc --output json gateway-info --bridge-host 127.0.0.1:7600' -Message 'gateway smoke does not require OPC server enumeration'
+
+    $gatewayPayloadRoot = Join-Path $script:WorkRoot 'gateway-payload'
+    New-Item -ItemType Directory -Path $gatewayPayloadRoot -Force | Out-Null
+    $gatewayExecutable = Join-Path $gatewayPayloadRoot 'opcda-bridge-gateway.exe'
+    $peBytes = New-Object byte[] 512
+    $peBytes[0] = 0x4d
+    $peBytes[1] = 0x5a
+    [BitConverter]::GetBytes([int]0x80).CopyTo($peBytes, 0x3c)
+    $peBytes[0x80] = 0x50
+    $peBytes[0x81] = 0x45
+    $peBytes[0x82] = 0
+    $peBytes[0x83] = 0
+    [BitConverter]::GetBytes([uint16]0x014c).CopyTo($peBytes, 0x84)
+    [System.IO.File]::WriteAllBytes($gatewayExecutable, $peBytes)
+    Assert-Equal -Actual (Get-PeMachine -Path $gatewayExecutable) -Expected 'I386' -Message '32-bit x86 PE payloads are recognized'
+    [BitConverter]::GetBytes([uint16]0x8664).CopyTo($peBytes, 0x84)
+    [System.IO.File]::WriteAllBytes($gatewayExecutable, $peBytes)
+    Assert-Equal -Actual (Get-PeMachine -Path $gatewayExecutable) -Expected 'AMD64' -Message '64-bit PE payloads are distinguished from the required gateway architecture'
+    [BitConverter]::GetBytes([uint16]0x014c).CopyTo($peBytes, 0x84)
+    [System.IO.File]::WriteAllBytes($gatewayExecutable, $peBytes)
+
+    $fixtureContract = $checkedInContract | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $fixtureContract.executable.sha256 = Get-FileSha256 -Path $gatewayExecutable
+    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'opcda-gateway-release.json') -Content ($fixtureContract | ConvertTo-Json -Depth 12)
+    $fixtureProvenance = [ordered]@{
+        schema_version              = 1
+        repository                  = $fixtureContract.repository
+        tag                         = $fixtureContract.tag
+        source_commit               = $fixtureContract.source_commit
+        archive_name                = $fixtureContract.archive.name
+        archive_sha256              = $fixtureContract.archive.sha256
+        executable_name             = $fixtureContract.executable.name
+        executable_sha256           = $fixtureContract.executable.sha256
+        builder_id                  = $fixtureContract.release_workflow.builder_id
+        release_workflow_blob_sha   = $fixtureContract.release_workflow.blob_sha
+        sigstore_verified           = $true
+        github_provenance_verified  = $true
+        compatibility_verified      = $true
+    }
+    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'opcda-gateway-provenance.json') -Content ($fixtureProvenance | ConvertTo-Json -Depth 8)
+    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'LICENSE-opcda-bridge.txt') -Content 'MIT'
+    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'NOTICE-opcda-bridge.txt') -Content 'notice'
+    $gatewayPayload = Assert-GatewayPayloadLayout -GatewayPayloadRoot $gatewayPayloadRoot
+    Assert-Equal -Actual $gatewayPayload.Contract.version -Expected '0.5.9' -Message 'gateway payloads matching the pinned release contract are accepted'
+    $fixtureProvenance.compatibility_verified = $false
+    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'opcda-gateway-provenance.json') -Content ($fixtureProvenance | ConvertTo-Json -Depth 8)
+    Assert-Throws -Action { Assert-GatewayPayloadLayout -GatewayPayloadRoot $gatewayPayloadRoot } -Message 'unverified gateway compatibility metadata is rejected'
+    $fixtureProvenance.compatibility_verified = $true
+    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'opcda-gateway-provenance.json') -Content ($fixtureProvenance | ConvertTo-Json -Depth 8)
+    Write-TestFile -Path (Join-Path $gatewayPayloadRoot 'unexpected.txt') -Content 'unexpected'
+    Assert-Throws -Action { Assert-GatewayPayloadLayout -GatewayPayloadRoot $gatewayPayloadRoot } -Message 'unexpected gateway payload files are rejected'
 
     $sourceFile = Join-Path $script:WorkRoot 'source.txt'
     $backupRoot = Join-Path $script:WorkRoot 'rollback'
@@ -367,6 +560,60 @@ try {
         [ref]$parseErrors
     )
     Assert-Equal -Actual @($parseErrors).Count -Expected 0 -Message 'installer orchestration script parses for manifest regression coverage'
+    $installTransactionAst = $installAst.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Invoke-InstallTransaction'
+        }, $true)
+    Assert-True -Condition ($null -ne $installTransactionAst) -Message 'install transaction function is present for gateway wiring coverage'
+    Assert-True `
+        -Condition ($installTransactionAst.Extent.Text -match '(?m)^\s*GatewayService\s*=\s*\$PriorState\.GatewayService\s*$') `
+        -Message 'schema-3 install journals record the prior gateway service snapshot required by validation'
+    Assert-True `
+        -Condition (
+            $installTransactionAst.Extent.Text.Contains("-Name 'GatewayServiceExists'") -and
+            $installTransactionAst.Extent.Text.Contains('$gatewayRegistrationExists -or $null -ne $PriorState.GatewayService')
+        ) `
+        -Message 'gateway install preflight treats the SCM registration query as authoritative'
+    foreach ($callContract in @(
+            @{
+                Name       = 'New-StagedPayload'
+                Required   = @('SourceGatewayPayloadRoot', 'IncludeGateway')
+                Forbidden  = @('GatewayPayloadRoot', 'InstallGateway')
+            },
+            @{
+                Name       = 'Copy-CandidateIntoInstall'
+                Required   = @('IncludeGateway')
+                Forbidden  = @('InstallGateway')
+            },
+            @{
+                Name       = 'Set-InstallerAcls'
+                Required   = @('ManageGateway')
+                Forbidden  = @('GatewayInstallRootCreated')
+            }
+        )) {
+        $calls = @($installTransactionAst.FindAll({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.CommandAst] -and
+                    $node.GetCommandName() -eq $callContract.Name
+                }, $true))
+        Assert-Equal -Actual $calls.Count -Expected 1 -Message "$($callContract.Name) is called exactly once by the install transaction"
+        $parameterNames = @(
+            $calls[0].CommandElements |
+                Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] } |
+                ForEach-Object { $_.ParameterName }
+        )
+        foreach ($requiredParameter in $callContract.Required) {
+            Assert-True `
+                -Condition ($parameterNames -contains $requiredParameter) `
+                -Message "$($callContract.Name) binds gateway argument '$requiredParameter'"
+        }
+        foreach ($forbiddenParameter in $callContract.Forbidden) {
+            Assert-True `
+                -Condition ($parameterNames -notcontains $forbiddenParameter) `
+                -Message "$($callContract.Name) does not silently ignore obsolete argument '$forbiddenParameter'"
+        }
+    }
     $copyFunctionAst = $installAst.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -381,6 +628,33 @@ try {
         -RelativePath 'missing.txt' `
         -Manifest $emptyManifest
     Assert-Equal -Actual $emptyManifest.Count -Expected 0 -Message 'backup copy accepts an initially empty manifest'
+
+    $safeBackupFilesAst = $installAst.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-SafeBackupFiles'
+        }, $true)
+    Assert-True -Condition ($null -ne $safeBackupFilesAst) -Message 'safe recursive backup enumeration is present'
+    Invoke-Expression $safeBackupFilesAst.Extent.Text
+    $backupTraversalRoot = Join-Path $script:WorkRoot 'backup-traversal'
+    $backupTraversalOutside = Join-Path $script:WorkRoot 'backup-traversal-outside'
+    $backupTraversalLink = Join-Path $backupTraversalRoot 'redirected'
+    New-Item -ItemType Directory -Path $backupTraversalRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $backupTraversalOutside -Force | Out-Null
+    Write-TestFile -Path (Join-Path $backupTraversalOutside 'outside.txt') -Content 'outside'
+    $backupTraversalSymlinkError = $null
+    try {
+        New-Item -ItemType SymbolicLink -Path $backupTraversalLink -Target $backupTraversalOutside -ErrorAction Stop | Out-Null
+    } catch {
+        $backupTraversalSymlinkError = $_.Exception
+    }
+    if ($null -eq $backupTraversalSymlinkError) {
+        Assert-Throws -Action {
+            @(Get-SafeBackupFiles `
+                    -RootPath $backupTraversalRoot `
+                    -Name 'the test backup tree')
+        } -Message 'recursive backup enumeration rejects nested reparse points before traversal'
+    }
 
     $copyCandidateFunctionAst = $installAst.Find({
             param($node)
@@ -447,24 +721,86 @@ try {
     $serviceSnapshot.StartMode = 'Manual'
     Assert-True -Condition (-not (Test-OwnedServiceSnapshot -ServiceSnapshot $serviceSnapshot -ExecutablePath 'C:\Program Files\ByteHound\bhtune\bhtune-server.exe' -ConfigPath 'C:\ProgramData\ByteHound\bhtune\bhtune.toml')) -Message 'non-automatic service snapshots are rejected'
 
+    $expectedGatewayCommand = Get-ExpectedGatewayServiceCommandLine `
+        -ExecutablePath 'C:\Program Files\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe' `
+        -ConfigPath 'C:\ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml' `
+        -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs'
+    Assert-True -Condition (Test-GatewayServiceCommandLine `
+            -ActualPathName $expectedGatewayCommand `
+            -ExecutablePath 'C:\Program Files\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe' `
+            -ConfigPath 'C:\ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml' `
+            -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs') -Message 'exact gateway service command lines are accepted'
+    Assert-True -Condition (-not (Test-GatewayServiceCommandLine `
+                -ActualPathName ($expectedGatewayCommand + ' --extra') `
+                -ExecutablePath 'C:\Program Files\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe' `
+                -ConfigPath 'C:\ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml' `
+                -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs')) -Message 'unexpected gateway service arguments are rejected'
+    $gatewayServiceSnapshot = [pscustomobject]@{
+        Exists      = $true
+        Name        = 'OpcdaBridgeGateway'
+        State       = 'Stopped'
+        ProcessId   = 0
+        StartName   = 'LocalSystem'
+        StartMode   = 'Auto'
+        DisplayName = 'OPC DA Bridge Gateway'
+        PathName    = $expectedGatewayCommand
+        Description = $script:GatewayServiceDescription
+    }
+    Assert-True -Condition (Test-OwnedGatewayServiceSnapshot `
+            -ServiceSnapshot $gatewayServiceSnapshot `
+            -ExecutablePath 'C:\Program Files\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe' `
+            -ConfigPath 'C:\ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml' `
+            -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs') -Message 'complete installer-owned gateway service snapshots are accepted'
+    Assert-True -Condition (Test-InstallerCreatedGatewayServiceSnapshot `
+            -ServiceSnapshot $gatewayServiceSnapshot `
+            -ExecutablePath 'C:\Program Files\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe' `
+            -ConfigPath 'C:\ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml' `
+            -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs') -Message 'gateway registrations created by the candidate are recognizable before description verification'
+    $gatewayServiceSnapshot.Description = 'partial registration'
+    Assert-True -Condition (Test-InstallerCreatedGatewayServiceSnapshot `
+            -ServiceSnapshot $gatewayServiceSnapshot `
+            -ExecutablePath 'C:\Program Files\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe' `
+            -ConfigPath 'C:\ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml' `
+            -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs') -Message 'a partial candidate registration remains safely identifiable for cleanup'
+    Assert-True -Condition (-not (Test-OwnedGatewayServiceSnapshot `
+                -ServiceSnapshot $gatewayServiceSnapshot `
+                -ExecutablePath 'C:\Program Files\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe' `
+                -ConfigPath 'C:\ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml' `
+                -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs')) -Message 'a partial gateway registration is not accepted as fully owned'
+    $gatewayServiceSnapshot.Description = $script:GatewayServiceDescription
+    $gatewayServiceSnapshot.StartName = 'NT AUTHORITY\LocalService'
+    Assert-True -Condition (-not (Test-OwnedGatewayServiceSnapshot `
+                -ServiceSnapshot $gatewayServiceSnapshot `
+                -ExecutablePath 'C:\Program Files\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe' `
+                -ConfigPath 'C:\ProgramData\ByteHound\bhtune\gateway\opcda-bridge-gateway.toml' `
+                -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs')) -Message 'gateway services outside LocalSystem are rejected'
+
     foreach ($functionName in @(
-            'Get-SnapshotValue',
-            'Write-TextFile',
             'Write-JsonFile',
             'Enter-InstallerTransactionLock',
             'Exit-InstallerTransactionLock',
             'Read-TransactionJournal',
             'Remove-TransactionJournal',
+            'Test-CleanInstallRootContents',
+            'Test-CleanStagingRootContents',
+            'Remove-CleanInstallStagingRoots',
+            'Recover-CleanInstallTransaction',
             'Recover-InterruptedTransaction',
             'Assert-InstallerOwnershipMarker',
+            'Get-GatewayMarkerState',
             'Assert-InstallerMetadataForRecovery',
             'Assert-InstallerState',
             'Assert-DatabasePolicy',
             'Write-TransactionJournal',
             'Test-TransactionJournalPath',
             'Assert-TransactionJournalShape',
+            'Ensure-InstallerGatewayConfig',
+            'Remove-InstallerCreatedGatewayConfig',
             'Remove-InstallerCreatedConfig',
             'Get-TransactionPhaseRank',
+            'Get-SafeBackupFiles',
+            'Get-BackupAclState',
+            'New-RollbackBackup',
             'Assert-RollbackStateAndManifest',
             'Resolve-RollbackManifestDestination',
             'Restore-RollbackBackup'
@@ -507,6 +843,56 @@ try {
     Assert-Equal -Actual @($helperParseErrors).Count -Expected 0 -Message 'installer support script parses for ACL regression coverage'
     Import-InstallerFunction -ScriptAst $helperAst -Name 'Set-InstallerAcls'
 
+    $diagnosticScriptPath = Join-Path $PSScriptRoot 'Run-NsisDiagnostic.ps1'
+    $diagnosticParseErrors = $null
+    $diagnosticParseTokens = $null
+    $diagnosticAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $diagnosticScriptPath,
+        [ref]$diagnosticParseTokens,
+        [ref]$diagnosticParseErrors
+    )
+    Assert-Equal -Actual @($diagnosticParseErrors).Count -Expected 0 -Message 'NSIS lifecycle diagnostic parses for command-scope regression coverage'
+    $diagnosticFunctions = @(
+        $diagnosticAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+            }, $true) |
+            ForEach-Object { $_.Name }
+    )
+    $windowsOnlyCommands = @(
+        'Get-CimInstance',
+        'Get-NetFirewallPortFilter',
+        'Get-NetFirewallRule',
+        'Get-ScheduledTask',
+        'Get-ScheduledTaskInfo',
+        'New-ScheduledTaskAction',
+        'New-ScheduledTaskPrincipal',
+        'New-Service',
+        'Register-ScheduledTask',
+        'Start-ScheduledTask',
+        'Start-Service',
+        'Stop-ScheduledTask',
+        'Unregister-ScheduledTask'
+    )
+    $unresolvedDiagnosticCommands = @(
+        $diagnosticAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.CommandAst]
+            }, $true) |
+            ForEach-Object { $_.GetCommandName() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique |
+            Where-Object {
+                $_ -notin $diagnosticFunctions -and
+                $_ -notin $windowsOnlyCommands -and
+                $null -eq (Get-Command $_ -ErrorAction SilentlyContinue)
+            }
+    )
+    Assert-Equal `
+        -Actual $unresolvedDiagnosticCommands `
+        -Expected @() `
+        -Message 'NSIS lifecycle diagnostic calls only local, shared, built-in, or explicit Windows-only commands'
+
     $journalPaths = Get-InstallerPaths `
         -InstallRoot (Join-Path $script:WorkRoot 'journal\ProgramFiles\ByteHound\bhtune') `
         -ProgramDataRoot (Join-Path $script:WorkRoot 'journal\ProgramData\ByteHound\bhtune')
@@ -545,6 +931,43 @@ try {
     $finalJournal = $journal | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     $finalJournal.BackupRoot = $journalPaths.RollbackRoot
     Assert-TransactionJournalShape -Paths $journalPaths -Journal $finalJournal
+    $gatewayJournal = $journal | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $gatewayJournal.SchemaVersion = 3
+    foreach ($property in ([ordered]@{
+            GatewayManaged                    = $true
+            GatewayWasManaged                 = $false
+            GatewayService                    = $null
+            GatewayProgramDataRootWasPresent  = $false
+            GatewayConfigWasPresent           = $false
+            GatewayConfigCreationPending      = $true
+            GatewayConfigWasCreated           = $false
+            ExpectedGatewayConfigHash         = ('b' * 64)
+            CreatedGatewayConfigHash          = $null
+            GatewayServiceWasPresent          = $false
+            GatewayServiceWasRunning          = $false
+        }).GetEnumerator()) {
+        $gatewayJournal | Add-Member -MemberType NoteProperty -Name $property.Key -Value $property.Value
+    }
+    Assert-TransactionJournalShape -Paths $journalPaths -Journal $gatewayJournal
+    $missingGatewayJournalField = $gatewayJournal | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $missingGatewayJournalField.PSObject.Properties.Remove('GatewayService')
+    Assert-Throws -Action {
+        Assert-TransactionJournalShape -Paths $journalPaths -Journal $missingGatewayJournalField
+    } -Message 'schema-v3 install journals require the prior gateway service snapshot field'
+    $invalidGatewayJournalHash = $gatewayJournal | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $invalidGatewayJournalHash.ExpectedGatewayConfigHash = 'not-a-sha256'
+    Assert-Throws -Action {
+        Assert-TransactionJournalShape -Paths $journalPaths -Journal $invalidGatewayJournalHash
+    } -Message 'schema-v3 install journals reject invalid gateway config hashes'
+    $schema3UninstallJournal = $journal | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $schema3UninstallJournal.SchemaVersion = 3
+    $schema3UninstallJournal.Mode = 'Uninstall'
+    $schema3UninstallJournal.Phase = 'Begin'
+    Assert-Throws -Action {
+        Assert-TransactionJournalShape -Paths $journalPaths -Journal $schema3UninstallJournal
+    } -Message 'schema-v3 uninstall journals require explicit gateway ownership'
+    $schema3UninstallJournal | Add-Member -MemberType NoteProperty -Name GatewayManaged -Value $true
+    Assert-TransactionJournalShape -Paths $journalPaths -Journal $schema3UninstallJournal
     Assert-Equal -Actual (Get-TransactionPhaseRank -Phase 'Preflight') -Expected 0 -Message 'journal phases have a stable ordering'
     Assert-Throws -Action { Get-TransactionPhaseRank -Phase 'not-a-phase' } -Message 'unknown journal phases are rejected'
     Assert-Throws -Action {
@@ -632,6 +1055,31 @@ try {
     Assert-Equal -Actual (Get-Content -LiteralPath $journalPaths.ConfigPath -Raw) -Expected 'pre-existing operator config' -Message 'pre-existing configuration is never removed'
     Remove-Item -LiteralPath $journalPaths.ConfigPath -Force
 
+    $gatewayConfigJournalContent = Get-DefaultGatewayConfigContent `
+        -DatabasePath $journalPaths.GatewayDatabasePath `
+        -LogDirectory $journalPaths.GatewayLogDirectory
+    $gatewayConfigJournalHash = Get-TextSha256 -Content $gatewayConfigJournalContent
+    Assert-True -Condition (Ensure-InstallerGatewayConfig `
+            -Paths $journalPaths `
+            -DefaultContent $gatewayConfigJournalContent) -Message 'missing gateway configuration is created by the top-level installer helper'
+    Assert-True -Condition (-not (Ensure-InstallerGatewayConfig -Paths $journalPaths)) -Message 'existing gateway configuration is preserved'
+    Remove-InstallerCreatedGatewayConfig `
+        -Paths $journalPaths `
+        -ConfigWasPresent:$false `
+        -ConfigWasCreated:$true `
+        -CreatedConfigHash $gatewayConfigJournalHash
+    Assert-True -Condition (-not (Test-Path -LiteralPath $journalPaths.GatewayConfigPath)) -Message 'installer-created gateway configuration is removed when its hash matches'
+    Write-TestFile -Path $journalPaths.GatewayConfigPath -Content 'operator gateway edit'
+    Assert-Throws -Action {
+        Remove-InstallerCreatedGatewayConfig `
+            -Paths $journalPaths `
+            -ConfigWasPresent:$false `
+            -ConfigWasCreated:$true `
+            -CreatedConfigHash $gatewayConfigJournalHash
+    } -Message 'modified installer-created gateway configuration is preserved'
+    Assert-Equal -Actual (Get-Content -LiteralPath $journalPaths.GatewayConfigPath -Raw) -Expected 'operator gateway edit' -Message 'modified gateway configuration remains intact'
+    Remove-Item -LiteralPath $journalPaths.GatewayConfigPath -Force
+
     Write-TransactionJournal -Paths $journalPaths -Value $journal
     $journalPath = Join-Path $journalRoot 'transaction.json'
     $script:JournalPathForMock = $journalPath
@@ -660,6 +1108,8 @@ try {
     $script:MockUninstall = $null
     $script:MockService = $null
     $script:MockServiceRegistration = $null
+    $script:MockGatewayService = $null
+    $script:MockGatewayServiceRegistration = $null
     function Get-RegistrySnapshot {
         param(
             [Parameter(Mandatory = $true)]
@@ -676,6 +1126,9 @@ try {
             [string]$Name
         )
 
+        if ($Name -eq $journalPaths.GatewayServiceName) {
+            return $script:MockGatewayService
+        }
         return $script:MockService
     }
     function Invoke-ServiceRegistrationQuery {
@@ -684,11 +1137,43 @@ try {
             [string]$Name
         )
 
+        if ($Name -eq $journalPaths.GatewayServiceName) {
+            if ($null -ne $script:MockGatewayServiceRegistration) {
+                return [bool]$script:MockGatewayServiceRegistration
+            }
+            return $null -ne $script:MockGatewayService
+        }
         if ($null -ne $script:MockServiceRegistration) {
             return [bool]$script:MockServiceRegistration
         }
         return $null -ne $script:MockService
     }
+    $script:MockGatewayServiceRegistration = $true
+    $hiddenGatewayState = Assert-InstallerState -Paths $journalPaths
+    Assert-True -Condition $hiddenGatewayState.GatewayServiceExists -Message 'clean-state inspection records a gateway SCM registration that WMI cannot inspect'
+    $hiddenGatewayPaths = Get-InstallerPaths `
+        -InstallRoot (Join-Path $script:WorkRoot 'hidden-gateway\ProgramFiles\ByteHound\bhtune') `
+        -ProgramDataRoot (Join-Path $script:WorkRoot 'hidden-gateway\ProgramData\ByteHound\bhtune')
+    Write-TestFile -Path $hiddenGatewayPaths.GatewayExecutable -Content 'gateway fixture'
+    $script:CapturedGatewayInstallCalls = 0
+    function Invoke-CapturedProcess {
+        param(
+            [string]$FilePath,
+            [string]$Arguments,
+            [int]$TimeoutMilliseconds
+        )
+        $script:CapturedGatewayInstallCalls++
+        return [pscustomobject]@{
+            ExitCode = 0
+            StdOut   = ''
+            StdErr   = ''
+        }
+    }
+    Assert-Throws -Action {
+        New-InstallerGatewayService -Paths $hiddenGatewayPaths
+    } -Message 'gateway service creation rejects an existing SCM registration when WMI inspection is unavailable'
+    Assert-Equal -Actual $script:CapturedGatewayInstallCalls -Expected 0 -Message 'hidden gateway registration rejection occurs before invoking the upstream installer'
+    $script:MockGatewayServiceRegistration = $null
     $script:RemovedRegistryKeys = @()
     $script:JournalPresentDuringMetadataRemoval = @()
     function Remove-RegistryKey {
@@ -720,6 +1205,179 @@ try {
         PathManaged = 0
         ShortcutPath = $journalPaths.ShortcutPath
     }
+    $legacyGatewayMarkerState = Get-GatewayMarkerState `
+        -Paths $journalPaths `
+        -Marker ([pscustomobject]@{ Values = $ownedMarkerValues })
+    Assert-True -Condition (-not $legacyGatewayMarkerState.Managed) -Message 'schema-v2 ownership markers preserve gateway absence'
+
+    $schema3MarkerValues = [ordered]@{}
+    foreach ($entry in $ownedMarkerValues.GetEnumerator()) {
+        $schema3MarkerValues[$entry.Key] = $entry.Value
+    }
+    $schema3MarkerValues.SchemaVersion = 3
+    $schema3MarkerValues.GatewayManaged = 0
+    $schema3MarkerValues.GatewayVersion = ''
+    $schema3MarkerValues.GatewaySha256 = ''
+    $schema3MarkerValues.GatewayExecutable = $journalPaths.GatewayExecutable
+    $schema3MarkerValues.GatewayConfigPath = $journalPaths.GatewayConfigPath
+    $schema3MarkerValues.GatewayServiceName = $journalPaths.GatewayServiceName
+    $schema3MarkerValues.GatewayPort = $journalPaths.GatewayPort
+    $schema3GatewayMarkerState = Get-GatewayMarkerState `
+        -Paths $journalPaths `
+        -Marker ([pscustomobject]@{ Values = $schema3MarkerValues })
+    Assert-True -Condition (-not $schema3GatewayMarkerState.Managed) -Message 'schema-v3 ownership markers explicitly preserve gateway absence'
+    $schema3MarkerValues.GatewayManaged = 1
+    $schema3MarkerValues.GatewayVersion = '0.5.9'
+    $schema3MarkerValues.GatewaySha256 = 'a' * 64
+    $schema3GatewayMarkerState = Get-GatewayMarkerState `
+        -Paths $journalPaths `
+        -Marker ([pscustomobject]@{ Values = $schema3MarkerValues })
+    Assert-True -Condition $schema3GatewayMarkerState.Managed -Message 'schema-v3 ownership markers record an installer-managed gateway'
+    Assert-Equal -Actual $schema3GatewayMarkerState.Version -Expected '0.5.9' -Message 'schema-v3 gateway version metadata round-trips'
+    $schema3MarkerValues.GatewayManaged = 0
+    Assert-Throws -Action {
+        Get-GatewayMarkerState `
+            -Paths $journalPaths `
+            -Marker ([pscustomobject]@{ Values = $schema3MarkerValues })
+    } -Message 'disabled schema-v3 gateway markers reject retained version and hash identity'
+    $schema3MarkerValues.GatewayVersion = ''
+    $schema3MarkerValues.GatewaySha256 = ''
+    $schema3MarkerValues.GatewayExecutable = Join-Path $script:WorkRoot 'other\gateway.exe'
+    Assert-Throws -Action {
+        Get-GatewayMarkerState `
+            -Paths $journalPaths `
+            -Marker ([pscustomobject]@{ Values = $schema3MarkerValues })
+    } -Message 'schema-v3 gateway markers reject noncanonical fixed paths even when management is disabled'
+    $schema3MarkerValues.GatewayExecutable = $journalPaths.GatewayExecutable
+
+    $script:MockMarker = $null
+    $script:MockUninstall = $null
+    $script:MockService = $null
+    $script:MockGatewayService = $null
+    $cleanGatewayJournal = $gatewayJournal | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $cleanGatewayJournal.Mode = 'Install'
+    $cleanGatewayJournal.Phase = 'Preflight'
+    $cleanGatewayJournal.BackupRoot = ''
+    $cleanGatewayJournal.GatewayProgramDataRootWasPresent = $false
+    $cleanGatewayJournal.GatewayConfigWasPresent = $false
+    $cleanGatewayJournal.GatewayConfigCreationPending = $false
+    $cleanGatewayJournal.GatewayConfigWasCreated = $true
+    $cleanGatewayJournal.ExpectedGatewayConfigHash = $gatewayConfigJournalHash
+    $cleanGatewayJournal.CreatedGatewayConfigHash = $gatewayConfigJournalHash
+    Write-TestFile -Path $journalPaths.GatewayConfigPath -Content $gatewayConfigJournalContent
+    Write-TestFile -Path (Join-Path $journalPaths.GatewayDataDirectory 'candidate-index.sqlite3') -Content 'candidate index'
+    Write-TransactionJournal -Paths $journalPaths -Value $cleanGatewayJournal
+    $cleanGatewayRecovery = Recover-InterruptedTransaction -Paths $journalPaths
+    Assert-Equal -Actual $cleanGatewayRecovery.Action -Expected 'Discarded' -Message 'interrupted clean gateway installs are discarded before backup promotion'
+    Assert-True -Condition (-not (Test-Path -LiteralPath $journalPaths.GatewayProgramDataRoot)) -Message 'clean recovery removes only the transaction-created gateway ProgramData root'
+    Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $journalPaths.InstallerStateRoot 'transaction.json'))) -Message 'clean gateway recovery removes its transaction journal'
+
+    $script:StartedGatewayServices = 0
+    $script:GatewaySmokeChecks = 0
+    function Start-InstallerGatewayService {
+        param([psobject]$Paths)
+        $script:StartedGatewayServices++
+        return [pscustomobject]@{ State = 'Running' }
+    }
+    function Invoke-GatewaySmokeCheck {
+        param([psobject]$Paths)
+        $script:GatewaySmokeChecks++
+        return [pscustomobject]@{ application_version = '0.5.9' }
+    }
+    $journalGatewayCommand = Get-ExpectedGatewayServiceCommandLine `
+        -ExecutablePath $journalPaths.GatewayExecutable `
+        -ConfigPath $journalPaths.GatewayConfigPath `
+        -LogDirectory $journalPaths.GatewayLogDirectory
+    $script:MockGatewayService = [pscustomobject]@{
+        Exists      = $true
+        Name        = $journalPaths.GatewayServiceName
+        State       = 'Stopped'
+        ProcessId   = 0
+        StartName   = 'LocalSystem'
+        StartMode   = 'Auto'
+        DisplayName = $script:GatewayServiceDisplayName
+        PathName    = $journalGatewayCommand
+        Description = $script:GatewayServiceDescription
+    }
+    $earlyGatewayUpgradeJournal = $gatewayJournal | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $earlyGatewayUpgradeJournal.Mode = 'Upgrade'
+    $earlyGatewayUpgradeJournal.Phase = 'ServiceStopped'
+    $earlyGatewayUpgradeJournal.BackupRoot = ''
+    $earlyGatewayUpgradeJournal.InstallRootWasPresent = $true
+    $earlyGatewayUpgradeJournal.ConfigWasPresent = $true
+    $earlyGatewayUpgradeJournal.ConfigWasCreated = $false
+    $earlyGatewayUpgradeJournal.GatewayManaged = $true
+    $earlyGatewayUpgradeJournal.GatewayWasManaged = $true
+    $earlyGatewayUpgradeJournal.GatewayProgramDataRootWasPresent = $true
+    $earlyGatewayUpgradeJournal.GatewayConfigWasPresent = $true
+    $earlyGatewayUpgradeJournal.GatewayConfigCreationPending = $false
+    $earlyGatewayUpgradeJournal.GatewayConfigWasCreated = $false
+    $earlyGatewayUpgradeJournal.ExpectedGatewayConfigHash = $null
+    $earlyGatewayUpgradeJournal.CreatedGatewayConfigHash = $null
+    $earlyGatewayUpgradeJournal.GatewayServiceWasPresent = $true
+    $earlyGatewayUpgradeJournal.GatewayServiceWasRunning = $true
+    Write-TransactionJournal -Paths $journalPaths -Value $earlyGatewayUpgradeJournal
+    $earlyGatewayRecovery = Recover-InterruptedTransaction -Paths $journalPaths
+    Assert-Equal -Actual $earlyGatewayRecovery.Action -Expected 'Discarded' -Message 'early interrupted upgrades restore the managed gateway without requiring a rollback snapshot'
+    Assert-Equal -Actual $script:StartedGatewayServices -Expected 1 -Message 'early upgrade recovery restarts a previously running managed gateway'
+    Assert-Equal -Actual $script:GatewaySmokeChecks -Expected 1 -Message 'early upgrade recovery smoke-checks the restarted gateway'
+
+    $managedSchema3MarkerValues = [ordered]@{}
+    foreach ($entry in $schema3MarkerValues.GetEnumerator()) {
+        $managedSchema3MarkerValues[$entry.Key] = $entry.Value
+    }
+    $managedSchema3MarkerValues.GatewayManaged = 1
+    $managedSchema3MarkerValues.GatewayVersion = '0.5.9'
+    $managedSchema3MarkerValues.GatewaySha256 = 'a' * 64
+    $script:MockMarker = [pscustomobject]@{ Values = $managedSchema3MarkerValues }
+    $script:MockUninstall = [pscustomobject]@{
+        Values = (Get-ExpectedUninstallMetadata `
+                -Version '1.2.3' `
+                -InstallRoot $journalPaths.InstallRoot `
+                -UninstallerPath $journalPaths.UninstallerPath)
+    }
+    $script:MockService = [pscustomobject]@{
+        Exists      = $true
+        State       = 'Stopped'
+        StartName   = 'NT AUTHORITY\LocalService'
+        StartMode   = 'Auto'
+        DisplayName = 'BHTune Server'
+        PathName    = (Get-ExpectedServiceCommandLine `
+                -ExecutablePath $journalPaths.ServiceExecutable `
+                -ConfigPath $journalPaths.ConfigPath)
+    }
+    $script:MockServiceRegistration = $true
+    $script:MockGatewayServiceRegistration = $true
+    $gatewayUninstallJournal = [pscustomobject][ordered]@{
+        SchemaVersion          = 3
+        Mode                   = 'Uninstall'
+        Phase                  = 'ServiceRemovePending'
+        TransactionId          = ([guid]::NewGuid().ToString('D'))
+        BackupRoot             = ''
+        StageRoot              = ''
+        Version                = '1.2.3'
+        InstallRoot            = $journalPaths.InstallRoot
+        UninstallerPath        = $journalPaths.UninstallerPath
+        InstallRootWasPresent  = $true
+        ConfigWasPresent       = $true
+        ConfigWasCreated       = $false
+        ServiceWasPresent      = $true
+        ServiceWasRunning      = $false
+        GatewayManaged         = $true
+        PathEntryWasPresent    = $false
+        ShortcutWasPresent     = $false
+        PathChangedByTransaction = $false
+    }
+    Write-TransactionJournal -Paths $journalPaths -Value $gatewayUninstallJournal
+    $gatewayUninstallRecovery = Recover-InterruptedTransaction -Paths $journalPaths
+    Assert-Equal -Actual $gatewayUninstallRecovery.Action -Expected 'ResumeUninstall' -Message 'interrupted uninstall recovery validates and retains both managed service removals'
+    Assert-Equal -Actual (Read-TransactionJournal -Paths $journalPaths).Phase -Expected 'ServiceRemovePending' -Message 'both-service uninstall recovery leaves the idempotent removal phase ready to retry'
+    Remove-TransactionJournal -Paths $journalPaths
+    $script:MockService = $null
+    $script:MockGatewayService = $null
+    $script:MockGatewayServiceRegistration = $null
+    $script:MockServiceRegistration = $null
+
     $script:MockMarker = [pscustomobject]@{ Values = $ownedMarkerValues }
     $script:MockUninstall = [pscustomobject]@{
         Values = (Get-ExpectedUninstallMetadata `
@@ -1082,6 +1740,143 @@ try {
     Assert-True -Condition (-not (Test-Path -LiteralPath $restorePaths.InstallRoot)) -Message 'rollback leaves a previously absent install root absent'
     Assert-Equal -Actual (Get-Content -LiteralPath $restorePaths.ConfigPath -Raw) -Expected $restoreConfigContent -Message 'rollback restores fixed ProgramData configuration'
 
+    $gatewayRestorePaths = Get-InstallerPaths `
+        -InstallRoot (Join-Path $script:WorkRoot 'gateway-restore\ProgramFiles\ByteHound\bhtune') `
+        -ProgramDataRoot (Join-Path $script:WorkRoot 'gateway-restore\ProgramData\ByteHound\bhtune')
+    $gatewayRestoreBackupRoot = Join-Path $gatewayRestorePaths.RollbackRoot 'gateway-data'
+    $gatewayRestoreFilesRoot = Join-Path $gatewayRestoreBackupRoot 'files'
+    $gatewayRestoreManifestEntries = New-Object System.Collections.ArrayList
+    $gatewayRestoreContents = [ordered]@{
+        'gatewaydata\opcda-bridge-gateway.toml' = "port = 7600`n"
+        'gatewaydata\data\index.sqlite3'         = 'index'
+        'gatewaydata\data\index.sqlite3-wal'     = 'wal'
+        'gatewaydata\data\index.sqlite3-shm'     = 'shm'
+        'gatewaydata\data\index.lock'            = 'lock'
+        'gatewaydata\logs\gateway.log'           = 'log'
+        'gatewaydata\evidence\rollback.json'     = 'evidence'
+    }
+    foreach ($entry in $gatewayRestoreContents.GetEnumerator()) {
+        $destination = Resolve-RollbackManifestDestination `
+            -Paths $gatewayRestorePaths `
+            -RelativePath $entry.Key
+        $backupFilePath = Join-Path $gatewayRestoreFilesRoot $entry.Key
+        Write-TestFile -Path $destination -Content $entry.Value
+        Write-TestFile -Path $backupFilePath -Content $entry.Value
+        [void]$gatewayRestoreManifestEntries.Add((New-HashManifestEntry `
+                    -SourcePath $destination `
+                    -BackupPath $backupFilePath `
+                    -RelativePath $entry.Key))
+    }
+    $gatewayRestoreManifest = [pscustomobject]@{
+        SchemaVersion = 3
+        Files         = @($gatewayRestoreManifestEntries)
+    }
+    $gatewayRestoreState = [pscustomobject]@{
+        SchemaVersion                     = 3
+        Version                           = '1.2.3'
+        Service                           = $null
+        MarkerValues                      = $null
+        UninstallValues                   = $null
+        DatabasePolicy                    = [pscustomobject]@{ Policy = 'External' }
+        ConfigPath                        = $gatewayRestorePaths.ConfigPath
+        DatabasePath                      = $gatewayRestorePaths.DatabasePath
+        ShortcutPath                      = $gatewayRestorePaths.ShortcutPath
+        InstallRootWasPresent             = $false
+        GatewayManaged                    = $true
+        GatewayWasManaged                 = $false
+        GatewayService                    = $null
+        GatewayProgramDataRootWasPresent  = $true
+        PathManaged                       = $false
+        PathEntryWasPresent               = $false
+        Acls                              = [pscustomobject]@{}
+    }
+    Write-TestFile -Path (Join-Path $gatewayRestoreBackupRoot 'state.json') -Content ($gatewayRestoreState | ConvertTo-Json -Depth 12)
+    Write-TestFile -Path (Join-Path $gatewayRestoreBackupRoot 'manifest.json') -Content ($gatewayRestoreManifest | ConvertTo-Json -Depth 12)
+    Assert-True -Condition (Test-RollbackBackup -BackupRoot $gatewayRestoreBackupRoot) -Message 'gateway ProgramData rollback manifests are verifiable'
+    Assert-RollbackStateAndManifest `
+        -Paths $gatewayRestorePaths `
+        -BackupRoot $gatewayRestoreBackupRoot `
+        -State $gatewayRestoreState `
+        -Manifest $gatewayRestoreManifest
+    $gatewayNotManagedState = $gatewayRestoreState | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $gatewayNotManagedState.GatewayManaged = $false
+    Assert-Throws -Action {
+        Assert-RollbackStateAndManifest `
+            -Paths $gatewayRestorePaths `
+            -BackupRoot $gatewayRestoreBackupRoot `
+            -State $gatewayNotManagedState `
+            -Manifest $gatewayRestoreManifest
+    } -Message 'gateway ProgramData rollback entries require a gateway-managed transaction'
+    Remove-Item -LiteralPath $gatewayRestorePaths.GatewayProgramDataRoot -Recurse -Force
+    Write-TestFile -Path (Join-Path $gatewayRestorePaths.GatewayProgramDataRoot 'candidate.txt') -Content 'candidate'
+    Restore-RollbackBackup -Paths $gatewayRestorePaths -BackupRoot $gatewayRestoreBackupRoot
+    Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $gatewayRestorePaths.GatewayProgramDataRoot 'candidate.txt'))) -Message 'gateway rollback removes candidate ProgramData before restoration'
+    foreach ($entry in $gatewayRestoreContents.GetEnumerator()) {
+        $destination = Resolve-RollbackManifestDestination `
+            -Paths $gatewayRestorePaths `
+            -RelativePath $entry.Key
+        Assert-Equal -Actual (Get-Content -LiteralPath $destination -Raw) -Expected $entry.Value -Message "gateway rollback restores '$($entry.Key)'"
+    }
+
+    $gatewayBackupPaths = Get-InstallerPaths `
+        -InstallRoot (Join-Path $script:WorkRoot 'gateway-backup\ProgramFiles\ByteHound\bhtune') `
+        -ProgramDataRoot (Join-Path $script:WorkRoot 'gateway-backup\ProgramData\ByteHound\bhtune')
+    Write-TestFile -Path $gatewayBackupPaths.CliExecutable -Content 'bhtune'
+    $gatewayBackupContents = [ordered]@{
+        $gatewayBackupPaths.GatewayConfigPath                         = 'config'
+        $gatewayBackupPaths.GatewayDatabasePath                       = 'index'
+        ($gatewayBackupPaths.GatewayDatabasePath + '-wal')            = 'wal'
+        ($gatewayBackupPaths.GatewayDatabasePath + '-shm')            = 'shm'
+        (Join-Path $gatewayBackupPaths.GatewayDataDirectory 'build.lock') = 'lock'
+        (Join-Path $gatewayBackupPaths.GatewayDataDirectory 'build-owner.json') = 'owner'
+        (Join-Path $gatewayBackupPaths.GatewayLogDirectory 'gateway.log') = 'log'
+        (Join-Path $gatewayBackupPaths.GatewayProgramDataRoot 'rollback-evidence.json') = 'evidence'
+    }
+    foreach ($entry in $gatewayBackupContents.GetEnumerator()) {
+        Write-TestFile -Path $entry.Key -Content $entry.Value
+    }
+    function Get-BackupAclState {
+        param([psobject]$Paths)
+        return [ordered]@{}
+    }
+    function Get-MachinePathSnapshot {
+        return ''
+    }
+    $gatewayBackupPriorState = [pscustomobject]@{
+        Marker         = $null
+        Uninstall      = $null
+        Version        = '1.2.3'
+        Service        = $null
+        PathManaged    = $false
+        GatewayManaged = $true
+        GatewayService = $null
+    }
+    $gatewayBackup = New-RollbackBackup `
+        -Paths $gatewayBackupPaths `
+        -PriorState $gatewayBackupPriorState `
+        -DatabasePolicy ([pscustomobject]@{ Policy = 'External' }) `
+        -ConfigWasCreated:$true `
+        -InstallRootWasPresent:$true `
+        -ManageGateway:$true `
+        -GatewayConfigWasCreated:$false `
+        -GatewayProgramDataRootWasPresent:$true
+    Assert-True -Condition (Test-RollbackBackup -BackupRoot $gatewayBackup.PendingRoot) -Message 'new combined rollback backups verify before promotion'
+    $gatewayBackupManifest = Get-Content -LiteralPath (Join-Path $gatewayBackup.PendingRoot 'manifest.json') -Raw | ConvertFrom-Json
+    $gatewayBackupRelativePaths = @($gatewayBackupManifest.Files | ForEach-Object { ([string]$_.RelativePath).Replace('/', '\') })
+    Assert-Equal -Actual @($gatewayBackupRelativePaths | Where-Object { $_.StartsWith('gatewaydata\', [System.StringComparison]::OrdinalIgnoreCase) }).Count -Expected $gatewayBackupContents.Count -Message 'combined rollback captures every managed gateway ProgramData file'
+    foreach ($requiredGatewayBackup in @(
+            'gatewaydata\opcda-bridge-gateway.toml',
+            'gatewaydata\data\index.sqlite3',
+            'gatewaydata\data\index.sqlite3-wal',
+            'gatewaydata\data\index.sqlite3-shm',
+            'gatewaydata\data\build.lock',
+            'gatewaydata\data\build-owner.json',
+            'gatewaydata\logs\gateway.log',
+            'gatewaydata\rollback-evidence.json'
+        )) {
+        Assert-True -Condition ($gatewayBackupRelativePaths -contains $requiredGatewayBackup) -Message "combined rollback contains '$requiredGatewayBackup'"
+    }
+
     $script:AclCalls = New-Object System.Collections.ArrayList
     function Set-InstallerAclPath {
         param(
@@ -1115,6 +1910,46 @@ try {
     Assert-True -Condition (@($script:AclCalls | Where-Object { $_ -eq $paths.InstallRoot }).Count -eq 1) -Message 'recreated install roots receive the scoped installer ACL'
     $operatorDescendant = Join-Path $paths.DatabaseDirectory 'operator-owned.db'
     Assert-True -Condition ((Get-InstallerAclTargets -Paths $paths) -notcontains $operatorDescendant) -Message 'operator-owned database descendants are outside ACL targets'
+    foreach ($directory in @(
+            $paths.GatewayInstallRoot,
+            $paths.GatewayProgramDataRoot,
+            $paths.GatewayDataDirectory,
+            $paths.GatewayLogDirectory
+        )) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    foreach ($path in @(
+            $paths.GatewayExecutable,
+            $paths.GatewayReleasePath,
+            $paths.GatewayProvenancePath,
+            $paths.GatewayLicensePath,
+            $paths.GatewayNoticePath,
+            $paths.GatewayConfigPath
+        )) {
+        Write-TestFile -Path $path -Content 'gateway ACL fixture'
+    }
+    $script:AclCalls.Clear()
+    Set-InstallerAcls `
+        -Paths $paths `
+        -ManageGateway:$true `
+        -GatewayProgramDataRootCreated:$true `
+        -GatewayDataDirectoryCreated:$true `
+        -GatewayLogDirectoryCreated:$true `
+        -GatewayConfigCreated:$true
+    foreach ($path in @(
+            $paths.GatewayProgramDataRoot,
+            $paths.GatewayDataDirectory,
+            $paths.GatewayLogDirectory,
+            $paths.GatewayConfigPath,
+            $paths.GatewayInstallRoot,
+            $paths.GatewayExecutable,
+            $paths.GatewayReleasePath,
+            $paths.GatewayProvenancePath,
+            $paths.GatewayLicensePath,
+            $paths.GatewayNoticePath
+        )) {
+        Assert-True -Condition (@($script:AclCalls | Where-Object { $_ -eq $path }).Count -eq 1) -Message "managed gateway ACL target '$path' is applied exactly once"
+    }
 
     . $helperPath
     $script:WmiQueryResults = New-Object System.Collections.Queue
@@ -1201,6 +2036,119 @@ try {
     }
     Assert-True -Condition ($timeoutMessage -like "*did not disappear after 1 seconds*") -Message 'service removal times out when SCM registration remains'
     Assert-True -Condition ($script:ServiceQueryCalls -gt 0) -Message 'service removal polls SCM before timing out'
+
+    $script:TcpListenerQueryUsedLocalPort = $false
+    function Get-NetTCPConnection {
+        param(
+            [string]$State,
+            [int]$LocalPort,
+            [object]$ErrorAction
+        )
+
+        $script:TcpListenerQueryUsedLocalPort = $PSBoundParameters.ContainsKey('LocalPort')
+        if ($script:TcpListenerQueryUsedLocalPort) {
+            throw 'a LocalPort CIM filter reports no matching objects as an error'
+        }
+        return @(
+            [pscustomobject]@{
+                LocalAddress  = '127.0.0.1'
+                LocalPort     = 5985
+                OwningProcess = 1111
+            },
+            [pscustomobject]@{
+                LocalAddress  = '0.0.0.0'
+                LocalPort     = 7600
+                OwningProcess = 4242
+            }
+        )
+    }
+    $filteredListeners = @(Get-TcpListenerSnapshots -Port 7600)
+    Assert-True -Condition (-not $script:TcpListenerQueryUsedLocalPort) -Message 'TCP listener inspection avoids the no-match LocalPort CIM query'
+    Assert-Equal -Actual $filteredListeners.Count -Expected 1 -Message 'TCP listener inspection filters the requested port in PowerShell'
+    Assert-Equal -Actual $filteredListeners[0].OwningProcess -Expected 4242 -Message 'TCP listener inspection preserves the owning process'
+    Remove-Item function:Get-NetTCPConnection
+
+    $listenerService = [pscustomobject]@{
+        Exists    = $true
+        State     = 'Running'
+        ProcessId = 4242
+    }
+    $script:ListenerSnapshots = @(
+        [pscustomobject]@{
+            LocalAddress  = '0.0.0.0'
+            LocalPort     = 7600
+            OwningProcess = 4242
+        }
+    )
+    $script:GatewayProcessSnapshot = [pscustomobject]@{
+        ProcessId      = 4242
+        ExecutablePath = $paths.GatewayExecutable
+        CommandLine    = 'gateway'
+    }
+    function Get-TcpListenerSnapshots {
+        param([int]$Port)
+        return @($script:ListenerSnapshots)
+    }
+    function Get-ProcessSnapshot {
+        param([int]$ProcessId)
+        return $script:GatewayProcessSnapshot
+    }
+    $listenerOwnership = Assert-GatewayListenerOwnership `
+        -Paths $paths `
+        -ServiceSnapshot $listenerService
+    Assert-Equal -Actual $listenerOwnership.Process.ProcessId -Expected 4242 -Message 'gateway listener validation returns the exact service process'
+    $script:ListenerSnapshots = @(
+        [pscustomobject]@{
+            LocalAddress  = '127.0.0.1'
+            LocalPort     = 7600
+            OwningProcess = 4242
+        }
+    )
+    Assert-Throws -Action {
+        Assert-GatewayListenerOwnership -Paths $paths -ServiceSnapshot $listenerService
+    } -Message 'gateway listener validation rejects a listener that is not bound to all interfaces'
+    $script:ListenerSnapshots = @(
+        [pscustomobject]@{
+            LocalAddress  = '0.0.0.0'
+            LocalPort     = 7600
+            OwningProcess = 4242
+        },
+        [pscustomobject]@{
+            LocalAddress  = '127.0.0.1'
+            LocalPort     = 7600
+            OwningProcess = 4343
+        }
+    )
+    Assert-Throws -Action {
+        Assert-GatewayListenerOwnership -Paths $paths -ServiceSnapshot $listenerService
+    } -Message 'gateway listener validation rejects any competing listener owner'
+    $script:ListenerSnapshots = @(
+        [pscustomobject]@{
+            LocalAddress  = '0.0.0.0'
+            LocalPort     = 7600
+            OwningProcess = 4242
+        }
+    )
+    $script:GatewayProcessSnapshot = [pscustomobject]@{
+        ProcessId      = 4242
+        ExecutablePath = Join-Path $script:WorkRoot 'unexpected\gateway.exe'
+        CommandLine    = 'gateway'
+    }
+    Assert-Throws -Action {
+        Assert-GatewayListenerOwnership -Paths $paths -ServiceSnapshot $listenerService
+    } -Message 'gateway listener validation rejects the expected PID when its executable path differs'
+    $script:ListenerSnapshots = @()
+    Assert-True -Condition (Assert-GatewayPortAvailable -Port 7600) -Message 'an unused gateway port passes preflight'
+    $script:ListenerSnapshots = @(
+        [pscustomobject]@{
+            LocalAddress  = '0.0.0.0'
+            LocalPort     = 7600
+            OwningProcess = 9999
+        }
+    )
+    Assert-Throws -Action {
+        Assert-GatewayPortAvailable -Port 7600
+    } -Message 'a pre-existing gateway port owner fails preflight'
 
     Write-Host ("InstallerSupport self-tests passed: {0}" -f $script:Passed)
     exit 0

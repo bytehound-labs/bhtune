@@ -23,6 +23,7 @@ until the approved RC has passed its canary.
 | Protected-branch squash auto-merge request            | `.github/workflows/auto-merge.yml`        |
 | GitHub Release and release assets                     | `.github/workflows/release.yml`           |
 | Prerelease artifact and platform acceptance           | `.github/workflows/release-canary.yml`    |
+| Windows NSIS installer build and acceptance           | `.github/workflows/windows-installer.yml` |
 
 `release-plz` is configured as git-only. It does not publish BHTune crates to crates.io and does
 not create GitHub Releases. The `release.yml` workflow is the only workflow that creates a GitHub
@@ -75,6 +76,46 @@ python3 scripts/sync_docs_version.py --repository . --check
 
 Before the first stable release, the unversioned site intentionally has no snapshot, so this
 check is expected to fail on `main` and on ordinary pre-release branches.
+
+## Windows installer workflow
+
+The reusable Windows installer workflow is separate from `release.yml`. In dry-run mode it
+builds BHTune from the selected source ref; in release mode it consumes the exact stable Windows
+archive and its checksum, Sigstore, and provenance evidence. Both modes independently download
+and verify the official gateway release pinned by
+`installer/windows/opcda-gateway-release.json`, then embed that verified payload into the NSIS
+installer as an optional component. The installer never downloads a gateway at runtime.
+
+Run a dry build and lifecycle acceptance for the feature branch before release integration:
+
+```sh
+gh workflow run windows-installer.yml \
+  -f mode=dry-run \
+  -f source_ref=<branch-or-commit> \
+  -f attest=false
+```
+
+The workflow must verify the pinned gateway tag and source commit, release-workflow blob,
+upstream checksum and Sigstore evidence, GitHub provenance, exact archive contents, executable
+SHA-256 and 32-bit PE architecture, version, and compatibility metadata. Its SYSTEM lifecycle
+diagnostic must cover the gateway-free silent default, explicit gateway installation, gateway
+add-on ending stopped, running/stopped managed upgrades, two-service rollback,
+ProgramData-preserving uninstall, unowned service and listener conflicts, a gateway-wide
+version/protocol handshake on a vanilla runner without OPCEnum, and an unchanged Windows
+Firewall fingerprint.
+
+Updating the bundled gateway is a reviewed source change, not a release-time lookup:
+
+1. Select an already-published stable `bytehound-labs/opcda-bridge` gateway release.
+2. Update the tag, source commit, archive/executable hashes, target, release-workflow blob, and
+   compatibility contract in `installer/windows/opcda-gateway-release.json`.
+3. Update `installer/windows/third-party/opcda-bridge/NOTICE.txt` to identify the same release
+   and source commit. Keep the exact upstream MIT license unchanged unless upstream changes it.
+4. Run the installer contract suite and the Windows installer dry-run workflow. Never weaken a
+   checksum, workflow-identity, architecture, provenance, or compatibility assertion to accept
+   a mismatched release.
+5. Complete controlled read-only OPC acceptance before making the installer a stable release
+   asset. Do not write tags or start a namespace index as part of release acceptance.
 
 ## Prerelease acceptance
 

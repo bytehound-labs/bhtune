@@ -6,9 +6,9 @@
 //!
 //! - [`opcda`]: the primary driver for v1 ([`OpcDaDriver`]), over the `opcda-bridge`
 //!   crates.io dependency (Windows OPC DA via a network gateway — no COM/DCOM dependency in
-//!   this process). Also home to [`list_opcda_servers`], a standalone pre-connection
-//!   function for OPC DA server discovery (see that function's doc comment for why it
-//!   isn't a `Driver`/`OpcDaDriver` method).
+//!   this process). Also home to [`get_opcda_gateway_info`] and [`list_opcda_servers`],
+//!   standalone pre-connection functions for gateway diagnostics and OPC DA server discovery
+//!   (see those functions' doc comments for why they aren't `Driver`/`OpcDaDriver` methods).
 //! - [`simulator`]: an in-process FOPDT (first-order-plus-dead-time) process model
 //!   ([`SimulatorDriver`]), used for fully automated E2E tests on CI (no Windows, no
 //!   Kepware, no external process) and as a demo mode. Also home to [`VirtualPid`], a
@@ -24,7 +24,8 @@
 //! - [`types`] — the plain data types ([`TagId`], [`TagValue`], [`TagWrite`],
 //!   [`WriteOutcome`], browse-page, capability, and search types) that cross the trait boundary.
 //! - [`error`] — the crate's error type, [`DriverError`].
-//! - [`opcda`] — [`OpcDaDriver`], the OPC DA implementation, and [`list_opcda_servers`].
+//! - [`opcda`] — [`OpcDaDriver`], the OPC DA implementation, gateway diagnostics, and
+//!   [`list_opcda_servers`].
 //! - [`simulator`] — [`SimulatorDriver`], [`FopdtProcess`]/[`FopdtConfig`], and
 //!   [`VirtualPid`]/[`VirtualPidConfig`].
 //! - [`replay`] — [`ReplayDriver`], [`ReplaySample`], and [`RecordedWrite`].
@@ -40,7 +41,8 @@ pub use driver::Driver;
 pub use error::{DriverError, DriverResult};
 pub use opcda::{
     DEFAULT_INDEX_SEARCH_MAX_RESULTS, DEFAULT_PAGE_SIZE, DEFAULT_SEARCH_MAX_RESULTS, OpcDaDriver,
-    close_opcda_browse_session, list_opcda_servers,
+    OpcDaGatewayFeature, OpcDaGatewayFeatureSupport, OpcDaGatewayInfo, close_opcda_browse_session,
+    get_opcda_gateway_info, list_opcda_servers,
 };
 pub use replay::{RecordedWrite, ReplayDriver, ReplaySample, ReplayTraceExhausted};
 pub use simulator::{FopdtConfig, FopdtProcess, SimulatorDriver, VirtualPid, VirtualPidConfig};

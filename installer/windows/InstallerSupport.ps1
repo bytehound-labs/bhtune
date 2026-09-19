@@ -4,7 +4,8 @@
 # dot-sourced by Install-Bhtune.ps1 and by the cross-platform self-tests.
 # Keep the syntax compatible with Windows PowerShell 5.1.
 
-$script:InstallerSchemaVersion = 2
+$script:InstallerSchemaVersion = 3
+$script:SupportedInstallerSchemaVersions = @(2, 3)
 $script:InstallerProductName = 'BHTune'
 $script:InstallerPublisher = 'ByteHound Corp.'
 $script:InstallerServiceName = 'BhtuneServer'
@@ -13,11 +14,63 @@ $script:InstallerServiceAccount = 'NT AUTHORITY\LocalService'
 $script:InstallerBindAddress = '127.0.0.1:8787'
 $script:InstallerStartUri = 'http://127.0.0.1:8787'
 $script:InstallerHealthUri = 'http://127.0.0.1:8787/api/health'
+$script:GatewayServiceName = 'OpcdaBridgeGateway'
+$script:GatewayServiceDisplayName = 'OPC DA Bridge Gateway'
+$script:GatewayServiceDescription = 'Bridges native OPC DA (COM/DCOM) tags to opcda-bridge clients over the network. https://github.com/bytehound-labs/opcda-bridge'
+$script:GatewayPort = 7600
 $script:InstallerMarkerPath = 'HKLM:\Software\ByteHound\bhtune'
 $script:InstallerUninstallPath = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BHTune'
 $script:RequiredPayloadFiles = @('bhtune.exe', 'bhtune-server.exe', 'LICENSE', 'README.md')
+$script:GatewayRequiredPayloadFiles = @(
+    'opcda-bridge-gateway.exe',
+    'opcda-gateway-release.json',
+    'opcda-gateway-provenance.json',
+    'LICENSE-opcda-bridge.txt',
+    'NOTICE-opcda-bridge.txt'
+)
 if (-not (Get-Variable -Name InstallerTracePath -Scope Script -ErrorAction SilentlyContinue)) {
     $script:InstallerTracePath = ''
+}
+
+function Get-SnapshotValue {
+    param(
+        [Parameter(Mandatory = $false)]
+        [psobject]$Snapshot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    if ($null -eq $Snapshot) {
+        return $null
+    }
+
+    if ($Snapshot -is [System.Collections.IDictionary]) {
+        return $Snapshot[$Name]
+    }
+
+    $property = $Snapshot.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
+function Write-TextFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $encoding)
 }
 
 function Write-InstallerTrace {
@@ -58,6 +111,19 @@ function Write-InstallerTrace {
 
 function Get-RequiredPayloadFiles {
     return @($script:RequiredPayloadFiles)
+}
+
+function Get-GatewayRequiredPayloadFiles {
+    return @($script:GatewayRequiredPayloadFiles)
+}
+
+function Test-SupportedInstallerSchemaVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Version
+    )
+
+    return $script:SupportedInstallerSchemaVersions -contains $Version
 }
 
 function Test-StableVersion {
@@ -134,7 +200,7 @@ function Assert-InstallerVersionContract {
 function Assert-FailureInjectionPolicy {
     param(
         [Parameter(Mandatory = $false)]
-        [ValidateSet('None', 'HealthMismatch', 'CommitFailure')]
+        [ValidateSet('None', 'HealthMismatch', 'GatewaySmokeFailure', 'CommitFailure')]
         [string]$FailureInjection = 'None',
 
         [Parameter(Mandatory = $false)]
@@ -235,6 +301,19 @@ function Get-InstallerPaths {
         MarkerPath         = $script:InstallerMarkerPath
         UninstallKeyPath   = $script:InstallerUninstallPath
         ServiceName        = $script:InstallerServiceName
+        GatewayInstallRoot = Join-Path $InstallRoot 'gateway'
+        GatewayExecutable  = Join-Path $InstallRoot 'gateway\opcda-bridge-gateway.exe'
+        GatewayReleasePath = Join-Path $InstallRoot 'gateway\opcda-gateway-release.json'
+        GatewayProvenancePath = Join-Path $InstallRoot 'gateway\opcda-gateway-provenance.json'
+        GatewayLicensePath = Join-Path $InstallRoot 'gateway\LICENSE-opcda-bridge.txt'
+        GatewayNoticePath  = Join-Path $InstallRoot 'gateway\NOTICE-opcda-bridge.txt'
+        GatewayProgramDataRoot = Join-Path $ProgramDataRoot 'gateway'
+        GatewayConfigPath  = Join-Path $ProgramDataRoot 'gateway\opcda-bridge-gateway.toml'
+        GatewayDataDirectory = Join-Path $ProgramDataRoot 'gateway\data'
+        GatewayDatabasePath = Join-Path $ProgramDataRoot 'gateway\data\index.sqlite3'
+        GatewayLogDirectory = Join-Path $ProgramDataRoot 'gateway\logs'
+        GatewayServiceName = $script:GatewayServiceName
+        GatewayPort        = $script:GatewayPort
     }
 }
 
@@ -395,6 +474,16 @@ function Get-PreservedProgramDataState {
         @(
             Get-ChildItem -LiteralPath $Paths.InstallerStateRoot -Force -ErrorAction SilentlyContinue
         ).Count -gt 0
+    $gatewayConfigExists = Test-Path -LiteralPath $Paths.GatewayConfigPath -PathType Leaf
+    $gatewayDataExists = (Test-Path -LiteralPath $Paths.GatewayDataDirectory -PathType Container) -and
+        @(
+            Get-ChildItem -LiteralPath $Paths.GatewayDataDirectory -Force -ErrorAction SilentlyContinue
+        ).Count -gt 0
+    $gatewayLogsExist = (Test-Path -LiteralPath $Paths.GatewayLogDirectory -PathType Container) -and
+        @(
+            Get-ChildItem -LiteralPath $Paths.GatewayLogDirectory -Force -ErrorAction SilentlyContinue
+        ).Count -gt 0
+    $gatewayStateExists = Test-Path -LiteralPath $Paths.GatewayProgramDataRoot
 
     return [pscustomobject]@{
         ConfigExists       = $configExists
@@ -402,6 +491,11 @@ function Get-PreservedProgramDataState {
         RollbackExists     = $rollbackExists
         LogsExist          = $logsExist
         InstallerStateExists = $installerStateExists
+        GatewayConfigExists = $gatewayConfigExists
+        GatewayDataExists   = $gatewayDataExists
+        GatewayLogsExist    = $gatewayLogsExist
+        GatewayStateExists  = $gatewayStateExists
+        GatewayReuseRequired = $gatewayConfigExists -or $gatewayDataExists -or $gatewayLogsExist
         ReuseRequired      = $configExists -or $databaseArtifacts.Count -gt 0 -or
             $rollbackExists -or $logsExist -or $installerStateExists
     }
@@ -441,7 +535,17 @@ function Get-InstallerAclTargets {
         $Paths.DatabaseDirectory,
         $Paths.LogDirectory,
         $Paths.InstallerStateRoot,
-        $Paths.ConfigPath
+        $Paths.ConfigPath,
+        $Paths.GatewayInstallRoot,
+        $Paths.GatewayExecutable,
+        $Paths.GatewayReleasePath,
+        $Paths.GatewayProvenancePath,
+        $Paths.GatewayLicensePath,
+        $Paths.GatewayNoticePath,
+        $Paths.GatewayProgramDataRoot,
+        $Paths.GatewayDataDirectory,
+        $Paths.GatewayLogDirectory,
+        $Paths.GatewayConfigPath
     )
 }
 
@@ -930,6 +1034,175 @@ function Get-TomlTopLevelStringValue {
     }
 }
 
+function Get-TomlTopLevelIntegerValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
+
+    $found = $false
+    $duplicate = $false
+    $valid = $true
+    $value = $null
+
+    foreach ($line in ($Content -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if ($trimmed.StartsWith('#') -or $trimmed.Length -eq 0) {
+            continue
+        }
+        if ($trimmed.StartsWith('[')) {
+            break
+        }
+        if ($trimmed -notmatch '^\s*([A-Za-z0-9_-]+)\s*=') {
+            continue
+        }
+        if ($Matches[1] -cne $Key) {
+            continue
+        }
+        if ($found) {
+            $duplicate = $true
+            continue
+        }
+
+        $found = $true
+        if ($trimmed -notmatch '^\s*[A-Za-z0-9_-]+\s*=\s*([0-9]+)\s*(?:#.*)?$') {
+            $valid = $false
+            continue
+        }
+        try {
+            $value = [int]$Matches[1]
+        } catch {
+            $valid = $false
+        }
+    }
+
+    return [pscustomobject]@{
+        Key       = $Key
+        Found     = $found
+        Duplicate = $duplicate
+        Valid     = $valid
+        Value     = $value
+    }
+}
+
+function Get-TomlTableStringValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Table,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Key
+    )
+
+    $found = $false
+    $duplicate = $false
+    $valid = $true
+    $value = $null
+    $inTable = $false
+
+    foreach ($line in ($Content -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if ($trimmed.StartsWith('#') -or $trimmed.Length -eq 0) {
+            continue
+        }
+        if ($trimmed -match '^\[([A-Za-z0-9_.-]+)\]\s*(?:#.*)?$') {
+            $inTable = $Matches[1] -ceq $Table
+            continue
+        }
+        if (-not $inTable -or $trimmed -notmatch '^\s*([A-Za-z0-9_-]+)\s*=') {
+            continue
+        }
+        if ($Matches[1] -cne $Key) {
+            continue
+        }
+        if ($found) {
+            $duplicate = $true
+            continue
+        }
+
+        $found = $true
+        if ($trimmed -notmatch '^\s*[A-Za-z0-9_-]+\s*=\s*("(?:\\.|[^"])*"|''[^'']*'')\s*(?:#.*)?$') {
+            $valid = $false
+            continue
+        }
+        try {
+            $value = ConvertFrom-TomlQuotedString -Token $Matches[1]
+        } catch {
+            $valid = $false
+        }
+    }
+
+    return [pscustomobject]@{
+        Table     = $Table
+        Key       = $Key
+        Found     = $found
+        Duplicate = $duplicate
+        Valid     = $valid
+        Value     = $value
+    }
+}
+
+function Assert-GatewayConfigPolicy {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedDatabasePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedLogDirectory,
+
+        [Parameter(Mandatory = $false)]
+        [int]$ExpectedPort = $script:GatewayPort
+    )
+
+    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+        throw "The installer-managed OPC DA gateway configuration is missing: $ConfigPath"
+    }
+    try {
+        $content = [System.IO.File]::ReadAllText($ConfigPath)
+    } catch {
+        throw "The installer-managed OPC DA gateway configuration cannot be read: $($_.Exception.Message)"
+    }
+
+    $database = Get-TomlTableStringValue -Content $content -Table 'index' -Key 'database_path'
+    if (-not $database.Found -or $database.Duplicate -or -not $database.Valid -or
+        [string]::IsNullOrWhiteSpace([string]$database.Value)) {
+        throw "The OPC DA gateway configuration must contain one valid [index] database_path value."
+    }
+    $actual = Get-ComparableAbsolutePath -Path ([string]$database.Value)
+    $expected = Get-ComparableAbsolutePath -Path $ExpectedDatabasePath
+    if ($null -eq $actual -or $actual -ne $expected) {
+        throw "The OPC DA gateway index database must remain at the installer-managed path '$ExpectedDatabasePath'."
+    }
+
+    $logDirectory = Get-TomlTableStringValue -Content $content -Table 'log' -Key 'dir'
+    if (-not $logDirectory.Found -or $logDirectory.Duplicate -or -not $logDirectory.Valid -or
+        [string]::IsNullOrWhiteSpace([string]$logDirectory.Value)) {
+        throw "The OPC DA gateway configuration must contain one valid [log] dir value."
+    }
+    $actualLogDirectory = Get-ComparableAbsolutePath -Path ([string]$logDirectory.Value)
+    $expectedLogDirectoryPath = Get-ComparableAbsolutePath -Path $ExpectedLogDirectory
+    if ($null -eq $actualLogDirectory -or $actualLogDirectory -ne $expectedLogDirectoryPath) {
+        throw "The OPC DA gateway log directory must remain at the installer-managed path '$ExpectedLogDirectory'."
+    }
+
+    $port = Get-TomlTopLevelIntegerValue -Content $content -Key 'port'
+    if (-not $port.Found -or $port.Duplicate -or -not $port.Valid -or
+        [int]$port.Value -ne $ExpectedPort) {
+        throw "The OPC DA gateway configuration must contain one top-level port value equal to $ExpectedPort."
+    }
+
+    return $true
+}
+
 function Get-DatabasePolicy {
     param(
         [Parameter(Mandatory = $true)]
@@ -1072,6 +1345,29 @@ dir = "$logs"
 "@
 }
 
+function Get-DefaultGatewayConfigContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DatabasePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LogDirectory
+    )
+
+    $database = ConvertTo-TomlPath -Path $DatabasePath
+    $logs = ConvertTo-TomlPath -Path $LogDirectory
+    return @"
+# BHTune installer defaults. Operator edits are preserved across upgrades.
+port = $($script:GatewayPort)
+
+[log]
+dir = "$logs"
+
+[index]
+database_path = "$database"
+"@
+}
+
 function Get-ExpectedServiceCommandLine {
     param(
         [Parameter(Mandatory = $true)]
@@ -1082,6 +1378,32 @@ function Get-ExpectedServiceCommandLine {
     )
 
     return '"' + $ExecutablePath + '" --config "' + $ConfigPath + '"'
+}
+
+function Get-ExpectedGatewayServiceCommandLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ExecutablePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LogDirectory
+    )
+
+    return '"' + $ExecutablePath + '" --config "' + $ConfigPath + '" --port ' +
+        $script:GatewayPort + ' --log-dir "' + $LogDirectory + '"'
+}
+
+function Normalize-ServiceCommandLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    $withoutQuotes = $Value.Trim().Replace('/', '\').Replace('"', '')
+    return [regex]::Replace($withoutQuotes, '\s+', ' ').ToLowerInvariant()
 }
 
 function Test-ServiceCommandLine {
@@ -1106,13 +1428,37 @@ function Test-ServiceCommandLine {
     # differences; never use substring matching, which could accept a
     # conflicting executable whose path merely has the expected path as a
     # prefix or an unexpected extra argument.
-    $normalizeCommandLine = {
-        param([string]$Value)
-        $withoutQuotes = $Value.Trim().Replace('/', '\').Replace('"', '')
-        return [regex]::Replace($withoutQuotes, '\s+', ' ').ToLowerInvariant()
+    $actual = Normalize-ServiceCommandLine -Value $ActualPathName
+    $expected = Normalize-ServiceCommandLine -Value (Get-ExpectedServiceCommandLine -ExecutablePath $ExecutablePath -ConfigPath $ConfigPath)
+    return $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-GatewayServiceCommandLine {
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowEmptyString()]
+        [string]$ActualPathName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExecutablePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LogDirectory
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ActualPathName)) {
+        return $false
     }
-    $actual = & $normalizeCommandLine $ActualPathName
-    $expected = & $normalizeCommandLine (Get-ExpectedServiceCommandLine -ExecutablePath $ExecutablePath -ConfigPath $ConfigPath)
+    $actual = Normalize-ServiceCommandLine -Value $ActualPathName
+    $expected = Normalize-ServiceCommandLine -Value (
+        Get-ExpectedGatewayServiceCommandLine `
+            -ExecutablePath $ExecutablePath `
+            -ConfigPath $ConfigPath `
+            -LogDirectory $LogDirectory
+    )
     return $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
@@ -1225,6 +1571,160 @@ function Assert-PayloadLayout {
     return $true
 }
 
+function Assert-GatewayReleaseContract {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ContractPath
+    )
+
+    if (-not (Test-Path -LiteralPath $ContractPath -PathType Leaf)) {
+        throw "The pinned OPC DA gateway release contract is missing: $ContractPath"
+    }
+
+    try {
+        $contract = Get-Content -LiteralPath $ContractPath -Raw | ConvertFrom-Json
+    } catch {
+        throw "The pinned OPC DA gateway release contract is invalid JSON: $($_.Exception.Message)"
+    }
+
+    if ([int]$contract.schema_version -ne 1) {
+        throw "The OPC DA gateway release contract uses unsupported schema '$($contract.schema_version)'."
+    }
+    if ([string]$contract.repository -cne 'bytehound-labs/opcda-bridge') {
+        throw "The OPC DA gateway release contract names unexpected repository '$($contract.repository)'."
+    }
+    if ([string]$contract.tag -notmatch '^opcda-bridge-gateway-v(?<version>[0-9]+\.[0-9]+\.[0-9]+)$') {
+        throw "The OPC DA gateway release contract has invalid stable tag '$($contract.tag)'."
+    }
+    if ([string]$contract.version -cne $Matches['version']) {
+        throw "The OPC DA gateway release contract version does not match its tag."
+    }
+    foreach ($hash in @(
+            [string]$contract.source_commit,
+            [string]$contract.archive.sha256,
+            [string]$contract.executable.sha256,
+            [string]$contract.release_workflow.blob_sha
+        )) {
+        $expectedLength = if ($hash -eq [string]$contract.source_commit -or
+            $hash -eq [string]$contract.release_workflow.blob_sha) { 40 } else { 64 }
+        if ($hash -cnotmatch "^[0-9a-f]{$expectedLength}$") {
+            throw "The OPC DA gateway release contract contains an invalid hexadecimal digest."
+        }
+    }
+    if ([string]$contract.archive.name -cne 'opcda-bridge-gateway-windows-x86.zip' -or
+        @($contract.archive.contents).Count -ne 1 -or
+        [string]@($contract.archive.contents)[0] -cne 'opcda-bridge-gateway.exe') {
+        throw 'The OPC DA gateway release contract has an unexpected archive layout.'
+    }
+    if ([string]$contract.executable.name -cne 'opcda-bridge-gateway.exe' -or
+        [string]$contract.executable.target -cne 'i686-pc-windows-msvc' -or
+        [string]$contract.executable.pe_machine -cne 'I386') {
+        throw 'The OPC DA gateway release contract does not describe the supported 32-bit Windows executable.'
+    }
+    if ([string]$contract.release_workflow.path -cne '.github/workflows/release.yml') {
+        throw 'The OPC DA gateway release contract has an unexpected upstream release workflow.'
+    }
+    $expectedBuilder = "https://github.com/$($contract.repository)/$($contract.release_workflow.path)@refs/tags/$($contract.tag)"
+    if ([string]$contract.release_workflow.builder_id -cne $expectedBuilder) {
+        throw 'The OPC DA gateway release contract builder identity does not match its repository, workflow, and tag.'
+    }
+    if ([string]$contract.upstream_evidence.checksums -cne 'release-assets.sha256' -or
+        [string]$contract.upstream_evidence.archive_sigstore_bundle -cne 'opcda-bridge-gateway-windows-x86.zip.sigstore.json' -or
+        [string]$contract.upstream_evidence.provenance -cne 'attestation.json' -or
+        [string]$contract.upstream_evidence.compatibility -cne 'compatibility.json') {
+        throw 'The OPC DA gateway release contract has unexpected upstream evidence names.'
+    }
+    if ([string]$contract.compatibility.release_line -cne 'indexed-on-demand' -or
+        [string]$contract.compatibility.min_version -cne '0.5.0' -or
+        [string]$contract.compatibility.max_version -cne '0.999.999' -or
+        [int]$contract.compatibility.core_protocol -ne 1 -or
+        [int]$contract.compatibility.namespace_protocol -ne 2 -or
+        [int]$contract.compatibility.indexed_search_protocol -ne 2) {
+        throw 'The OPC DA gateway release contract does not describe the supported indexed-on-demand protocol line.'
+    }
+
+    return $contract
+}
+
+function Get-MissingGatewayPayloadFiles {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GatewayPayloadRoot
+    )
+
+    $missing = New-Object System.Collections.ArrayList
+    foreach ($name in (Get-GatewayRequiredPayloadFiles)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $GatewayPayloadRoot $name) -PathType Leaf)) {
+            [void]$missing.Add($name)
+        }
+    }
+    return @($missing)
+}
+
+function Assert-GatewayPayloadLayout {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$GatewayPayloadRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $GatewayPayloadRoot -PathType Container)) {
+        throw "The staged OPC DA gateway payload directory does not exist: $GatewayPayloadRoot"
+    }
+
+    $missing = @(Get-MissingGatewayPayloadFiles -GatewayPayloadRoot $GatewayPayloadRoot)
+    if ($missing.Count -gt 0) {
+        throw "The staged OPC DA gateway payload is incomplete. Missing: $($missing -join ', ')."
+    }
+
+    $actualFiles = @(
+        Get-ChildItem -LiteralPath $GatewayPayloadRoot -File -Recurse |
+            ForEach-Object { $_.FullName.Substring($GatewayPayloadRoot.Length).TrimStart('\', '/') } |
+            Sort-Object
+    )
+    $expectedFiles = @(Get-GatewayRequiredPayloadFiles | Sort-Object)
+    if (($actualFiles -join '|') -cne ($expectedFiles -join '|')) {
+        throw "The staged OPC DA gateway payload contains unexpected files: $($actualFiles -join ', ')."
+    }
+
+    $contract = Assert-GatewayReleaseContract -ContractPath (Join-Path $GatewayPayloadRoot 'opcda-gateway-release.json')
+    try {
+        $provenance = Get-Content -LiteralPath (Join-Path $GatewayPayloadRoot 'opcda-gateway-provenance.json') -Raw | ConvertFrom-Json
+    } catch {
+        throw "The staged OPC DA gateway provenance manifest is invalid JSON: $($_.Exception.Message)"
+    }
+    if ([int]$provenance.schema_version -ne 1 -or
+        [string]$provenance.repository -cne [string]$contract.repository -or
+        [string]$provenance.tag -cne [string]$contract.tag -or
+        [string]$provenance.source_commit -cne [string]$contract.source_commit -or
+        [string]$provenance.archive_name -cne [string]$contract.archive.name -or
+        [string]$provenance.archive_sha256 -cne [string]$contract.archive.sha256 -or
+        [string]$provenance.executable_name -cne [string]$contract.executable.name -or
+        [string]$provenance.executable_sha256 -cne [string]$contract.executable.sha256 -or
+        [string]$provenance.builder_id -cne [string]$contract.release_workflow.builder_id -or
+        [string]$provenance.release_workflow_blob_sha -cne [string]$contract.release_workflow.blob_sha -or
+        $provenance.sigstore_verified -isnot [bool] -or -not $provenance.sigstore_verified -or
+        $provenance.github_provenance_verified -isnot [bool] -or -not $provenance.github_provenance_verified -or
+        $provenance.compatibility_verified -isnot [bool] -or -not $provenance.compatibility_verified) {
+        throw 'The staged OPC DA gateway provenance manifest does not match the pinned release contract.'
+    }
+
+    $executable = Join-Path $GatewayPayloadRoot 'opcda-bridge-gateway.exe'
+    if ((Get-FileSha256 -Path $executable) -cne [string]$contract.executable.sha256) {
+        throw 'The staged OPC DA gateway executable does not match the pinned SHA-256.'
+    }
+    foreach ($name in @('LICENSE-opcda-bridge.txt', 'NOTICE-opcda-bridge.txt')) {
+        if ((Get-Item -LiteralPath (Join-Path $GatewayPayloadRoot $name)).Length -le 0) {
+            throw "The staged OPC DA gateway redistribution file '$name' is empty."
+        }
+    }
+
+    return [pscustomobject]@{
+        Contract   = $contract
+        Provenance = $provenance
+        Executable = $executable
+    }
+}
+
 function Invoke-CapturedProcess {
     param(
         [Parameter(Mandatory = $true)]
@@ -1251,18 +1751,22 @@ function Invoke-CapturedProcess {
         if (-not $process.Start()) {
             throw "The process could not be started: $FilePath"
         }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutMilliseconds)) {
             try {
                 $process.Kill()
+                [void]$process.WaitForExit(5000)
             } catch {
             }
             throw "The process did not exit within $TimeoutMilliseconds ms: $FilePath"
         }
+        $process.WaitForExit()
 
         return [pscustomobject]@{
             ExitCode = $process.ExitCode
-            StdOut   = $process.StandardOutput.ReadToEnd()
-            StdErr   = $process.StandardError.ReadToEnd()
+            StdOut   = $stdoutTask.GetAwaiter().GetResult()
+            StdErr   = $stderrTask.GetAwaiter().GetResult()
         }
     } finally {
         $process.Dispose()
@@ -1289,7 +1793,7 @@ function Get-VersionFromProcessOutput {
         return $null
     }
 
-    if ($lines[0] -match '^(?:bhtune(?:-server)?\s+)?v?([0-9]+\.[0-9]+\.[0-9]+)$') {
+    if ($lines[0] -match '^(?:(?:bhtune(?:-server)?|opcda-bridge-gateway)\s+)?v?([0-9]+\.[0-9]+\.[0-9]+)$') {
         return $Matches[1]
     }
 
@@ -1316,6 +1820,69 @@ function Assert-PayloadBinaryVersions {
         if ($reported -ne $expected) {
             throw "Payload executable '$name' reports version '$reported', expected '$expected'."
         }
+    }
+
+    return $true
+}
+
+function Get-PeMachine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Cannot inspect a missing PE file: $Path"
+    }
+
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    $reader = New-Object System.IO.BinaryReader($stream)
+    try {
+        if ($reader.ReadUInt16() -ne 0x5a4d) {
+            throw "The file is not a PE executable: $Path"
+        }
+        $stream.Position = 0x3c
+        $peOffset = $reader.ReadInt32()
+        if ($peOffset -lt 0 -or $peOffset -gt ($stream.Length - 6)) {
+            throw "The PE header offset is invalid: $Path"
+        }
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "The PE signature is invalid: $Path"
+        }
+        $machine = $reader.ReadUInt16()
+        switch ($machine) {
+            0x014c { return 'I386' }
+            0x8664 { return 'AMD64' }
+            0xaa64 { return 'ARM64' }
+            default { return ('0x{0:x4}' -f $machine) }
+        }
+    } finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+}
+
+function Assert-GatewayPayloadBinary {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$GatewayPayload
+    )
+
+    $contract = $GatewayPayload.Contract
+    $executable = [string]$GatewayPayload.Executable
+    $machine = Get-PeMachine -Path $executable
+    if ($machine -cne [string]$contract.executable.pe_machine) {
+        throw "The OPC DA gateway executable has PE machine '$machine', expected '$($contract.executable.pe_machine)'."
+    }
+
+    $result = Invoke-CapturedProcess -FilePath $executable -Arguments '--version'
+    $reported = Get-VersionFromProcessOutput -Output ($result.StdOut + "`n" + $result.StdErr)
+    if ($result.ExitCode -ne 0 -or $null -eq $reported) {
+        throw 'The OPC DA gateway executable did not report a usable version.'
+    }
+    if ($reported -cne [string]$contract.version) {
+        throw "The OPC DA gateway executable reports version '$reported', expected '$($contract.version)'."
     }
 
     return $true
@@ -1424,7 +1991,7 @@ function Test-RollbackBackup {
         Assert-NoReparsePointInPath -Path $manifestPath -Name 'the rollback manifest'
         Assert-NoReparsePointInPath -Path $statePath -Name 'the rollback state'
         $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-        if ([int]$state.SchemaVersion -ne $script:InstallerSchemaVersion) {
+        if (-not (Test-SupportedInstallerSchemaVersion -Version ([int]$state.SchemaVersion))) {
             return $false
         }
         if (-not $state.PSObject.Properties['InstallRootWasPresent']) {
@@ -1436,8 +2003,25 @@ function Test-RollbackBackup {
             [string]$installRootWasPresent -ne 'False') {
             return $false
         }
+        if ([int]$state.SchemaVersion -ge 3) {
+            foreach ($name in @(
+                    'GatewayManaged',
+                    'GatewayWasManaged',
+                    'GatewayProgramDataRootWasPresent'
+                )) {
+                if (-not $state.PSObject.Properties[$name]) {
+                    return $false
+                }
+                $value = $state.$name
+                if ($value -isnot [bool] -and
+                    [string]$value -ne 'True' -and
+                    [string]$value -ne 'False') {
+                    return $false
+                }
+            }
+        }
         $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-        if ([int]$manifest.SchemaVersion -ne $script:InstallerSchemaVersion) {
+        if (-not (Test-SupportedInstallerSchemaVersion -Version ([int]$manifest.SchemaVersion))) {
             return $false
         }
         $filesRoot = Join-Path $BackupRoot 'files'
@@ -1555,10 +2139,15 @@ function Get-ServiceSnapshot {
                 return $null
             }
 
+            $processId = 0
+            if ($null -ne $service.PSObject.Properties['ProcessId']) {
+                $processId = [int]$service.ProcessId
+            }
             return [pscustomobject]@{
                 Exists      = $true
                 Name        = [string]$service.Name
                 State       = [string]$service.State
+                ProcessId   = $processId
                 StartMode   = [string]$service.StartMode
                 StartName   = [string]$service.StartName
                 PathName    = [string]$service.PathName
@@ -1594,6 +2183,22 @@ function Test-LocalServiceAccount {
     return $value -eq 'localservice' -or $value -eq 'nt authority\localservice'
 }
 
+function Test-LocalSystemAccount {
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowEmptyString()]
+        [string]$Account
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Account)) {
+        return $false
+    }
+
+    $value = $Account.Trim().ToLowerInvariant()
+    return $value -eq 'localsystem' -or $value -eq '.\localsystem' -or
+        $value -eq 'nt authority\system'
+}
+
 function Test-OwnedServiceSnapshot {
     param(
         [Parameter(Mandatory = $true)]
@@ -1619,6 +2224,85 @@ function Test-OwnedServiceSnapshot {
         return $false
     }
     return Test-ServiceCommandLine -ActualPathName $ServiceSnapshot.PathName -ExecutablePath $ExecutablePath -ConfigPath $ConfigPath
+}
+
+function Test-InstallerCreatedGatewayServiceSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$ServiceSnapshot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExecutablePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LogDirectory
+    )
+
+    if ($null -eq $ServiceSnapshot -or -not $ServiceSnapshot.Exists) {
+        return $false
+    }
+    if ([string]$ServiceSnapshot.Name -cne $script:GatewayServiceName -or
+        -not (Test-LocalSystemAccount -Account $ServiceSnapshot.StartName) -or
+        [string]$ServiceSnapshot.StartMode -ne 'Auto' -or
+        [string]$ServiceSnapshot.DisplayName -cne $script:GatewayServiceDisplayName) {
+        return $false
+    }
+    return Test-GatewayServiceCommandLine `
+        -ActualPathName $ServiceSnapshot.PathName `
+        -ExecutablePath $ExecutablePath `
+        -ConfigPath $ConfigPath `
+        -LogDirectory $LogDirectory
+}
+
+function Test-OwnedGatewayServiceSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$ServiceSnapshot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ExecutablePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$ConfigPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LogDirectory
+    )
+
+    if (-not (Test-InstallerCreatedGatewayServiceSnapshot `
+            -ServiceSnapshot $ServiceSnapshot `
+            -ExecutablePath $ExecutablePath `
+            -ConfigPath $ConfigPath `
+            -LogDirectory $LogDirectory)) {
+        return $false
+    }
+    return [string]$ServiceSnapshot.Description -ceq $script:GatewayServiceDescription
+}
+
+function Remove-InstallerCreatedGatewayServiceRegistration {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths
+    )
+
+    $snapshot = Get-ServiceSnapshot -Name $script:GatewayServiceName
+    if ($null -eq $snapshot) {
+        return
+    }
+    if (-not (Test-InstallerCreatedGatewayServiceSnapshot `
+            -ServiceSnapshot $snapshot `
+            -ExecutablePath $Paths.GatewayExecutable `
+            -ConfigPath $Paths.GatewayConfigPath `
+            -LogDirectory $Paths.GatewayLogDirectory)) {
+        throw "Refusing to remove service '$($script:GatewayServiceName)' because it does not match the candidate registration."
+    }
+    if ($snapshot.State -ne 'Stopped') {
+        Stop-ServiceByName -Name $script:GatewayServiceName | Out-Null
+    }
+    Remove-ServiceByName -Name $script:GatewayServiceName
 }
 
 function Invoke-ScCommand {
@@ -1712,6 +2396,40 @@ function New-LocalServiceCredential {
     )
 }
 
+function New-LocalSystemService {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BinaryPathName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DisplayName,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Automatic', 'Manual', 'Disabled')]
+        [string]$StartupType,
+
+        [Parameter(Mandatory = $false)]
+        [AllowEmptyString()]
+        [string]$Description
+    )
+
+    $parameters = @{
+        Name           = $Name
+        BinaryPathName = $BinaryPathName
+        DisplayName    = $DisplayName
+        StartupType    = $StartupType
+        ErrorAction    = 'Stop'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Description)) {
+        $parameters.Description = $Description
+    }
+
+    New-Service @parameters | Out-Null
+}
+
 function New-LocalService {
     param(
         [Parameter(Mandatory = $true)]
@@ -1797,6 +2515,415 @@ function New-InstallerService {
     return $created
 }
 
+function New-InstallerGatewayService {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths
+    )
+
+    $registrationExists = Invoke-ServiceRegistrationQuery -Name $script:GatewayServiceName
+    $serviceSnapshot = Get-ServiceSnapshot -Name $script:GatewayServiceName
+    if ($registrationExists -or $null -ne $serviceSnapshot) {
+        throw "The service '$script:GatewayServiceName' already exists."
+    }
+    if (-not (Test-Path -LiteralPath $Paths.GatewayExecutable -PathType Leaf)) {
+        throw "The OPC DA gateway executable is missing: $($Paths.GatewayExecutable)"
+    }
+
+    $installAttempted = $false
+    try {
+        $arguments = '--config "' + $Paths.GatewayConfigPath + '" --port ' +
+            $script:GatewayPort + ' --log-dir "' + $Paths.GatewayLogDirectory + '" install'
+        $installAttempted = $true
+        $result = Invoke-CapturedProcess -FilePath $Paths.GatewayExecutable -Arguments $arguments -TimeoutMilliseconds 30000
+        if ($result.ExitCode -ne 0) {
+            throw "The OPC DA gateway service installer failed with exit code $($result.ExitCode): $($result.StdOut) $($result.StdErr)"
+        }
+
+        $created = Get-ServiceSnapshot -Name $script:GatewayServiceName
+        if (-not (Test-OwnedGatewayServiceSnapshot `
+                -ServiceSnapshot $created `
+                -ExecutablePath $Paths.GatewayExecutable `
+                -ConfigPath $Paths.GatewayConfigPath `
+                -LogDirectory $Paths.GatewayLogDirectory)) {
+            throw 'The newly registered OPC DA gateway service does not match the installer-owned LocalSystem definition.'
+        }
+    } catch {
+        if ($installAttempted) {
+            try {
+                $partial = Get-ServiceSnapshot -Name $script:GatewayServiceName
+                if ($null -ne $partial -and
+                    (Test-InstallerCreatedGatewayServiceSnapshot `
+                        -ServiceSnapshot $partial `
+                        -ExecutablePath $Paths.GatewayExecutable `
+                        -ConfigPath $Paths.GatewayConfigPath `
+                        -LogDirectory $Paths.GatewayLogDirectory)) {
+                    Remove-InstallerCreatedGatewayServiceRegistration -Paths $Paths
+                }
+            } catch {
+                # Leave an unverified service in place rather than deleting a
+                # service whose ownership cannot be established.
+            }
+        }
+        throw
+    }
+
+    return $created
+}
+
+function Get-ProcessSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$ProcessId
+    )
+
+    if ($ProcessId -le 0) {
+        return $null
+    }
+
+    try {
+        $process = Get-WmiObject -Class Win32_Process -Filter ("ProcessId={0}" -f $ProcessId) -ErrorAction Stop
+    } catch {
+        throw "Unable to inspect process ${ProcessId}: $($_.Exception.Message)"
+    }
+    if ($null -eq $process) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        ProcessId      = [int]$process.ProcessId
+        ExecutablePath = [string]$process.ExecutablePath
+        CommandLine    = [string]$process.CommandLine
+    }
+}
+
+function Get-TcpListenerSnapshots {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Port
+    )
+
+    try {
+        $listeners = @(
+            Get-NetTCPConnection -State Listen -ErrorAction Stop |
+                Where-Object { [int]$_.LocalPort -eq $Port }
+        )
+    } catch {
+        throw "Unable to inspect TCP port $Port listeners: $($_.Exception.Message)"
+    }
+
+    return @($listeners | ForEach-Object {
+            [pscustomobject]@{
+                LocalAddress  = [string]$_.LocalAddress
+                LocalPort     = [int]$_.LocalPort
+                OwningProcess = [int]$_.OwningProcess
+            }
+        })
+}
+
+function Test-TcpPortFree {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Port
+    )
+
+    return @(Get-TcpListenerSnapshots -Port $Port).Count -eq 0
+}
+
+function Wait-TcpPortFree {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$Port,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        if (Test-TcpPortFree -Port $Port) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    $owners = @(Get-TcpListenerSnapshots -Port $Port | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
+    throw "TCP port $Port remains in use by process ID(s): $($owners -join ', ')."
+}
+
+function Assert-GatewayPortAvailable {
+    param(
+        [Parameter(Mandatory = $false)]
+        [int]$Port = $script:GatewayPort
+    )
+
+    $listeners = @(Get-TcpListenerSnapshots -Port $Port)
+    if ($listeners.Count -gt 0) {
+        $owners = @($listeners | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
+        throw "TCP port $Port is already owned by process ID(s): $($owners -join ', ')."
+    }
+    return $true
+}
+
+function Assert-GatewayListenerOwnership {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [psobject]$ServiceSnapshot
+    )
+
+    if ($null -eq $ServiceSnapshot) {
+        $ServiceSnapshot = Get-ServiceSnapshot -Name $script:GatewayServiceName
+    }
+    if ($null -eq $ServiceSnapshot -or $ServiceSnapshot.State -ne 'Running' -or
+        [int]$ServiceSnapshot.ProcessId -le 0) {
+        throw "The installer-owned OPC DA gateway service is not running with a valid process ID."
+    }
+
+    $listeners = @(Get-TcpListenerSnapshots -Port $script:GatewayPort)
+    if ($listeners.Count -eq 0) {
+        throw "The installer-owned OPC DA gateway is not listening on TCP port $script:GatewayPort."
+    }
+    if (-not ($listeners | Where-Object { $_.LocalAddress -eq '0.0.0.0' })) {
+        throw "The installer-owned OPC DA gateway is not listening on 0.0.0.0:$script:GatewayPort."
+    }
+    $unexpected = @($listeners | Where-Object { $_.OwningProcess -ne [int]$ServiceSnapshot.ProcessId })
+    if ($unexpected.Count -gt 0) {
+        $owners = @($unexpected | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
+        throw "TCP port $script:GatewayPort has an unexpected listener owner: $($owners -join ', ')."
+    }
+
+    $process = Get-ProcessSnapshot -ProcessId ([int]$ServiceSnapshot.ProcessId)
+    if ($null -eq $process) {
+        throw "The OPC DA gateway service process $($ServiceSnapshot.ProcessId) disappeared during validation."
+    }
+    $actualPath = Get-ComparableAbsolutePath -Path ([string]$process.ExecutablePath)
+    $expectedPath = Get-ComparableAbsolutePath -Path $Paths.GatewayExecutable
+    if ($null -eq $actualPath -or $actualPath -ne $expectedPath) {
+        throw "TCP port $script:GatewayPort is owned by unexpected executable '$($process.ExecutablePath)'."
+    }
+
+    return [pscustomobject]@{
+        Process   = $process
+        Listeners = $listeners
+    }
+}
+
+function Wait-GatewayListenerOwnership {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastError = 'the listener has not appeared'
+    do {
+        try {
+            $service = Get-ServiceSnapshot -Name $script:GatewayServiceName
+            return Assert-GatewayListenerOwnership -Paths $Paths -ServiceSnapshot $service
+        } catch {
+            $lastError = $_.Exception.Message
+            Start-Sleep -Milliseconds 250
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "The OPC DA gateway listener did not become valid within $TimeoutSeconds seconds: $lastError"
+}
+
+function Start-InstallerGatewayService {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 30
+    )
+
+    $service = Start-ServiceByName -Name $script:GatewayServiceName -TimeoutSeconds $TimeoutSeconds
+    Wait-GatewayListenerOwnership -Paths $Paths -TimeoutSeconds $TimeoutSeconds | Out-Null
+    return $service
+}
+
+function Stop-InstallerGatewayService {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 30
+    )
+
+    $snapshot = Get-ServiceSnapshot -Name $script:GatewayServiceName
+    if ($null -eq $snapshot) {
+        Wait-TcpPortFree -Port $script:GatewayPort -TimeoutSeconds $TimeoutSeconds
+        return $null
+    }
+    if (-not (Test-OwnedGatewayServiceSnapshot `
+            -ServiceSnapshot $snapshot `
+            -ExecutablePath $Paths.GatewayExecutable `
+            -ConfigPath $Paths.GatewayConfigPath `
+            -LogDirectory $Paths.GatewayLogDirectory)) {
+        throw "The service '$script:GatewayServiceName' no longer matches the installer-owned definition."
+    }
+
+    $verifiedProcessId = [int]$snapshot.ProcessId
+    if ($snapshot.State -ne 'Stopped') {
+        Stop-ServiceByName -Name $script:GatewayServiceName -TimeoutSeconds $TimeoutSeconds | Out-Null
+    }
+
+    $portFree = $false
+    try {
+        Wait-TcpPortFree -Port $script:GatewayPort -TimeoutSeconds 5
+        $portFree = $true
+    } catch {
+        $listeners = @(Get-TcpListenerSnapshots -Port $script:GatewayPort)
+        if ($verifiedProcessId -le 0 -or
+            @($listeners | Where-Object { $_.OwningProcess -ne $verifiedProcessId }).Count -gt 0) {
+            throw
+        }
+    }
+
+    $process = if ($verifiedProcessId -gt 0) {
+        Get-ProcessSnapshot -ProcessId $verifiedProcessId
+    } else {
+        $null
+    }
+    if ($null -ne $process) {
+        if ((Get-ComparableAbsolutePath -Path $process.ExecutablePath) -ne
+            (Get-ComparableAbsolutePath -Path $Paths.GatewayExecutable)) {
+            throw "The previously verified gateway PID $verifiedProcessId now belongs to an unexpected executable."
+        }
+
+        Stop-Process -Id $verifiedProcessId -Force -ErrorAction Stop
+    }
+    if (-not $portFree -or $null -ne $process) {
+        Wait-TcpPortFree -Port $script:GatewayPort -TimeoutSeconds $TimeoutSeconds
+    }
+    return $snapshot
+}
+
+function Invoke-GatewaySmokeCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutMilliseconds = 30000
+    )
+
+    if (-not (Test-Path -LiteralPath $Paths.CliExecutable -PathType Leaf)) {
+        throw "Cannot smoke-test the OPC DA gateway because the BHTune CLI is missing: $($Paths.CliExecutable)"
+    }
+
+    $result = Invoke-CapturedProcess `
+        -FilePath $Paths.CliExecutable `
+        -Arguments 'opc --output json gateway-info --bridge-host 127.0.0.1:7600' `
+        -TimeoutMilliseconds $TimeoutMilliseconds
+    if ($result.ExitCode -ne 0) {
+        throw "The OPC DA gateway smoke check failed with exit code $($result.ExitCode): $($result.StdOut) $($result.StdErr)"
+    }
+
+    $contract = Assert-GatewayReleaseContract -ContractPath $Paths.GatewayReleasePath
+    return Assert-GatewayInfoPayload -Json $result.StdOut -Contract $contract
+}
+
+function Assert-GatewayInfoPayload {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Json,
+
+        [Parameter(Mandatory = $true)]
+        [psobject]$Contract
+    )
+
+    try {
+        $payload = $Json | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "The OPC DA gateway smoke check did not return valid JSON: $($_.Exception.Message)"
+    }
+    if ([string]$payload.application_version -cne [string]$Contract.version) {
+        throw "The running OPC DA gateway reports version '$($payload.application_version)' instead of '$($Contract.version)'."
+    }
+    if ([int]$payload.compatibility_schema_version -ne 1) {
+        throw "The running OPC DA gateway reports unsupported compatibility schema '$($payload.compatibility_schema_version)'."
+    }
+    if ($null -eq $payload.PSObject.Properties['features']) {
+        throw 'The OPC DA gateway smoke check JSON did not contain protocol features.'
+    }
+
+    $expectedProtocols = @(
+        [pscustomobject]@{
+            Name    = 'core'
+            Version = [int]$Contract.compatibility.core_protocol
+        },
+        [pscustomobject]@{
+            Name    = 'namespace'
+            Version = [int]$Contract.compatibility.namespace_protocol
+        },
+        [pscustomobject]@{
+            Name    = 'indexed_search'
+            Version = [int]$Contract.compatibility.indexed_search_protocol
+        }
+    )
+    foreach ($expected in $expectedProtocols) {
+        $matches = @($payload.features | Where-Object { [string]$_.feature -ceq $expected.Name })
+        if ($matches.Count -ne 1) {
+            throw "The OPC DA gateway smoke check expected exactly one '$($expected.Name)' protocol feature."
+        }
+        $minimum = [int]$matches[0].min_version
+        $maximum = [int]$matches[0].max_version
+        if ($minimum -lt 1 -or $maximum -lt $minimum -or
+            $expected.Version -lt $minimum -or $expected.Version -gt $maximum) {
+            throw "The running OPC DA gateway does not support required $($expected.Name) protocol version $($expected.Version)."
+        }
+    }
+
+    return $payload
+}
+
+function Remove-InstallerGatewayService {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$AllowMissing
+    )
+
+    $existing = Get-ServiceSnapshot -Name $script:GatewayServiceName
+    if ($null -eq $existing) {
+        if ($AllowMissing) {
+            return
+        }
+        throw "The installer-owned OPC DA gateway service is missing."
+    }
+    if (-not (Test-OwnedGatewayServiceSnapshot `
+            -ServiceSnapshot $existing `
+            -ExecutablePath $Paths.GatewayExecutable `
+            -ConfigPath $Paths.GatewayConfigPath `
+            -LogDirectory $Paths.GatewayLogDirectory)) {
+        throw "The service '$script:GatewayServiceName' no longer matches the installer-owned definition."
+    }
+    Stop-InstallerGatewayService -Paths $Paths | Out-Null
+    if (-not (Test-Path -LiteralPath $Paths.GatewayExecutable -PathType Leaf)) {
+        throw "Cannot unregister the OPC DA gateway because its installer-owned executable is missing."
+    }
+
+    $result = Invoke-CapturedProcess `
+        -FilePath $Paths.GatewayExecutable `
+        -Arguments 'uninstall' `
+        -TimeoutMilliseconds 30000
+    if ($result.ExitCode -ne 0) {
+        throw "The OPC DA gateway service uninstaller failed with exit code $($result.ExitCode): $($result.StdOut) $($result.StdErr)"
+    }
+    Wait-ServiceRegistrationGone -Name $script:GatewayServiceName
+}
+
 function Remove-ServiceByName {
     param(
         [Parameter(Mandatory = $true)]
@@ -1846,14 +2973,44 @@ function Wait-ServiceState {
     throw "The service '$Name' did not reach state '$State' within $TimeoutSeconds seconds."
 }
 
+function Start-ServiceByName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 30
+    )
+
+    Start-Service -Name $Name -ErrorAction Stop
+    return Wait-ServiceState -Name $Name -State Running -TimeoutSeconds $TimeoutSeconds
+}
+
+function Stop-ServiceByName {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 30
+    )
+
+    $snapshot = Get-ServiceSnapshot -Name $Name
+    if ($null -eq $snapshot -or $snapshot.State -eq 'Stopped') {
+        return $snapshot
+    }
+
+    Stop-Service -Name $Name -Force -ErrorAction Stop
+    return Wait-ServiceState -Name $Name -State Stopped -TimeoutSeconds $TimeoutSeconds
+}
+
 function Start-InstallerService {
     param(
         [Parameter(Mandatory = $false)]
         [int]$TimeoutSeconds = 30
     )
 
-    Start-Service -Name $script:InstallerServiceName -ErrorAction Stop
-    return Wait-ServiceState -Name $script:InstallerServiceName -State Running -TimeoutSeconds $TimeoutSeconds
+    return Start-ServiceByName -Name $script:InstallerServiceName -TimeoutSeconds $TimeoutSeconds
 }
 
 function Stop-InstallerService {
@@ -1862,13 +3019,7 @@ function Stop-InstallerService {
         [int]$TimeoutSeconds = 30
     )
 
-    $snapshot = Get-ServiceSnapshot -Name $script:InstallerServiceName
-    if ($null -eq $snapshot -or $snapshot.State -eq 'Stopped') {
-        return $snapshot
-    }
-
-    Stop-Service -Name $script:InstallerServiceName -Force -ErrorAction Stop
-    return Wait-ServiceState -Name $script:InstallerServiceName -State Stopped -TimeoutSeconds $TimeoutSeconds
+    return Stop-ServiceByName -Name $script:InstallerServiceName -TimeoutSeconds $TimeoutSeconds
 }
 
 function Restore-ServiceSnapshot {
@@ -1903,6 +3054,53 @@ function Restore-ServiceSnapshot {
         Start-InstallerService | Out-Null
     } else {
         Wait-ServiceState -Name $script:InstallerServiceName -State Stopped | Out-Null
+    }
+}
+
+function Restore-GatewayServiceSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [psobject]$Snapshot
+    )
+
+    $current = Get-ServiceSnapshot -Name $script:GatewayServiceName
+    if ($null -ne $current) {
+        if (-not (Test-OwnedGatewayServiceSnapshot `
+                -ServiceSnapshot $current `
+                -ExecutablePath $Paths.GatewayExecutable `
+                -ConfigPath $Paths.GatewayConfigPath `
+                -LogDirectory $Paths.GatewayLogDirectory)) {
+            throw "Cannot replace service '$script:GatewayServiceName' during rollback because its definition is no longer installer-owned."
+        }
+        Remove-InstallerGatewayService -Paths $Paths
+    }
+
+    if ($null -eq $Snapshot -or -not $Snapshot.Exists) {
+        return
+    }
+    if (-not (Test-LocalSystemAccount -Account $Snapshot.StartName)) {
+        throw "Cannot restore service '$script:GatewayServiceName' without a supported LocalSystem account."
+    }
+    $startMode = switch ($Snapshot.StartMode) {
+        'Auto' { 'Automatic' }
+        'Disabled' { 'Disabled' }
+        default { 'Manual' }
+    }
+    New-LocalSystemService `
+        -Name $script:GatewayServiceName `
+        -BinaryPathName $Snapshot.PathName `
+        -DisplayName $Snapshot.DisplayName `
+        -StartupType $startMode `
+        -Description $Snapshot.Description
+
+    if ($Snapshot.State -eq 'Running') {
+        Start-InstallerGatewayService -Paths $Paths | Out-Null
+    } else {
+        Wait-ServiceState -Name $script:GatewayServiceName -State Stopped | Out-Null
+        Wait-TcpPortFree -Port $script:GatewayPort
     }
 }
 
@@ -1954,7 +3152,22 @@ function Set-InstallerAcls {
         [bool]$InstallerStateRootCreated = $false,
 
         [Parameter(Mandatory = $false)]
-        [bool]$ConfigCreated = $false
+        [bool]$ConfigCreated = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$ManageGateway = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$GatewayProgramDataRootCreated = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$GatewayDataDirectoryCreated = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$GatewayLogDirectoryCreated = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$GatewayConfigCreated = $false
     )
 
     foreach ($directory in @($Paths.InstallRoot, $Paths.DatabaseDirectory, $Paths.LogDirectory, $Paths.InstallerStateRoot)) {
@@ -2001,6 +3214,37 @@ function Set-InstallerAcls {
 
     if ($ConfigCreated -and (Test-Path -LiteralPath $Paths.ConfigPath -PathType Leaf)) {
         Set-InstallerAclPath -Path $Paths.ConfigPath -LocalServiceRights 'M' -Directory $false
+    }
+
+    if ($ManageGateway) {
+        if ($GatewayProgramDataRootCreated) {
+            Set-InstallerAclPath -Path $Paths.GatewayProgramDataRoot -LocalServiceRights $null -Directory $true
+        }
+        if ($GatewayDataDirectoryCreated) {
+            Set-InstallerAclPath -Path $Paths.GatewayDataDirectory -LocalServiceRights $null -Directory $true
+        }
+        if ($GatewayLogDirectoryCreated) {
+            Set-InstallerAclPath -Path $Paths.GatewayLogDirectory -LocalServiceRights $null -Directory $true
+        }
+        if ($GatewayConfigCreated -and (Test-Path -LiteralPath $Paths.GatewayConfigPath -PathType Leaf)) {
+            Set-InstallerAclPath -Path $Paths.GatewayConfigPath -LocalServiceRights $null -Directory $false
+        }
+
+        foreach ($path in @(
+                $Paths.GatewayInstallRoot,
+                $Paths.GatewayExecutable,
+                $Paths.GatewayReleasePath,
+                $Paths.GatewayProvenancePath,
+                $Paths.GatewayLicensePath,
+                $Paths.GatewayNoticePath
+            )) {
+            if (Test-Path -LiteralPath $path) {
+                Set-InstallerAclPath `
+                    -Path $path `
+                    -LocalServiceRights $null `
+                    -Directory (Test-Path -LiteralPath $path -PathType Container)
+            }
+        }
     }
 }
 
