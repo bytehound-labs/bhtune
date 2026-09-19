@@ -50,11 +50,11 @@ Pre-release, but functional: the CLI and web GUI both run a complete MRFT tune e
 against the built-in simulator with no setup at all, or against a real OPC DA loop via
 [`opcda-bridge`](https://github.com/bytehound-labs/opcda-bridge) — including calculating PID
 constants, writing them back with confirmation and rollback, and recording full run history.
-See [Getting started](#getting-started) below to try it. No versioned release or prebuilt
-binaries exist yet (see [Installation](#installation)). One captured golden trace validates
-the MRFT port end to end; additional legacy trace capture is intentionally deferred. The guarded
-release state machine is implemented but remains fail-closed until its prerelease evidence and
-explicit activation gates are complete; see the
+See [Getting started](#getting-started) below to try it. No stable release has been published
+yet (see [Installation](#installation)); prerelease binaries are validation-only. One captured
+golden trace validates the MRFT port end to end; additional legacy trace capture is intentionally
+deferred. The guarded release state machine is implemented but remains fail-closed until its
+prerelease evidence and explicit activation gates are complete; see the
 [release automation guide](docs/guides/releasing.md).
 
 The browser also supports a restricted **Demo mode** for public simulator deployments. It

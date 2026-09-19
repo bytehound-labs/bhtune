@@ -201,7 +201,7 @@ jobs:
           deb="$(find dist -maxdepth 1 -name '*.deb' -print -quit)"
           test -n "$deb"
           sudo apt-get update
-          sudo apt-get install -y "$deb"
+          sudo apt-get install -y "./$deb"
           command -v bhtune
           bhtune --version | grep -F "$version"
 
