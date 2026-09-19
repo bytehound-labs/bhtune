@@ -1773,6 +1773,152 @@ function Invoke-CapturedProcess {
     }
 }
 
+function ConvertFrom-ScQueryExOutput {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        [AllowEmptyString()]
+        [string]$Output = ''
+    )
+
+    $stateMatch = [regex]::Match(
+        $Output,
+        '(?im)^\s*STATE\s*:\s*(?<code>\d+)\s+(?<name>[A-Z_]+)'
+    )
+    if (-not $stateMatch.Success) {
+        throw "sc.exe queryex did not return a service state for '$Name'. Output: $Output"
+    }
+
+    $state = switch ([int]$stateMatch.Groups['code'].Value) {
+        1 { 'Stopped' }
+        2 { 'StartPending' }
+        3 { 'StopPending' }
+        4 { 'Running' }
+        5 { 'ContinuePending' }
+        6 { 'PausePending' }
+        7 { 'Paused' }
+        default { $stateMatch.Groups['name'].Value }
+    }
+
+    $parseScNumber = {
+        param([string]$Value)
+        if ($Value.StartsWith('0x', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return [Convert]::ToInt32($Value.Substring(2), 16)
+        }
+        return [int]$Value
+    }
+
+    $processId = 0
+    $processMatch = [regex]::Match($Output, '(?im)^\s*PID\s*:\s*(?<value>0x[0-9a-f]+|\d+)')
+    if ($processMatch.Success) {
+        $processId = & $parseScNumber $processMatch.Groups['value'].Value
+    }
+
+    $win32ExitCode = 0
+    $win32Match = [regex]::Match($Output, '(?im)^\s*WIN32_EXIT_CODE\s*:\s*(?<value>0x[0-9a-f]+|\d+)')
+    if ($win32Match.Success) {
+        $win32ExitCode = & $parseScNumber $win32Match.Groups['value'].Value
+    }
+
+    $serviceExitCode = 0
+    $serviceMatch = [regex]::Match($Output, '(?im)^\s*SERVICE_EXIT_CODE\s*:\s*(?<value>0x[0-9a-f]+|\d+)')
+    if ($serviceMatch.Success) {
+        $serviceExitCode = & $parseScNumber $serviceMatch.Groups['value'].Value
+    }
+
+    $checkpoint = 0
+    $checkpointMatch = [regex]::Match($Output, '(?im)^\s*CHECKPOINT\s*:\s*(?<value>0x[0-9a-f]+|\d+)')
+    if ($checkpointMatch.Success) {
+        $checkpoint = & $parseScNumber $checkpointMatch.Groups['value'].Value
+    }
+
+    $waitHint = 0
+    $waitHintMatch = [regex]::Match($Output, '(?im)^\s*WAIT_HINT\s*:\s*(?<value>0x[0-9a-f]+|\d+)')
+    if ($waitHintMatch.Success) {
+        $waitHint = & $parseScNumber $waitHintMatch.Groups['value'].Value
+    }
+
+    return [pscustomobject]@{
+        Exists           = $true
+        Name             = $Name
+        State            = $state
+        ProcessId        = $processId
+        Win32ExitCode    = $win32ExitCode
+        ServiceExitCode  = $serviceExitCode
+        Checkpoint       = $checkpoint
+        WaitHint         = $waitHint
+    }
+}
+
+function Get-ServiceControlStatus {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutMilliseconds = 5000
+    )
+
+    $scPath = Join-Path $env:SystemRoot 'System32\sc.exe'
+    if (-not (Test-Path -LiteralPath $scPath -PathType Leaf)) {
+        throw 'The Windows Service Control Manager command (sc.exe) is unavailable.'
+    }
+
+    Write-InstallerTrace `
+        -Stage 'service.state.query' `
+        -Detail ("name={0}; timeout_ms={1}" -f $Name, $TimeoutMilliseconds)
+    $result = Invoke-CapturedProcess `
+        -FilePath $scPath `
+        -Arguments ('queryex "{0}"' -f $Name) `
+        -TimeoutMilliseconds $TimeoutMilliseconds
+    $output = [string]::Join("`n", @($result.StdOut, $result.StdErr))
+    if ($result.ExitCode -eq 1060) {
+        return $null
+    }
+    if ($result.ExitCode -ne 0) {
+        throw "sc.exe queryex $Name failed with exit code $($result.ExitCode). $output"
+    }
+
+    return ConvertFrom-ScQueryExOutput -Name $Name -Output $output
+}
+
+function Invoke-BoundedServiceControlCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('start', 'stop')]
+        [string]$Command,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutMilliseconds = 15000
+    )
+
+    $scPath = Join-Path $env:SystemRoot 'System32\sc.exe'
+    if (-not (Test-Path -LiteralPath $scPath -PathType Leaf)) {
+        throw 'The Windows Service Control Manager command (sc.exe) is unavailable.'
+    }
+
+    $result = Invoke-CapturedProcess `
+        -FilePath $scPath `
+        -Arguments ('{0} "{1}"' -f $Command, $Name) `
+        -TimeoutMilliseconds $TimeoutMilliseconds
+    $allowedExitCodes = if ($Command -eq 'start') {
+        @(0, 1056)
+    } else {
+        @(0, 1062)
+    }
+    if ($result.ExitCode -notin $allowedExitCodes) {
+        $output = [string]::Join("`n", @($result.StdOut, $result.StdErr))
+        throw "sc.exe $Command $Name failed with exit code $($result.ExitCode). $output"
+    }
+
+    return $result
+}
+
 function Get-VersionFromProcessOutput {
     param(
         [Parameter(Mandatory = $false)]
@@ -2959,17 +3105,62 @@ function Wait-ServiceState {
     )
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $lastError = $null
     do {
-        $snapshot = Get-ServiceSnapshot -Name $Name
+        if ([DateTime]::UtcNow -ge $deadline) {
+            break
+        }
+        $remainingMilliseconds = [int][Math]::Max(
+            1000,
+            [Math]::Min(5000, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        )
+        try {
+            $snapshot = Get-ServiceControlStatus `
+                -Name $Name `
+                -TimeoutMilliseconds $remainingMilliseconds
+            $lastError = $null
+        } catch {
+            $lastError = $_.Exception
+            Write-InstallerTrace `
+                -Stage 'service.state.retry' `
+                -Detail ("name={0}; target={1}; error={2}" -f $Name, $State, $lastError.Message)
+            Start-Sleep -Milliseconds 250
+            continue
+        }
         if ($null -eq $snapshot) {
             throw "The service '$Name' disappeared while waiting for state '$State'."
         }
+        Write-InstallerTrace `
+            -Stage 'service.state.result' `
+            -Detail ("name={0}; target={1}; actual={2}; pid={3}; win32_exit={4}; service_exit={5}; checkpoint={6}; wait_hint={7}" -f
+                $Name,
+                $State,
+                $snapshot.State,
+                $snapshot.ProcessId,
+                $snapshot.Win32ExitCode,
+                $snapshot.ServiceExitCode,
+                $snapshot.Checkpoint,
+                $snapshot.WaitHint)
         if ($snapshot.State -eq $State) {
             return $snapshot
+        }
+        if ($snapshot.State -eq 'Stopped' -and
+            ($snapshot.Win32ExitCode -ne 0 -or $snapshot.ServiceExitCode -ne 0)) {
+            throw (
+                "The service '{0}' stopped while waiting for state '{1}' " +
+                "(Win32ExitCode={2}, ServiceExitCode={3})." -f
+                $Name,
+                $State,
+                $snapshot.Win32ExitCode,
+                $snapshot.ServiceExitCode
+            )
         }
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $deadline)
 
+    if ($null -ne $lastError) {
+        throw "The service '$Name' did not reach state '$State' within $TimeoutSeconds seconds. Last query error: $($lastError.Message)"
+    }
     throw "The service '$Name' did not reach state '$State' within $TimeoutSeconds seconds."
 }
 
@@ -2982,7 +3173,18 @@ function Start-ServiceByName {
         [int]$TimeoutSeconds = 30
     )
 
-    Start-Service -Name $Name -ErrorAction Stop
+    $current = Get-ServiceControlStatus -Name $Name
+    if ($null -eq $current) {
+        throw "The service '$Name' is not registered."
+    }
+    if ($current.State -ne 'Running') {
+        Write-InstallerTrace -Stage 'service.start.begin' -Detail $Name
+        Invoke-BoundedServiceControlCommand `
+            -Command 'start' `
+            -Name $Name `
+            -TimeoutMilliseconds ([Math]::Max(1000, $TimeoutSeconds * 1000)) | Out-Null
+        Write-InstallerTrace -Stage 'service.start.requested' -Detail $Name
+    }
     return Wait-ServiceState -Name $Name -State Running -TimeoutSeconds $TimeoutSeconds
 }
 
@@ -3000,7 +3202,12 @@ function Stop-ServiceByName {
         return $snapshot
     }
 
-    Stop-Service -Name $Name -Force -ErrorAction Stop
+    Write-InstallerTrace -Stage 'service.stop.begin' -Detail $Name
+    Invoke-BoundedServiceControlCommand `
+        -Command 'stop' `
+        -Name $Name `
+        -TimeoutMilliseconds ([Math]::Max(1000, $TimeoutSeconds * 1000)) | Out-Null
+    Write-InstallerTrace -Stage 'service.stop.requested' -Detail $Name
     return Wait-ServiceState -Name $Name -State Stopped -TimeoutSeconds $TimeoutSeconds
 }
 

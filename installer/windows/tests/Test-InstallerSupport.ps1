@@ -358,6 +358,21 @@ try {
     Assert-Equal -Actual (Get-VersionFromProcessOutput -Output 'bhtune-server v3.2.1') -Expected '3.2.1' -Message 'server process version output is parsed'
     Assert-Equal -Actual (Get-VersionFromProcessOutput -Output 'opcda-bridge-gateway 0.5.9') -Expected '0.5.9' -Message 'gateway process version output is parsed'
     Assert-Null -Actual (Get-VersionFromProcessOutput -Output 'warning: bhtune 3.2.1 payload') -Message 'unstructured version output is rejected'
+    $scRunning = ConvertFrom-ScQueryExOutput -Name 'BhtuneServer' -Output @'
+SERVICE_NAME: BhtuneServer
+        STATE              : 4  RUNNING
+                                (STOPPABLE, NOT_PAUSABLE, ACCEPTS_SHUTDOWN)
+        WIN32_EXIT_CODE    : 0  (0x0)
+        SERVICE_EXIT_CODE  : 0  (0x0)
+        CHECKPOINT         : 0x2A
+        WAIT_HINT          : 0x10
+        PID                : 4242
+'@
+    Assert-Equal -Actual $scRunning.State -Expected 'Running' -Message 'sc.exe running state is parsed'
+    Assert-Equal -Actual $scRunning.ProcessId -Expected 4242 -Message 'sc.exe service PID is parsed'
+    Assert-Equal -Actual $scRunning.Win32ExitCode -Expected 0 -Message 'sc.exe Win32 exit code is parsed'
+    Assert-Equal -Actual $scRunning.Checkpoint -Expected 42 -Message 'sc.exe hexadecimal checkpoint is parsed'
+    Assert-Equal -Actual $scRunning.WaitHint -Expected 16 -Message 'sc.exe hexadecimal wait hint is parsed'
 
     $largeOutputScript = Join-Path $script:WorkRoot 'large-output.ps1'
     Write-TestFile -Path $largeOutputScript -Content @'
