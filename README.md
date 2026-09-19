@@ -418,11 +418,12 @@ pinned application version and required core, namespace, and indexed-search prot
 without requiring OPCEnum or a registered OPC DA server. Actual OPC server discovery and tag
 reads remain separate target-host acceptance checks. A failed upgrade also requires the restored
 services to pass their health and gateway compatibility checks before rollback is reported
-successful. Fatal silent-mode failures return a nonzero exit code rather than waiting for a
-desktop dialog. An interrupted installer run is validated and safely recovered, or refused
-without guessing, when the installer is invoked again. Windows uninstall uses a guarded two-pass
-cleanup, removes only marker-proven services and Program Files payloads, and preserves the
-complete ProgramData tree, including
+successful. CI allows the complete SYSTEM-context lifecycle matrix up to one hour while retaining
+the two-minute bound on each individual installer or uninstaller process. Fatal silent-mode
+failures return a nonzero exit code rather than waiting for a desktop dialog. An interrupted
+installer run is validated and safely recovered, or refused without guessing, when the installer
+is invoked again. Windows uninstall uses a guarded two-pass cleanup, removes only marker-proven
+services and Program Files payloads, and preserves the complete ProgramData tree, including
 gateway configuration, index state, logs, and installer recovery data. A genuinely empty clean
 install has no rollback backup until there is existing data to protect. It is not attached to
 a public release until the first stable release contract is activated. The

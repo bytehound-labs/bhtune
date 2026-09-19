@@ -11,7 +11,7 @@ param(
 
     [int]$TimeoutSeconds = 30,
 
-    [int]$OverallTimeoutSeconds = 1800,
+    [int]$OverallTimeoutSeconds = 3600,
 
     [switch]$CustomDbBackupConfirmed,
 
@@ -785,11 +785,13 @@ try {
     # Exercise a real Windows SCM rollback while BHTune uses an external
     # database. The gateway starts transiently, the injected smoke failure
     # occurs, and the verified prior stopped state plus ProgramData return.
+    Write-DiagnosticLog 'SCENARIO_BEGIN name=gateway-smoke-failure-rollback'
     $externalRoot = Join-Path $env:ProgramData 'ByteHound\bhtune-installer-diagnostic-external'
     Assert-Diagnostic -Condition (-not (Test-Path -LiteralPath $externalRoot)) -Message "The external-database diagnostic root already exists: $externalRoot"
     New-Item -ItemType Directory -Path $externalRoot -Force | Out-Null
     $externalDatabase = Join-Path $externalRoot 'bhtune-external.db'
     Stop-InstallerService | Out-Null
+    Write-DiagnosticLog 'ROLLBACK_PREP_BHTUNE_STOPPED=True'
     Assert-Diagnostic -Condition (Test-Path -LiteralPath $paths.DatabasePath -PathType Leaf) -Message 'The managed database was not created before the external-database rollback scenario.'
     Copy-Item -LiteralPath $paths.DatabasePath -Destination $externalDatabase -Force
     $configText = Get-Content -LiteralPath $paths.ConfigPath -Raw
@@ -799,7 +801,9 @@ try {
     Write-TextFile -Path $paths.ConfigPath -Content $updatedConfig
     Start-InstallerService | Out-Null
     Wait-ForHealth -Uri 'http://127.0.0.1:8787/api/health' -Version $ExpectedVersion -Timeout $TimeoutSeconds
+    Write-DiagnosticLog 'ROLLBACK_PREP_EXTERNAL_DATABASE_ACTIVE=True'
     Stop-InstallerGatewayService -Paths $paths | Out-Null
+    Write-DiagnosticLog 'ROLLBACK_PREP_GATEWAY_STOPPED=True'
 
     $rollbackSentinels = @(
         (Join-Path $paths.GatewayProgramDataRoot 'rollback-sentinel.txt'),
@@ -816,7 +820,9 @@ try {
     }
     $rollbackGatewayConfigHash = Get-FileSha256 -Path $paths.GatewayConfigPath
     $rollbackBhtuneConfigHash = Get-FileSha256 -Path $paths.ConfigPath
+    Write-DiagnosticLog 'ROLLBACK_INJECTION_BEGIN=True'
     Invoke-GatewayRollbackDiagnostic -Paths $paths -Version $ExpectedVersion
+    Write-DiagnosticLog 'ROLLBACK_INJECTION_END=True'
     Assert-CoreInstallation -Paths $paths -Version $ExpectedVersion -ExpectedDatabasePath $externalDatabase
     Assert-GatewayInstallation -Paths $paths -ExpectedManaged:$true -ExpectedRunning:$false
     Assert-Diagnostic -Condition ((Get-FileSha256 -Path $paths.ConfigPath) -eq $rollbackBhtuneConfigHash) -Message 'The external-database BHTune configuration was not restored after gateway rollback.'

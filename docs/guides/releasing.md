@@ -102,7 +102,9 @@ diagnostic must cover the gateway-free silent default, explicit gateway installa
 add-on ending stopped, running/stopped managed upgrades, two-service rollback,
 ProgramData-preserving uninstall, unowned service and listener conflicts, a gateway-wide
 version/protocol handshake on a vanilla runner without OPCEnum, and an unchanged Windows
-Firewall fingerprint.
+Firewall fingerprint. The full SYSTEM-context matrix has a one-hour overall budget because it
+performs repeated real SCM install, upgrade, rollback, and uninstall cycles; each installer or
+uninstaller process remains independently capped at two minutes.
 
 Updating the bundled gateway is a reviewed source change, not a release-time lookup:
 

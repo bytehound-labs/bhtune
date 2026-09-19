@@ -67,7 +67,7 @@ jobs:
   build:
     name: Build and validate NSIS installer
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     outputs:
@@ -545,7 +545,8 @@ jobs:
             -InstallerPath $env:INSTALLER_PATH `
             -LogPath $log `
             -ExpectedVersion $env:PACKAGE_VERSION `
-            -TimeoutSeconds 120
+            -TimeoutSeconds 120 `
+            -OverallTimeoutSeconds 3600
           if ($LASTEXITCODE -ne 0) {
             throw "NSIS lifecycle diagnostic failed with exit code $LASTEXITCODE"
           }

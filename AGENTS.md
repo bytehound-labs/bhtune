@@ -3737,8 +3737,10 @@ reparse-point rejection, PowerShell call binding, and large redirected child-pro
 The Windows SYSTEM lifecycle diagnostic covers the silent opt-in boundary, explicit
 installation, opt-out/add-on, stopped/running upgrades, injected two-service rollback,
 ProgramData-preserving uninstall, unowned service/listener refusal, and an unchanged firewall
-fingerprint. Windows CI and controlled read-only Kepware acceptance on `win` remain required
-before this extension is accepted or merged.
+fingerprint. Its one-hour overall budget covers the complete real-SCM matrix while each
+installer or uninstaller process remains capped at two minutes. Windows CI and controlled
+read-only Kepware acceptance on `win` remain required before this extension is accepted or
+merged.
 
 ## `pkg-docker`: the Docker image
 
