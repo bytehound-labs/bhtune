@@ -22,7 +22,10 @@ class ReleaseArtifactTests(unittest.TestCase):
             directory / f"bhtune-{tag}-aarch64-apple-darwin.tar.gz",
             directory / f"bhtune-{tag}-x86_64-pc-windows-msvc.zip",
         ]
-        packages = [directory / "bhtune_0.1.0~rc.1-1_amd64.deb", directory / "bhtune-0.1.0-1.x86_64.rpm"]
+        packages = [
+            directory / "bhtune_0.1.0.rc.1-1_amd64.deb",
+            directory / "bhtune-0.1.0.rc.1-1.x86_64.rpm",
+        ]
         product_assets = [*archives, *packages]
         for index, asset in enumerate(product_assets):
             asset.write_bytes(f"asset-{index}".encode())
@@ -32,7 +35,9 @@ class ReleaseArtifactTests(unittest.TestCase):
                 encoding="utf-8",
             )
             if asset in archives:
-                (directory / f"{asset.name}.sha256").write_text(
+                suffix = ".zip" if asset.name.endswith(".zip") else ".tar.gz"
+                checksum_name = f"{asset.name[:-len(suffix)]}.sha256"
+                (directory / checksum_name).write_text(
                     f"{digest}  {asset.name}\n",
                     encoding="utf-8",
                 )
