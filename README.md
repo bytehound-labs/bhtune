@@ -384,9 +384,27 @@ recovery rules, and release-rate limits.
 
 ### What's still coming
 
-A Windows installer and an AUR package are follow-on distribution channels, not yet built.
-Homebrew remains prepared but inactive; additional registry publication is outside the current
-release policy. See the [roadmap](docs/roadmap.md).
+Once a version tag is pushed, release tooling already in place
+(`.github/workflows/release.yml`, `taiki-e/upload-rust-binary-action`) attaches prebuilt
+Linux/macOS/Windows archives (each bundling both `bhtune` and `bhtune-server`) to the
+[Releases](https://github.com/bytehound-labs/bhtune/releases) page automatically. The separate
+Windows NSIS installer workflow builds and validates
+`bhtune-vX.Y.Z-windows-x86_64-installer.exe` from the exact Windows archive in stable-release
+mode, while arbitrary refs and release candidates remain dry-run-only. Silent installs use the
+same ownership, health, and rollback checks as interactive installs; a failed upgrade also
+requires the restored service to pass its health/version check before rollback is reported
+successful. Fatal silent-mode failures return a nonzero exit code rather than waiting for a
+desktop dialog. An interrupted installer run is validated and safely recovered, or refused
+without guessing, when the installer is invoked again. Windows uninstall uses a guarded
+two-pass cleanup and preserves the complete ProgramData tree, including installer recovery state;
+a genuinely empty clean install has no rollback backup until there is existing data to protect.
+It is not attached to a public release until the first stable release contract is activated. The
+`bhtune-bin` AUR package is a separate follow-on channel and is likewise stable-tag-only.
+Windows uninstall uses a bounded Service Control Manager disappearance wait and a retryable
+finalizer so delayed service deregistration does not remove the ownership journal prematurely;
+ProgramData remains preserved throughout.
+Publishing to [crates.io](https://crates.io), Homebrew, and a few other channels is still an
+open evaluation, not a commitment — see the [roadmap](docs/roadmap.md).
 
 ### Running the server
 

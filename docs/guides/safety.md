@@ -259,6 +259,48 @@ proxy rewrites `Host` or when one external browser origin must be pinned. Reques
 `Origin` remain available for CLI/curl compatibility. This policy does not authenticate users,
 authorize operators, or make an unauthenticated non-loopback deployment safe to expose publicly.
 
+## Packaging and database recovery boundaries
+
+The Windows NSIS installer keeps exactly one verified rollback backup under
+`%ProgramData%\ByteHound\bhtune\` once an installer-managed database exists. A genuinely empty
+clean install has no prior database to protect and therefore has no rollback backup. Automatic
+database backup and rollback cover only the
+installer-managed SQLite database named by the absolute top-level `db` setting in the preserved
+configuration, including its `-wal` and `-shm` companions when present. The installer validates
+that path before stopping the service; it refuses malformed, relative, ambiguous, or external
+database paths by default.
+
+An operator who prepares an existing external database file and independently backs it up can
+explicitly acknowledge that boundary with `/CUSTOM_DB_BACKUP_CONFIRMED=1`. A missing or
+inaccessible external file, or a path that names a directory, fails closed before the installer
+stops the service; the installer does not create external database parents or files. After the
+preflight succeeds, the installer may replace binaries and service state, but the external
+database remains operator-owned: the installer does not claim to have backed it up or to be able
+to roll it back. A failed health/version validation, including validation of the restored service
+after rollback, still requires checking that database and the service manually.
+
+The NSIS-installed service runs as `NT AUTHORITY\LocalService`. An external database therefore
+needs service-account access on both the existing database file and its parent directory, including
+permission to create or update SQLite's `-wal` and `-shm` sidecars. Elevated installer access is
+not evidence that the service can use an operator-owned path; the installer leaves those ACLs
+unchanged and the startup health check is the definitive validation. Grant only the minimum
+access required for the service, and independently back up the database before acknowledging the
+override.
+
+Linux packages preserve `/etc/bhtune` and `/var/lib/bhtune` across upgrades and removal; they do
+not silently delete operator data. Docker deployments have the same boundary through the mounted
+`/var/lib/bhtune` volume. For every packaging path, stop the service before copying or restoring a
+SQLite database and keep the database, `-wal`, and `-shm` files together. Package installers do
+not create firewall rules or widen BHTune's loopback bind. Windows uninstall uses a guarded
+two-pass cleanup: ProgramData, installer recovery state, and operator data remain in place, while
+ownership metadata is removed only after the fixed Program Files tree has been independently
+verified absent.
+
+The Windows installer is not Authenticode-signed. SmartScreen may therefore warn about the
+publisher even when the file is intact. Verify the release checksum and, when available, the
+Sigstore bundle and GitHub provenance separately; those checks establish integrity and build
+provenance, not Windows publisher trust.
+
 The frontend development server is also unauthenticated. It binds all local interfaces so a
 trusted host can use `http://asus:5173`, and proxies browser API requests to the local
 `bhtune-server`; use this development-only path only on the same trusted network.

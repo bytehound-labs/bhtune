@@ -26,6 +26,7 @@ jobs:
       screenshots: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.screenshots == 'true' }}
       package: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.package == 'true' }}
       knip: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.knip == 'true' }}
+      installer: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.installer == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -105,6 +106,24 @@ jobs:
               - 'scripts/**'
               - 'frontend/**'
               - 'website/**'
+            installer:
+              - 'installer/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'LICENSE'
+              - 'README.md'
+              - 'rust-toolchain'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - 'crates/**'
+              - 'frontend/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'packaging/**'
+              - 'scripts/**'
+              - '.github/actions/**'
+              - '.github/workflows/windows-installer.yml'
 
   check:
     needs: changes
@@ -399,6 +418,20 @@ jobs:
       - name: Check for unused files, dependencies, and exports
         run: pnpm run check:dead-code
 
+  installer:
+    name: Windows installer validation
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
+    uses: ./.github/workflows/windows-installer.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      mode: dry-run
+      source_ref: ${{ github.sha }}
+      attest: false
+
   status:
     name: Required validation status
     if: always()
@@ -413,6 +446,7 @@ jobs:
         screenshots,
         website,
         knip,
+        installer,
       ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -430,7 +464,8 @@ jobs:
           needs.changes.outputs.screenshots != 'true' &&
           needs.changes.outputs.website != 'true' &&
           needs.changes.outputs.package != 'true' &&
-          needs.changes.outputs.knip != 'true'
+          needs.changes.outputs.knip != 'true' &&
+          needs.changes.outputs.installer != 'true'
         run: echo "No validation-affecting files changed; heavy validation skipped."
 
       - name: Verify validation results
@@ -449,6 +484,8 @@ jobs:
           PACKAGE_RESULT: ${{ needs.package.result }}
           KNIP_CHANGED: ${{ needs.changes.outputs.knip }}
           KNIP_RESULT: ${{ needs.knip.result }}
+          INSTALLER_CHANGED: ${{ needs.changes.outputs.installer }}
+          INSTALLER_RESULT: ${{ needs.installer.result }}
         run: |
           failed=0
 
@@ -483,6 +520,11 @@ jobs:
 
           if [[ "$KNIP_CHANGED" == "true" && "$KNIP_RESULT" != "success" ]]; then
             echo "Knip dead-code analysis ended with: $KNIP_RESULT"
+            failed=1
+          fi
+
+          if [[ "$INSTALLER_CHANGED" == "true" && "$INSTALLER_RESULT" != "success" ]]; then
+            echo "Windows installer validation ended with: $INSTALLER_RESULT"
             failed=1
           fi
 

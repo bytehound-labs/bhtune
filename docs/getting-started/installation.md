@@ -6,7 +6,9 @@ sidebar_position: 1
 
 BHTune has not made its first tagged release yet — see the
 [Releases](https://github.com/bytehound-labs/bhtune/releases) page for prebuilt binaries once
-one exists. Until then, run the published Docker image or build from source.
+one exists. Until then, run the published Docker image or build from source. The repository also
+contains the Windows NSIS installer workflow and validation sources; a stable release will attach
+the resulting installer beside the matching Windows archive.
 
 ## Run via Docker
 
@@ -142,8 +144,78 @@ starts at boot and restarts automatically without anyone needing to keep a termi
 
 ### Windows
 
-`bhtune-server.exe` registers itself directly with the Service Control Manager (SCM) — no
-separate installer or third-party service wrapper needed:
+#### NSIS installer
+
+A stable Windows release will provide an installer named
+`bhtune-vX.Y.Z-windows-x86_64-installer.exe`. It installs the release payload under
+`%ProgramFiles%\ByteHound\bhtune\`, stores configuration, SQLite data, logs, installer state,
+and one verified rollback backup under `%ProgramData%\ByteHound\bhtune\`, and registers
+`BhtuneServer` as an automatic `NT AUTHORITY\LocalService` service. The registered command line
+contains an absolute `--config` path under ProgramData, so service startup does not depend on the
+interactive user's profile.
+
+The installer starts the service by default and checks
+`http://127.0.0.1:8787/api/health` for both `status: "ok"` and the expected package version.
+It does not create firewall rules or change the OPC DA gateway. Interactive installation keeps
+machine `PATH` and clean-install service startup enabled by default. Silent installation supports:
+
+```text
+/S
+/ADD_TO_PATH=0
+/START_SERVICE=0
+/CUSTOM_DB_BACKUP_CONFIRMED=1
+```
+
+An empty clean install has no prior database to protect, so it does not create a rollback
+backup. Once installer-managed data exists, upgrades retain exactly one verified rollback backup
+under the ProgramData installer state directory; the existing backup is replaced only after the
+new manifest has been verified.
+
+Silent installs use the same ownership, health, and rollback checks as interactive installs; the
+flags only select the optional machine `PATH`, clean-install startup, and custom-database
+acknowledgement behavior. Fatal errors in silent mode return a nonzero installer exit code
+instead of waiting for an interactive error dialog, so scheduled-task and CI callers can detect
+failure without a desktop session.
+
+Upgrades preserve the service's previous running/stopped state, but validate configuration before
+stopping the service. Automatic database backup and rollback apply only when the top-level `db`
+setting resolves to the installer-managed ProgramData database. An external, malformed, relative,
+ambiguous, missing, or inaccessible database path fails closed; the installer does not create an
+external database file or its parent directory. After preparing and independently backing up an
+existing external database, an operator may rerun with `/CUSTOM_DB_BACKUP_CONFIRMED=1`. That
+override permits binary/service upgrade but does not claim to back up or roll back the external
+database. If an upgrade fails, rollback also checks the managed rollback root, restored service
+health, and package version before reporting recovery.
+
+The external database is opened by the installed service as `NT AUTHORITY\LocalService`, not
+by the elevated installer account. The database file's parent directory and the database file
+itself therefore need to grant that account enough access to read and update SQLite state and
+to create or update the `bhtune.db-wal` and `bhtune.db-shm` sidecars. Installer preflight can
+confirm that the file exists and is readable in the installer context, but only the subsequent
+service startup and health check proves that the service account can use the path. A confirmed
+external database that fails that startup check is an operator configuration/ACL problem; the
+installer does not broaden permissions on arbitrary operator-owned paths.
+
+If an installer process is interrupted, the next installer invocation validates the recorded
+transaction journal and either completes the safe recovery or refuses to continue without
+guessing about ownership or data.
+
+Uninstall is a two-pass transaction. The first pass removes the owned service, shortcut,
+registry-facing uninstall state, and exact machine `PATH` entry, then leaves the transaction
+journal and ownership metadata in place while NSIS removes the fixed Program Files tree. A
+guarded finalization pass removes that metadata and the journal only after the tree is verified
+absent; an interrupted or incomplete cleanup therefore remains retryable instead of being
+reported as finished. Service removal uses a bounded SCM disappearance wait with transient
+service-query retries, which allows older Windows versions to complete delayed service
+deregistration without treating a still-pending removal as success. Uninstall removes only
+installer-owned binaries and state, and preserves the entire
+`%ProgramData%\ByteHound\bhtune\` tree, including configuration, databases, logs, and rollback
+backup. There is no automated data-deletion option.
+
+#### Manual archive installation
+
+The release archive is also usable without the installer. `bhtune-server.exe` registers itself
+directly with the Service Control Manager (SCM):
 
 ```powershell
 bhtune-server.exe install    # registers the service (does not start it)
@@ -154,7 +226,8 @@ bhtune-server.exe uninstall  # stops it first if still running, then removes it
 ```
 
 `install` registers a service named `BhtuneServer` ("BHTune Server" in `services.msc`), set to
-start automatically and run as `LocalSystem`.
+start automatically and run as `LocalSystem`. This manual fallback is intentionally distinct from
+the NSIS installer, which uses `LocalService` and an installer-owned ProgramData layout.
 
 **A config/database gotcha worth knowing before you install.** BHTune's default config and
 data paths live under `%APPDATA%` (see [above](#where-bhtune-stores-its-data)), which resolves
