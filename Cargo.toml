@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-rc.3"
 edition = "2024"
 # Floor confirmed by direct test: `cargo check --workspace --all-targets --all-features
 # --locked` fails under rustc 1.88 (sqlx 0.9.0 requires 1.94.0) and succeeds under 1.94.1.
@@ -30,10 +30,10 @@ homepage = "https://github.com/bytehound-labs/bhtune"
 # must have a version requirement specified when packaging"), which would otherwise make
 # every crate depending on another workspace member unpublishable. `bhtune-server` has no
 # entry here since nothing in the workspace depends on it.
-bhtune-core = { path = "crates/bhtune-core", version = "0.1.0" }
-bhtune-driver = { path = "crates/bhtune-driver", version = "0.1.0" }
-bhtune-db = { path = "crates/bhtune-db", version = "0.1.0" }
-bhtune-cli = { path = "crates/bhtune-cli", version = "0.1.0" }
+bhtune-core = { path = "crates/bhtune-core", version = "0.1.0-rc.3" }
+bhtune-driver = { path = "crates/bhtune-driver", version = "0.1.0-rc.3" }
+bhtune-db = { path = "crates/bhtune-db", version = "0.1.0-rc.3" }
+bhtune-cli = { path = "crates/bhtune-cli", version = "0.1.0-rc.3" }
 # Deliberately does NOT enable the "clock"/"now" features: bhtune-core must never be able
 # to call `Utc::now()`, since the MRFT engine's determinism guarantee (see AGENTS.md) is
 # that all timestamps come in as `Tick` data, never read from the wall clock internally.
