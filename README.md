@@ -386,7 +386,9 @@ Linux package definitions are also prepared for the stable release: Debian/Ubunt
 RPM-based `.rpm`, and the Arch `bhtune-bin` package. The AUR generator and validation workflow
 accept only exact stable `vX.Y.Z` tags for publication; prereleases and arbitrary refs are
 validation-only, retain generated metadata and Arch lifecycle evidence as workflow artifacts,
-and the first AUR publication remains a manual post-release action. Until that happens,
+and the first AUR publication remains a manual post-release action. Prerelease RPM metadata uses
+RPM's literal-tilde ordering syntax (for example, `0.1.0-rc.1` is packaged as
+`0.1.0~rc.1`) without changing the application version. Until that happens,
 `bhtune-bin` is not an available AUR package. Debian packages use adaptive shared-library
 dependency discovery and must be built in a Debian-capable environment that provides
 `dpkg-shlibdeps`.

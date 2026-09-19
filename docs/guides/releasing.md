@@ -100,7 +100,9 @@ RC creation and validation.
    runtime checks; the Windows check remains CLI-only. For prerelease RPMs, the workflow maps
    the SemVer prerelease separator to RPM's ordering syntax (for example,
    `0.1.0-rc.1` becomes the RPM version `0.1.0~rc.1`); archives and executables retain the
-   exact `0.1.0-rc.1` version.
+   exact `0.1.0-rc.1` version. The RPM metadata override must preserve the literal tilde;
+   replacing it with a filesystem path produces an invalid package version and fails the
+   release before assets are uploaded.
 6. Retain the evidence before removing the temporary branch. Keep the public RC tag and release
    as the tested reference for the stable release.
 
