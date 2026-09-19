@@ -196,7 +196,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bhtune-cli"
-version = "0.1.0"
+version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "bhtune-core"
-version = "0.1.0"
+version = "0.1.0-rc.2"
 dependencies = [
  "chrono",
  "proptest",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "bhtune-db"
-version = "0.1.0"
+version = "0.1.0-rc.2"
 dependencies = [
  "bhtune-core",
  "chrono",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "bhtune-driver"
-version = "0.1.0"
+version = "0.1.0-rc.2"
 dependencies = [
  "async-trait",
  "bhtune-core",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "bhtune-server"
-version = "0.1.0"
+version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "async-stream",
