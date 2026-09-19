@@ -44,6 +44,11 @@ website/static/generated/web-ui/
 *.db-shm
 *.db-wal
 
+# Windows installer build and acceptance artifacts
+installer-build/
+installer/windows/test-artifacts/
+installer/windows/tests/.work/
+
 # Python (scripts/convert_golden_trace.py)
 __pycache__/
 *.pyc

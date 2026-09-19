@@ -936,7 +936,7 @@ error_message })` even when the driver _rejects_ the write (read-only tag, out o
   because a live PV/MV trend chart is a headline feature (see below); and Playwright E2E against
   a real browser is markedly more reliable in CI than `tauri-driver`/WebDriver for a project with
   a 100%-coverage, golden-master validation posture. Nothing here reduces to "just add Docker" —
-  a plain installer (`pkg-windows-installer`) is the primary distribution artifact precisely
+  a plain NSIS installer (`pkg-windows-installer`) is the primary distribution artifact precisely
   because Docker is frequently banned or unavailable on OT networks; the Docker image
   (`pkg-docker`, done — see "`pkg-docker`: the Docker image" below) is a secondary channel for
   IT-managed Linux hosts, not the deployment path this decision was optimized for.
@@ -3621,7 +3621,8 @@ already-proven alternative doing exactly what this project needs, with far less 
 one action builds the binaries, packages a platform-appropriate archive (`.tar.gz` on
 Unix, `.zip` on Windows), computes checksums, and uploads to the tag's GitHub Release.
 `cargo-dist` additionally generates shell/PowerShell/npm installer scripts and an
-updater — none of which bhtune needs, since the Windows MSI (`pkg-windows-installer`) and
+updater — none of which bhtune needs, since the Windows NSIS installer
+(`pkg-windows-installer`) and
 the AUR package (`pkg-aur`) are the actual installer stories, not a `curl | sh` script.
 Adopting the sibling project's simpler, working tool beats introducing a second,
 heavier one for the same job — directly the kind of cross-project consistency
@@ -3675,7 +3676,7 @@ release automation guide and `release-v1` in "Phases and todos" below.
 
 A multi-stage root `Dockerfile` plus `.github/workflows/docker-publish.yml` publish
 `ghcr.io/bytehound-labs/bhtune`, a ~110 MB image bundling both binaries and the embedded
-SPA. This is deliberately a **secondary** distribution channel: the Windows MSI
+SPA. This is deliberately a **secondary** distribution channel: the Windows NSIS installer
 (`pkg-windows-installer`) remains the primary one, since OT sites frequently prohibit or
 simply lack container runtimes — see the "v1 adapters" bullet above under "Key
 architectural decisions" for the full reasoning. Nothing about shipping a Docker image
@@ -3894,8 +3895,8 @@ named individually, which would drift out of sync with the entire point of gener
 them.
 
 **winget remains out of scope.** It requires PR-ing a manifest into Microsoft's community
-repo on every single release, which only makes sense once `pkg-windows-installer`'s MSI is
-itself stable — revisit then, not before.
+repo on every single release, which only makes sense once `pkg-windows-installer`'s NSIS
+installer is itself stable — revisit then, not before.
 
 ## Validation strategy: golden-master replay
 
@@ -4985,8 +4986,12 @@ servers`/`browse`/`read`) backing the GUI OPC browser, each OPC DA call bounded 
    `release-v1` itself (v0.1.0 — now technically possible via `build-matrix`'s
    `release.yml`, but cutting the actual first tag is a deliberate call left to the project
    owner, not automatic — see "`build-matrix`: the release binary matrix" above), a
-   Windows MSI installer (`pkg-windows-installer`, the primary distribution artifact), and
-   `pkg-aur` (already unblocked — it needs the man pages/completions `docs-generated-cli`
+   Windows NSIS installer (`pkg-windows-installer`, the primary distribution artifact; the
+   installer source and reusable dry-run workflow are implemented, and Windows 11 lifecycle
+   validation is substantially complete, including running-service external-database health
+   validation; remaining acceptance includes the final rollback/database sentinel evidence,
+   Server 2016 validation, and stable-release integration), and `pkg-aur` (already unblocked
+   — it needs the man pages/completions `docs-generated-cli`
    produces plus `build-matrix`'s Linux archive, both done).
 10. **History explorer** (low priority, post-v1, done) — mostly a reader of data earlier
     phases already write, so deliberately scheduled after v1. `history-retention` is done:
