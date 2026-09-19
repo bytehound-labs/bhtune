@@ -18,6 +18,10 @@ param(
 
     [Parameter(Mandatory = $false)]
     [AllowEmptyString()]
+    [string]$GatewayPayloadRoot = '',
+
+    [Parameter(Mandatory = $false)]
+    [AllowEmptyString()]
     [string]$InstallerScriptRoot = '',
 
     [Parameter(Mandatory = $false)]
@@ -39,6 +43,12 @@ param(
     [object]$StartService = '1',
 
     [Parameter(Mandatory = $false)]
+    [object]$InstallGateway = '1',
+
+    [Parameter(Mandatory = $false)]
+    [object]$StartGateway = '1',
+
+    [Parameter(Mandatory = $false)]
     [object]$CustomDbBackupConfirmed = '0',
 
     [Parameter(Mandatory = $false)]
@@ -52,7 +62,7 @@ param(
     [switch]$TestOnly,
 
     [Parameter(Mandatory = $false)]
-    [ValidateSet('None', 'HealthMismatch', 'CommitFailure')]
+    [ValidateSet('None', 'HealthMismatch', 'GatewaySmokeFailure', 'CommitFailure')]
     [string]$FailureInjection = 'None',
 
     [Parameter(Mandatory = $false)]
@@ -86,6 +96,8 @@ if (-not (Test-Path -LiteralPath $helperPath -PathType Leaf)) {
 
 $AddToPath = ConvertTo-InstallerBoolean -Value $AddToPath -Name 'AddToPath'
 $StartService = ConvertTo-InstallerBoolean -Value $StartService -Name 'StartService'
+$InstallGateway = ConvertTo-InstallerBoolean -Value $InstallGateway -Name 'InstallGateway'
+$StartGateway = ConvertTo-InstallerBoolean -Value $StartGateway -Name 'StartGateway'
 $CustomDbBackupConfirmed = ConvertTo-InstallerBoolean -Value $CustomDbBackupConfirmed -Name 'CustomDbBackupConfirmed'
 
 function Get-SnapshotValue {
@@ -386,7 +398,8 @@ function Assert-InstallerOwnershipMarker {
         }
     }
 
-    if ([int](Get-SnapshotValue -Snapshot $Marker.Values -Name 'SchemaVersion') -ne $script:InstallerSchemaVersion) {
+    $schemaVersion = [int](Get-SnapshotValue -Snapshot $Marker.Values -Name 'SchemaVersion')
+    if (-not (Test-SupportedInstallerSchemaVersion -Version $schemaVersion)) {
         throw 'The installer ownership marker has an unsupported schema version.'
     }
     if ([int](Get-SnapshotValue -Snapshot $Marker.Values -Name 'InstallerOwned') -ne 1) {
@@ -415,9 +428,86 @@ function Assert-InstallerOwnershipMarker {
         throw "The installer ownership marker version '$version' does not match the journaled version '$ExpectedVersion'."
     }
 
+    $gatewayState = Get-GatewayMarkerState -Paths $Paths -Marker $Marker
     return [pscustomobject]@{
-        Version     = $version
-        PathManaged = [bool]([int](Get-SnapshotValue -Snapshot $Marker.Values -Name 'PathManaged'))
+        Version        = $version
+        PathManaged    = [bool]([int](Get-SnapshotValue -Snapshot $Marker.Values -Name 'PathManaged'))
+        GatewayManaged = $gatewayState.Managed
+        GatewayVersion = $gatewayState.Version
+        GatewaySha256  = $gatewayState.Sha256
+    }
+}
+
+function Get-GatewayMarkerState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $true)]
+        [psobject]$Marker
+    )
+
+    $schemaVersion = [int](Get-SnapshotValue -Snapshot $Marker.Values -Name 'SchemaVersion')
+    if ($schemaVersion -lt 3) {
+        return [pscustomobject]@{
+            Managed = $false
+            Version = $null
+            Sha256  = $null
+        }
+    }
+
+    foreach ($name in @(
+            'GatewayManaged',
+            'GatewayVersion',
+            'GatewaySha256',
+            'GatewayExecutable',
+            'GatewayConfigPath',
+            'GatewayServiceName',
+            'GatewayPort'
+        )) {
+        if ($null -eq (Get-SnapshotValue -Snapshot $Marker.Values -Name $name)) {
+            throw "The schema-3 installer ownership marker is missing '$name'."
+        }
+    }
+
+    $managedValue = [string](Get-SnapshotValue -Snapshot $Marker.Values -Name 'GatewayManaged')
+    if ($managedValue -ne '0' -and $managedValue -ne '1') {
+        throw 'The installer ownership marker has an invalid GatewayManaged value.'
+    }
+    $managed = $managedValue -eq '1'
+    $version = [string](Get-SnapshotValue -Snapshot $Marker.Values -Name 'GatewayVersion')
+    $sha256 = [string](Get-SnapshotValue -Snapshot $Marker.Values -Name 'GatewaySha256')
+
+    if ((Normalize-PathForComparison -Path ([string](Get-SnapshotValue -Snapshot $Marker.Values -Name 'GatewayExecutable'))) -ne
+        (Normalize-PathForComparison -Path $Paths.GatewayExecutable) -or
+        (Normalize-PathForComparison -Path ([string](Get-SnapshotValue -Snapshot $Marker.Values -Name 'GatewayConfigPath'))) -ne
+        (Normalize-PathForComparison -Path $Paths.GatewayConfigPath) -or
+        [string](Get-SnapshotValue -Snapshot $Marker.Values -Name 'GatewayServiceName') -cne $Paths.GatewayServiceName -or
+        [int](Get-SnapshotValue -Snapshot $Marker.Values -Name 'GatewayPort') -ne [int]$Paths.GatewayPort) {
+        throw 'The installer ownership marker does not describe the fixed OPC DA gateway paths and service.'
+    }
+
+    if (-not $managed) {
+        if (-not [string]::IsNullOrWhiteSpace($version) -or
+            -not [string]::IsNullOrWhiteSpace($sha256)) {
+            throw 'The installer ownership marker records gateway identity while GatewayManaged is disabled.'
+        }
+        return [pscustomobject]@{
+            Managed = $false
+            Version = $null
+            Sha256  = $null
+        }
+    }
+
+    if (-not (Test-StableVersion -Version $version) -or
+        $sha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'The installer ownership marker has invalid gateway version or SHA-256 metadata.'
+    }
+
+    return [pscustomobject]@{
+        Managed = $true
+        Version = ConvertTo-NormalizedVersion -Version $version
+        Sha256  = $sha256
     }
 }
 
@@ -522,7 +612,7 @@ function Read-TransactionJournal {
         $null -eq $journal.PSObject.Properties['Phase']) {
         throw "The installer transaction journal '$path' is incomplete and cannot be recovered safely."
     }
-    if ([int]$journal.SchemaVersion -ne $script:InstallerSchemaVersion) {
+    if (-not (Test-SupportedInstallerSchemaVersion -Version ([int]$journal.SchemaVersion))) {
         throw "The installer transaction journal '$path' has an unsupported schema version."
     }
     Assert-TransactionJournalShape -Paths $Paths -Journal $journal
@@ -554,7 +644,10 @@ function Recover-InterruptedTransaction {
                 throw "The interrupted installer transaction has an unverifiable rollback backup '$backupRoot'. Refusing to guess."
             }
             Write-InstallerTrace -Stage 'journal.recover.rollback.begin' -Detail $backupRoot
-            Restore-RollbackBackup -Paths $Paths -BackupRoot $backupRoot
+            Restore-RollbackBackup `
+                -Paths $Paths `
+                -BackupRoot $backupRoot `
+                -AllowPartialGatewayRegistration:($phase -eq 'ServiceCreatePending')
             Remove-TransactionJournal -Paths $Paths
             Write-InstallerTrace -Stage 'journal.recover.rollback.end' -Detail $backupRoot
             return [pscustomobject]@{ Action = 'RolledBack'; Journal = $journal }
@@ -584,6 +677,46 @@ function Recover-InterruptedTransaction {
             } elseif ($serviceWasPresent -and $null -eq $current) {
                 throw 'The interrupted upgrade lost its previously existing service before backup promotion.'
             }
+            $gatewayManaged = [bool](Get-SnapshotValue -Snapshot $journal -Name 'GatewayManaged')
+            $gatewayWasManaged = [bool](Get-SnapshotValue -Snapshot $journal -Name 'GatewayWasManaged')
+            $gatewayServiceWasPresent = [bool](Get-SnapshotValue -Snapshot $journal -Name 'GatewayServiceWasPresent')
+            $gatewayServiceWasRunning = [bool](Get-SnapshotValue -Snapshot $journal -Name 'GatewayServiceWasRunning')
+            if ($gatewayManaged) {
+                $currentGateway = Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+                if ($gatewayWasManaged -and $gatewayServiceWasRunning) {
+                    if ($null -eq $currentGateway -or
+                        -not (Test-OwnedGatewayServiceSnapshot `
+                                -ServiceSnapshot $currentGateway `
+                                -ExecutablePath $Paths.GatewayExecutable `
+                                -ConfigPath $Paths.GatewayConfigPath `
+                                -LogDirectory $Paths.GatewayLogDirectory)) {
+                        throw 'The interrupted upgrade stopped an owned OPC DA gateway service that is no longer safely restorable.'
+                    }
+                    if ($currentGateway.State -eq 'Stopped') {
+                        Start-InstallerGatewayService -Paths $Paths | Out-Null
+                        Invoke-GatewaySmokeCheck -Paths $Paths | Out-Null
+                    }
+                } elseif ($gatewayServiceWasPresent -and $null -eq $currentGateway) {
+                    throw 'The interrupted upgrade lost its previously existing OPC DA gateway service before backup promotion.'
+                } elseif (-not $gatewayWasManaged -and $null -ne $currentGateway) {
+                    throw 'The interrupted upgrade found an unexpected OPC DA gateway service before backup promotion.'
+                }
+
+                Remove-InstallerCreatedGatewayConfig `
+                    -Paths $Paths `
+                    -ConfigWasPresent ([bool](Get-SnapshotValue -Snapshot $journal -Name 'GatewayConfigWasPresent')) `
+                    -ConfigCreationPending ([bool](Get-SnapshotValue -Snapshot $journal -Name 'GatewayConfigCreationPending')) `
+                    -ConfigWasCreated ([bool](Get-SnapshotValue -Snapshot $journal -Name 'GatewayConfigWasCreated')) `
+                    -ExpectedConfigHash ([string](Get-SnapshotValue -Snapshot $journal -Name 'ExpectedGatewayConfigHash')) `
+                    -CreatedConfigHash ([string](Get-SnapshotValue -Snapshot $journal -Name 'CreatedGatewayConfigHash'))
+                if (-not [bool](Get-SnapshotValue -Snapshot $journal -Name 'GatewayProgramDataRootWasPresent') -and
+                    (Test-Path -LiteralPath $Paths.GatewayProgramDataRoot)) {
+                    Assert-NoReparsePointInPath `
+                        -Path $Paths.GatewayProgramDataRoot `
+                        -Name 'the transaction-created OPC DA gateway ProgramData root'
+                    Remove-Item -LiteralPath $Paths.GatewayProgramDataRoot -Recurse -Force
+                }
+            }
             Remove-TransactionJournal -Paths $Paths
             Write-InstallerTrace -Stage 'journal.recover.discard' -Detail $phase
             return [pscustomobject]@{ Action = 'Discarded'; Journal = $journal }
@@ -596,39 +729,96 @@ function Recover-InterruptedTransaction {
         $marker = Get-RegistrySnapshot -Path $Paths.MarkerPath
         $installExists = Test-Path -LiteralPath $Paths.InstallRoot
         $service = Get-ServiceSnapshot -Name $Paths.ServiceName
+        $gatewayManaged = if ($journal.PSObject.Properties['GatewayManaged']) {
+            [bool]$journal.GatewayManaged
+        } else {
+            $false
+        }
+        if ($null -ne $marker) {
+            $markerState = Assert-InstallerOwnershipMarker -Paths $Paths -Marker $marker
+            if ($journal.PSObject.Properties['GatewayManaged'] -and
+                [bool]$markerState.GatewayManaged -ne $gatewayManaged) {
+                throw 'The uninstall journal and ownership marker disagree about OPC DA gateway ownership.'
+            }
+            $gatewayManaged = [bool]$markerState.GatewayManaged
+        }
+        $gatewayService = if ($gatewayManaged) {
+            Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+        } else {
+            $null
+        }
         if ($phase -eq 'ServiceStopPending') {
-            if ($null -eq $service) {
+            if ($null -ne $service -and
+                -not (Test-OwnedServiceSnapshot -ServiceSnapshot $service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
+                throw "The interrupted uninstall found an unowned service at '$($Paths.ServiceName)'. Refusing to guess."
+            }
+            if ($null -ne $gatewayService -and
+                -not (Test-OwnedGatewayServiceSnapshot `
+                        -ServiceSnapshot $gatewayService `
+                        -ExecutablePath $Paths.GatewayExecutable `
+                        -ConfigPath $Paths.GatewayConfigPath `
+                        -LogDirectory $Paths.GatewayLogDirectory)) {
+                throw "The interrupted uninstall found an unowned service at '$($Paths.GatewayServiceName)'. Refusing to guess."
+            }
+            if ($null -eq $service -and $null -eq $gatewayService) {
                 $journal.Phase = 'ServiceRemoved'
                 Write-TransactionJournal -Paths $Paths -Value $journal
                 $phase = 'ServiceRemoved'
-            } elseif (-not (Test-OwnedServiceSnapshot -ServiceSnapshot $service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
-                throw "The interrupted uninstall found an unowned service at '$($Paths.ServiceName)'. Refusing to guess."
-            } elseif ($service.State -ne 'Stopped') {
+            } elseif (($null -ne $service -and $service.State -ne 'Stopped') -or
+                ($null -ne $gatewayService -and $gatewayService.State -ne 'Stopped')) {
                 $journal.Phase = 'Begin'
                 Write-TransactionJournal -Paths $Paths -Value $journal
                 $phase = 'Begin'
+            } else {
+                $journal.Phase = 'ServiceRemovePending'
+                Write-TransactionJournal -Paths $Paths -Value $journal
+                $phase = 'ServiceRemovePending'
             }
         }
         if ($phase -eq 'ServiceRemovePending') {
             $registrationExists = Invoke-ServiceRegistrationQuery -Name $Paths.ServiceName
-            if (-not $registrationExists) {
+            $gatewayRegistrationExists = $gatewayManaged -and
+                (Invoke-ServiceRegistrationQuery -Name $Paths.GatewayServiceName)
+            if (-not $registrationExists -and -not $gatewayRegistrationExists) {
                 $journal.Phase = 'ServiceRemoved'
                 Write-TransactionJournal -Paths $Paths -Value $journal
                 $phase = 'ServiceRemoved'
             } else {
-                $service = Get-ServiceSnapshot -Name $Paths.ServiceName
-                if ($null -eq $service -or
-                    -not (Test-OwnedServiceSnapshot -ServiceSnapshot $service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
+                if ($registrationExists) {
+                    $service = Get-ServiceSnapshot -Name $Paths.ServiceName
+                }
+                if ($registrationExists -and ($null -eq $service -or
+                    -not (Test-OwnedServiceSnapshot -ServiceSnapshot $service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath))) {
                     throw "The interrupted uninstall found an unowned or unverifiable service at '$($Paths.ServiceName)'. Refusing to guess."
+                }
+                if ($gatewayRegistrationExists) {
+                    $gatewayService = Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+                }
+                if ($gatewayRegistrationExists -and ($null -eq $gatewayService -or
+                    -not (Test-OwnedGatewayServiceSnapshot `
+                            -ServiceSnapshot $gatewayService `
+                            -ExecutablePath $Paths.GatewayExecutable `
+                            -ConfigPath $Paths.GatewayConfigPath `
+                            -LogDirectory $Paths.GatewayLogDirectory))) {
+                    throw "The interrupted uninstall found an unowned or unverifiable service at '$($Paths.GatewayServiceName)'. Refusing to guess."
                 }
             }
         }
         if ($phase -ne 'Begin' -and
             $phase -ne 'ServiceStopPending' -and
             $phase -ne 'ServiceRemovePending' -and
-            $null -ne $service) {
-            if (-not (Test-OwnedServiceSnapshot -ServiceSnapshot $service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
+            ($null -ne $service -or $null -ne $gatewayService)) {
+            if ($null -ne $service -and
+                -not (Test-OwnedServiceSnapshot -ServiceSnapshot $service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
                 throw "The interrupted uninstall found an unowned service at '$($Paths.ServiceName)'. Refusing to guess."
+            }
+            if ($null -ne $gatewayService -and
+                -not (Test-OwnedGatewayServiceSnapshot `
+                        -ServiceSnapshot $gatewayService `
+                        -ExecutablePath $Paths.GatewayExecutable `
+                        -ConfigPath $Paths.GatewayConfigPath `
+                        -LogDirectory $Paths.GatewayLogDirectory)) {
+                throw "The interrupted uninstall found an unowned service at '$($Paths.GatewayServiceName)'. Refusing to guess."
             }
             # The journal claimed service removal, but the service is still
             # present.  Rewind only this idempotent step so the normal
@@ -779,6 +969,8 @@ function Assert-InstallerState {
     $uninstall = Get-RegistrySnapshot -Path $Paths.UninstallKeyPath
     $service = Get-ServiceSnapshot -Name $Paths.ServiceName
     $registrationExists = Invoke-ServiceRegistrationQuery -Name $Paths.ServiceName
+    $gatewayService = Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+    $gatewayRegistrationExists = Invoke-ServiceRegistrationQuery -Name $Paths.GatewayServiceName
     # Treat any pre-existing filesystem object at the fixed root as a
     # conflicting installation.  A file, junction, or other non-directory
     # object must not be removed just because it is not a container.
@@ -803,7 +995,8 @@ function Assert-InstallerState {
             }
         }
 
-        if ([int](Get-SnapshotValue -Snapshot $marker.Values -Name 'SchemaVersion') -ne $script:InstallerSchemaVersion) {
+        $schemaVersion = [int](Get-SnapshotValue -Snapshot $marker.Values -Name 'SchemaVersion')
+        if (-not (Test-SupportedInstallerSchemaVersion -Version $schemaVersion)) {
             throw "The ownership marker '$($Paths.MarkerPath)' has an unsupported schema version."
         }
         $installerOwnedValue = [string](Get-SnapshotValue -Snapshot $marker.Values -Name 'InstallerOwned')
@@ -867,15 +1060,56 @@ function Assert-InstallerState {
         if (-not (Test-UninstallMetadata -Snapshot $uninstall -Version $version -InstallRoot $Paths.InstallRoot -UninstallerPath $Paths.UninstallerPath)) {
             throw 'The Windows uninstall metadata does not match the installer-owned BHTune installation.'
         }
+
+        $gatewayState = Get-GatewayMarkerState -Paths $Paths -Marker $marker
+        if ($gatewayState.Managed) {
+            if ($installExists) {
+                $gatewayPayload = Assert-GatewayPayloadLayout -GatewayPayloadRoot $Paths.GatewayInstallRoot
+                if ([string]$gatewayPayload.Contract.version -cne $gatewayState.Version -or
+                    [string]$gatewayPayload.Contract.executable.sha256 -cne $gatewayState.Sha256) {
+                    throw 'The installed OPC DA gateway payload does not match the installer ownership marker.'
+                }
+                if ((Get-FileSha256 -Path $Paths.GatewayExecutable) -cne $gatewayState.Sha256) {
+                    throw 'The installed OPC DA gateway executable hash does not match the installer ownership marker.'
+                }
+            }
+            if ($null -eq $gatewayService) {
+                if ($gatewayRegistrationExists) {
+                    throw "Service '$($Paths.GatewayServiceName)' remains registered but cannot be inspected. Refusing to guess."
+                }
+                if (-not $AllowMissingService) {
+                    throw "The installer ownership marker owns service '$($Paths.GatewayServiceName)', but the service is missing."
+                }
+            } else {
+                if (-not (Test-OwnedGatewayServiceSnapshot `
+                        -ServiceSnapshot $gatewayService `
+                        -ExecutablePath $Paths.GatewayExecutable `
+                        -ConfigPath $Paths.GatewayConfigPath `
+                        -LogDirectory $Paths.GatewayLogDirectory)) {
+                    throw "Service '$($Paths.GatewayServiceName)' is not the installer-owned LocalSystem definition. Refusing to reconfigure it."
+                }
+                if ([string]$gatewayService.State -ne 'Running' -and [string]$gatewayService.State -ne 'Stopped') {
+                    throw "Service '$($Paths.GatewayServiceName)' is in unsupported state '$($gatewayService.State)'. Refusing to change it while it is transitioning."
+                }
+            }
+        } elseif (Test-Path -LiteralPath $Paths.GatewayInstallRoot) {
+            throw "The fixed gateway installation directory '$($Paths.GatewayInstallRoot)' exists without installer ownership. Refusing to overwrite or delete it."
+        }
+
         return [pscustomobject]@{
-            IsUpgrade      = $true
-            Marker         = $marker
-            Uninstall      = $uninstall
-            Service        = $service
-            ServiceMissing = $null -eq $service
-            Version        = $version
-            PathManaged    = ([int](Get-SnapshotValue -Snapshot $marker.Values -Name 'PathManaged') -eq 1)
-            ShortcutPath   = [string](Get-SnapshotValue -Snapshot $marker.Values -Name 'ShortcutPath')
+            IsUpgrade            = $true
+            Marker               = $marker
+            Uninstall            = $uninstall
+            Service              = $service
+            ServiceMissing       = $null -eq $service
+            Version              = $version
+            PathManaged          = ([int](Get-SnapshotValue -Snapshot $marker.Values -Name 'PathManaged') -eq 1)
+            ShortcutPath         = [string](Get-SnapshotValue -Snapshot $marker.Values -Name 'ShortcutPath')
+            GatewayManaged       = $gatewayState.Managed
+            GatewayVersion       = $gatewayState.Version
+            GatewaySha256        = $gatewayState.Sha256
+            GatewayService       = $gatewayService
+            GatewayServiceExists = $gatewayRegistrationExists
         }
     }
 
@@ -894,29 +1128,46 @@ function Assert-InstallerState {
     }
 
     return [pscustomobject]@{
-        IsUpgrade    = $false
-        Marker       = $null
-        Uninstall    = $null
-        Service      = $null
-        ServiceMissing = $false
-        Version      = $null
-        PathManaged  = $false
-        ShortcutPath = $Paths.ShortcutPath
+        IsUpgrade            = $false
+        Marker               = $null
+        Uninstall            = $null
+        Service              = $null
+        ServiceMissing       = $false
+        Version              = $null
+        PathManaged          = $false
+        ShortcutPath         = $Paths.ShortcutPath
+        GatewayManaged       = $false
+        GatewayVersion       = $null
+        GatewaySha256        = $null
+        GatewayService       = $gatewayService
+        GatewayServiceExists = $gatewayRegistrationExists
     }
 }
 
 function Ensure-InstallerDirectories {
     param(
         [Parameter(Mandatory = $true)]
-        [psobject]$Paths
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$ManageGateway = $false
     )
 
-    foreach ($directory in @(
+    $directories = @(
             $Paths.ProgramDataRoot,
             $Paths.DatabaseDirectory,
             $Paths.LogDirectory,
             $Paths.InstallerStateRoot
-        )) {
+        )
+    if ($ManageGateway) {
+        $directories += @(
+            $Paths.GatewayProgramDataRoot,
+            $Paths.GatewayDataDirectory,
+            $Paths.GatewayLogDirectory
+        )
+    }
+
+    foreach ($directory in $directories) {
         if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
             New-Item -ItemType Directory -Path $directory -Force | Out-Null
         }
@@ -947,6 +1198,82 @@ function Ensure-InstallerConfig {
     }
 
     return $false
+}
+
+function Ensure-InstallerGatewayConfig {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string]$DefaultContent
+    )
+
+    if (Test-Path -LiteralPath $Paths.GatewayConfigPath -PathType Container) {
+        throw "The OPC DA gateway configuration path is a directory, not a file: $($Paths.GatewayConfigPath)"
+    }
+    if (-not (Test-Path -LiteralPath $Paths.GatewayConfigPath -PathType Leaf)) {
+        $content = if ($null -ne $DefaultContent) {
+            $DefaultContent
+        } else {
+            Get-DefaultGatewayConfigContent `
+                -DatabasePath $Paths.GatewayDatabasePath `
+                -LogDirectory $Paths.GatewayLogDirectory
+        }
+        Write-TextFile -Path $Paths.GatewayConfigPath -Content $content
+        return $true
+    }
+
+    return $false
+}
+
+function Remove-InstallerCreatedGatewayConfig {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Paths,
+
+        [Parameter(Mandatory = $true)]
+        [bool]$ConfigWasPresent,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$ConfigCreationPending = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$ConfigWasCreated = $false,
+
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string]$ExpectedConfigHash,
+
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string]$CreatedConfigHash
+    )
+
+    if ($ConfigWasPresent -or (-not $ConfigCreationPending -and -not $ConfigWasCreated)) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Paths.GatewayConfigPath)) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Paths.GatewayConfigPath -PathType Leaf)) {
+        throw "The installer-created OPC DA gateway configuration path is not a file: $($Paths.GatewayConfigPath)"
+    }
+
+    $claimedHash = if ($ConfigCreationPending -and -not [string]::IsNullOrWhiteSpace($ExpectedConfigHash)) {
+        $ExpectedConfigHash
+    } else {
+        $CreatedConfigHash
+    }
+    if ([string]::IsNullOrWhiteSpace($claimedHash) -or $claimedHash -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'The installer-created OPC DA gateway configuration has no valid journaled content hash. Refusing to delete it.'
+    }
+    if ((Get-FileSha256 -Path $Paths.GatewayConfigPath) -ne $claimedHash.Trim().ToLowerInvariant()) {
+        throw 'The installer-created OPC DA gateway configuration was changed after creation. Refusing to delete operator-owned content.'
+    }
+
+    Remove-Item -LiteralPath $Paths.GatewayConfigPath -Force
 }
 
 function Remove-InstallerCreatedConfig {
@@ -1046,7 +1373,14 @@ function New-StagedPayload {
         [string]$SourcePayloadRoot,
 
         [Parameter(Mandatory = $true)]
-        [string]$ExpectedVersion
+        [string]$ExpectedVersion,
+
+        [Parameter(Mandatory = $false)]
+        [AllowEmptyString()]
+        [string]$SourceGatewayPayloadRoot = '',
+
+        [Parameter(Mandatory = $false)]
+        [bool]$IncludeGateway = $false
     )
 
     Write-InstallerTrace -Stage 'payload.validate.begin' -Detail ("root={0}; expected={1}" -f $SourcePayloadRoot, $ExpectedVersion)
@@ -1068,10 +1402,37 @@ function New-StagedPayload {
         Write-InstallerTrace -Stage 'payload.stage.file.end' -Detail $name
     }
 
+    $stageGatewayPayload = $null
+    $gatewayPayload = $null
+    if ($IncludeGateway) {
+        if ([string]::IsNullOrWhiteSpace($SourceGatewayPayloadRoot)) {
+            throw 'The installer must provide a gateway payload root when gateway installation is enabled.'
+        }
+        Write-InstallerTrace -Stage 'gateway-payload.validate.begin' -Detail $SourceGatewayPayloadRoot
+        $gatewayPayload = Assert-GatewayPayloadLayout -GatewayPayloadRoot $SourceGatewayPayloadRoot
+        Assert-GatewayPayloadBinary -GatewayPayload $gatewayPayload | Out-Null
+        $stageGatewayPayload = Join-Path $stageRoot 'gateway'
+        New-Item -ItemType Directory -Path $stageGatewayPayload -Force | Out-Null
+        foreach ($name in (Get-GatewayRequiredPayloadFiles)) {
+            $source = Join-Path $SourceGatewayPayloadRoot $name
+            $destination = Join-Path $stageGatewayPayload $name
+            Write-InstallerTrace -Stage 'gateway-payload.stage.file.begin' -Detail $name
+            Copy-Item -LiteralPath $source -Destination $destination -Force
+            if ((Get-FileSha256 -Path $source) -ne (Get-FileSha256 -Path $destination)) {
+                throw "The staged OPC DA gateway payload copy did not verify for '$name'."
+            }
+            Write-InstallerTrace -Stage 'gateway-payload.stage.file.end' -Detail $name
+        }
+        $gatewayPayload = Assert-GatewayPayloadLayout -GatewayPayloadRoot $stageGatewayPayload
+        Write-InstallerTrace -Stage 'gateway-payload.validate.end' -Detail $stageGatewayPayload
+    }
+
     Write-InstallerTrace -Stage 'payload.validate.end' -Detail $stageRoot
     return [pscustomobject]@{
-        Root        = $stageRoot
-        PayloadRoot = $stagePayload
+        Root               = $stageRoot
+        PayloadRoot        = $stagePayload
+        GatewayPayloadRoot = $stageGatewayPayload
+        GatewayPayload     = $gatewayPayload
     }
 }
 
@@ -1108,6 +1469,7 @@ function Copy-FileToBackup {
         return
     }
 
+    Assert-NoReparsePointInPath -Path $SourcePath -Name 'a rollback source file'
     $before = Get-FileStabilitySnapshot -Path $SourcePath
     $backupPath = Join-Path $BackupFilesRoot $RelativePath
     $parent = Split-Path -Parent $backupPath
@@ -1117,6 +1479,35 @@ function Copy-FileToBackup {
     Assert-FileStabilitySnapshot -Path $SourcePath -Before $before -After $after
     $entry = New-HashManifestEntry -SourcePath $SourcePath -BackupPath $backupPath -RelativePath $RelativePath
     [void]$Manifest.Add($entry)
+}
+
+function Get-SafeBackupFiles {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RootPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    Assert-NoReparsePointInPath -Path $RootPath -Name $Name
+    $pending = New-Object System.Collections.Queue
+    $pending.Enqueue((Get-Item -LiteralPath $RootPath -Force -ErrorAction Stop).FullName)
+
+    while ($pending.Count -gt 0) {
+        $directory = [string]$pending.Dequeue()
+        Assert-NoReparsePointInPath -Path $directory -Name $Name
+        foreach ($item in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "$Name '$($item.FullName)' is a reparse point. Refusing to traverse redirected content."
+            }
+            if ($item.PSIsContainer) {
+                $pending.Enqueue($item.FullName)
+            } else {
+                Write-Output $item
+            }
+        }
+    }
 }
 
 function Get-BackupAclState {
@@ -1150,7 +1541,16 @@ function New-RollbackBackup {
         [bool]$ConfigWasCreated = $false,
 
         [Parameter(Mandatory = $false)]
-        [bool]$InstallRootWasPresent = $false
+        [bool]$InstallRootWasPresent = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$ManageGateway = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$GatewayConfigWasCreated = $false,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$GatewayProgramDataRootWasPresent = $false
     )
 
     $pendingRoot = Join-Path $Paths.InstallerStateRoot ('rollback.pending-' + [guid]::NewGuid().ToString('N'))
@@ -1164,11 +1564,33 @@ function New-RollbackBackup {
         $manifest = New-Object System.Collections.ArrayList
 
         if (Test-Path -LiteralPath $Paths.InstallRoot -PathType Container) {
-            foreach ($file in @(Get-ChildItem -LiteralPath $Paths.InstallRoot -Recurse -Force | Where-Object { -not $_.PSIsContainer })) {
+            foreach ($file in @(Get-SafeBackupFiles `
+                        -RootPath $Paths.InstallRoot `
+                        -Name 'the installer-owned Program Files tree')) {
                 $relative = $file.FullName.Substring($Paths.InstallRoot.Length).TrimStart('\', '/')
                 Write-InstallerTrace -Stage 'backup.file.begin' -Detail (Join-Path 'install' $relative)
                 Copy-FileToBackup -SourcePath $file.FullName -BackupFilesRoot $backupFilesRoot -RelativePath (Join-Path 'install' $relative) -Manifest $manifest
                 Write-InstallerTrace -Stage 'backup.file.end' -Detail (Join-Path 'install' $relative)
+            }
+        }
+        if ($ManageGateway -and (Test-Path -LiteralPath $Paths.GatewayProgramDataRoot -PathType Container)) {
+            foreach ($file in @(Get-SafeBackupFiles `
+                        -RootPath $Paths.GatewayProgramDataRoot `
+                        -Name 'the managed OPC DA gateway ProgramData tree')) {
+                if ($GatewayConfigWasCreated -and
+                    (Normalize-PathForComparison -Path $file.FullName) -eq
+                    (Normalize-PathForComparison -Path $Paths.GatewayConfigPath)) {
+                    continue
+                }
+                $relative = $file.FullName.Substring($Paths.GatewayProgramDataRoot.Length).TrimStart('\', '/')
+                $backupRelative = Join-Path 'gatewaydata' $relative
+                Write-InstallerTrace -Stage 'backup.file.begin' -Detail $backupRelative
+                Copy-FileToBackup `
+                    -SourcePath $file.FullName `
+                    -BackupFilesRoot $backupFilesRoot `
+                    -RelativePath $backupRelative `
+                    -Manifest $manifest
+                Write-InstallerTrace -Stage 'backup.file.end' -Detail $backupRelative
             }
         }
 
@@ -1211,6 +1633,10 @@ function New-RollbackBackup {
             DatabasePath        = $Paths.DatabasePath
             ShortcutPath        = $Paths.ShortcutPath
             InstallRootWasPresent = $InstallRootWasPresent
+            GatewayManaged       = $ManageGateway
+            GatewayWasManaged    = [bool]$PriorState.GatewayManaged
+            GatewayService       = $PriorState.GatewayService
+            GatewayProgramDataRootWasPresent = $GatewayProgramDataRootWasPresent
             PathManaged         = $priorPathManaged
             PathEntryWasPresent = $priorPathEntryWasPresent
             Acls                = Get-BackupAclState -Paths $Paths
@@ -1327,6 +1753,13 @@ function Resolve-RollbackManifestDestination {
         }
         return Join-Path $Paths.InstallRoot $child
     }
+    if ($relative.StartsWith('gatewaydata\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $child = $relative.Substring('gatewaydata\'.Length)
+        if ([string]::IsNullOrWhiteSpace($child)) {
+            throw 'Rollback manifest cannot target the gateway ProgramData directory itself.'
+        }
+        return Join-Path $Paths.GatewayProgramDataRoot $child
+    }
 
     $fixedDestinations = @{
         'programdata\bhtune.toml'       = $Paths.ConfigPath
@@ -1367,6 +1800,23 @@ function Assert-RollbackStateAndManifest {
     if (-not $State.PSObject.Properties['PathEntryWasPresent']) {
         throw 'Rollback state does not record exact PATH-entry ownership. Refusing to restore the complete machine PATH snapshot.'
     }
+    if ([int]$State.SchemaVersion -ge 3) {
+        foreach ($name in @(
+                'GatewayManaged',
+                'GatewayWasManaged',
+                'GatewayProgramDataRootWasPresent'
+            )) {
+            if (-not $State.PSObject.Properties[$name]) {
+                throw "Rollback state does not record '$name'. Refusing to guess."
+            }
+            $gatewayValue = $State.$name
+            if ($gatewayValue -isnot [bool] -and
+                [string]$gatewayValue -ne 'True' -and
+                [string]$gatewayValue -ne 'False') {
+                throw "Rollback state has a non-boolean '$name' value. Refusing to guess."
+            }
+        }
+    }
     $installRootWasPresent = $State.InstallRootWasPresent
     if ($installRootWasPresent -isnot [bool] -and
         [string]$installRootWasPresent -ne 'True' -and
@@ -1394,6 +1844,15 @@ function Assert-RollbackStateAndManifest {
                 -ConfigPath $Paths.ConfigPath)) {
         throw 'Rollback state contains a conflicting service snapshot. Refusing to remove or restore it.'
     }
+    if ($State.PSObject.Properties['GatewayService'] -and
+        $null -ne $State.GatewayService -and
+        -not (Test-OwnedGatewayServiceSnapshot `
+                -ServiceSnapshot $State.GatewayService `
+                -ExecutablePath $Paths.GatewayExecutable `
+                -ConfigPath $Paths.GatewayConfigPath `
+                -LogDirectory $Paths.GatewayLogDirectory)) {
+        throw 'Rollback state contains a conflicting OPC DA gateway service snapshot. Refusing to remove or restore it.'
+    }
 
     $allowedAclTargets = @{}
     foreach ($target in @(Get-InstallerAclTargets -Paths $Paths)) {
@@ -1416,6 +1875,7 @@ function Assert-RollbackStateAndManifest {
 
     $seenSources = @{}
     $hasInstallEntry = $false
+    $hasGatewayDataEntry = $false
     foreach ($entry in @($Manifest.Files)) {
         $relativePath = [string]$entry.RelativePath
         $destination = Resolve-RollbackManifestDestination -Paths $Paths -RelativePath $relativePath
@@ -1432,6 +1892,9 @@ function Assert-RollbackStateAndManifest {
         if ($relativePath.Replace('/', '\').StartsWith('install\', [System.StringComparison]::OrdinalIgnoreCase)) {
             $hasInstallEntry = $true
         }
+        if ($relativePath.Replace('/', '\').StartsWith('gatewaydata\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $hasGatewayDataEntry = $true
+        }
         if ([string]$State.DatabasePolicy.Policy -eq 'External' -and
             $relativePath.Replace('/', '\').StartsWith('programdata\data\bhtune.db', [System.StringComparison]::OrdinalIgnoreCase)) {
             throw 'Rollback manifest contains managed database files while the recorded database policy is external.'
@@ -1439,6 +1902,14 @@ function Assert-RollbackStateAndManifest {
     }
     if (-not [bool]$installRootWasPresent -and $hasInstallEntry) {
         throw 'Rollback manifest contains install files even though the prior install root was absent.'
+    }
+    if ($State.PSObject.Properties['GatewayProgramDataRootWasPresent'] -and
+        -not [bool]$State.GatewayProgramDataRootWasPresent -and $hasGatewayDataEntry) {
+        throw 'Rollback manifest contains gateway ProgramData files even though that root was previously absent.'
+    }
+    if ($State.PSObject.Properties['GatewayManaged'] -and
+        -not [bool]$State.GatewayManaged -and $hasGatewayDataEntry) {
+        throw 'Rollback manifest contains gateway ProgramData files even though the transaction did not manage the gateway.'
     }
 }
 
@@ -1448,7 +1919,10 @@ function Restore-RollbackBackup {
         [psobject]$Paths,
 
         [Parameter(Mandatory = $true)]
-        [string]$BackupRoot
+        [string]$BackupRoot,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$AllowPartialGatewayRegistration = $false
     )
 
     if (-not (Test-RollbackBackup -BackupRoot $BackupRoot)) {
@@ -1469,6 +1943,31 @@ function Restore-RollbackBackup {
         }
         Remove-ServiceByName -Name $Paths.ServiceName
     }
+    if ($state.PSObject.Properties['GatewayManaged'] -and [bool]$state.GatewayManaged) {
+        $currentGatewayService = Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+        if ($null -ne $currentGatewayService) {
+            $ownedGatewayService = Test-OwnedGatewayServiceSnapshot `
+                -ServiceSnapshot $currentGatewayService `
+                -ExecutablePath $Paths.GatewayExecutable `
+                -ConfigPath $Paths.GatewayConfigPath `
+                -LogDirectory $Paths.GatewayLogDirectory
+            $partialCandidateService = $AllowPartialGatewayRegistration -and
+                (Test-InstallerCreatedGatewayServiceSnapshot `
+                    -ServiceSnapshot $currentGatewayService `
+                    -ExecutablePath $Paths.GatewayExecutable `
+                    -ConfigPath $Paths.GatewayConfigPath `
+                    -LogDirectory $Paths.GatewayLogDirectory)
+            if (-not $ownedGatewayService -and -not $partialCandidateService) {
+                throw "Rollback found a conflicting service '$($Paths.GatewayServiceName)'; refusing to remove an unowned service."
+            }
+            if ($ownedGatewayService) {
+                Stop-InstallerGatewayService -Paths $Paths | Out-Null
+                Remove-InstallerGatewayService -Paths $Paths
+            } else {
+                Remove-InstallerCreatedGatewayServiceRegistration -Paths $Paths
+            }
+        }
+    }
 
     if (Test-Path -LiteralPath $Paths.InstallRoot) {
         Remove-Item -LiteralPath $Paths.InstallRoot -Recurse -Force
@@ -1487,6 +1986,14 @@ function Restore-RollbackBackup {
             if (Test-Path -LiteralPath $path) {
                 Remove-Item -LiteralPath $path -Force
             }
+        }
+    }
+    if ($state.PSObject.Properties['GatewayManaged'] -and [bool]$state.GatewayManaged) {
+        if (Test-Path -LiteralPath $Paths.GatewayProgramDataRoot) {
+            Remove-Item -LiteralPath $Paths.GatewayProgramDataRoot -Recurse -Force
+        }
+        if ([bool]$state.GatewayProgramDataRootWasPresent) {
+            New-Item -ItemType Directory -Path $Paths.GatewayProgramDataRoot -Force | Out-Null
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($Paths.ShortcutPath)) {
@@ -1523,6 +2030,14 @@ function Restore-RollbackBackup {
     }
 
     Restore-ServiceSnapshot -Snapshot $state.Service
+    if ($state.PSObject.Properties['GatewayManaged'] -and [bool]$state.GatewayManaged) {
+        $gatewaySnapshot = if ($state.PSObject.Properties['GatewayService']) {
+            $state.GatewayService
+        } else {
+            $null
+        }
+        Restore-GatewayServiceSnapshot -Paths $Paths -Snapshot $gatewaySnapshot
+    }
     if ($null -eq $state.PSObject.Properties['PathEntryWasPresent']) {
         throw 'Rollback state does not record exact PATH-entry ownership. Refusing to restore the complete machine PATH snapshot.'
     }
@@ -1530,6 +2045,12 @@ function Restore-RollbackBackup {
 
     if ($null -ne $state.Service -and $state.Service.State -eq 'Running') {
         Invoke-HealthVersionCheck -ExpectedVersion ([string]$state.Version) | Out-Null
+    }
+    if ($state.PSObject.Properties['GatewayService'] -and
+        $null -ne $state.GatewayService -and
+        $state.GatewayService.State -eq 'Running') {
+        Wait-GatewayListenerOwnership -Paths $Paths | Out-Null
+        Invoke-GatewaySmokeCheck -Paths $Paths | Out-Null
     }
 }
 
@@ -1545,7 +2066,10 @@ function Copy-CandidateIntoInstall {
         [string]$InstallerScriptRoot,
 
         [Parameter(Mandatory = $true)]
-        [string]$UninstallerSource
+        [string]$UninstallerSource,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$IncludeGateway = $false
     )
 
     $installRootComparable = Get-ComparableAbsolutePath -Path $Paths.InstallRoot
@@ -1591,6 +2115,23 @@ function Copy-CandidateIntoInstall {
         Write-InstallerTrace -Stage 'candidate.copy-file.end' -Detail $name
     }
 
+    if ($IncludeGateway) {
+        if ([string]::IsNullOrWhiteSpace([string]$Stage.GatewayPayloadRoot)) {
+            throw 'The staged candidate does not include the requested OPC DA gateway payload.'
+        }
+        New-Item -ItemType Directory -Path $Paths.GatewayInstallRoot -Force | Out-Null
+        foreach ($name in (Get-GatewayRequiredPayloadFiles)) {
+            Write-InstallerTrace -Stage 'candidate.copy-gateway-file.begin' -Detail $name
+            Copy-Item `
+                -LiteralPath (Join-Path $Stage.GatewayPayloadRoot $name) `
+                -Destination (Join-Path $Paths.GatewayInstallRoot $name) `
+                -Force
+            Write-InstallerTrace -Stage 'candidate.copy-gateway-file.end' -Detail $name
+        }
+        $installedGateway = Assert-GatewayPayloadLayout -GatewayPayloadRoot $Paths.GatewayInstallRoot
+        Assert-GatewayPayloadBinary -GatewayPayload $installedGateway | Out-Null
+    }
+
     Write-InstallerTrace -Stage 'candidate.copy-support.begin' -Detail $Paths.InstallerScriptRoot
     New-Item -ItemType Directory -Path $Paths.InstallerScriptRoot -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $InstallerScriptRoot 'InstallerSupport.ps1') -Destination (Join-Path $Paths.InstallerScriptRoot 'InstallerSupport.ps1') -Force
@@ -1608,8 +2149,19 @@ function Write-OwnershipMetadata {
         [string]$Version,
 
         [Parameter(Mandatory = $true)]
-        [bool]$PathManaged
+        [bool]$PathManaged,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$GatewayManaged = $false,
+
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [psobject]$GatewayContract
     )
+
+    if ($GatewayManaged -and $null -eq $GatewayContract) {
+        throw 'Gateway ownership metadata requires the verified gateway release contract.'
+    }
 
     $marker = [pscustomobject]([ordered]@{
         SchemaVersion = $script:InstallerSchemaVersion
@@ -1622,6 +2174,13 @@ function Write-OwnershipMetadata {
         PathEntry     = $Paths.InstallRoot
         PathManaged   = if ($PathManaged) { 1 } else { 0 }
         ShortcutPath  = $Paths.ShortcutPath
+        GatewayManaged = if ($GatewayManaged) { 1 } else { 0 }
+        GatewayVersion = if ($GatewayManaged) { [string]$GatewayContract.version } else { '' }
+        GatewaySha256 = if ($GatewayManaged) { [string]$GatewayContract.executable.sha256 } else { '' }
+        GatewayExecutable = $Paths.GatewayExecutable
+        GatewayConfigPath = $Paths.GatewayConfigPath
+        GatewayServiceName = $Paths.GatewayServiceName
+        GatewayPort = [int]$Paths.GatewayPort
     })
     $uninstall = [pscustomobject](Get-ExpectedUninstallMetadata -Version $Version -InstallRoot $Paths.InstallRoot -UninstallerPath $Paths.UninstallerPath)
     Set-RegistryValues -Path $Paths.MarkerPath -Values $marker
@@ -1772,6 +2331,14 @@ function Assert-TransactionJournalShape {
             'ConfigWasCreated',
             'ServiceWasPresent',
             'ServiceWasRunning',
+            'GatewayManaged',
+            'GatewayWasManaged',
+            'GatewayProgramDataRootWasPresent',
+            'GatewayConfigWasPresent',
+            'GatewayConfigCreationPending',
+            'GatewayConfigWasCreated',
+            'GatewayServiceWasPresent',
+            'GatewayServiceWasRunning',
             'PathEntryWasPresent',
             'ShortcutWasPresent',
             'PathChangedByTransaction'
@@ -1783,7 +2350,12 @@ function Assert-TransactionJournalShape {
             }
         }
     }
-    foreach ($hashName in @('ExpectedConfigHash', 'CreatedConfigHash')) {
+    foreach ($hashName in @(
+            'ExpectedConfigHash',
+            'CreatedConfigHash',
+            'ExpectedGatewayConfigHash',
+            'CreatedGatewayConfigHash'
+        )) {
         if ($Journal.PSObject.Properties[$hashName]) {
             $hashValue = $Journal.$hashName
             if ($null -ne $hashValue -and
@@ -1792,6 +2364,30 @@ function Assert-TransactionJournalShape {
                 throw "The installer transaction journal has an invalid '$hashName' value. Refusing to guess."
             }
         }
+    }
+
+    if ([int]$Journal.SchemaVersion -ge 3 -and ($mode -eq 'Install' -or $mode -eq 'Upgrade')) {
+        foreach ($name in @(
+                'GatewayManaged',
+                'GatewayWasManaged',
+                'GatewayService',
+                'GatewayProgramDataRootWasPresent',
+                'GatewayConfigWasPresent',
+                'GatewayConfigCreationPending',
+                'GatewayConfigWasCreated',
+                'ExpectedGatewayConfigHash',
+                'CreatedGatewayConfigHash',
+                'GatewayServiceWasPresent',
+                'GatewayServiceWasRunning'
+            )) {
+            if (-not $Journal.PSObject.Properties[$name]) {
+                throw "The schema-3 installer transaction journal is missing '$name'."
+            }
+        }
+    }
+    if ([int]$Journal.SchemaVersion -ge 3 -and $mode -eq 'Uninstall' -and
+        -not $Journal.PSObject.Properties['GatewayManaged']) {
+        throw "The schema-3 uninstall transaction journal is missing 'GatewayManaged'."
     }
 }
 
@@ -1873,12 +2469,15 @@ function Test-CleanInstallRootContents {
         )) {
         [void]$allowed.Add($name)
     }
+    foreach ($name in (Get-GatewayRequiredPayloadFiles)) {
+        [void]$allowed.Add(('gateway\' + $name))
+    }
 
     $rootValue = (Get-Item -LiteralPath $InstallRoot -Force).FullName.TrimEnd('\') + '\'
     foreach ($item in @(Get-ChildItem -LiteralPath $InstallRoot -Force -Recurse -ErrorAction Stop)) {
         $relative = $item.FullName.Substring($rootValue.Length).Replace('/', '\')
         if ($item.PSIsContainer) {
-            if ($relative -ne 'installer') {
+            if ($relative -ne 'installer' -and $relative -ne 'gateway') {
                 throw "The interrupted clean installation contains an unexpected directory '$relative'. Refusing to delete operator-owned data."
             }
             continue
@@ -1900,10 +2499,13 @@ function Test-CleanStagingRootContents {
         return $false
     }
     $children = @(Get-ChildItem -LiteralPath $StageRoot -Force -ErrorAction Stop)
-    if ($children.Count -ne 1 -or -not $children[0].PSIsContainer -or $children[0].Name -ne 'payload') {
+    $allowedRoots = @('payload', 'gateway')
+    if ($children.Count -lt 1 -or $children.Count -gt 2 -or
+        @($children | Where-Object { -not $_.PSIsContainer -or $allowedRoots -notcontains $_.Name }).Count -gt 0 -or
+        @($children | Where-Object { $_.Name -eq 'payload' }).Count -ne 1) {
         throw "The interrupted staging root '$StageRoot' contains unexpected content. Refusing to delete it."
     }
-    $payloadRoot = $children[0].FullName
+    $payloadRoot = @($children | Where-Object { $_.Name -eq 'payload' })[0].FullName
     $allowed = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($name in (Get-RequiredPayloadFiles)) {
         [void]$allowed.Add($name)
@@ -1915,6 +2517,10 @@ function Test-CleanStagingRootContents {
         if (-not $allowed.Contains($item.Name)) {
             throw "The interrupted staging root '$StageRoot' contains unexpected file '$($item.Name)'. Refusing to delete it."
         }
+    }
+    $gatewayRoot = @($children | Where-Object { $_.Name -eq 'gateway' })
+    if ($gatewayRoot.Count -eq 1) {
+        Assert-GatewayPayloadLayout -GatewayPayloadRoot $gatewayRoot[0].FullName | Out-Null
     }
     return $true
 }
@@ -1965,15 +2571,27 @@ function Recover-CleanInstallTransaction {
     $serviceWasPresent = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'ServiceWasPresent')
     $configWasPresent = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'ConfigWasPresent')
     $configWasCreated = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'ConfigWasCreated')
+    $gatewayManaged = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'GatewayManaged')
+    $gatewayWasManaged = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'GatewayWasManaged')
+    $gatewayProgramDataRootWasPresent = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'GatewayProgramDataRootWasPresent')
+    $gatewayConfigWasPresent = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'GatewayConfigWasPresent')
+    $gatewayConfigWasCreated = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'GatewayConfigWasCreated')
+    $gatewayServiceWasPresent = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'GatewayServiceWasPresent')
     $pathEntryWasPresent = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'PathEntryWasPresent')
     $shortcutWasPresent = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'ShortcutWasPresent')
     $pathChanged = [bool](Get-SnapshotValue -Snapshot $Journal -Name 'PathChangedByTransaction')
     $service = Get-ServiceSnapshot -Name $Paths.ServiceName
+    $gatewayService = if ($gatewayManaged) {
+        Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+    } else {
+        $null
+    }
     $marker = Get-RegistrySnapshot -Path $Paths.MarkerPath
     $uninstall = Get-RegistrySnapshot -Path $Paths.UninstallKeyPath
 
     if ($installRootWasPresent -or $serviceWasPresent -or $configWasPresent -or
-        $pathEntryWasPresent -or $shortcutWasPresent) {
+        $pathEntryWasPresent -or $shortcutWasPresent -or $gatewayWasManaged -or
+        $gatewayServiceWasPresent) {
         throw 'The clean-install journal claims pre-existing or installer-owned state that cannot be discarded without a verified backup.'
     }
     if ($phaseRank -ge (Get-TransactionPhaseRank -Phase 'ServiceCreatePending')) {
@@ -1989,6 +2607,34 @@ function Recover-CleanInstallTransaction {
         }
     } elseif ($null -ne $service) {
         throw 'The interrupted clean installation found a service before its journaled creation phase.'
+    }
+    if ($gatewayManaged) {
+        if ($phaseRank -ge (Get-TransactionPhaseRank -Phase 'ServiceCreatePending')) {
+            if ($null -ne $gatewayService) {
+                $ownedGatewayService = Test-OwnedGatewayServiceSnapshot `
+                    -ServiceSnapshot $gatewayService `
+                    -ExecutablePath $Paths.GatewayExecutable `
+                    -ConfigPath $Paths.GatewayConfigPath `
+                    -LogDirectory $Paths.GatewayLogDirectory
+                $partialCandidateService = $phase -eq 'ServiceCreatePending' -and
+                    (Test-InstallerCreatedGatewayServiceSnapshot `
+                        -ServiceSnapshot $gatewayService `
+                        -ExecutablePath $Paths.GatewayExecutable `
+                        -ConfigPath $Paths.GatewayConfigPath `
+                        -LogDirectory $Paths.GatewayLogDirectory)
+                if (-not $ownedGatewayService -and -not $partialCandidateService) {
+                    throw 'The interrupted clean installation found an unowned OPC DA gateway service at the fixed service name.'
+                }
+                if ($ownedGatewayService) {
+                    Stop-InstallerGatewayService -Paths $Paths | Out-Null
+                    Remove-InstallerGatewayService -Paths $Paths
+                } else {
+                    Remove-InstallerCreatedGatewayServiceRegistration -Paths $Paths
+                }
+            }
+        } elseif ($null -ne $gatewayService) {
+            throw 'The interrupted clean installation found an OPC DA gateway service before its journaled creation phase.'
+        }
     }
 
     $stageRoot = if ($Journal.PSObject.Properties['StageRoot']) { [string]$Journal.StageRoot } else { '' }
@@ -2011,6 +2657,22 @@ function Recover-CleanInstallTransaction {
         -ConfigWasCreated $configWasCreated `
         -ExpectedConfigHash ([string](Get-SnapshotValue -Snapshot $Journal -Name 'ExpectedConfigHash')) `
         -CreatedConfigHash ([string](Get-SnapshotValue -Snapshot $Journal -Name 'CreatedConfigHash'))
+    if ($gatewayManaged) {
+        Remove-InstallerCreatedGatewayConfig `
+            -Paths $Paths `
+            -ConfigWasPresent $gatewayConfigWasPresent `
+            -ConfigCreationPending ([bool](Get-SnapshotValue -Snapshot $Journal -Name 'GatewayConfigCreationPending')) `
+            -ConfigWasCreated $gatewayConfigWasCreated `
+            -ExpectedConfigHash ([string](Get-SnapshotValue -Snapshot $Journal -Name 'ExpectedGatewayConfigHash')) `
+            -CreatedConfigHash ([string](Get-SnapshotValue -Snapshot $Journal -Name 'CreatedGatewayConfigHash'))
+        if (-not $gatewayProgramDataRootWasPresent -and
+            (Test-Path -LiteralPath $Paths.GatewayProgramDataRoot)) {
+            Assert-NoReparsePointInPath `
+                -Path $Paths.GatewayProgramDataRoot `
+                -Name 'the transaction-created OPC DA gateway ProgramData root'
+            Remove-Item -LiteralPath $Paths.GatewayProgramDataRoot -Recurse -Force
+        }
+    }
 
     $pathPending = $phase -eq 'PathUpdatePending'
     if ($pathPending -and -not $pathChanged -and -not $pathEntryWasPresent) {
@@ -2083,6 +2745,10 @@ function Invoke-InstallTransaction {
         [Parameter(Mandatory = $true)]
         [string]$PayloadRoot,
 
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string]$GatewayPayloadRoot,
+
         [Parameter(Mandatory = $true)]
         [string]$InstallerScriptRoot,
 
@@ -2096,6 +2762,12 @@ function Invoke-InstallTransaction {
         [bool]$StartService,
 
         [Parameter(Mandatory = $true)]
+        [bool]$InstallGateway,
+
+        [Parameter(Mandatory = $true)]
+        [bool]$StartGateway,
+
+        [Parameter(Mandatory = $true)]
         [bool]$CustomDbBackupConfirmed,
 
         [Parameter(Mandatory = $true)]
@@ -2106,35 +2778,78 @@ function Invoke-InstallTransaction {
     )
 
     $isUpgrade = [bool]$PriorState.IsUpgrade
+    $gatewayWasManaged = [bool]$PriorState.GatewayManaged
+    $gatewayRegistrationExists = [bool](Get-SnapshotValue `
+            -Snapshot $PriorState `
+            -Name 'GatewayServiceExists')
+    $manageGateway = $gatewayWasManaged -or $InstallGateway
     $preservedState = Get-PreservedProgramDataState -Paths $Paths
-    $rollbackRequired = $isUpgrade -or [bool]$preservedState.ReuseRequired
+    $rollbackRequired = $isUpgrade -or [bool]$preservedState.ReuseRequired -or
+        ($manageGateway -and [bool]$preservedState.GatewayStateExists)
     $configWasCreated = $false
     $createdConfigHash = $null
     $configCreationPending = $false
     $expectedConfigHash = $null
+    $gatewayConfigWasCreated = $false
+    $createdGatewayConfigHash = $null
+    $gatewayConfigCreationPending = $false
+    $expectedGatewayConfigHash = $null
+    $gatewayRelease = $null
     $stage = $null
     $backup = $null
     $pathManaged = $false
     $pathChangedByTransaction = $false
     $serviceCreated = $false
+    $gatewayServiceCreationAttempted = $false
+    $gatewayServiceCreated = $false
     $backupPromoted = $false
     $shortcutCreated = $false
     $priorWasRunning = $isUpgrade -and $null -ne $PriorState.Service -and $PriorState.Service.State -eq 'Running'
+    $priorGatewayWasRunning = $gatewayWasManaged -and
+        $null -ne $PriorState.GatewayService -and
+        $PriorState.GatewayService.State -eq 'Running'
+    $finalGatewayRunning = if ($gatewayWasManaged) { $priorGatewayWasRunning } else { $StartGateway }
     $installRootWasPresent = Test-Path -LiteralPath $Paths.InstallRoot -PathType Container
     $databaseDirectoryWasPresent = Test-Path -LiteralPath $Paths.DatabaseDirectory -PathType Container
     $logDirectoryWasPresent = Test-Path -LiteralPath $Paths.LogDirectory -PathType Container
     $installerStateRootWasPresent = Test-Path -LiteralPath $Paths.InstallerStateRoot -PathType Container
+    $gatewayProgramDataRootWasPresent = Test-Path -LiteralPath $Paths.GatewayProgramDataRoot -PathType Container
+    $gatewayDataDirectoryWasPresent = Test-Path -LiteralPath $Paths.GatewayDataDirectory -PathType Container
+    $gatewayLogDirectoryWasPresent = Test-Path -LiteralPath $Paths.GatewayLogDirectory -PathType Container
     $configWasPresent = Test-Path -LiteralPath $Paths.ConfigPath -PathType Leaf
+    $gatewayConfigWasPresent = Test-Path -LiteralPath $Paths.GatewayConfigPath -PathType Leaf
     $serviceWasPresent = $null -ne $PriorState.Service
+    $gatewayServiceWasPresent = $null -ne $PriorState.GatewayService
     $shortcutWasPresent = -not [string]::IsNullOrWhiteSpace($Paths.ShortcutPath) -and
         (Test-Path -LiteralPath $Paths.ShortcutPath)
     $transactionId = [guid]::NewGuid().ToString('N')
 
     try {
-        Write-InstallerTrace -Stage 'transaction.begin' -Detail ("mode={0}; upgrade={1}; version={2}; addPath={3}; startService={4}; customDb={5}" -f `
-                'Install', $isUpgrade, $VersionContract.Version, $AddToPath, $StartService, $CustomDbBackupConfirmed)
+        Write-InstallerTrace -Stage 'transaction.begin' -Detail ("mode={0}; upgrade={1}; version={2}; addPath={3}; startService={4}; manageGateway={5}; startGateway={6}; customDb={7}" -f `
+                'Install', $isUpgrade, $VersionContract.Version, $AddToPath, $StartService, $manageGateway, $finalGatewayRunning, $CustomDbBackupConfirmed)
+        if ($manageGateway -and [string]::IsNullOrWhiteSpace($GatewayPayloadRoot)) {
+            throw 'The OPC DA gateway component is selected, but no verified gateway payload was provided.'
+        }
+        if ($manageGateway -and -not $gatewayWasManaged -and
+            ($gatewayRegistrationExists -or $null -ne $PriorState.GatewayService)) {
+            throw "The service '$($Paths.GatewayServiceName)' already exists but is not installer-owned. Refusing to adopt it."
+        }
+        if ($manageGateway -and $gatewayConfigWasPresent) {
+            Assert-GatewayConfigPolicy `
+                -ConfigPath $Paths.GatewayConfigPath `
+                -ExpectedDatabasePath $Paths.GatewayDatabasePath `
+                -ExpectedLogDirectory $Paths.GatewayLogDirectory | Out-Null
+        }
+        if ($manageGateway) {
+            $gatewayListeners = @(Get-TcpListenerSnapshots -Port $Paths.GatewayPort)
+            if ($gatewayWasManaged -and $priorGatewayWasRunning) {
+                Assert-GatewayListenerOwnership -Paths $Paths | Out-Null
+            } elseif ($gatewayListeners.Count -gt 0) {
+                throw "TCP port $($Paths.GatewayPort) is already occupied. Refusing to replace an unexpected listener."
+            }
+        }
         Write-InstallerTrace -Stage 'preflight.directories.begin' -Detail $Paths.ProgramDataRoot
-        Ensure-InstallerDirectories -Paths $Paths
+        Ensure-InstallerDirectories -Paths $Paths -ManageGateway:$manageGateway
         Write-InstallerTrace -Stage 'preflight.directories.end' -Detail $Paths.ProgramDataRoot
         $pathEntryWasPresent = @(
             (Split-PathList -PathList (Get-MachinePathSnapshot)) | Where-Object {
@@ -2158,6 +2873,17 @@ function Invoke-InstallTransaction {
                 CreatedConfigHash       = $null
                 ServiceWasPresent        = $serviceWasPresent
                 ServiceWasRunning        = $priorWasRunning
+                GatewayManaged           = $manageGateway
+                GatewayWasManaged        = $gatewayWasManaged
+                GatewayProgramDataRootWasPresent = $gatewayProgramDataRootWasPresent
+                GatewayConfigWasPresent  = $gatewayConfigWasPresent
+                GatewayConfigCreationPending = $false
+                ExpectedGatewayConfigHash = $null
+                GatewayConfigWasCreated  = $false
+                CreatedGatewayConfigHash = $null
+                GatewayService           = $PriorState.GatewayService
+                GatewayServiceWasPresent = $gatewayServiceWasPresent
+                GatewayServiceWasRunning = $priorGatewayWasRunning
                 PathEntryWasPresent      = $pathEntryWasPresent
                 PathChangedByTransaction = $false
                 ShortcutWasPresent       = $shortcutWasPresent
@@ -2195,23 +2921,76 @@ function Invoke-InstallTransaction {
             }
         }
         Write-InstallerTrace -Stage 'preflight.config.end' -Detail ("created={0}" -f $configWasCreated)
+        if ($manageGateway) {
+            Write-InstallerTrace -Stage 'preflight.gateway-config.begin' -Detail $Paths.GatewayConfigPath
+            if (-not $gatewayConfigWasPresent) {
+                $defaultGatewayConfigContent = Get-DefaultGatewayConfigContent `
+                    -DatabasePath $Paths.GatewayDatabasePath `
+                    -LogDirectory $Paths.GatewayLogDirectory
+                $expectedGatewayConfigHash = Get-TextSha256 -Content $defaultGatewayConfigContent
+                $gatewayConfigCreationPending = $true
+                Update-TransactionJournalFields -Paths $Paths -Fields @{
+                    GatewayConfigCreationPending = $true
+                    ExpectedGatewayConfigHash    = $expectedGatewayConfigHash
+                }
+                if (-not (Ensure-InstallerGatewayConfig `
+                        -Paths $Paths `
+                        -DefaultContent $defaultGatewayConfigContent)) {
+                    throw "The OPC DA gateway configuration appeared while creation was pending: $($Paths.GatewayConfigPath)"
+                }
+                $createdGatewayConfigHash = Get-FileSha256 -Path $Paths.GatewayConfigPath
+                if ($createdGatewayConfigHash -ne $expectedGatewayConfigHash) {
+                    throw "The OPC DA gateway configuration did not match its journaled content hash: $($Paths.GatewayConfigPath)"
+                }
+                $gatewayConfigWasCreated = $true
+                $gatewayConfigCreationPending = $false
+                Update-TransactionJournalFields -Paths $Paths -Fields @{
+                    GatewayConfigCreationPending = $false
+                    GatewayConfigWasCreated      = $true
+                    CreatedGatewayConfigHash     = $createdGatewayConfigHash
+                }
+            } elseif (Ensure-InstallerGatewayConfig -Paths $Paths) {
+                throw "The installer-created OPC DA gateway configuration was not journaled before writing: $($Paths.GatewayConfigPath)"
+            }
+            Assert-GatewayConfigPolicy `
+                -ConfigPath $Paths.GatewayConfigPath `
+                -ExpectedDatabasePath $Paths.GatewayDatabasePath `
+                -ExpectedLogDirectory $Paths.GatewayLogDirectory | Out-Null
+            Write-InstallerTrace -Stage 'preflight.gateway-config.end' -Detail ("created={0}" -f $gatewayConfigWasCreated)
+        }
         Write-InstallerTrace -Stage 'preflight.database.begin' -Detail $Paths.DatabasePath
         $databasePolicy = Assert-DatabasePolicy -Paths $Paths -IsUpgrade $isUpgrade -CustomDbBackupConfirmed $CustomDbBackupConfirmed -PreservedData ([bool]$preservedState.ReuseRequired)
         Write-InstallerTrace -Stage 'preflight.database.end' -Detail ("policy={0}" -f $databasePolicy.Policy)
 
         Write-InstallerTrace -Stage 'payload.stage.begin' -Detail $PayloadRoot
-        $stage = New-StagedPayload -Paths $Paths -SourcePayloadRoot $PayloadRoot -ExpectedVersion $VersionContract.Version
+        $stage = New-StagedPayload `
+            -Paths $Paths `
+            -SourcePayloadRoot $PayloadRoot `
+            -ExpectedVersion $VersionContract.Version `
+            -SourceGatewayPayloadRoot $GatewayPayloadRoot `
+            -IncludeGateway:$manageGateway
         Update-TransactionJournalFields -Paths $Paths -Fields @{ StageRoot = $stage.Root }
         Write-InstallerTrace -Stage 'payload.stage.end' -Detail $stage.Root
         Write-InstallerTrace -Stage 'path.snapshot.begin' -Detail 'machine'
         Write-InstallerTrace -Stage 'path.snapshot.end' -Detail 'machine'
         Update-TransactionJournalPhase -Paths $Paths -Phase 'PathSnapshotted'
 
-        if ($isUpgrade -and $null -ne $PriorState.Service) {
-            Write-InstallerTrace -Stage 'service.stop.begin' -Detail $Paths.ServiceName
+        if (($isUpgrade -and $null -ne $PriorState.Service) -or
+            ($gatewayWasManaged -and $null -ne $PriorState.GatewayService)) {
             Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceStopPending'
-            Stop-InstallerService | Out-Null
-            Write-InstallerTrace -Stage 'service.stop.end' -Detail $Paths.ServiceName
+            if ($gatewayWasManaged -and $null -ne $PriorState.GatewayService) {
+                Write-InstallerTrace -Stage 'gateway.service.stop.begin' -Detail $Paths.GatewayServiceName
+                Stop-InstallerGatewayService -Paths $Paths | Out-Null
+                Write-InstallerTrace -Stage 'gateway.service.stop.end' -Detail $Paths.GatewayServiceName
+            }
+            if ($isUpgrade -and $null -ne $PriorState.Service) {
+                Write-InstallerTrace -Stage 'service.stop.begin' -Detail $Paths.ServiceName
+                Stop-InstallerService | Out-Null
+                Write-InstallerTrace -Stage 'service.stop.end' -Detail $Paths.ServiceName
+            }
+            if ($manageGateway) {
+                Wait-TcpPortFree -Port $Paths.GatewayPort -TimeoutSeconds 30
+            }
             Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceStopped'
         }
 
@@ -2222,7 +3001,10 @@ function Invoke-InstallTransaction {
                 -PriorState $PriorState `
                 -DatabasePolicy $databasePolicy `
                 -ConfigWasCreated $configWasCreated `
-                -InstallRootWasPresent:$installRootWasPresent
+                -InstallRootWasPresent:$installRootWasPresent `
+                -ManageGateway:$manageGateway `
+                -GatewayConfigWasCreated:$gatewayConfigWasCreated `
+                -GatewayProgramDataRootWasPresent:$gatewayProgramDataRootWasPresent
             Write-InstallerTrace -Stage 'backup.create.end' -Detail $backup.PendingRoot
             Write-InstallerTrace -Stage 'backup.promote.begin' -Detail $backup.FinalRoot
             Promote-RollbackBackup -Backup $backup
@@ -2231,17 +3013,30 @@ function Invoke-InstallTransaction {
             Update-TransactionJournalPhase -Paths $Paths -Phase 'BackupPromoted' -BackupRoot $backup.FinalRoot
         }
 
-        if ($isUpgrade -and $null -ne $PriorState.Service) {
-            Write-InstallerTrace -Stage 'service.remove.begin' -Detail $Paths.ServiceName
+        if (($isUpgrade -and $null -ne $PriorState.Service) -or
+            ($gatewayWasManaged -and $null -ne $PriorState.GatewayService)) {
             Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceRemovePending'
-            Remove-ServiceByName -Name $Paths.ServiceName
-            Write-InstallerTrace -Stage 'service.remove.end' -Detail $Paths.ServiceName
+            if ($gatewayWasManaged -and $null -ne $PriorState.GatewayService) {
+                Write-InstallerTrace -Stage 'gateway.service.remove.begin' -Detail $Paths.GatewayServiceName
+                Remove-InstallerGatewayService -Paths $Paths
+                Write-InstallerTrace -Stage 'gateway.service.remove.end' -Detail $Paths.GatewayServiceName
+            }
+            if ($isUpgrade -and $null -ne $PriorState.Service) {
+                Write-InstallerTrace -Stage 'service.remove.begin' -Detail $Paths.ServiceName
+                Remove-ServiceByName -Name $Paths.ServiceName
+                Write-InstallerTrace -Stage 'service.remove.end' -Detail $Paths.ServiceName
+            }
             Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceRemoved'
         }
 
         Update-TransactionJournalPhase -Paths $Paths -Phase 'PayloadStaged'
         Write-InstallerTrace -Stage 'candidate.copy.begin' -Detail $Paths.InstallRoot
-        Copy-CandidateIntoInstall -Paths $Paths -Stage $stage -InstallerScriptRoot $InstallerScriptRoot -UninstallerSource $UninstallerSource
+        Copy-CandidateIntoInstall `
+            -Paths $Paths `
+            -Stage $stage `
+            -InstallerScriptRoot $InstallerScriptRoot `
+            -UninstallerSource $UninstallerSource `
+            -IncludeGateway:$manageGateway
         Write-InstallerTrace -Stage 'candidate.copy.end' -Detail $Paths.InstallRoot
         Write-InstallerTrace -Stage 'acl.begin' -Detail $Paths.InstallRoot
         # Copy-CandidateIntoInstall replaces the prior root and creates a
@@ -2252,7 +3047,12 @@ function Invoke-InstallTransaction {
             -DatabaseDirectoryCreated (-not $databaseDirectoryWasPresent) `
             -LogDirectoryCreated (-not $logDirectoryWasPresent) `
             -InstallerStateRootCreated (-not $installerStateRootWasPresent) `
-            -ConfigCreated $configWasCreated
+            -ConfigCreated $configWasCreated `
+            -ManageGateway:$manageGateway `
+            -GatewayProgramDataRootCreated ($manageGateway -and -not $gatewayProgramDataRootWasPresent) `
+            -GatewayDataDirectoryCreated ($manageGateway -and -not $gatewayDataDirectoryWasPresent) `
+            -GatewayLogDirectoryCreated ($manageGateway -and -not $gatewayLogDirectoryWasPresent) `
+            -GatewayConfigCreated $gatewayConfigWasCreated
         Write-InstallerTrace -Stage 'acl.end' -Detail $Paths.InstallRoot
         Update-TransactionJournalPhase -Paths $Paths -Phase 'PayloadInstalled'
         Write-InstallerTrace -Stage 'service.create.begin' -Detail $Paths.ServiceName
@@ -2264,6 +3064,16 @@ function Invoke-InstallTransaction {
         # delete an unowned service.
         $serviceCreated = $true
         Write-InstallerTrace -Stage 'service.create.end' -Detail $Paths.ServiceName
+        if ($manageGateway) {
+            Write-InstallerTrace -Stage 'gateway.service.create.begin' -Detail $Paths.GatewayServiceName
+            $installedGateway = Assert-GatewayPayloadLayout -GatewayPayloadRoot $Paths.GatewayInstallRoot
+            Assert-GatewayPayloadBinary -GatewayPayload $installedGateway | Out-Null
+            $gatewayRelease = $installedGateway.Contract
+            $gatewayServiceCreationAttempted = $true
+            $newGatewayService = New-InstallerGatewayService -Paths $Paths
+            $gatewayServiceCreated = $true
+            Write-InstallerTrace -Stage 'gateway.service.create.end' -Detail $Paths.GatewayServiceName
+        }
         Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceCreated'
 
         if ($isUpgrade -or $StartService) {
@@ -2277,8 +3087,19 @@ function Invoke-InstallTransaction {
             Write-InstallerTrace -Stage 'health.check.begin' -Detail $healthVersion
             Invoke-HealthVersionCheck -ExpectedVersion $healthVersion | Out-Null
             Write-InstallerTrace -Stage 'health.check.end' -Detail $healthVersion
-            Update-TransactionJournalPhase -Paths $Paths -Phase 'HealthChecked'
         }
+        if ($manageGateway) {
+            Write-InstallerTrace -Stage 'gateway.service.start.begin' -Detail $Paths.GatewayServiceName
+            Start-InstallerGatewayService -Paths $Paths | Out-Null
+            Write-InstallerTrace -Stage 'gateway.service.start.end' -Detail $Paths.GatewayServiceName
+            if ($TestOnly -and $FailureInjection -eq 'GatewaySmokeFailure') {
+                throw 'Acceptance-only gateway smoke failure injection requested.'
+            }
+            Write-InstallerTrace -Stage 'gateway.smoke.begin' -Detail '127.0.0.1:7600'
+            Invoke-GatewaySmokeCheck -Paths $Paths | Out-Null
+            Write-InstallerTrace -Stage 'gateway.smoke.end' -Detail '127.0.0.1:7600'
+        }
+        Update-TransactionJournalPhase -Paths $Paths -Phase 'HealthChecked'
 
         if ($TestOnly -and $FailureInjection -eq 'CommitFailure') {
             throw 'Acceptance-only commit failure injection requested.'
@@ -2288,6 +3109,11 @@ function Invoke-InstallTransaction {
             Write-InstallerTrace -Stage 'service.restore-stopped.begin' -Detail $Paths.ServiceName
             Stop-InstallerService | Out-Null
             Write-InstallerTrace -Stage 'service.restore-stopped.end' -Detail $Paths.ServiceName
+        }
+        if ($manageGateway -and -not $finalGatewayRunning) {
+            Write-InstallerTrace -Stage 'gateway.service.restore-stopped.begin' -Detail $Paths.GatewayServiceName
+            Stop-InstallerGatewayService -Paths $Paths | Out-Null
+            Write-InstallerTrace -Stage 'gateway.service.restore-stopped.end' -Detail $Paths.GatewayServiceName
         }
 
         if (-not $isUpgrade) {
@@ -2340,7 +3166,12 @@ function Invoke-InstallTransaction {
         }
         Update-TransactionJournalPhase -Paths $Paths -Phase 'MetadataPending'
         Write-InstallerTrace -Stage 'metadata.write.begin' -Detail $Paths.MarkerPath
-        Write-OwnershipMetadata -Paths $Paths -Version $VersionContract.Version -PathManaged $pathManaged
+        Write-OwnershipMetadata `
+            -Paths $Paths `
+            -Version $VersionContract.Version `
+            -PathManaged $pathManaged `
+            -GatewayManaged:$manageGateway `
+            -GatewayContract $gatewayRelease
         Write-InstallerTrace -Stage 'metadata.write.end' -Detail $Paths.MarkerPath
         Write-InstallerTrace -Stage 'journal.remove.begin' -Detail $Paths.InstallerStateRoot
         Remove-TransactionJournal -Paths $Paths
@@ -2356,7 +3187,13 @@ function Invoke-InstallTransaction {
             if ($rollbackRequired) {
                 if ($null -ne $backup -and $backupPromoted -and (Test-Path -LiteralPath $backup.FinalRoot)) {
                     Write-InstallerTrace -Stage 'rollback.begin' -Detail $backup.FinalRoot
-                    Restore-RollbackBackup -Paths $Paths -BackupRoot $backup.FinalRoot
+                    $failedJournal = Read-TransactionJournal -Paths $Paths
+                    $allowPartialGatewayRegistration = $null -ne $failedJournal -and
+                        [string]$failedJournal.Phase -eq 'ServiceCreatePending'
+                    Restore-RollbackBackup `
+                        -Paths $Paths `
+                        -BackupRoot $backup.FinalRoot `
+                        -AllowPartialGatewayRegistration:$allowPartialGatewayRegistration
                     Remove-TransactionJournal -Paths $Paths
                     Write-InstallerTrace -Stage 'rollback.end' -Detail $backup.FinalRoot
                     Write-Warning 'The installation transaction failed and the verified prior state was restored.'
@@ -2369,6 +3206,13 @@ function Invoke-InstallTransaction {
                     if ($priorWasRunning -and $null -ne $current -and $current.State -eq 'Stopped') {
                         Start-InstallerService | Out-Null
                     }
+                    if ($gatewayWasManaged -and $priorGatewayWasRunning) {
+                        $currentGateway = Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+                        if ($null -ne $currentGateway -and $currentGateway.State -eq 'Stopped') {
+                            Start-InstallerGatewayService -Paths $Paths | Out-Null
+                            Invoke-GatewaySmokeCheck -Paths $Paths | Out-Null
+                        }
+                    }
                     Remove-InstallerCreatedConfig `
                         -Paths $Paths `
                         -ConfigWasPresent $configWasPresent `
@@ -2376,6 +3220,15 @@ function Invoke-InstallTransaction {
                         -ConfigWasCreated $configWasCreated `
                         -ExpectedConfigHash $expectedConfigHash `
                         -CreatedConfigHash $createdConfigHash
+                    if ($manageGateway) {
+                        Remove-InstallerCreatedGatewayConfig `
+                            -Paths $Paths `
+                            -ConfigWasPresent $gatewayConfigWasPresent `
+                            -ConfigCreationPending $gatewayConfigCreationPending `
+                            -ConfigWasCreated $gatewayConfigWasCreated `
+                            -ExpectedConfigHash $expectedGatewayConfigHash `
+                            -CreatedConfigHash $createdGatewayConfigHash
+                    }
                     Remove-TransactionJournal -Paths $Paths
                 }
             } else {
@@ -2391,6 +3244,32 @@ function Invoke-InstallTransaction {
                         Stop-InstallerService | Out-Null
                     }
                     Remove-ServiceByName -Name $Paths.ServiceName
+                }
+                if ($manageGateway) {
+                    $currentGateway = Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+                    if ($null -ne $currentGateway) {
+                        if (-not $gatewayServiceCreated) {
+                            if (-not $gatewayServiceCreationAttempted -or
+                                -not (Test-InstallerCreatedGatewayServiceSnapshot `
+                                        -ServiceSnapshot $currentGateway `
+                                        -ExecutablePath $Paths.GatewayExecutable `
+                                        -ConfigPath $Paths.GatewayConfigPath `
+                                        -LogDirectory $Paths.GatewayLogDirectory)) {
+                                throw "Clean-install rollback found service '$($Paths.GatewayServiceName)' before the installer completed registration; refusing to remove it."
+                            }
+                            Remove-InstallerCreatedGatewayServiceRegistration -Paths $Paths
+                        } else {
+                            if (-not (Test-OwnedGatewayServiceSnapshot `
+                                    -ServiceSnapshot $currentGateway `
+                                    -ExecutablePath $Paths.GatewayExecutable `
+                                    -ConfigPath $Paths.GatewayConfigPath `
+                                    -LogDirectory $Paths.GatewayLogDirectory)) {
+                                throw "Clean-install rollback found a conflicting service '$($Paths.GatewayServiceName)'; refusing to remove it."
+                            }
+                            Stop-InstallerGatewayService -Paths $Paths | Out-Null
+                            Remove-InstallerGatewayService -Paths $Paths
+                        }
+                    }
                 }
                 Remove-RegistryKey -Path $Paths.MarkerPath
                 Remove-RegistryKey -Path $Paths.UninstallKeyPath
@@ -2408,6 +3287,22 @@ function Invoke-InstallTransaction {
                         -ConfigWasCreated $configWasCreated `
                         -ExpectedConfigHash $expectedConfigHash `
                         -CreatedConfigHash $createdConfigHash
+                }
+                if ($manageGateway) {
+                    Remove-InstallerCreatedGatewayConfig `
+                        -Paths $Paths `
+                        -ConfigWasPresent $gatewayConfigWasPresent `
+                        -ConfigCreationPending $gatewayConfigCreationPending `
+                        -ConfigWasCreated $gatewayConfigWasCreated `
+                        -ExpectedConfigHash $expectedGatewayConfigHash `
+                        -CreatedConfigHash $createdGatewayConfigHash
+                    if (-not $gatewayProgramDataRootWasPresent -and
+                        (Test-Path -LiteralPath $Paths.GatewayProgramDataRoot)) {
+                        Assert-NoReparsePointInPath `
+                            -Path $Paths.GatewayProgramDataRoot `
+                            -Name 'the transaction-created OPC DA gateway ProgramData root'
+                        Remove-Item -LiteralPath $Paths.GatewayProgramDataRoot -Recurse -Force
+                    }
                 }
                 if (Test-Path -LiteralPath $Paths.InstallRoot) {
                     if ($installRootWasPresent -or -not (Test-CleanInstallRootContents -InstallRoot $Paths.InstallRoot)) {
@@ -2467,6 +3362,7 @@ function Invoke-ConservativeUninstall {
             Version            = $state.Version
             InstallRoot        = $Paths.InstallRoot
             UninstallerPath    = $Paths.UninstallerPath
+            GatewayManaged     = [bool]$state.GatewayManaged
         })
         Write-TransactionJournal -Paths $Paths -Value $journal
     } elseif ([string]$journal.Mode -ne 'Uninstall') {
@@ -2486,28 +3382,33 @@ function Invoke-ConservativeUninstall {
         $journal.UninstallerPath = $Paths.UninstallerPath
         Write-TransactionJournal -Paths $Paths -Value $journal
     }
+    if (-not $journal.PSObject.Properties['GatewayManaged']) {
+        $journal | Add-Member -MemberType NoteProperty -Name GatewayManaged -Value ([bool]$state.GatewayManaged)
+        Write-TransactionJournal -Paths $Paths -Value $journal
+    } elseif ([bool]$journal.GatewayManaged -ne [bool]$state.GatewayManaged) {
+        throw 'The uninstall transaction journal and ownership marker disagree about OPC DA gateway ownership.'
+    }
     $phase = [string]$journal.Phase
 
-    if ($phase -eq 'Begin' -and $null -ne $state.Service) {
-        if (-not (Test-OwnedServiceSnapshot -ServiceSnapshot $state.Service -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
-            throw "Service '$($Paths.ServiceName)' is not the installer-owned LocalService service. Refusing to remove it."
-        }
-        if ($state.Service.State -ne 'Stopped') {
-            Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceStopPending'
-            Stop-InstallerService | Out-Null
-        }
-        Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceRemovePending'
-        Remove-ServiceByName -Name $Paths.ServiceName
-        Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceRemoved'
-        $phase = 'ServiceRemoved'
-    } elseif ($phase -eq 'Begin') {
-        # A missing service is an already-completed service-removal step.  The
-        # ownership marker still protects every remaining uninstall action.
-        Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceRemoved'
-        $phase = 'ServiceRemoved'
+    if ($phase -eq 'Begin') {
+        Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceStopPending'
+        $phase = 'ServiceStopPending'
     }
 
     if ($phase -eq 'ServiceStopPending') {
+        if ($state.GatewayManaged) {
+            $currentGatewayService = Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+            if ($null -ne $currentGatewayService) {
+                if (-not (Test-OwnedGatewayServiceSnapshot `
+                        -ServiceSnapshot $currentGatewayService `
+                        -ExecutablePath $Paths.GatewayExecutable `
+                        -ConfigPath $Paths.GatewayConfigPath `
+                        -LogDirectory $Paths.GatewayLogDirectory)) {
+                    throw "Service '$($Paths.GatewayServiceName)' is not the installer-owned LocalSystem gateway service. Refusing to remove it."
+                }
+                Stop-InstallerGatewayService -Paths $Paths | Out-Null
+            }
+        }
         $currentService = Get-ServiceSnapshot -Name $Paths.ServiceName
         if ($null -ne $currentService) {
             if (-not (Test-OwnedServiceSnapshot -ServiceSnapshot $currentService -ExecutablePath $Paths.ServiceExecutable -ConfigPath $Paths.ConfigPath)) {
@@ -2517,10 +3418,28 @@ function Invoke-ConservativeUninstall {
                 Stop-InstallerService | Out-Null
             }
         }
+        Update-TransactionJournalPhase -Paths $Paths -Phase 'ServiceRemovePending'
         $phase = 'ServiceRemovePending'
     }
 
     if ($phase -eq 'ServiceRemovePending') {
+        if ($state.GatewayManaged) {
+            $gatewayRegistrationExists = Invoke-ServiceRegistrationQuery -Name $Paths.GatewayServiceName
+            if ($gatewayRegistrationExists) {
+                $currentGatewayService = Get-ServiceSnapshot -Name $Paths.GatewayServiceName
+                if ($null -eq $currentGatewayService) {
+                    throw "Service '$($Paths.GatewayServiceName)' remains registered but cannot be inspected. Refusing to remove it."
+                }
+                if (-not (Test-OwnedGatewayServiceSnapshot `
+                        -ServiceSnapshot $currentGatewayService `
+                        -ExecutablePath $Paths.GatewayExecutable `
+                        -ConfigPath $Paths.GatewayConfigPath `
+                        -LogDirectory $Paths.GatewayLogDirectory)) {
+                    throw "Service '$($Paths.GatewayServiceName)' is not the installer-owned LocalSystem gateway service. Refusing to remove it."
+                }
+                Remove-InstallerGatewayService -Paths $Paths
+            }
+        }
         $registrationExists = Invoke-ServiceRegistrationQuery -Name $Paths.ServiceName
         if ($registrationExists) {
             $currentService = Get-ServiceSnapshot -Name $Paths.ServiceName
@@ -2711,10 +3630,13 @@ try {
             -PriorState $priorState `
             -VersionContract $versionContract `
             -PayloadRoot $PayloadRoot `
+            -GatewayPayloadRoot $GatewayPayloadRoot `
             -InstallerScriptRoot $InstallerScriptRoot `
             -UninstallerSource $UninstallerSource `
             -AddToPath $AddToPath `
             -StartService $StartService `
+            -InstallGateway $InstallGateway `
+            -StartGateway $StartGateway `
             -CustomDbBackupConfirmed $CustomDbBackupConfirmed `
             -TestOnly ([bool]$TestOnly) `
             -FailureInjection $FailureInjection

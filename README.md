@@ -402,15 +402,25 @@ Linux/macOS/Windows archives (each bundling both `bhtune` and `bhtune-server`) t
 [Releases](https://github.com/bytehound-labs/bhtune/releases) page automatically. The separate
 Windows NSIS installer workflow builds and validates
 `bhtune-vX.Y.Z-windows-x86_64-installer.exe` from the exact Windows archive in stable-release
-mode, while arbitrary refs and release candidates remain dry-run-only. Silent installs use the
-same ownership, health, and rollback checks as interactive installs; a failed upgrade also
-requires the restored service to pass its health/version check before rollback is reported
-successful. Fatal silent-mode failures return a nonzero exit code rather than waiting for a
-desktop dialog. An interrupted installer run is validated and safely recovered, or refused
-without guessing, when the installer is invoked again. Windows uninstall uses a guarded
-two-pass cleanup and preserves the complete ProgramData tree, including installer recovery state;
-a genuinely empty clean install has no rollback backup until there is existing data to protect.
-It is not attached to a public release until the first stable release contract is activated. The
+mode, while arbitrary refs and release candidates remain dry-run-only. It embeds a pinned,
+independently verified official 32-bit `opcda-bridge-gateway` as an optional companion
+component. Interactive clean installs select the gateway by default after showing that its
+`LocalSystem` service is unauthenticated and listens on `0.0.0.0:7600`; silent clean installs
+require `/INSTALL_GATEWAY=1` so that exposure is explicit. The installer never creates or
+modifies a firewall rule. Once installer-owned, the gateway remains part of managed upgrades,
+preserves its prior running/stopped state, and participates with `BhtuneServer` in one
+transactional rollback.
+
+Silent installs use the same ownership, health, listener, and rollback checks as interactive
+installs; a failed upgrade also requires the restored services to pass their health and
+read-only gateway checks before rollback is reported successful. Fatal silent-mode failures
+return a nonzero exit code rather than waiting for a desktop dialog. An interrupted installer
+run is validated and safely recovered, or refused without guessing, when the installer is
+invoked again. Windows uninstall uses a guarded two-pass cleanup, removes only marker-proven
+services and Program Files payloads, and preserves the complete ProgramData tree, including
+gateway configuration, index state, logs, and installer recovery data. A genuinely empty clean
+install has no rollback backup until there is existing data to protect. It is not attached to
+a public release until the first stable release contract is activated. The
 `bhtune-bin` generator and reusable AUR workflow are ready as a separate follow-on channel and
 are likewise stable-tag-only. The first publication is intentionally manual after the exact
 stable Linux archive and release evidence have been independently verified; no AUR package is

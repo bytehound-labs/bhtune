@@ -1,0 +1,13 @@
+The BHTune Windows installer can install opcda-bridge-gateway 0.5.9 as an
+optional companion component.
+
+Project: https://github.com/bytehound-labs/opcda-bridge
+Release: opcda-bridge-gateway-v0.5.9
+Source commit: 23b7487dda1da9e4e84ee5c48277785cbfc6519e
+License: MIT
+
+The embedded executable is copied from the official upstream release archive
+and is not rebuilt or modified by BHTune. The installer build verifies the
+upstream checksum, Sigstore identity, GitHub provenance, archive contents,
+32-bit PE architecture, reported version, and compatibility metadata before
+packaging it.

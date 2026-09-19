@@ -16,12 +16,20 @@ Before an installation is accepted for operator use, verify all of the following
   verified with the [release-verification guide](release-verification.md).
 - The server listens on `127.0.0.1:8787` unless a deliberate, documented deployment decision
   says otherwise.
-- No installer or package step created a firewall rule or changed the OPC DA gateway.
+- No installer or package step created or modified a firewall rule.
 - `GET /api/health` returns `status: "ok"` and the expected product version.
 - A simulator tune completes and appears in history.
 - The service identity, configuration path, database path, and log path match the installation
   method.
 - The operator can stop and start the service and can locate its logs.
+- When the Windows installer owns the optional local gateway:
+  - `OpcdaBridgeGateway` runs as `LocalSystem` from the exact managed executable and
+    configuration paths;
+  - every TCP `7600` listener belongs to its SCM process and at least one listener binds
+    `0.0.0.0:7600`;
+  - the installed gateway hash matches its embedded release contract; and
+  - `bhtune opc --output json servers --bridge-host 127.0.0.1:7600` returns valid JSON,
+    including a valid empty `servers` array when no OPC DA server is registered.
 
 The browser health indicator confirms only that the BHTune HTTP service responds. It does not
 test the OPC DA gateway, a controller, or a tag.
@@ -31,19 +39,20 @@ test the OPC DA gateway, a controller, or a tag.
 Use the procedure matching the installed distribution. Do not mix service units or paths from
 different installation methods.
 
-| Installation             | Binary/service path                                                                       | Configuration                                                   | Data and logs                                      |
-| ------------------------ | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
-| Windows NSIS             | `%ProgramFiles%\ByteHound\bhtune\bhtune-server.exe`; service `BhtuneServer`               | `%ProgramData%\ByteHound\bhtune\bhtune.toml`                    | `%ProgramData%\ByteHound\bhtune\data\` and `logs\` |
-| Windows manual archive   | The path chosen by the operator; service registration uses the binary's `install` command | The path passed to `--config`, if any                           | The configured/default user data directory         |
-| Arch, Debian/Ubuntu, RPM | `/usr/bin/bhtune-server`; `bhtune-server.service`                                         | `/etc/bhtune/`                                                  | `/var/lib/bhtune/`, including `logs/`              |
-| macOS archive            | `/usr/local/bin/bhtune-server` unless the archive was installed elsewhere                 | `/usr/local/etc/bhtune/` for the supplied LaunchDaemon template | `/usr/local/var/bhtune/` and `/usr/local/var/log/` |
-| Docker                   | `/usr/local/bin/bhtune-server` inside the container                                       | Environment variables or a mounted config                       | The mounted `/var/lib/bhtune` volume               |
+| Installation             | Binary/service path                                                                                            | Configuration                                                                 | Data and logs                                                            |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Windows NSIS             | `%ProgramFiles%\ByteHound\bhtune\bhtune-server.exe`; services `BhtuneServer` and optional `OpcdaBridgeGateway` | `%ProgramData%\ByteHound\bhtune\bhtune.toml`; gateway config under `gateway\` | `%ProgramData%\ByteHound\bhtune\data\`, `logs\`, and optional `gateway\` |
+| Windows manual archive   | The path chosen by the operator; service registration uses the binary's `install` command                      | The path passed to `--config`, if any                                         | The configured/default user data directory                               |
+| Arch, Debian/Ubuntu, RPM | `/usr/bin/bhtune-server`; `bhtune-server.service`                                                              | `/etc/bhtune/`                                                                | `/var/lib/bhtune/`, including `logs/`                                    |
+| macOS archive            | `/usr/local/bin/bhtune-server` unless the archive was installed elsewhere                                      | `/usr/local/etc/bhtune/` for the supplied LaunchDaemon template               | `/usr/local/var/bhtune/` and `/usr/local/var/log/`                       |
+| Docker                   | `/usr/local/bin/bhtune-server` inside the container                                                            | Environment variables or a mounted config                                     | The mounted `/var/lib/bhtune` volume                                     |
 
-The Windows NSIS service runs as `NT AUTHORITY\LocalService`. The manual Windows
-`bhtune-server.exe install` path follows the application's existing service-registration path
-and runs as `LocalSystem`; it is a separate operating model. The package-managed Linux unit
-uses `DynamicUser=true`; the supplied macOS LaunchDaemon runs as root because no dedicated
-launchd service account is provisioned.
+The Windows NSIS BHTune service runs as `NT AUTHORITY\LocalService`. Its optional
+`OpcdaBridgeGateway` service runs as `LocalSystem`, matching the upstream native OPC DA/DCOM
+service contract. The manual Windows `bhtune-server.exe install` path also runs BHTune as
+`LocalSystem`; it is a separate operating model. The package-managed Linux unit uses
+`DynamicUser=true`; the supplied macOS LaunchDaemon runs as root because no dedicated launchd
+service account is provisioned.
 
 ## 3. Service control and logs
 
@@ -73,6 +82,22 @@ C:\ProgramData\ByteHound\bhtune\installer\
 ```
 
 Do not delete that directory while investigating an upgrade or rollback.
+
+When the optional local gateway is installer-owned:
+
+```powershell
+Get-Service OpcdaBridgeGateway
+sc.exe qc OpcdaBridgeGateway
+Get-CimInstance Win32_Service -Filter "Name='OpcdaBridgeGateway'"
+Get-NetTCPConnection -State Listen -LocalPort 7600
+& "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json servers `
+  --bridge-host 127.0.0.1:7600
+Get-ChildItem "$env:ProgramData\ByteHound\bhtune\gateway\logs"
+```
+
+The gateway is unauthenticated and binds `0.0.0.0:7600`. The installer deliberately leaves
+Windows Firewall unchanged. Do not add a firewall rule unless off-host gateway access on a
+trusted OT network is required and explicitly approved.
 
 ### Linux systemd
 
@@ -331,11 +356,13 @@ run's samples, results, and write audit rows.
 Before any upgrade, capture the current version, service state, configuration, database
 backup, and health response. Keep one known-good package or archive available.
 
-- **Windows NSIS:** the installer validates ownership, preserves the previous service state,
-  keeps one verified rollback backup, transiently validates the candidate even when the old
-  service was stopped, and restores the prior state after success. An external database is
-  outside the automatic backup boundary and requires `/CUSTOM_DB_BACKUP_CONFIRMED=1` only
-  after an independent backup.
+- **Windows NSIS:** the installer validates ownership of both managed services and TCP `7600`,
+  preserves each service's previous state, keeps one verified rollback backup, and transiently
+  validates both candidates even when a prior service was stopped. A gateway-free installation
+  remains gateway-free unless explicitly opted in; once the gateway is installer-owned, an
+  upgrade continues to manage it. The rollback snapshot includes the complete gateway
+  ProgramData subtree. An external BHTune database is outside the automatic backup boundary
+  and requires `/CUSTOM_DB_BACKUP_CONFIRMED=1` only after an independent backup.
 - **Arch/Debian/RPM:** package upgrades preserve `/etc/bhtune` and `/var/lib/bhtune`; the
   package-managed unit uses `/usr/bin/bhtune-server`. A running service may be restarted by
   package lifecycle scripts, while a stopped service remains stopped.
@@ -350,16 +377,19 @@ installer/package logs and database backup, and escalate with the exact version,
 definition, API response, and log output. Do not retry repeatedly against a live loop.
 
 Normal removal deletes package or installer payloads but preserves operator data. Windows
-uninstall preserves the complete ProgramData tree. Linux package removal preserves `/etc/bhtune`,
-`/var/lib/bhtune`, SQLite sidecars, and logs. Delete retained data only as a separate,
-operator-approved archival or decommissioning task.
+uninstall removes a marker-proven `BhtuneServer` and optional `OpcdaBridgeGateway` registration
+and preserves the complete ProgramData tree, including gateway configuration, index database
+and sidecars, build metadata, logs, and rollback evidence. Linux package removal preserves
+`/etc/bhtune`, `/var/lib/bhtune`, SQLite sidecars, and logs. Delete retained data only as a
+separate, operator-approved archival or decommissioning task.
 
 ## 12. Incident response
 
 ### Service will not start
 
 1. Do not change the database while the service may still be running.
-2. Capture `systemctl status`/`sc query`/`launchctl print`/`docker logs`.
+2. Capture `systemctl status`/`sc query`/`launchctl print`/`docker logs`. On Windows, capture
+   both `BhtuneServer` and `OpcdaBridgeGateway` when the gateway component is installed.
 3. Check the configured bind, database path, log directory, and service identity.
 4. Confirm the configured database parent and SQLite sidecars are accessible to the service
    account.
@@ -383,6 +413,11 @@ Stop the service, preserve the original database and sidecars, preserve the fail
 package logs, and use an independently verified backup. The Windows installer cannot roll back
 an external database, and package/manual archive installs do not provide an automatic database
 rollback.
+
+For a Windows gateway failure, also preserve the exact gateway service definition, PID and
+command line, TCP `7600` listener ownership, installed executable hash, configuration, index
+database and sidecars, build metadata, and gateway logs. Do not kill a process by name; stop the
+service first and use an exact, freshly verified PID only when ordinary service shutdown fails.
 
 ## Related procedures
 

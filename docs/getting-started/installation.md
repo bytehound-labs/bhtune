@@ -25,16 +25,16 @@ Sigstore bundle, and provenance evidence. A checksum proves that the downloaded 
 published digest; Sigstore and GitHub provenance verify different parts of the build identity.
 Do not treat a successful health check as evidence that a live plant is safe to tune.
 
-| Path            | Artifact or source                                                           | Service model                                       | Persistent state                                 |
-| --------------- | ---------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------ |
-| Windows NSIS    | `bhtune-vX.Y.Z-windows-x86_64-installer.exe` after stable release activation | `BhtuneServer`, `LocalService`                      | `%ProgramData%\ByteHound\bhtune\`                |
-| Windows archive | Windows release archive                                                      | Manual SCM registration, `LocalSystem`              | Explicit `--config` path recommended             |
-| Arch            | `bhtune-bin` after the first verified AUR publication                        | systemd, `DynamicUser`                              | `/etc/bhtune`, `/var/lib/bhtune`                 |
-| Debian/Ubuntu   | `.deb` from the stable release                                               | systemd, `DynamicUser`                              | `/etc/bhtune`, `/var/lib/bhtune`                 |
-| RPM Linux       | `.rpm` from the stable release                                               | systemd, `DynamicUser`                              | `/etc/bhtune`, `/var/lib/bhtune`                 |
-| Portable Linux  | Linux release archive                                                        | Manual systemd unit or foreground process           | Operator-selected paths                          |
-| macOS           | Apple Silicon release archive                                                | Supplied launchd LaunchDaemon or foreground process | `/usr/local/etc/bhtune`, `/usr/local/var/bhtune` |
-| Docker          | GHCR `edge` or stable version tag                                            | Container process                                   | Docker volume at `/var/lib/bhtune`               |
+| Path            | Artifact or source                                                           | Service model                                                                  | Persistent state                                                    |
+| --------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Windows NSIS    | `bhtune-vX.Y.Z-windows-x86_64-installer.exe` after stable release activation | `BhtuneServer` (`LocalService`); optional `OpcdaBridgeGateway` (`LocalSystem`) | `%ProgramData%\ByteHound\bhtune\`, including optional gateway state |
+| Windows archive | Windows release archive                                                      | Manual SCM registration, `LocalSystem`                                         | Explicit `--config` path recommended                                |
+| Arch            | `bhtune-bin` after the first verified AUR publication                        | systemd, `DynamicUser`                                                         | `/etc/bhtune`, `/var/lib/bhtune`                                    |
+| Debian/Ubuntu   | `.deb` from the stable release                                               | systemd, `DynamicUser`                                                         | `/etc/bhtune`, `/var/lib/bhtune`                                    |
+| RPM Linux       | `.rpm` from the stable release                                               | systemd, `DynamicUser`                                                         | `/etc/bhtune`, `/var/lib/bhtune`                                    |
+| Portable Linux  | Linux release archive                                                        | Manual systemd unit or foreground process                                      | Operator-selected paths                                             |
+| macOS           | Apple Silicon release archive                                                | Supplied launchd LaunchDaemon or foreground process                            | `/usr/local/etc/bhtune`, `/usr/local/var/bhtune`                    |
+| Docker          | GHCR `edge` or stable version tag                                            | Container process                                                              | Docker volume at `/var/lib/bhtune`                                  |
 
 The NSIS installer, AUR package, and stable package assets are prepared in the repository but are
 not publicly installable until the first stable release and its publication steps are complete.
@@ -47,16 +47,24 @@ automatic `BhtuneServer` service as `NT AUTHORITY\LocalService`, and stores conf
 logs, and one verified rollback backup under `%ProgramData%\ByteHound\bhtune\`. It starts the
 service by default and verifies both `/api/health` and the installed version.
 
-Silent installation supports `/S`, `/ADD_TO_PATH=0`, `/START_SERVICE=0`, and
-`/CUSTOM_DB_BACKUP_CONFIRMED=1`. The last flag is only for an external database that the
-operator has backed up independently; the installer never claims ownership of that database.
-The installer does not create firewall rules or expose the OPC gateway.
+The installer embeds a pinned, independently verified official 32-bit
+`opcda-bridge-gateway`. Interactive clean installs select this optional component by default
+after warning that it is unauthenticated and listens on `0.0.0.0:7600`. Silent clean installs
+require `/INSTALL_GATEWAY=1`; `/START_GATEWAY=0` installs and validates it without leaving it
+running. The installer never creates or modifies a firewall rule.
 
-Upgrades preserve the previous service running/stopped state and retain exactly one verified
-rollback backup. The automatic database boundary covers only the installer-managed ProgramData
-database and its `-wal`/`-shm` companions. An external, malformed, relative, ambiguous, missing,
-or inaccessible path fails closed before the service is stopped. Uninstall removes only the
-installer-owned Program Files/service/shortcut state and preserves the entire ProgramData tree.
+Silent installation also supports `/S`, `/ADD_TO_PATH=0`, `/START_SERVICE=0`, and
+`/CUSTOM_DB_BACKUP_CONFIRMED=1`. The last flag is only for an external BHTune database that the
+operator has backed up independently; the installer never claims ownership of that database.
+
+Upgrades preserve each installer-managed service's previous running/stopped state and retain
+exactly one verified rollback backup. Gateway-free installations remain gateway-free unless
+explicitly opted in; an installer-owned gateway remains managed on later upgrades. The
+automatic BHTune database boundary covers only the installer-managed ProgramData database and
+its `-wal`/`-shm` companions, while gateway ProgramData remains inside the combined rollback
+transaction. An external, malformed, relative, ambiguous, missing, or inaccessible BHTune
+database path fails closed before either service is stopped. Uninstall removes only
+marker-proven Program Files and service ownership and preserves the entire ProgramData tree.
 See the [operator runbook](../guides/operator-runbook.md#1-installation-acceptance) for acceptance,
 rollback, and incident procedures.
 
@@ -374,14 +382,40 @@ interactive user's profile.
 
 The installer starts the service by default and checks
 `http://127.0.0.1:8787/api/health` for both `status: "ok"` and the expected package version.
-It does not create firewall rules or change the OPC DA gateway. Interactive installation keeps
-machine `PATH` and clean-install service startup enabled by default. Silent installation supports:
+It also embeds the official 32-bit gateway release pinned by
+`installer/windows/opcda-gateway-release.json`. The optional component installs
+`gateway\opcda-bridge-gateway.exe` plus its release contract, verification manifest, MIT
+license, and notice under Program Files; registers `OpcdaBridgeGateway` as an automatic
+`LocalSystem` service; and stores its configuration, persistent search index, SQLite sidecars,
+build metadata, and logs under `%ProgramData%\ByteHound\bhtune\gateway\`.
+
+Interactive clean installs select and start the gateway by default after displaying its
+security warning. Silent clean installs require an explicit `/INSTALL_GATEWAY=1`, because
+`/S` cannot display that warning. The gateway is unauthenticated and listens on
+`0.0.0.0:7600`; the installer never creates or modifies a Windows Firewall rule. Interactive
+installation also keeps machine `PATH` and clean-install BHTune service startup enabled by
+default. Silent installation supports:
 
 ```text
 /S
 /ADD_TO_PATH=0
 /START_SERVICE=0
+/INSTALL_GATEWAY=1|0
+/START_GATEWAY=1|0
 /CUSTOM_DB_BACKUP_CONFIRMED=1
+```
+
+For example:
+
+```powershell
+# Install BHTune only.
+.\bhtune-vX.Y.Z-windows-x86_64-installer.exe /S
+
+# Install and start BHTune plus the local gateway.
+.\bhtune-vX.Y.Z-windows-x86_64-installer.exe /S /INSTALL_GATEWAY=1
+
+# Install and validate the gateway, then leave it stopped.
+.\bhtune-vX.Y.Z-windows-x86_64-installer.exe /S /INSTALL_GATEWAY=1 /START_GATEWAY=0
 ```
 
 An empty clean install has no prior database to protect, so it does not create a rollback
@@ -389,21 +423,28 @@ backup. Once installer-managed data exists, upgrades retain exactly one verified
 under the ProgramData installer state directory; the existing backup is replaced only after the
 new manifest has been verified.
 
-Silent installs use the same ownership, health, and rollback checks as interactive installs; the
-flags only select the optional machine `PATH`, clean-install startup, and custom-database
-acknowledgement behavior. Fatal errors in silent mode return a nonzero installer exit code
-instead of waiting for an interactive error dialog, so scheduled-task and CI callers can detect
-failure without a desktop session.
+Silent installs use the same ownership, health, listener, gateway smoke, and rollback checks as
+interactive installs. `/START_GATEWAY` controls the final state only for a new gateway
+installation or add-on; a managed gateway upgrade preserves its prior running/stopped state.
+An installation that predates gateway support, or that previously opted out, remains
+gateway-free until `/INSTALL_GATEWAY=1` is supplied. Once the gateway is installer-owned,
+`/INSTALL_GATEWAY=0` cannot abandon or remove it during an upgrade. Fatal errors in silent mode
+return a nonzero installer exit code instead of waiting for an interactive error dialog, so
+scheduled-task and CI callers can detect failure without a desktop session.
 
-Upgrades preserve the service's previous running/stopped state, but validate configuration before
-stopping the service. Automatic database backup and rollback apply only when the top-level `db`
-setting resolves to the installer-managed ProgramData database. An external, malformed, relative,
-ambiguous, missing, or inaccessible database path fails closed; the installer does not create an
-external database file or its parent directory. After preparing and independently backing up an
-existing external database, an operator may rerun with `/CUSTOM_DB_BACKUP_CONFIRMED=1`. That
-override permits binary/service upgrade but does not claim to back up or roll back the external
-database. If an upgrade fails, rollback also checks the managed rollback root, restored service
-health, and package version before reporting recovery.
+Upgrades validate ownership, both service definitions, gateway payload/configuration, and TCP
+`7600` ownership before stopping anything. The installer then stops both managed services,
+creates one verified snapshot of BHTune Program Files and the complete gateway ProgramData tree,
+replaces and validates the candidate payloads, transiently starts the candidates for BHTune
+health and read-only gateway checks, and restores each service's prior state. Automatic BHTune
+database backup and rollback apply only when the top-level `db` setting resolves to the
+installer-managed ProgramData database. An external, malformed, relative, ambiguous, missing,
+or inaccessible database path fails closed; the installer does not create an external database
+file or its parent directory. After preparing and independently backing up an existing external
+database, an operator may rerun with `/CUSTOM_DB_BACKUP_CONFIRMED=1`. That override permits
+binary/service upgrade but does not claim to back up or roll back the external database.
+Gateway configuration, index database and sidecars, build metadata, logs, and evidence remain
+inside the installer rollback boundary regardless of the BHTune database location.
 
 The external database is opened by the installed service as `NT AUTHORITY\LocalService`, not
 by the elevated installer account. The database file's parent directory and the database file
@@ -418,17 +459,31 @@ If an installer process is interrupted, the next installer invocation validates 
 transaction journal and either completes the safe recovery or refuses to continue without
 guessing about ownership or data.
 
-Uninstall is a two-pass transaction. The first pass removes the owned service, shortcut,
-registry-facing uninstall state, and exact machine `PATH` entry, then leaves the transaction
-journal and ownership metadata in place while NSIS removes the fixed Program Files tree. A
-guarded finalization pass removes that metadata and the journal only after the tree is verified
-absent; an interrupted or incomplete cleanup therefore remains retryable instead of being
-reported as finished. Service removal uses a bounded SCM disappearance wait with transient
-service-query retries, which allows older Windows versions to complete delayed service
-deregistration without treating a still-pending removal as success. Uninstall removes only
-installer-owned binaries and state, and preserves the entire
-`%ProgramData%\ByteHound\bhtune\` tree, including configuration, databases, logs, and rollback
-backup. There is no automated data-deletion option.
+Uninstall is a two-pass transaction. The first pass removes marker-proven `BhtuneServer` and
+`OpcdaBridgeGateway` registrations, the shortcut, registry-facing uninstall state, and exact
+machine `PATH` entry, then leaves the transaction journal and ownership metadata in place while
+NSIS removes the fixed Program Files tree. A guarded finalization pass removes that metadata and
+the journal only after the tree is verified absent; an interrupted or incomplete cleanup
+therefore remains retryable instead of being reported as finished. Service removal uses a
+bounded SCM disappearance wait with transient service-query retries, which allows older Windows
+versions to complete delayed service deregistration without treating a still-pending removal as
+success. Uninstall removes only installer-owned binaries and state, and preserves the entire
+`%ProgramData%\ByteHound\bhtune\` tree, including BHTune configuration/database/logs, gateway
+configuration/index/sidecars/logs, and rollback evidence. There is no automated data-deletion
+option.
+
+After installation, verify both services when the gateway component was selected:
+
+```powershell
+sc.exe qc BhtuneServer
+sc.exe qc OpcdaBridgeGateway
+Invoke-RestMethod http://127.0.0.1:8787/api/health
+& "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json servers `
+  --bridge-host 127.0.0.1:7600
+```
+
+The final command must return valid JSON; an empty `servers` array is valid when no OPC DA
+servers are registered on the gateway host.
 
 #### Manual archive installation
 
