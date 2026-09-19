@@ -725,7 +725,6 @@ exit 7
                 -LogDirectory 'C:\ProgramData\ByteHound\bhtune\gateway\logs')) -Message 'gateway services outside LocalSystem are rejected'
 
     foreach ($functionName in @(
-            'Write-TextFile',
             'Write-JsonFile',
             'Enter-InstallerTransactionLock',
             'Exit-InstallerTransactionLock',
@@ -792,6 +791,56 @@ exit 7
     )
     Assert-Equal -Actual @($helperParseErrors).Count -Expected 0 -Message 'installer support script parses for ACL regression coverage'
     Import-InstallerFunction -ScriptAst $helperAst -Name 'Set-InstallerAcls'
+
+    $diagnosticScriptPath = Join-Path $PSScriptRoot 'Run-NsisDiagnostic.ps1'
+    $diagnosticParseErrors = $null
+    $diagnosticParseTokens = $null
+    $diagnosticAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $diagnosticScriptPath,
+        [ref]$diagnosticParseTokens,
+        [ref]$diagnosticParseErrors
+    )
+    Assert-Equal -Actual @($diagnosticParseErrors).Count -Expected 0 -Message 'NSIS lifecycle diagnostic parses for command-scope regression coverage'
+    $diagnosticFunctions = @(
+        $diagnosticAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
+            }, $true) |
+            ForEach-Object { $_.Name }
+    )
+    $windowsOnlyCommands = @(
+        'Get-CimInstance',
+        'Get-NetFirewallPortFilter',
+        'Get-NetFirewallRule',
+        'Get-ScheduledTask',
+        'Get-ScheduledTaskInfo',
+        'New-ScheduledTaskAction',
+        'New-ScheduledTaskPrincipal',
+        'New-Service',
+        'Register-ScheduledTask',
+        'Start-ScheduledTask',
+        'Start-Service',
+        'Stop-ScheduledTask',
+        'Unregister-ScheduledTask'
+    )
+    $unresolvedDiagnosticCommands = @(
+        $diagnosticAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.CommandAst]
+            }, $true) |
+            ForEach-Object { $_.GetCommandName() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique |
+            Where-Object {
+                $_ -notin $diagnosticFunctions -and
+                $_ -notin $windowsOnlyCommands -and
+                $null -eq (Get-Command $_ -ErrorAction SilentlyContinue)
+            }
+    )
+    Assert-Equal `
+        -Actual $unresolvedDiagnosticCommands `
+        -Expected @() `
+        -Message 'NSIS lifecycle diagnostic calls only local, shared, built-in, or explicit Windows-only commands'
 
     $journalPaths = Get-InstallerPaths `
         -InstallRoot (Join-Path $script:WorkRoot 'journal\ProgramFiles\ByteHound\bhtune') `

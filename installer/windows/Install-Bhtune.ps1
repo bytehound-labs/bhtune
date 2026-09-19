@@ -100,23 +100,6 @@ $InstallGateway = ConvertTo-InstallerBoolean -Value $InstallGateway -Name 'Insta
 $StartGateway = ConvertTo-InstallerBoolean -Value $StartGateway -Name 'StartGateway'
 $CustomDbBackupConfirmed = ConvertTo-InstallerBoolean -Value $CustomDbBackupConfirmed -Name 'CustomDbBackupConfirmed'
 
-function Write-TextFile {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Content
-    )
-
-    $parent = Split-Path -Parent $Path
-    if (-not [string]::IsNullOrWhiteSpace($parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    $encoding = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($Path, $Content, $encoding)
-}
-
 function Write-JsonFile {
     param(
         [Parameter(Mandatory = $true)]
