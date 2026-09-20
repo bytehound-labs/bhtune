@@ -67,7 +67,7 @@ jobs:
   build:
     name: Build and validate NSIS installer
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
     outputs:
@@ -162,9 +162,191 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Install Cosign for stable-release verification
-        if: inputs.mode == 'release'
+      - name: Install Cosign for supply-chain verification
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac
+
+      - name: Verify and stage pinned OPC DA gateway
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\InstallerSupport.ps1')
+
+          $contractSource = Join-Path $env:GITHUB_WORKSPACE 'installer\windows\opcda-gateway-release.json'
+          $contract = Assert-GatewayReleaseContract -ContractPath $contractSource
+          $repository = [string]$contract.repository
+          $tag = [string]$contract.tag
+          $download = Join-Path $env:GITHUB_WORKSPACE 'installer-build\gateway-release'
+          $extract = Join-Path $download 'extract'
+          $payload = Join-Path $env:GITHUB_WORKSPACE 'installer-build\gateway-payload'
+          New-Item -ItemType Directory -Force -Path $download, $payload | Out-Null
+
+          $release = gh api "repos/$repository/releases/tags/$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect upstream gateway release $repository@$tag"
+          }
+          if ([string]$release.tag_name -cne $tag -or $release.draft -or $release.prerelease) {
+            throw "The pinned upstream gateway release must remain a published stable release."
+          }
+          $requiredAssets = @(
+            [string]$contract.archive.name,
+            [string]$contract.upstream_evidence.archive_sigstore_bundle,
+            [string]$contract.upstream_evidence.checksums,
+            "$($contract.upstream_evidence.checksums).sigstore.json",
+            [string]$contract.upstream_evidence.provenance,
+            [string]$contract.upstream_evidence.compatibility
+          )
+          $publishedAssets = @($release.assets | ForEach-Object { [string]$_.name })
+          foreach ($asset in $requiredAssets) {
+            if ($publishedAssets -cnotcontains $asset) {
+              throw "The upstream gateway release is missing required asset '$asset'."
+            }
+          }
+
+          $tagRef = gh api "repos/$repository/git/ref/tags/$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect upstream gateway tag $tag"
+          }
+          $sourceCommit = if ([string]$tagRef.object.type -eq 'tag') {
+            $tagObject = gh api "repos/$repository/git/tags/$($tagRef.object.sha)" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or [string]$tagObject.object.type -ne 'commit') {
+              throw "The upstream gateway tag does not resolve to a commit."
+            }
+            [string]$tagObject.object.sha
+          } elseif ([string]$tagRef.object.type -eq 'commit') {
+            [string]$tagRef.object.sha
+          } else {
+            throw "The upstream gateway tag resolves to unsupported object type '$($tagRef.object.type)'."
+          }
+          if ($sourceCommit -cne [string]$contract.source_commit) {
+            throw "The upstream gateway tag moved from pinned commit '$($contract.source_commit)' to '$sourceCommit'."
+          }
+
+          $workflow = gh api "repos/$repository/contents/$($contract.release_workflow.path)?ref=$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or [string]$workflow.sha -cne [string]$contract.release_workflow.blob_sha) {
+            throw "The upstream gateway release workflow does not match its pinned blob SHA."
+          }
+
+          $patterns = @()
+          foreach ($asset in $requiredAssets) {
+            $patterns += @('--pattern', $asset)
+          }
+          gh release download $tag --repo $repository --dir $download @patterns
+          if ($LASTEXITCODE -ne 0) {
+            throw "Downloading the pinned upstream gateway release failed."
+          }
+
+          $archive = Join-Path $download ([string]$contract.archive.name)
+          $archiveBundle = Join-Path $download ([string]$contract.upstream_evidence.archive_sigstore_bundle)
+          $checksums = Join-Path $download ([string]$contract.upstream_evidence.checksums)
+          $checksumsBundle = "$checksums.sigstore.json"
+          $attestation = Join-Path $download ([string]$contract.upstream_evidence.provenance)
+          $compatibility = Join-Path $download ([string]$contract.upstream_evidence.compatibility)
+
+          cosign verify-blob `
+            --bundle $checksumsBundle `
+            --certificate-identity ([string]$contract.release_workflow.builder_id) `
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' `
+            $checksums
+          if ($LASTEXITCODE -ne 0) {
+            throw "The upstream gateway release checksum signature is invalid."
+          }
+          cosign verify-blob `
+            --bundle $archiveBundle `
+            --certificate-identity ([string]$contract.release_workflow.builder_id) `
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' `
+            $archive
+          if ($LASTEXITCODE -ne 0) {
+            throw "The upstream gateway archive signature is invalid."
+          }
+          gh attestation verify $archive `
+            --repo $repository `
+            --bundle $attestation `
+            --signer-workflow "$repository/$($contract.release_workflow.path)" `
+            --source-ref "refs/tags/$tag" `
+            --cert-oidc-issuer 'https://token.actions.githubusercontent.com'
+          if ($LASTEXITCODE -ne 0) {
+            throw "The upstream gateway GitHub provenance is invalid."
+          }
+
+          $checksumLine = Get-Content -LiteralPath $checksums |
+            Where-Object { [System.IO.Path]::GetFileName(($_ -split '\s+', 2)[-1]) -ceq [string]$contract.archive.name } |
+            Select-Object -First 1
+          $checksumMatch = if ($null -eq $checksumLine) {
+            $null
+          } else {
+            [regex]::Match([string]$checksumLine, '^(?<hash>[0-9a-fA-F]{64})\s+\*?(?<name>.+)$')
+          }
+          if ($null -eq $checksumMatch -or -not $checksumMatch.Success) {
+            throw "The upstream release checksum file does not name the pinned gateway archive."
+          }
+          $archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($archiveHash -cne $checksumMatch.Groups['hash'].Value.ToLowerInvariant() -or
+              $archiveHash -cne [string]$contract.archive.sha256) {
+            throw "The upstream gateway archive does not match both upstream and pinned checksums."
+          }
+
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract -Force
+          $archiveFiles = @(
+            Get-ChildItem -LiteralPath $extract -File -Recurse |
+              ForEach-Object { $_.FullName.Substring($extract.Length).TrimStart('\', '/') }
+          )
+          if ($archiveFiles.Count -ne 1 -or $archiveFiles[0] -cne [string]$contract.executable.name) {
+            throw "The upstream gateway archive does not contain exactly the expected executable."
+          }
+          $executable = Join-Path $extract ([string]$contract.executable.name)
+          $executableHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $executable).Hash.ToLowerInvariant()
+          if ($executableHash -cne [string]$contract.executable.sha256) {
+            throw "The extracted upstream gateway executable does not match the pinned SHA-256."
+          }
+
+          $compatibilityRecord = Get-Content -LiteralPath $compatibility -Raw | ConvertFrom-Json
+          $releaseLine = @(
+            $compatibilityRecord.release_lines |
+              Where-Object { [string]$_.name -ceq [string]$contract.compatibility.release_line }
+          )
+          if ($releaseLine.Count -ne 1 -or
+              [string]$releaseLine[0].status -cne 'supported' -or
+              [string]$releaseLine[0].min_version -cne [string]$contract.compatibility.min_version -or
+              [string]$releaseLine[0].max_version -cne [string]$contract.compatibility.max_version -or
+              [int]$releaseLine[0].core_protocol -ne [int]$contract.compatibility.core_protocol -or
+              [int]$releaseLine[0].namespace_protocol -ne [int]$contract.compatibility.namespace_protocol -or
+              [int]$releaseLine[0].indexed_search_protocol -ne [int]$contract.compatibility.indexed_search_protocol) {
+            throw "The upstream gateway compatibility catalog does not contain the pinned supported release line."
+          }
+
+          Copy-Item -LiteralPath $executable -Destination (Join-Path $payload 'opcda-bridge-gateway.exe')
+          Copy-Item -LiteralPath $contractSource -Destination (Join-Path $payload 'opcda-gateway-release.json')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\third-party\opcda-bridge\LICENSE-MIT.txt') -Destination (Join-Path $payload 'LICENSE-opcda-bridge.txt')
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\third-party\opcda-bridge\NOTICE.txt') -Destination (Join-Path $payload 'NOTICE-opcda-bridge.txt')
+          $provenance = [ordered]@{
+            schema_version                 = 1
+            verified_at_utc                = [DateTime]::UtcNow.ToString('o')
+            repository                     = $repository
+            tag                            = $tag
+            source_commit                  = $sourceCommit
+            archive_name                   = [string]$contract.archive.name
+            archive_sha256                 = $archiveHash
+            executable_name                = [string]$contract.executable.name
+            executable_sha256              = $executableHash
+            builder_id                     = [string]$contract.release_workflow.builder_id
+            release_workflow_blob_sha      = [string]$workflow.sha
+            release_assets_sha256_sha256   = (Get-FileHash -Algorithm SHA256 -LiteralPath $checksums).Hash.ToLowerInvariant()
+            archive_sigstore_bundle_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $archiveBundle).Hash.ToLowerInvariant()
+            provenance_asset_sha256        = (Get-FileHash -Algorithm SHA256 -LiteralPath $attestation).Hash.ToLowerInvariant()
+            compatibility_asset_sha256     = (Get-FileHash -Algorithm SHA256 -LiteralPath $compatibility).Hash.ToLowerInvariant()
+            sigstore_verified              = $true
+            github_provenance_verified     = $true
+            compatibility_verified         = $true
+            compatibility                  = $releaseLine[0]
+          }
+          $provenance | ConvertTo-Json -Depth 12 |
+            Set-Content -LiteralPath (Join-Path $payload 'opcda-gateway-provenance.json') -Encoding UTF8
+
+          $gatewayPayload = Assert-GatewayPayloadLayout -GatewayPayloadRoot $payload
+          Assert-GatewayPayloadBinary -GatewayPayload $gatewayPayload | Out-Null
+          "GATEWAY_PAYLOAD=$payload" >> $env:GITHUB_ENV
 
       - name: Prepare release payload
         shell: pwsh
@@ -334,6 +516,7 @@ jobs:
             "/DPRODUCT_VERSION=$env:PACKAGE_VERSION" `
             "/DRELEASE_TAG=$releaseTag" `
             "/DPAYLOAD_DIR=$env:PAYLOAD" `
+            "/DGATEWAY_PAYLOAD_DIR=$env:GATEWAY_PAYLOAD" `
             "/DOUTPUT_DIR=$output" `
             (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\bhtune-installer.nsi')
           if ($LASTEXITCODE -ne 0) {
@@ -362,7 +545,8 @@ jobs:
             -InstallerPath $env:INSTALLER_PATH `
             -LogPath $log `
             -ExpectedVersion $env:PACKAGE_VERSION `
-            -TimeoutSeconds 120
+            -TimeoutSeconds 120 `
+            -OverallTimeoutSeconds 3600
           if ($LASTEXITCODE -ne 0) {
             throw "NSIS lifecycle diagnostic failed with exit code $LASTEXITCODE"
           }

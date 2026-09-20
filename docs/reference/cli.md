@@ -20,6 +20,7 @@ This document contains the help content for the `bhtune` command-line program.
 * [`bhtune history prune`↴](#bhtune-history-prune)
 * [`bhtune export`↴](#bhtune-export)
 * [`bhtune opc`↴](#bhtune-opc)
+* [`bhtune opc gateway-info`↴](#bhtune-opc-gateway-info)
 * [`bhtune opc servers`↴](#bhtune-opc-servers)
 * [`bhtune opc read`↴](#bhtune-opc-read)
 * [`bhtune opc write`↴](#bhtune-opc-write)
@@ -446,6 +447,7 @@ Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassi
 
 ###### **Subcommands:**
 
+* `gateway-info` — Report gateway-wide version and protocol information without contacting an OPC server
 * `servers` — List the OPC DA servers registered on the bridge gateway's host
 * `read` — Read one or more tags
 * `write` — Write a value to one tag
@@ -466,6 +468,18 @@ Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassi
   - `json`:
     Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
 
+
+
+
+## `bhtune opc gateway-info`
+
+Report gateway-wide version and protocol information without contacting an OPC server
+
+**Usage:** `bhtune opc gateway-info [OPTIONS]`
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>` — (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via `BHTUNE_BRIDGE_HOST` or the config file's `bridge_host` key.)
 
 
 

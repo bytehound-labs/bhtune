@@ -282,6 +282,12 @@ after installation:
 & .\bhtune-vX.Y.Z-windows-x86_64-installer.exe /S
 & "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" --version
 & "$env:ProgramFiles\ByteHound\bhtune\bhtune-server.exe" --version
+if (Get-Service OpcdaBridgeGateway -ErrorAction SilentlyContinue) {
+  throw "silent clean install unexpectedly enabled the gateway"
+}
+# Silent installs require an explicit gateway opt-in.
+& .\bhtune-vX.Y.Z-windows-x86_64-installer.exe /S /INSTALL_GATEWAY=1
+& "$env:ProgramFiles\ByteHound\bhtune\gateway\opcda-bridge-gateway.exe" --version
 Invoke-RestMethod http://127.0.0.1:8787/api/health
 ```
 
@@ -289,19 +295,69 @@ Confirm the health response has `status: "ok"` and version `X.Y.Z`, then inspect
 
 ```powershell
 sc.exe qc BhtuneServer
+sc.exe qc OpcdaBridgeGateway
 Get-Acl "$env:ProgramFiles\ByteHound\bhtune"
 Get-Acl "$env:ProgramData\ByteHound\bhtune"
+Get-CimInstance Win32_Service -Filter "Name='OpcdaBridgeGateway'"
+Get-NetTCPConnection -State Listen -LocalPort 7600
+& "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json gateway-info `
+  --bridge-host 127.0.0.1:7600
+& "$env:ProgramFiles\ByteHound\bhtune\bhtune.exe" opc --output json servers `
+  --bridge-host 127.0.0.1:7600
 ```
 
-The installer runs the service as `NT AUTHORITY\LocalService`, keeps its configuration and
-database under ProgramData, and does not create firewall rules. The installer is not
-Authenticode-signed, so SmartScreen may display an unknown-publisher warning. That warning is
-separate from the checksum, Sigstore, and provenance results above.
+The first command verifies the gateway-free silent default; the second invocation explicitly
+adds the gateway. The BHTune service must run as `NT AUTHORITY\LocalService`. The gateway must
+run as `LocalSystem` from the managed executable, use the managed configuration/log arguments,
+register for automatic start, and own every TCP `7600` listener. At least one listener must bind
+`0.0.0.0:7600`. `bhtune opc --output json gateway-info` must report the pinned application
+version and compatible core, namespace, and indexed-search protocol ranges without requiring
+OPCEnum or a registered OPC DA server. `bhtune opc --output json servers` is a separate
+target-host integration check; an empty `servers` array is valid on a host with no registered
+OPC DA servers.
+
+Verify the embedded upstream release record independently:
+
+```powershell
+$gatewayRoot = "$env:ProgramFiles\ByteHound\bhtune\gateway"
+$contract = Get-Content "$gatewayRoot\opcda-gateway-release.json" -Raw | ConvertFrom-Json
+$provenance = Get-Content "$gatewayRoot\opcda-gateway-provenance.json" -Raw | ConvertFrom-Json
+$actualGatewayHash = (Get-FileHash -Algorithm SHA256 `
+  "$gatewayRoot\opcda-bridge-gateway.exe").Hash.ToLowerInvariant()
+if ($actualGatewayHash -ne ([string]$contract.executable.sha256).ToLowerInvariant()) {
+  throw "installed gateway checksum mismatch"
+}
+if (-not $provenance.sigstore_verified -or
+    -not $provenance.github_provenance_verified -or
+    -not $provenance.compatibility_verified) {
+  throw "embedded gateway verification record is incomplete"
+}
+```
+
+The checked-in release contract pins the upstream repository, stable tag, source commit,
+archive and executable hashes, 32-bit target, release-workflow blob, and supported protocol
+line. The installer workflow independently verifies the upstream checksum, Sigstore bundle,
+GitHub provenance, archive layout, PE architecture, version, and compatibility metadata before
+embedding the gateway. Treat any mismatch between the installed files, checked-in contract, or
+upstream evidence as a release failure.
+
+The installer keeps BHTune and gateway configuration, databases, indexes, logs, and rollback
+state under ProgramData and does not create firewall rules. It is not Authenticode-signed, so
+SmartScreen may display an unknown-publisher warning. That warning is separate from the
+checksum, Sigstore, and provenance results above.
+
+Repeat lifecycle acceptance with `/INSTALL_GATEWAY=0`,
+`/INSTALL_GATEWAY=1 /START_GATEWAY=0`, and managed running and stopped upgrades. Verify that a
+gateway-free installation stays gateway-free unless explicitly opted in, a managed gateway
+retains its prior state across upgrades, injected candidate failure restores both services and
+gateway ProgramData, uninstall preserves the complete ProgramData tree, unowned service and
+unexpected listener conflicts fail closed, and the Windows Firewall rule fingerprint does not
+change.
 
 Do not run the installer against a production database as a substitute for the documented
 upgrade procedure. Its automatic rollback boundary covers only the installer-managed
-ProgramData database; an external database requires an independent backup and explicit
-operator acknowledgement.
+ProgramData BHTune database plus the managed gateway ProgramData tree; an external BHTune
+database requires an independent backup and explicit operator acknowledgement.
 
 ## 8. Verify the Linux archive used by `bhtune-bin`
 
@@ -385,7 +441,8 @@ Retain a small release record containing:
 - the Sigstore certificate identity and successful verification output;
 - the provenance verification output;
 - the SBOM component count and review notes;
-- Windows installer service/health evidence, when applicable;
+- Windows installer service/health evidence, gateway checksum/provenance/listener/read-only
+  smoke evidence, and unchanged-firewall evidence, when applicable;
 - Arch package contents and lifecycle evidence, when applicable;
 - the exact AUR commit after publication.
 
