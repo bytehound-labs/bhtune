@@ -428,6 +428,14 @@ function SimulatorProcessFields({
     limits && pvSpan !== undefined
       ? Math.max(0, pvSpan * limits.max_noise_fraction_of_pv_span)
       : undefined;
+  let gainHint: string | undefined;
+  if (limits) {
+    if (limits.sim_gain.absolute_min) {
+      gainHint = `Allowed magnitude: ${limits.sim_gain.absolute_min}–${limits.sim_gain.max}.`;
+    } else {
+      gainHint = `Allowed range: ${limits.sim_gain.min}–${limits.sim_gain.max}.`;
+    }
+  }
   return (
     <>
       <NumberField
@@ -437,13 +445,7 @@ function SimulatorProcessFields({
         min={limits?.sim_gain.min}
         max={limits?.sim_gain.max}
         step="any"
-        hint={
-          limits?.sim_gain.absolute_min
-            ? `Allowed magnitude: ${limits.sim_gain.absolute_min}–${limits.sim_gain.max}.`
-            : limits
-              ? `Allowed range: ${limits.sim_gain.min}–${limits.sim_gain.max}.`
-              : undefined
-        }
+        hint={gainHint}
       />
       <NumberField
         label="Time constant τ (s)"
