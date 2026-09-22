@@ -906,7 +906,6 @@ export interface components {
       automatic_pid_write_allowed: boolean;
       built_in_templates_only: boolean;
       custom_tag_mappings_allowed: boolean;
-      direction_must_match_process_gain: boolean;
       fixed_tag_name: boolean;
       notes_allowed: boolean;
       post_run_pid_write_allowed: boolean;

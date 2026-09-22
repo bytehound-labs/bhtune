@@ -110,7 +110,6 @@ const capabilities = {
     simulator_only: true,
     built_in_templates_only: true,
     fixed_tag_name: true,
-    direction_must_match_process_gain: true,
     custom_tag_mappings_allowed: false,
     notes_allowed: false,
     automatic_pid_write_allowed: false,
@@ -446,7 +445,7 @@ test.describe("Demo mode contract", () => {
       cycles_skip: 1,
       cycles_count: 2,
       noise_protection_secs: 0,
-      direction: "direct",
+      direction: "reverse",
       pv_range_high: 100,
       pv_range_low: 0,
       mv_range_high: 100,
@@ -518,7 +517,7 @@ test.describe("Demo mode contract", () => {
       tagname: "Simulator demo",
       process_type: "temperature_mixing",
       controller_type: "pid",
-      direction: "direct",
+      direction: "reverse",
       sim_gain: -2.5,
     });
     expect(Object.keys(api.starts[1]).sort()).toEqual(
@@ -553,6 +552,31 @@ test.describe("Demo mode contract", () => {
     ).toHaveCount(2);
   });
 
+  test("keeps Demo controller direction independent of gain sign", async ({
+    page,
+  }) => {
+    const api = await installDemoApi(page.context(), 2001);
+    await page.goto("/runs/new");
+
+    await page.getByLabel("Process gain").fill("1");
+    await page.getByRole("button", { name: "Start tune" }).click();
+    await expect(page).toHaveURL(/\/runs\/2001$/);
+    expect(api.starts[0]).toMatchObject({
+      direction: "reverse",
+      sim_gain: 1,
+    });
+
+    await page.getByRole("link", { name: "Tune", exact: true }).click();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await page.getByLabel("Process gain").fill("-1");
+    await page.getByRole("button", { name: "Start tune" }).click();
+    await expect(page).toHaveURL(/\/runs\/2002$/);
+    expect(api.starts[1]).toMatchObject({
+      direction: "reverse",
+      sim_gain: -1,
+    });
+  });
+
   test("sanitizes invalid stored duplicate settings back to capability defaults", async ({
     page,
   }) => {
@@ -566,7 +590,7 @@ test.describe("Demo mode contract", () => {
       cycles_skip: 99,
       cycles_count: 0,
       noise_protection_secs: -1,
-      direction: "direct",
+      direction: "reverse",
       pv_range_low: 900,
       pv_range_high: 900,
       mv_range_low: -2000,
@@ -772,7 +796,7 @@ test.describe("Demo mode contract", () => {
       cycles_skip: 2,
       cycles_count: 3,
       noise_protection_secs: 2,
-      direction: "direct",
+      direction: "reverse",
       pv_range_low: -20,
       pv_range_high: 80,
       mv_range_low: 10,

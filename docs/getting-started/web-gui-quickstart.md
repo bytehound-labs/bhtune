@@ -44,9 +44,9 @@ database row; storage begins only when the browser starts its first accepted tun
 browsing, notes, and PID write-back are absent; templates are limited to the built-in read-only
 catalog. Demo run history, detail, streaming, cancellation, export, and deletion use the same
 `/api/runs` paths as Full mode. Starting a tune sends only the normalized simulator fields shown
-by the Demo form, with a fixed safe tag, bounded simulator ranges and timing values, and a
-controller direction that must provide negative feedback for the selected positive or negative
-process gain. The Demo defaults are a 0–100 PV/MV range with initial values of 50, gain 1.0,
+by the Demo form, with a fixed safe tag, bounded simulator ranges and timing values, and
+Reverse controller action as a simple consistent default. Process-gain sign is independent from
+controller direction. The Demo defaults are a 0–100 PV/MV range with initial values of 50, gain 1.0,
 time constant 0.5 seconds, dead time 1 second, zero noise, relay amplitude 10%, one skipped
 cycle, two counted cycles, and zero seconds of noise protection.
 

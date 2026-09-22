@@ -499,6 +499,10 @@ function formFromDemoInput(
       capabilities.limits.max_noise_fraction_of_pv_span,
   );
   const processDefaults = demoProcessDefaultsFor(capabilities, processType);
+  const direction =
+    source.direction === "direct" || source.direction === "reverse"
+      ? source.direction
+      : defaults.simDirection;
 
   return {
     ...defaults,
@@ -530,7 +534,7 @@ function formFromDemoInput(
       capabilities.limits.noise_protection_secs,
       capabilities.defaults.noise_protection_secs,
     ),
-    simDirection: simGain < 0 ? "direct" : "reverse",
+    simDirection: direction,
     simPvRangeLow: pvRange.min,
     simPvRangeHigh: pvRange.max,
     simMvRangeLow: mvRange.min,
@@ -1672,7 +1676,7 @@ function demoRequest(
     cycles_skip: values.cyclesSkip,
     cycles_count: values.cyclesCount,
     noise_protection_secs: values.noiseProtectionSecs,
-    direction: values.simGain! < 0 ? "direct" : "reverse",
+    direction: form.simDirection || capabilities.defaults.direction,
     pv_range_high: ranges.pvRangeHigh,
     pv_range_low: ranges.pvRangeLow,
     mv_range_high: ranges.mvRangeHigh,

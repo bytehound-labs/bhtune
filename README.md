@@ -73,7 +73,9 @@ It uses the same first-order-plus-dead-time (FOPDT) transfer function for every 
 category; the [simulator model guide](docs/guides/simulator-model.md) documents the equations,
 dead-time queue, exact discrete update, noise, and simulated timing.
 The selected template formats calculated PID constants using that system's native conventions
-(for example, gain versus proportional band). Full mode retains the complete
+(for example, gain versus proportional band). Demo mode uses Reverse controller action by
+default as a simple consistent convention; process-gain sign is independent from controller
+direction. Full mode retains the complete
 OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing
 requests require the exact configured browser origin; non-loopback self-hosting therefore uses
 an HTTPS reverse proxy rather than direct HTTP access to the bound application port.

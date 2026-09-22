@@ -52,7 +52,6 @@ const RESTRICTION_KEYS = [
   "automatic_pid_write_allowed",
   "built_in_templates_only",
   "custom_tag_mappings_allowed",
-  "direction_must_match_process_gain",
   "fixed_tag_name",
   "notes_allowed",
   "post_run_pid_write_allowed",
@@ -472,8 +471,7 @@ function validateDemoSimulator(value: unknown) {
   if (
     gainBounds.absoluteMin === null ||
     Math.abs(simGain) < gainBounds.absoluteMin ||
-    (simGain > 0 && defaults.direction !== "reverse") ||
-    (simGain < 0 && defaults.direction !== "direct")
+    defaults.direction !== "reverse"
   ) {
     throw new Error("The server returned unsafe simulator gain defaults.");
   }
@@ -510,7 +508,6 @@ function validateDemoContract(
     !restrictions.simulator_only ||
     !restrictions.built_in_templates_only ||
     !restrictions.fixed_tag_name ||
-    !restrictions.direction_must_match_process_gain ||
     restrictions.custom_tag_mappings_allowed ||
     restrictions.notes_allowed ||
     restrictions.automatic_pid_write_allowed ||

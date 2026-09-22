@@ -1967,8 +1967,9 @@ and initial PV/MV `50`. Explicit values are bounded before the owned `prepare()`
 amplitude `1–20%`, skipped cycles `0–2`, counted cycles `1–3`, noise protection `0–3` seconds,
 gain magnitude `0.1–5.0` excluding zero, time constant `0.05–5` seconds, dead time `0–2`
 seconds, range endpoints `-1,000–1,000` with spans `1–1,000`, non-negative noise up to 5% of
-the PV span, and initial values inside their ranges. Gain sign and controller direction must
-form negative feedback, and the normal process/controller compatibility rules still apply.
+the PV span, and initial values inside their ranges. Demo uses Reverse controller action by
+default, while process-gain sign remains independent from controller direction; the normal
+process/controller compatibility rules still apply.
 OPC server/bridge values, tag overrides, notes, `write_pid`, and write confirmation are
 rejected rather than ignored. The persisted/display identity is the fixed label
 `Simulator demo`; simulator internals remain `Sim.PV` and `Sim.MV`.

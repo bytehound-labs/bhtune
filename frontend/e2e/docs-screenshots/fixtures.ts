@@ -131,7 +131,6 @@ const demoCapabilities = {
     simulator_only: true,
     built_in_templates_only: true,
     custom_tag_mappings_allowed: false,
-    direction_must_match_process_gain: true,
     fixed_tag_name: true,
     notes_allowed: false,
     automatic_pid_write_allowed: false,

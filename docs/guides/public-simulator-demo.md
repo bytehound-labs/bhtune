@@ -142,9 +142,9 @@ contract:
 | Measurement noise      |       0 |            0–5% of the configured PV span |
 | Random seed            |       0 |                           0–2,147,483,647 |
 
-Positive gain requires Reverse action and negative gain requires Direct action so the simulated
-loop always uses negative feedback. The browser derives that direction from the gain; the server
-independently verifies it.
+Demo uses Reverse controller action by default as a simple, consistent convention. Process-gain
+sign is independent from controller direction, so both positive and negative gain values are
+supported without changing the selected action.
 
 ## Self-hosting requirements
 

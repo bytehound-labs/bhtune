@@ -125,7 +125,7 @@ fn quota_error(error: DemoQuotaExceeded) -> ApiError {
 fn validate_demo_request(request: &StartRunRequest) -> Result<(), ApiError> {
     validate_demo_identity(request)?;
     validate_demo_scalar_ranges(request)?;
-    validate_demo_gain_and_direction(request)?;
+    validate_demo_gain(request)?;
     validate_demo_discrete_fields(request)?;
     validate_demo_process_ranges(request)?;
     Ok(())
@@ -187,32 +187,13 @@ fn validate_demo_scalar_ranges(request: &StartRunRequest) -> Result<(), ApiError
     Ok(())
 }
 
-fn validate_demo_gain_and_direction(request: &StartRunRequest) -> Result<(), ApiError> {
+fn validate_demo_gain(request: &StartRunRequest) -> Result<(), ApiError> {
     if !request.sim_gain.is_finite()
         || !(DEMO_SIM_GAIN_ABS_MIN..=DEMO_SIM_GAIN_MAX).contains(&request.sim_gain.abs())
     {
         return Err(bad_request(format!(
             "demo field 'sim_gain' must be finite and between -{DEMO_SIM_GAIN_MAX} and \
              -{DEMO_SIM_GAIN_ABS_MIN} or between {DEMO_SIM_GAIN_ABS_MIN} and {DEMO_SIM_GAIN_MAX}"
-        )));
-    }
-    let expected_direction = if request.sim_gain.is_sign_positive() {
-        ControllerDirection::Reverse
-    } else {
-        ControllerDirection::Direct
-    };
-    if request.direction != Some(expected_direction) {
-        return Err(bad_request(format!(
-            "demo direction must be '{}' for a {} process gain so the simulated loop uses negative feedback",
-            match expected_direction {
-                ControllerDirection::Direct => "direct",
-                ControllerDirection::Reverse => "reverse",
-            },
-            if request.sim_gain.is_sign_positive() {
-                "positive"
-            } else {
-                "negative"
-            }
         )));
     }
     Ok(())
@@ -1644,11 +1625,11 @@ mod tests {
     }
 
     #[test]
-    fn gain_magnitude_and_direction_must_form_negative_feedback() {
+    fn gain_magnitude_is_valid_independently_of_direction() {
         for (gain, direction) in [
             (1.0, ControllerDirection::Reverse),
-            (-1.0, ControllerDirection::Direct),
-            (DEMO_SIM_GAIN_MAX, ControllerDirection::Reverse),
+            (-1.0, ControllerDirection::Reverse),
+            (DEMO_SIM_GAIN_MAX, ControllerDirection::Direct),
             (-DEMO_SIM_GAIN_MAX, ControllerDirection::Direct),
         ] {
             let mut request = valid_request(ProcessType::Flow, ControllerType::Pi);
@@ -1656,15 +1637,9 @@ mod tests {
             request["direction"] = serde_json::json!(direction);
             assert!(parse_demo_request(request).is_ok());
         }
-        for (gain, direction) in [
-            (0.0, ControllerDirection::Reverse),
-            (DEMO_SIM_GAIN_ABS_MIN / 2.0, ControllerDirection::Reverse),
-            (1.0, ControllerDirection::Direct),
-            (-1.0, ControllerDirection::Reverse),
-        ] {
+        for gain in [0.0, DEMO_SIM_GAIN_ABS_MIN / 2.0] {
             let mut request = valid_request(ProcessType::Flow, ControllerType::Pi);
             request["sim_gain"] = serde_json::json!(gain);
-            request["direction"] = serde_json::json!(direction);
             assert!(parse_demo_request(request).is_err());
         }
     }
