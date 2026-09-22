@@ -571,6 +571,11 @@ function SimulatorRangeFields({
   );
 }
 
+function simulatorModelInfo(props: SimulatorParameterProps) {
+  if (props.form.driver !== "simulator") return null;
+  return <SimulatorModelInfo {...props} />;
+}
+
 function simulatorParameterFields(props: SimulatorParameterProps) {
   if (props.form.driver !== "simulator") return null;
   return (
@@ -580,7 +585,6 @@ function simulatorParameterFields(props: SimulatorParameterProps) {
       defaultOpen
       documentationId="new-tune.simulator-parameters"
     >
-      <SimulatorModelInfo {...props} />
       <SimulatorProcessFields {...props} />
       <SimulatorInitialFields {...props} />
       <SimulatorRangeFields {...props} />
@@ -689,6 +693,7 @@ function demoFields({
         </p>
       </FormSection>
       {simulatorParameterFields({ form, onChange, simulatorCapabilities })}
+      {simulatorModelInfo({ form, onChange, simulatorCapabilities })}
     </>
   );
 }
@@ -809,6 +814,11 @@ export function NewRunForm({
             simulatorCapabilities: undefined,
           })}
           {automaticPidFields({ form, onChange })}
+          {simulatorModelInfo({
+            form,
+            onChange,
+            simulatorCapabilities: undefined,
+          })}
         </>
       )}
     </form>

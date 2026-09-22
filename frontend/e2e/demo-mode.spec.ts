@@ -377,6 +377,10 @@ test.describe("Demo mode contract", () => {
       "All current process categories use this same generic physical model.",
     );
     await expect(modelInfo).toContainText("G(s) = K");
+    await expect(page.locator("form > :last-child")).toHaveAttribute(
+      "data-testid",
+      "simulator-model-info",
+    );
     await expect(
       page.getByRole("combobox", { name: "Controller type", exact: true }),
     ).toHaveValue("pi");

@@ -93,6 +93,10 @@ test.describe("app shell", () => {
       "Model used: first-order-plus-dead-time (FOPDT)",
     );
     await expect(modelInfo).toContainText("G(s) = K");
+    await expect(page.locator("form > :last-child")).toHaveAttribute(
+      "data-testid",
+      "simulator-model-info",
+    );
 
     const startsWithLabel = (label: string) =>
       new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
