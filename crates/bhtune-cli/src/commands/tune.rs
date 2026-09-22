@@ -6175,7 +6175,9 @@ mod tests {
                 &mut ctrl_c,
                 &mut None,
                 Some(&mut completion),
-                Some(75.0),
+                // Leave enough wall-clock room for coarse Windows timer scheduling; the
+                // persisted sample timestamps still use the fixed five-millisecond step.
+                Some(1_500.0),
                 Some(&mut timing),
             )
             .await
