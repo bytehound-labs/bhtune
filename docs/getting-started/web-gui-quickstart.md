@@ -112,10 +112,10 @@ browser-visible origin.
    - Switching the driver to **Simulator** greys out every field the simulator genuinely
      ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, and quality
      options) rather than hiding them, so the form doesn't reflow and the greyed field itself
-     explains what the simulator doesn't use. The template stays enabled intentionally: the
-     simulator ignores its DCS tag mappings, but its PID type and unit conventions still format
-     calculated results (for example, Yokogawa uses proportional band while the other built-in
-     templates use gain). PV/MV ranges, controller direction, and every engine parameter also
+     explains what the simulator doesn't use. The template stays enabled intentionally. The
+     selected template formats calculated PID constants using that system's native conventions
+     (for example, gain versus proportional band). The simulator ignores its DCS tag mappings.
+     PV/MV ranges, controller direction, and every engine parameter also
      stay enabled because the simulator needs them.
    - Test parameters show concrete **Process defaults** for cycles to skip, cycles to count, and
      noise protection based on the selected Process type. Changing Process type replaces all

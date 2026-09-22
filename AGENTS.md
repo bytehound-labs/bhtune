@@ -471,7 +471,9 @@ template is retained in run history. PV/MV ranges, controller direction, process
 controller type, relay amplitude, cycles, poll interval, run timeout, and MRFT delay padding
 fields all stay enabled, since they are genuinely used regardless of driver — and the
 simulator's lack of its own range/direction tags makes those four fields _more_ required, not
-less. `buildRequest()`'s tag-name check is skipped whenever the field is disabled, matching the
+less. The selected template formats calculated PID constants using that system's native
+conventions (for example, gain versus proportional band), while the simulator ignores its DCS
+tag mappings. `buildRequest()`'s tag-name check is skipped whenever the field is disabled, matching the
 rule that a disabled field must be excluded from client-side validation. Manually verified against a real running server via browser automation (not
 just typechecked): confirmed the disabled state, hint text, and enabled/disabled field list
 match exactly in both driver modes, and that the existing Playwright E2E suite (which never

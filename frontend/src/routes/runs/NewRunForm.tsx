@@ -93,7 +93,7 @@ type NewRunFormProps = {
 
 function templateHint(driver: TuneDriver): string {
   if (driver === "simulator") {
-    return "The simulator ignores DCS tag mappings, but the template still formats calculated PID values (for example, gain versus proportional band).";
+    return "The selected template formats calculated PID constants using that system's native conventions (for example, gain versus proportional band).";
   }
   return "Maps the connected DCS/PLC's item IDs and PID conventions.";
 }
@@ -540,12 +540,17 @@ function demoFields({
         defaultOpen
         documentationId="new-tune.demo-settings"
       >
-        <SelectField
-          label="Template"
-          value={form.template}
-          onChange={(value) => onChange("template", value)}
-          options={simulatorCapabilities.templates}
-        />
+        <div>
+          <SelectField
+            label="Template"
+            value={form.template}
+            onChange={(value) => onChange("template", value)}
+            options={simulatorCapabilities.templates}
+          />
+          <span className="mt-1 block text-xs text-slate-500">
+            {templateHint("simulator")}
+          </span>
+        </div>
         <SelectField
           label="Process type"
           value={processType ?? ""}

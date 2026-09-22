@@ -68,7 +68,9 @@ limits and simulator timing are fixed application-owned
 values; deployment configuration may repeat them for validation but cannot widen them. Demo
 runs use the stable identity **Simulator demo**, not an external plant tag. The Demo page lets
 visitors choose a built-in template, process/controller type, and bounded MRFT and simulator
-settings while omitting controls that require live equipment. Full mode retains the complete
+settings while omitting controls that require live equipment. The simulator model is generic.
+The selected template formats calculated PID constants using that system's native conventions
+(for example, gain versus proportional band). Full mode retains the complete
 OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing
 requests require the exact configured browser origin; non-loopback self-hosting therefore uses
 an HTTPS reverse proxy rather than direct HTTP access to the bound application port.
@@ -254,9 +256,9 @@ may omit them to use the same server-side defaults.
 
 In **Simulator** mode, the form disables the OPC DA connection, tag, quality, operation/restore
 timeout, and automatic write-back controls because the in-process simulator cannot use them. The DCS/PLC
-template remains selectable: the simulator ignores its tag mappings, but its PID type and unit
-conventions still format the calculated results (for example, Yokogawa uses proportional band
-while the other built-in templates use gain). PV/MV ranges and controller direction remain
+template remains selectable: the selected template formats calculated PID constants using that
+system's native conventions (for example, gain versus proportional band). The simulator ignores
+its tag mappings. PV/MV ranges and controller direction remain
 editable because the simulator has no live tags from which to read them.
 
 When a run has calculated results, its **Calculated results** panel moves directly below the

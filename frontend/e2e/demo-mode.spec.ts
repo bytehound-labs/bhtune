@@ -363,6 +363,12 @@ test.describe("Demo mode contract", () => {
 
     await expect(page.getByLabel("Template")).toHaveValue("Yokogawa CentumVP");
     await expect(
+      page.getByText(
+        "The selected template formats calculated PID constants using that system's native conventions (for example, gain versus proportional band).",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
       page.getByRole("combobox", { name: "Controller type", exact: true }),
     ).toHaveValue("pi");
     await expect(page.getByLabel("Relay amplitude (%)")).toHaveValue("10");

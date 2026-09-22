@@ -84,7 +84,7 @@ test.describe("app shell", () => {
     await expect(template).toBeEnabled();
     await expect(
       page.getByText(
-        "The simulator ignores DCS tag mappings, but the template still formats calculated PID values (for example, gain versus proportional band).",
+        "The selected template formats calculated PID constants using that system's native conventions (for example, gain versus proportional band).",
       ),
     ).toBeVisible();
 
