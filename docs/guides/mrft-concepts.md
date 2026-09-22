@@ -43,7 +43,13 @@ unchanged.
 6. **On the final step, the MV snaps back to its starting value** rather than taking one more
    full relay step — so the loop is left close to where it started, not mid-swing.
 7. **The loop is restored** to its original mode (and setpoint, if it was changed) — see
-   [Safety](safety.md#restoration) for exactly what "restored" guarantees.
+   [Safety](safety.md#restoration) for exactly what "restored" guarantees. For a live OPC DA
+   run that started in Auto, BHTune first restores and verifies the original MV, then holds
+   the loop in Manual for one-third of the measured oscillation period before releasing it to
+   the template-defined Auto value. PV samples collected during that interval remain part of
+   the persisted trend and history; the MRFT state is frozen and no replacement relay steps
+   are issued. Simulator/Demo runs and loops that started in Manual do not use this settling
+   interval.
 
 For OPC DA runs, each accepted MV relay command is also read back and checked against its
 commanded target before another relay can replace it. This verification uses a fixed internal
@@ -82,6 +88,11 @@ values produced by the MRFT engine. The actual MV values returned by OPC DA read
 separate actuation-audit records available through run history, the API, and structured logs;
 keeping these series separate preserves the engine's timing and export semantics while making
 physical actuation evidence available.
+
+During the live Auto-release settling interval, the trend continues to show PV samples at the
+configured poll interval while the commanded MV remains at the restored starting value. These
+samples use the final MRFT state for display/history purposes only; the engine is not advanced
+and no new relay decisions are made.
 
 Nothing here writes a PID constant. That only happens if you explicitly ask for it
 (`--write-pid <level>` on the CLI, or the Automatic PID settings section of the New tune form) — see
