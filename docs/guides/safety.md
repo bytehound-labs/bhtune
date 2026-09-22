@@ -103,6 +103,24 @@ available. This is an advisory signal, not an automatic rejection: a valid resul
 sampling remains writable, but should be reviewed against the trend and the recorded timing data
 before it is applied.
 
+### Live Auto-release settling
+
+When a live OPC DA tune starts with the loop in the template-defined Auto value and the MRFT
+completes normally, BHTune does not release the loop to Auto immediately. It first restores and
+verifies the original MV, keeps the loop in Manual for one-third of the measured oscillation
+period, and polls the PV at the configured interval during that hold. Those PV samples are
+persisted as ordinary run samples, so they appear in the trend, history, API responses, and
+exports. The MRFT state remains frozen during the hold: no additional relay decisions or MV
+commands are issued.
+
+After the hold, BHTune writes the template-defined Auto value and restores the setpoint and any
+mode-attribute value. This behavior is limited to live OPC DA runs that began in Auto; Simulator
+and Demo runs, Manual-start runs, and runs without a valid measured period use the normal
+restoration path. If the settling read, quality check, persistence, timeout, cancellation, or a
+restore write/readback fails, BHTune suppresses Auto release and leaves the loop in Manual while
+reporting an incomplete restore for operator follow-up. The settling interval shares the
+configured restore-time budget and never extends it.
+
 The timing snapshot includes successful PV-read, MV-write, MV-verification-read,
 sample-persistence, and total-tick-work latency summaries in addition to sample gaps. When a
 pending relay is checked by the normal batched PV/MV poll, the same underlying OPC operation may

@@ -721,6 +721,15 @@ language, including exactly what happens on the first and second Ctrl+C:
   deadline.
   The fresh read started at that deadline has its own one-second bound, so a stalled MV read
   cannot consume the full per-operation timeout and leave the run waiting indefinitely.
+- **Live Auto-start runs settle in Manual before Auto release.** When an OPC DA loop starts in
+  its template-defined Auto value and the MRFT completes normally, BHTune restores and verifies
+  the original MV, then keeps the loop in Manual for one-third of the measured oscillation
+  period before writing the template-defined Auto value. PV samples collected during this
+  interval are persisted in the run trend/history with the normal quality and timing checks;
+  the MRFT state is held, so settling does not issue another relay step. Simulator/Demo runs
+  and loops that started in Manual retain their existing restoration behavior. If settling or
+  any prerequisite restore step cannot be completed safely, Auto release is suppressed and the
+  run remains in Manual for operator follow-up.
 - **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) is the initial budget for
   putting the loop back afterwards, independently of `[tuning].timeout_secs`. When the
   authoritative MV restore write is accepted near the end of that budget, BHTune extends the

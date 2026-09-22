@@ -16,9 +16,9 @@ use std::time::Duration;
 use bhtune_core::mrft::clamp_relay_amplitude;
 use bhtune_core::{
     Action, ControllerDirection, ControllerType, DcsTemplate, InitialReadings, LoopConfig,
-    LoopTags, MrftCompat, MrftEngine, MvRange, PidParameters, ProcessType, PvRange, ResponseLevel,
-    TagOrValue, TagOverrides, Tick, TuningMathCompat, TuningResultStatus, calculate_all_checked,
-    lookup, measure_oscillation, opc_write_values,
+    LoopTags, MrftCompat, MrftEngine, MrftState, MvRange, PidParameters, ProcessType, PvRange,
+    ResponseLevel, TagOrValue, TagOverrides, Tick, TuningMathCompat, TuningResultStatus,
+    calculate_all_checked, lookup, measure_oscillation, opc_write_values,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
@@ -1564,7 +1564,6 @@ async fn execute_with_timing<R: std::io::BufRead>(
                 &mut mv_actuations,
                 completion,
                 &mut timing,
-                timing_metrics_without_period,
                 measured_oscillation_period_ms,
             )
             .await
@@ -1659,6 +1658,44 @@ async fn attempt_and_record_restore(
     ctrl_c: &mut CtrlC,
     mv_actuations: &mut Option<MvActuationTracker>,
 ) -> RestoreAttempt {
+    attempt_and_record_restore_with_settling(
+        pool,
+        run_id,
+        args,
+        effective_timing,
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        allow_uncertain_quality,
+        ctrl_c,
+        mv_actuations,
+        None,
+        None,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn attempt_and_record_restore_with_settling(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneArgs,
+    effective_timing: EffectiveTiming,
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    mv_actuations: &mut Option<MvActuationTracker>,
+    completion: Option<&mut CompletedPoll>,
+    measured_oscillation_period_ms: Option<f64>,
+    timing: Option<&mut PollTimingAccumulator>,
+) -> RestoreAttempt {
     let restore_attempt = attempt_restore_with_actuation_with_timing(
         pool,
         run_id,
@@ -1672,6 +1709,9 @@ async fn attempt_and_record_restore(
         allow_uncertain_quality,
         ctrl_c,
         mv_actuations,
+        completion,
+        measured_oscillation_period_ms,
+        timing,
     )
     .await;
     record_restore_status_best_effort(pool, run_id, &restore_attempt).await;
@@ -1701,9 +1741,8 @@ async fn finish_completed_run<R: std::io::BufRead>(
     ctrl_c: &mut CtrlC,
     reader: &mut R,
     mv_actuations: &mut Option<MvActuationTracker>,
-    completion: Action,
+    mut completion: CompletedPoll,
     timing: &mut PollTimingAccumulator,
-    timing_metrics_without_period: Option<TimingMetrics>,
     measured_oscillation_period_ms: Option<f64>,
 ) -> anyhow::Result<RunOutcome> {
     let pv_range = PvRange {
@@ -1713,7 +1752,7 @@ async fn finish_completed_run<R: std::io::BufRead>(
     if let Err(error) = persist_completed_results(
         pool,
         run_id,
-        completion,
+        completion.action.clone(),
         initial.direction,
         config,
         pv_range,
@@ -1721,27 +1760,40 @@ async fn finish_completed_run<R: std::io::BufRead>(
     )
     .await
     {
-        let error = restore_best_effort_then_propagate_with_timing(
+        let restore_attempt = attempt_and_record_restore_with_settling(
             pool,
             run_id,
+            args,
+            effective_timing,
             driver,
             tags,
             template,
             initial,
             guard,
-            args,
-            effective_timing,
             allow_uncertain_quality,
             ctrl_c,
             mv_actuations,
-            error,
+            Some(&mut completion),
+            measured_oscillation_period_ms,
+            Some(timing),
         )
         .await;
-        record_timing_metrics_if_present(pool, run_id, timing_metrics_without_period).await;
+        let error = match restore_attempt {
+            RestoreAttempt::Confirmed => error,
+            RestoreAttempt::Incomplete { reason } => {
+                tracing::warn!(
+                    run_id,
+                    reason = %reason,
+                    "completed MRFT result persistence failed and restore was incomplete"
+                );
+                error
+            }
+        };
+        record_timing_metrics_if_present(pool, run_id, timing.finish(None)).await;
         return Err(error);
     }
 
-    let restore_attempt = attempt_and_record_restore(
+    let restore_attempt = attempt_and_record_restore_with_settling(
         pool,
         run_id,
         args,
@@ -1754,6 +1806,9 @@ async fn finish_completed_run<R: std::io::BufRead>(
         allow_uncertain_quality,
         ctrl_c,
         mv_actuations,
+        Some(&mut completion),
+        measured_oscillation_period_ms,
+        Some(timing),
     )
     .await;
     TuneRunRow::complete_with_timing_metrics(
@@ -2389,15 +2444,21 @@ impl RestoreReport {
 /// mode/setpoint/mode-attribute reverts are each gated by both their original value-based
 /// condition (as before) *and* the matching `guard` flag, so nothing is "restored" that was
 /// never actually mutated in the first place.
-async fn restore_after_mv(
+async fn restore_after_mv_with_policy(
     driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
     guard: &MutationGuard,
     mv: RestoreStepOutcome,
+    mode_policy: RestoreModePolicy,
 ) -> RestoreReport {
-    let mode = restore_mode_step(driver, tags, template, initial, guard).await;
+    let mode = match mode_policy {
+        RestoreModePolicy::ReleaseToInitial => {
+            restore_mode_step(driver, tags, template, initial, guard).await
+        }
+        RestoreModePolicy::KeepManual => RestoreStepOutcome::NotNeeded,
+    };
     let setpoint = restore_setpoint_step(driver, tags, template, initial, guard).await;
     let mode_attribute = restore_mode_attribute_step(driver, tags, template, initial, guard).await;
 
@@ -2426,7 +2487,16 @@ async fn restore(
 ) -> RestoreReport {
     let mv = restore_value_step(driver, &tags.manipulated_variable, initial.mv_ini).await;
     tokio::time::sleep(Duration::from_millis(1000)).await;
-    restore_after_mv(driver, tags, template, initial, guard, mv).await
+    restore_after_mv_with_policy(
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        mv,
+        RestoreModePolicy::ReleaseToInitial,
+    )
+    .await
 }
 
 async fn restore_raw_step(driver: &dyn Driver, tag: &str, value: &str) -> RestoreStepOutcome {
@@ -3864,6 +3934,9 @@ async fn attempt_restore_with_actuation_with_timing(
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     mv_actuations: &mut Option<MvActuationTracker>,
+    completion: Option<&mut CompletedPoll>,
+    measured_oscillation_period_ms: Option<f64>,
+    timing: Option<&mut PollTimingAccumulator>,
 ) -> RestoreAttempt {
     let mut restore_deadline =
         Instant::now() + Duration::from_secs(effective_timing.restore_timeout_secs);
@@ -3890,8 +3963,276 @@ async fn attempt_restore_with_actuation_with_timing(
         }
     };
 
+    let mode_policy = if should_settle_before_auto_release(args, tags, template, initial, guard)
+        && !matches!(mv, RestoreStepOutcome::Succeeded)
+    {
+        RestoreModePolicy::KeepManual
+    } else {
+        RestoreModePolicy::ReleaseToInitial
+    };
+    if should_settle_before_auto_release(args, tags, template, initial, guard)
+        && matches!(mv, RestoreStepOutcome::Succeeded)
+        && settling_duration(measured_oscillation_period_ms).is_some()
+    {
+        let duration = settling_duration(measured_oscillation_period_ms)
+            .expect("settling duration was checked immediately above");
+        let Some(completion) = completion else {
+            tracing::warn!(
+                run_id,
+                "skipping live Auto-release settling because completion state was unavailable"
+            );
+            return restore_after_mv_with_deadline(
+                driver,
+                tags,
+                template,
+                initial,
+                guard,
+                mv,
+                RestoreModePolicy::ReleaseToInitial,
+                ctrl_c,
+                restore_deadline,
+                effective_timing,
+            )
+            .await;
+        };
+        let Some(timing) = timing else {
+            tracing::warn!(
+                run_id,
+                "skipping live Auto-release settling because timing state was unavailable"
+            );
+            return restore_after_mv_with_deadline(
+                driver,
+                tags,
+                template,
+                initial,
+                guard,
+                mv,
+                RestoreModePolicy::ReleaseToInitial,
+                ctrl_c,
+                restore_deadline,
+                effective_timing,
+            )
+            .await;
+        };
+
+        tracing::info!(
+            run_id,
+            duration_ms = duration.as_millis(),
+            measured_oscillation_period_ms = ?measured_oscillation_period_ms,
+            "holding the loop in Manual for post-MRFT Auto-release settling"
+        );
+        if let Err(error) = run_auto_release_settling(
+            pool,
+            run_id,
+            effective_timing,
+            tags,
+            driver,
+            ctrl_c,
+            allow_uncertain_quality,
+            completion,
+            timing,
+            duration,
+            restore_deadline,
+        )
+        .await
+        {
+            let reason = format!("post-MRFT Auto-release settling failed: {error}");
+            let restore_result = restore_after_mv_with_deadline(
+                driver,
+                tags,
+                template,
+                initial,
+                guard,
+                mv,
+                RestoreModePolicy::KeepManual,
+                ctrl_c,
+                restore_deadline,
+                effective_timing,
+            )
+            .await;
+            return match restore_result {
+                RestoreAttempt::Confirmed => {
+                    let _ = warn_restore_incomplete(tags, initial, &reason);
+                    RestoreAttempt::Incomplete { reason }
+                }
+                RestoreAttempt::Incomplete {
+                    reason: restore_reason,
+                } => RestoreAttempt::Incomplete {
+                    reason: format!("{reason}; {restore_reason}"),
+                },
+            };
+        }
+    }
+
+    restore_after_mv_with_deadline(
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        mv,
+        mode_policy,
+        ctrl_c,
+        restore_deadline,
+        effective_timing,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestoreModePolicy {
+    ReleaseToInitial,
+    KeepManual,
+}
+
+fn should_settle_before_auto_release(
+    args: &TuneArgs,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+) -> bool {
+    matches!(args.driver, DriverKindArg::Opcda)
+        && tags.controller_mode.is_some()
+        && template.revert_mode
+        && guard.mode_written
+        && initial.mode_raw.as_deref() == Some(template.mode_auto_value.as_str())
+}
+
+fn settling_duration(measured_oscillation_period_ms: Option<f64>) -> Option<Duration> {
+    let period_ms =
+        measured_oscillation_period_ms.filter(|period| period.is_finite() && *period > 0.0)?;
+    let seconds = period_ms / 3_000.0;
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return None;
+    }
+    Duration::try_from_secs_f64(seconds).ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_auto_release_settling(
+    pool: &SqlitePool,
+    run_id: i64,
+    effective_timing: EffectiveTiming,
+    tags: &LoopTags,
+    driver: &dyn Driver,
+    ctrl_c: &mut CtrlC,
+    allow_uncertain_quality: bool,
+    completion: &mut CompletedPoll,
+    timing: &mut PollTimingAccumulator,
+    duration: Duration,
+    restore_deadline: Instant,
+) -> anyhow::Result<()> {
+    let settling_deadline = Instant::now()
+        .checked_add(duration)
+        .ok_or_else(|| anyhow::anyhow!("post-MRFT settling deadline exceeded the clock range"))?;
+    let poll_interval = Duration::from_millis(effective_timing.poll_interval_ms.max(1));
+    let mut next_poll_at = Instant::now();
+    let mut tick_index = completion.next_tick_index;
+
+    loop {
+        let now = Instant::now();
+        if now >= settling_deadline {
+            break;
+        }
+        tokio::select! {
+            biased;
+            () = ctrl_c.signalled() => {
+                anyhow::bail!("Ctrl+C was received during post-MRFT Auto-release settling");
+            }
+            () = tokio::time::sleep_until(restore_deadline) => {
+                anyhow::bail!(
+                    "the post-MRFT Auto-release settling interval exceeded the {}s [tuning].restore_timeout_secs limit",
+                    effective_timing.restore_timeout_secs
+                );
+            }
+            () = tokio::time::sleep_until(next_poll_at) => {}
+        }
+
+        let tick_started = Instant::now();
+        if tick_started >= settling_deadline {
+            break;
+        }
+        next_poll_at = tick_started + poll_interval;
+
+        let pv_read_started = Instant::now();
+        let (pv, quality) = match bounded_driver_call(
+            effective_timing.op_timeout_secs,
+            ctrl_c,
+            read_poll_batch(driver, &tags.process_variable, None),
+        )
+        .await?
+        {
+            TickOperation::Completed(values) => {
+                timing.observe_pv_read(pv_read_started.elapsed());
+                read_numeric_from_batch(&values, &tags.process_variable)?
+            }
+            TickOperation::Cancelled => {
+                anyhow::bail!("Ctrl+C was received while reading the settling PV");
+            }
+            TickOperation::TimedOut => {
+                anyhow::bail!(
+                    "[tuning].op_timeout_secs elapsed reading the settling PV tag '{}'",
+                    tags.process_variable
+                );
+            }
+        };
+
+        let now = completion.tick_time.next_timestamp()?;
+        timing.observe(now)?;
+        let tick = Tick { time: now, pv };
+        let sample_quality = sample_quality_from_driver(quality);
+        if let Err(error) = check_quality(&tags.process_variable, quality, allow_uncertain_quality)
+        {
+            insert_tune_sample_with_timing(
+                pool,
+                run_id,
+                tick_index,
+                tick,
+                completion.state,
+                sample_quality,
+                timing,
+            )
+            .await?;
+            timing.observe_tick_work(tick_started.elapsed());
+            anyhow::bail!("{error}");
+        }
+
+        insert_tune_sample_with_timing(
+            pool,
+            run_id,
+            tick_index,
+            tick,
+            completion.state,
+            sample_quality,
+            timing,
+        )
+        .await?;
+        timing.observe_tick_work(tick_started.elapsed());
+        tick_index = tick_index
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("settling sample tick index exceeded i64 range"))?;
+    }
+
+    completion.next_tick_index = tick_index;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn restore_after_mv_with_deadline(
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    mv: RestoreStepOutcome,
+    mode_policy: RestoreModePolicy,
+    ctrl_c: &mut CtrlC,
+    restore_deadline: Instant,
+    effective_timing: EffectiveTiming,
+) -> RestoreAttempt {
     tokio::select! {
-        report = restore_after_mv(driver, tags, template, initial, guard, mv) => {
+        report = restore_after_mv_with_policy(driver, tags, template, initial, guard, mv, mode_policy) => {
             if report.all_succeeded() {
                 RestoreAttempt::Confirmed
             } else {
@@ -3946,6 +4287,9 @@ async fn attempt_restore_with_actuation(
         allow_uncertain_quality,
         ctrl_c,
         mv_actuations,
+        None,
+        None,
+        None,
     )
     .await
 }
@@ -4007,11 +4351,15 @@ fn completed_oscillation_period_ms(
     config: LoopConfig,
     pv_range: PvRange,
 ) -> Option<f64> {
-    let Ok(PollOutcome::Completed(Action::Complete {
-        peaks,
-        troughs,
-        switch_times,
-        mv_sign_init,
+    let Ok(PollOutcome::Completed(CompletedPoll {
+        action:
+            Action::Complete {
+                peaks,
+                troughs,
+                switch_times,
+                mv_sign_init,
+            },
+        ..
     })) = poll_result
     else {
         return None;
@@ -4102,6 +4450,9 @@ async fn restore_best_effort_then_propagate_with_timing(
         allow_uncertain_quality,
         ctrl_c,
         mv_actuations,
+        None,
+        None,
+        None,
     )
     .await;
     record_restore_status_best_effort(pool, run_id, &attempt).await;
@@ -4162,10 +4513,17 @@ enum PollOutcome {
     /// The engine reported [`Action::Complete`] and any post-completion
     /// `[tuning].mrft_delay_secs`
     /// padding has elapsed.
-    Completed(Action),
+    Completed(CompletedPoll),
     /// Ctrl+C, `[tuning].timeout_secs`, `[tuning].op_timeout_secs`, or a poor-quality PV sample ended the
     /// run before that.
     Aborted(AbortReason),
+}
+
+struct CompletedPoll {
+    action: Action,
+    state: MrftState,
+    next_tick_index: i64,
+    tick_time: TickTimeSource,
 }
 
 async fn insert_tune_sample_with_timing(
@@ -4649,9 +5007,12 @@ async fn run_polling_loop_with_timing(
         }
     }
 
-    Ok(PollOutcome::Completed(completion.expect(
-        "the loop only `break`s after `completion` is set",
-    )))
+    Ok(PollOutcome::Completed(CompletedPoll {
+        action: completion.expect("the loop only `break`s after `completion` is set"),
+        state: engine.state(),
+        next_tick_index: tick_index,
+        tick_time,
+    }))
 }
 
 #[cfg(test)]
@@ -5344,6 +5705,31 @@ mod tests {
         (run.id, config, template, tags)
     }
 
+    async fn start_yokogawa_test_run(
+        pool: &SqlitePool,
+        name: &str,
+    ) -> (i64, LoopConfig, DcsTemplate, LoopTags) {
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        let config = build_loop_config(&args).unwrap();
+        let template = yokogawa_template();
+        let tags = yokogawa_tags();
+        let run = TuneRunRow::start(
+            pool,
+            None,
+            name,
+            TuneDriver::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        (run.id, config, template, tags)
+    }
+
     /// Keep the shared execution tests fast now that timing values come from global
     /// configuration rather than per-run arguments.
     fn test_config() -> crate::config::BhtuneConfig {
@@ -5605,6 +5991,283 @@ mod tests {
             write_pid: None,
             output: OutputFormat::Table,
         }
+    }
+
+    fn completed_poll_for_settling(start: DateTime<Utc>, next_tick_index: i64) -> CompletedPoll {
+        CompletedPoll {
+            action: Action::Complete {
+                peaks: vec![52.0, 48.0, 52.0],
+                troughs: vec![46.0, 50.0],
+                switch_times: vec![
+                    start,
+                    start + chrono::Duration::seconds(30),
+                    start + chrono::Duration::seconds(60),
+                    start + chrono::Duration::seconds(90),
+                    start + chrono::Duration::seconds(120),
+                ],
+                mv_sign_init: 1,
+            },
+            state: MrftState {
+                hysteresis: 0.0,
+                mv_value_current: 45.0,
+                mv_sign_next_step: 1,
+                counter_all_switches: 5,
+                cycles_completed: 2,
+                cycles_remaining: 0,
+            },
+            next_tick_index,
+            tick_time: TickTimeSource::FixedStep {
+                current: start,
+                step: chrono::Duration::milliseconds(5),
+            },
+        }
+    }
+
+    #[test]
+    fn settling_duration_is_one_third_of_a_finite_positive_period() {
+        assert_eq!(
+            settling_duration(Some(4_500.0)),
+            Some(Duration::from_millis(1_500))
+        );
+    }
+
+    #[test]
+    fn settling_duration_rejects_missing_non_finite_and_non_positive_periods() {
+        for period in [
+            None,
+            Some(0.0),
+            Some(-1.0),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+        ] {
+            assert_eq!(settling_duration(period), None);
+        }
+    }
+
+    #[test]
+    fn auto_release_settling_is_eligible_only_for_live_auto_started_mode_changes() {
+        let args = {
+            let mut args = fast_simulator_args();
+            args.driver = DriverKindArg::Opcda;
+            args
+        };
+        let template = yokogawa_template();
+        let tags = yokogawa_tags();
+        let mut guard = MutationGuard {
+            mode_written: true,
+            ..MutationGuard::default()
+        };
+
+        let mut initial = InitialState {
+            pv_ini: 50.0,
+            mv_ini: 45.0,
+            pv_range_high: 100.0,
+            pv_range_low: 0.0,
+            mv_range_high: 100.0,
+            mv_range_low: 0.0,
+            direction: ControllerDirection::Direct,
+            mode_raw: Some("AUT".to_string()),
+            mode_attribute_raw: None,
+            setpoint_ini: Some(55.0),
+        };
+        assert!(should_settle_before_auto_release(
+            &args, &tags, &template, &initial, &guard
+        ));
+
+        initial.mode_raw = Some("MAN".to_string());
+        assert!(!should_settle_before_auto_release(
+            &args, &tags, &template, &initial, &guard
+        ));
+
+        initial.mode_raw = Some("AUT".to_string());
+        guard.mode_written = false;
+        assert!(!should_settle_before_auto_release(
+            &args, &tags, &template, &initial, &guard
+        ));
+
+        guard.mode_written = true;
+        let mut simulator_args = args;
+        simulator_args.driver = DriverKindArg::Simulator;
+        assert!(!should_settle_before_auto_release(
+            &simulator_args,
+            &tags,
+            &template,
+            &initial,
+            &guard
+        ));
+    }
+
+    #[tokio::test]
+    async fn live_auto_release_settling_persists_samples_freezes_state_and_releases_auto() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, template, tags) =
+            start_yokogawa_test_run(&pool, "yokogawa-auto-settling").await;
+        let driver = yokogawa_driver_auto();
+        let initial = read_initial_values(&driver, &tags, &template, true)
+            .await
+            .unwrap();
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
+            .await
+            .unwrap();
+        assert!(guard.mode_written);
+
+        let start = Utc::now();
+        let mut completion = completed_poll_for_settling(start, 12);
+        let frozen_state = completion.state;
+        let args = {
+            let mut args = fast_simulator_args();
+            args.driver = DriverKindArg::Opcda;
+            args
+        };
+        let effective_timing = test_effective_timing(&args);
+        let mut timing = timing_for_args(&args);
+        let mut ctrl_c = CtrlC::never();
+        let restore = attempt_restore_with_actuation_with_timing(
+            &pool,
+            run_id,
+            &args,
+            effective_timing,
+            &driver,
+            &tags,
+            &template,
+            &initial,
+            &guard,
+            true,
+            &mut ctrl_c,
+            &mut None,
+            Some(&mut completion),
+            Some(75.0),
+            Some(&mut timing),
+        )
+        .await;
+
+        assert!(matches!(restore, RestoreAttempt::Confirmed));
+        assert_eq!(completion.state, frozen_state);
+
+        let samples = TuneSampleRow::list_for_run(&pool, run_id).await.unwrap();
+        assert!(samples.len() >= 2);
+        assert_eq!(
+            completion.next_tick_index,
+            12 + i64::try_from(samples.len()).unwrap()
+        );
+        for (offset, sample) in samples.iter().enumerate() {
+            assert_eq!(sample.tick_index, 12 + i64::try_from(offset).unwrap());
+            assert_eq!(
+                sample.sample.time,
+                start + chrono::Duration::milliseconds(5 * (offset as i64 + 1))
+            );
+            assert_eq!(sample.state, frozen_state);
+        }
+        assert_eq!(
+            completion.tick_time.next_timestamp().unwrap(),
+            start + chrono::Duration::milliseconds(5 * (samples.len() as i64 + 1))
+        );
+        assert_eq!(
+            driver.write_log(),
+            vec![
+                (tags.controller_mode.clone().unwrap(), "MAN".to_string()),
+                (tags.manipulated_variable.clone(), "45".to_string()),
+                (tags.controller_mode.clone().unwrap(), "AUT".to_string()),
+                (tags.setpoint_variable.clone().unwrap(), "55".to_string(),),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn settling_poor_quality_persists_the_triggering_sample_and_stays_manual() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, _template, tags) =
+            start_yokogawa_test_run(&pool, "yokogawa-settling-poor-quality").await;
+        let driver = yokogawa_driver_auto().degrade_quality_after(
+            &tags.process_variable,
+            0,
+            bhtune_driver::Quality::Bad,
+        );
+        let args = {
+            let mut args = fast_simulator_args();
+            args.driver = DriverKindArg::Opcda;
+            args
+        };
+        let mut completion = completed_poll_for_settling(Utc::now(), 20);
+        let original_state = completion.state;
+        let mut timing = timing_for_args(&args);
+        let error = run_auto_release_settling(
+            &pool,
+            run_id,
+            test_effective_timing(&args),
+            &tags,
+            &driver,
+            &mut CtrlC::never(),
+            true,
+            &mut completion,
+            &mut timing,
+            Duration::from_millis(5),
+            Instant::now() + Duration::from_secs(30),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Bad"));
+        assert_eq!(completion.state, original_state);
+        assert_eq!(completion.next_tick_index, 20);
+        assert!(driver.write_log().is_empty());
+        let samples = TuneSampleRow::list_for_run(&pool, run_id).await.unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].tick_index, 20);
+        assert_eq!(samples[0].pv_quality, SampleQuality::Bad);
+    }
+
+    #[tokio::test]
+    async fn settling_failure_suppresses_auto_release_and_leaves_the_loop_manual() {
+        let pool = seeded_pool().await;
+        let (run_id, _config, template, tags) =
+            start_yokogawa_test_run(&pool, "yokogawa-settling-read-error").await;
+        let driver = yokogawa_driver_auto().erroring_read_after(&tags.process_variable, 1);
+        let initial = read_initial_values(&driver, &tags, &template, true)
+            .await
+            .unwrap();
+        let mut guard = MutationGuard::default();
+        transition_to_manual(&driver, &tags, &template, &initial, &mut guard)
+            .await
+            .unwrap();
+        let args = {
+            let mut args = fast_simulator_args();
+            args.driver = DriverKindArg::Opcda;
+            args
+        };
+        let mut completion = completed_poll_for_settling(Utc::now(), 30);
+        let mut timing = timing_for_args(&args);
+        let mut ctrl_c = CtrlC::never();
+        let result = attempt_restore_with_actuation_with_timing(
+            &pool,
+            run_id,
+            &args,
+            test_effective_timing(&args),
+            &driver,
+            &tags,
+            &template,
+            &initial,
+            &guard,
+            true,
+            &mut ctrl_c,
+            &mut None,
+            Some(&mut completion),
+            Some(4_500.0),
+            Some(&mut timing),
+        )
+        .await;
+
+        assert!(matches!(result, RestoreAttempt::Incomplete { .. }));
+        assert_eq!(
+            driver.value_of(tags.controller_mode.as_deref().unwrap()),
+            Some("MAN".to_string())
+        );
+        assert!(
+            !driver.write_log().iter().any(|(tag, value)| tag
+                == tags.controller_mode.as_deref().unwrap()
+                && value == "AUT")
+        );
     }
 
     #[tokio::test]
@@ -9767,7 +10430,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_attempts_mode_setpoint_and_attribute_after_mv_quality_failure() {
+    async fn failed_mv_restore_keeps_an_auto_starting_loop_in_manual() {
         let pool = seeded_pool().await;
         let (run_id, _config, template, tags) =
             start_opc_test_run(&pool, "actuation-restore-quality").await;
@@ -9800,17 +10463,11 @@ mod tests {
 
         assert!(matches!(outcome, RestoreAttempt::Incomplete { .. }));
         let writes = driver.write_log();
-        let mv_index = writes
-            .iter()
-            .position(|(tag, _)| tag == &tags.manipulated_variable)
-            .unwrap();
-        let mode_index = writes
-            .iter()
-            .position(|(tag, _)| Some(tag) == tags.controller_mode.as_ref())
-            .unwrap();
         assert!(
-            mv_index < mode_index,
-            "the MV must be restored while the loop is still in Manual"
+            !writes
+                .iter()
+                .any(|(tag, _)| Some(tag) == tags.controller_mode.as_ref()),
+            "Auto release must be suppressed when the final MV restore is not confirmed"
         );
         assert!(
             writes
@@ -10490,7 +11147,24 @@ mod tests {
     }
 
     fn yokogawa_tags() -> LoopTags {
-        LoopTags::derive_from_pv_tag("Unit1.FIC101.PV", &yokogawa_template())
+        LoopTags::derive_from_pv_tag("FCS0217!204FC03010.PV", &yokogawa_template())
+    }
+
+    fn yokogawa_driver_auto() -> MockDriver {
+        MockDriver::new(&[
+            ("FCS0217!204FC03010.PV", "50.0"),
+            ("FCS0217!204FC03010.MV", "45.0"),
+            ("FCS0217!204FC03010.MODE", "AUT"),
+            ("FCS0217!204FC03010.DR", "0"),
+            ("FCS0217!204FC03010.SH", "100.0"),
+            ("FCS0217!204FC03010.SL", "0.0"),
+            ("FCS0217!204FC03010.MSH", "100.0"),
+            ("FCS0217!204FC03010.MSL", "0.0"),
+            ("FCS0217!204FC03010.SV", "55.0"),
+            ("FCS0217!204FC03010.P", "10.0"),
+            ("FCS0217!204FC03010.I", "2.0"),
+            ("FCS0217!204FC03010.D", "0.5"),
+        ])
     }
 
     /// A `MockDriver` pre-populated with every tag `honeywell_tags()` derives, using values
@@ -10557,14 +11231,14 @@ mod tests {
         let template = yokogawa_template();
         let tags = yokogawa_tags();
         let driver = MockDriver::new(&[
-            ("Unit1.FIC101.PV", "50.0"),
-            ("Unit1.FIC101.MV", "45.0"),
-            ("Unit1.FIC101.MODE", "MAN"),
-            ("Unit1.FIC101.DR", "0"),
-            ("Unit1.FIC101.SH", "100.0"),
-            ("Unit1.FIC101.SL", "0.0"),
-            ("Unit1.FIC101.MSH", "100.0"),
-            ("Unit1.FIC101.MSL", "0.0"),
+            ("FCS0217!204FC03010.PV", "50.0"),
+            ("FCS0217!204FC03010.MV", "45.0"),
+            ("FCS0217!204FC03010.MODE", "MAN"),
+            ("FCS0217!204FC03010.DR", "0"),
+            ("FCS0217!204FC03010.SH", "100.0"),
+            ("FCS0217!204FC03010.SL", "0.0"),
+            ("FCS0217!204FC03010.MSH", "100.0"),
+            ("FCS0217!204FC03010.MSL", "0.0"),
         ]);
 
         let initial = read_initial_values(&driver, &tags, &template, false)
@@ -10576,14 +11250,14 @@ mod tests {
         assert_eq!(
             driver.read_batches(),
             vec![vec![
-                "Unit1.FIC101.PV".to_string(),
-                "Unit1.FIC101.MV".to_string(),
-                "Unit1.FIC101.MODE".to_string(),
-                "Unit1.FIC101.DR".to_string(),
-                "Unit1.FIC101.SH".to_string(),
-                "Unit1.FIC101.SL".to_string(),
-                "Unit1.FIC101.MSH".to_string(),
-                "Unit1.FIC101.MSL".to_string(),
+                "FCS0217!204FC03010.PV".to_string(),
+                "FCS0217!204FC03010.MV".to_string(),
+                "FCS0217!204FC03010.MODE".to_string(),
+                "FCS0217!204FC03010.DR".to_string(),
+                "FCS0217!204FC03010.SH".to_string(),
+                "FCS0217!204FC03010.SL".to_string(),
+                "FCS0217!204FC03010.MSH".to_string(),
+                "FCS0217!204FC03010.MSL".to_string(),
             ]]
         );
     }
@@ -11441,17 +12115,33 @@ mod tests {
 
     #[test]
     fn completed_oscillation_period_is_reported_for_a_successful_poll_result() {
-        let completion = PollOutcome::Completed(Action::Complete {
-            peaks: vec![52.0, 48.0, 52.0],
-            troughs: vec![46.0, 50.0],
-            switch_times: vec![
-                Utc::now(),
-                Utc::now() + chrono::Duration::seconds(30),
-                Utc::now() + chrono::Duration::seconds(60),
-                Utc::now() + chrono::Duration::seconds(90),
-                Utc::now() + chrono::Duration::seconds(120),
-            ],
-            mv_sign_init: 1,
+        let start = Utc::now();
+        let completion = PollOutcome::Completed(CompletedPoll {
+            action: Action::Complete {
+                peaks: vec![52.0, 48.0, 52.0],
+                troughs: vec![46.0, 50.0],
+                switch_times: vec![
+                    start,
+                    start + chrono::Duration::seconds(30),
+                    start + chrono::Duration::seconds(60),
+                    start + chrono::Duration::seconds(90),
+                    start + chrono::Duration::seconds(120),
+                ],
+                mv_sign_init: 1,
+            },
+            state: MrftState {
+                hysteresis: 0.0,
+                mv_value_current: 45.0,
+                mv_sign_next_step: 1,
+                counter_all_switches: 5,
+                cycles_completed: 2,
+                cycles_remaining: 0,
+            },
+            next_tick_index: 0,
+            tick_time: TickTimeSource::FixedStep {
+                current: start,
+                step: chrono::Duration::seconds(1),
+            },
         });
         let result = completed_oscillation_period_ms(
             &Ok(completion),
