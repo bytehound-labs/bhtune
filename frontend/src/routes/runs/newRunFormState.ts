@@ -352,15 +352,9 @@ function within(
   bounds: {
     readonly min: number;
     readonly max: number;
-    readonly absolute_min?: number | null;
   },
 ): value is number {
-  return (
-    value !== undefined &&
-    value >= bounds.min &&
-    value <= bounds.max &&
-    (bounds.absolute_min == null || Math.abs(value) >= bounds.absolute_min)
-  );
+  return value !== undefined && value >= bounds.min && value <= bounds.max;
 }
 
 function demoNumber(
@@ -369,7 +363,6 @@ function demoNumber(
   bounds: {
     readonly min: number;
     readonly max: number;
-    readonly absolute_min?: number | null;
   },
   fallback: number,
 ): number {
@@ -1455,15 +1448,11 @@ function bounded(
   range: {
     readonly min: number;
     readonly max: number;
-    readonly absolute_min?: number | null;
   },
   label: string,
 ): number | string {
   if (!Number.isFinite(value) || value < range.min || value > range.max) {
     return `${label} must be between ${range.min} and ${range.max}.`;
-  }
-  if (range.absolute_min != null && Math.abs(value) < range.absolute_min) {
-    return `${label} must be between ${range.min} and -${range.absolute_min}, or between ${range.absolute_min} and ${range.max}.`;
   }
   return value;
 }
@@ -1475,7 +1464,6 @@ function bounded(
 type DemoRangeLimit = {
   readonly min: number;
   readonly max: number;
-  readonly absolute_min?: number | null;
 };
 
 type DemoNumericValues = {

@@ -97,7 +97,7 @@ const capabilities = {
       cycles_skip: { min: 0, max: 2 },
       cycles_count: { min: 1, max: 3 },
       noise_protection_secs: { min: 0, max: 3 },
-      sim_gain: { min: -5, max: 5, absolute_min: 0.1 },
+      sim_gain: { min: 0.1, max: 5, absolute_min: null },
       sim_tau: { min: 0.05, max: 5, absolute_min: null },
       sim_dead_time: { min: 0, max: 2, absolute_min: null },
       sim_seed: { min: 0, max: 2_147_483_647 },
@@ -407,7 +407,7 @@ test.describe("Demo mode contract", () => {
     await page
       .getByRole("combobox", { name: "Controller type", exact: true })
       .selectOption("pid");
-    await page.getByLabel("Process gain").fill("-2.5");
+    await page.getByLabel("Process gain").fill("2.5");
     await page.getByRole("button", { name: "Start tune" }).click();
     await expect(page).toHaveURL(/\/runs\/1001$/);
 
@@ -450,7 +450,7 @@ test.describe("Demo mode contract", () => {
       pv_range_low: 0,
       mv_range_high: 100,
       mv_range_low: 0,
-      sim_gain: -2.5,
+      sim_gain: 2.5,
     });
     expect(api.unexpectedPaths).toEqual([]);
 
@@ -502,7 +502,7 @@ test.describe("Demo mode contract", () => {
     await expect(
       page.getByRole("combobox", { name: "Controller type", exact: true }),
     ).toHaveValue("pid");
-    await expect(page.getByLabel("Process gain")).toHaveValue("-2.5");
+    await expect(page.getByLabel("Process gain")).toHaveValue("2.5");
     await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("0.5");
     await expect(page.getByLabel("Dead time (s)")).toHaveValue("1");
     await expect(page.getByLabel("Initial PV")).toHaveValue("50");
@@ -518,7 +518,7 @@ test.describe("Demo mode contract", () => {
       process_type: "temperature_mixing",
       controller_type: "pid",
       direction: "reverse",
-      sim_gain: -2.5,
+      sim_gain: 2.5,
     });
     expect(Object.keys(api.starts[1]).sort()).toEqual(
       [
@@ -552,29 +552,18 @@ test.describe("Demo mode contract", () => {
     ).toHaveCount(2);
   });
 
-  test("keeps Demo controller direction independent of gain sign", async ({
-    page,
-  }) => {
+  test("rejects negative Demo process gains", async ({ page }) => {
     const api = await installDemoApi(page.context(), 2001);
     await page.goto("/runs/new");
 
-    await page.getByLabel("Process gain").fill("1");
-    await page.getByRole("button", { name: "Start tune" }).click();
-    await expect(page).toHaveURL(/\/runs\/2001$/);
-    expect(api.starts[0]).toMatchObject({
-      direction: "reverse",
-      sim_gain: 1,
-    });
-
-    await page.getByRole("link", { name: "Tune", exact: true }).click();
-    await expect(page).toHaveURL(/\/runs\/new$/);
     await page.getByLabel("Process gain").fill("-1");
     await page.getByRole("button", { name: "Start tune" }).click();
-    await expect(page).toHaveURL(/\/runs\/2002$/);
-    expect(api.starts[1]).toMatchObject({
-      direction: "reverse",
-      sim_gain: -1,
-    });
+    await expect(
+      page.getByText("Process gain must be between 0.1 and 5.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    expect(api.starts).toEqual([]);
   });
 
   test("sanitizes invalid stored duplicate settings back to capability defaults", async ({
@@ -697,7 +686,7 @@ test.describe("Demo mode contract", () => {
         source_pv_range_high: 80,
         source_mv_range_low: 10,
         source_mv_range_high: 90,
-        sim_gain: -2,
+        sim_gain: 2,
         sim_tau: 1.25,
         sim_dead_time: 0.75,
         sim_noise: 2,
@@ -734,7 +723,7 @@ test.describe("Demo mode contract", () => {
     await expect(page.getByLabel("Cycles to skip")).toHaveValue("2");
     await expect(page.getByLabel("Cycles to count")).toHaveValue("3");
     await expect(page.getByLabel("Noise protection (s)")).toHaveValue("2");
-    await expect(page.getByLabel("Process gain")).toHaveValue("-2");
+    await expect(page.getByLabel("Process gain")).toHaveValue("2");
     await expect(page.getByLabel("Time constant τ (s)")).toHaveValue("1.25");
     await expect(page.getByLabel("Dead time (s)")).toHaveValue("0.75");
     await expect(page.getByLabel("Measurement noise")).toHaveValue("2");
@@ -760,7 +749,7 @@ test.describe("Demo mode contract", () => {
           template: "Allen-Bradley PlantPAx",
           process_type: "temperature_mixing",
           controller_type: "pid",
-          sim_gain: -2,
+          sim_gain: 2,
         },
       });
     const sanitizedDraft = await page.evaluate(() => {
@@ -801,7 +790,7 @@ test.describe("Demo mode contract", () => {
       pv_range_high: 80,
       mv_range_low: 10,
       mv_range_high: 90,
-      sim_gain: -2,
+      sim_gain: 2,
       sim_tau: 1.25,
       sim_dead_time: 0.75,
       sim_noise: 2,
@@ -1041,10 +1030,9 @@ test.describe("Demo mode contract", () => {
     await page.getByLabel("Process gain").fill("0");
     await page.getByRole("button", { name: "Start tune" }).click();
     await expect(
-      page.getByText(
-        "Process gain must be between -5 and -0.1, or between 0.1 and 5.",
-        { exact: true },
-      ),
+      page.getByText("Process gain must be between 0.1 and 5.", {
+        exact: true,
+      }),
     ).toBeVisible();
     expect(api.starts).toEqual([]);
   });

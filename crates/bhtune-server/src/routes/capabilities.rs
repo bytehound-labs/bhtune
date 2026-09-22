@@ -8,7 +8,7 @@ use bhtune_cli::config::{
     DEMO_RANGE_ENDPOINT_MIN, DEMO_RANGE_HIGH, DEMO_RANGE_LOW, DEMO_RANGE_SPAN_MAX,
     DEMO_RANGE_SPAN_MIN, DEMO_RELAY_AMP_DEFAULT, DEMO_RELAY_AMP_MAX, DEMO_RELAY_AMP_MIN,
     DEMO_RUN_TIMEOUT_SECS, DEMO_SIM_DEAD_TIME_DEFAULT, DEMO_SIM_DEAD_TIME_MAX,
-    DEMO_SIM_DEAD_TIME_MIN, DEMO_SIM_GAIN_ABS_MIN, DEMO_SIM_GAIN_DEFAULT, DEMO_SIM_GAIN_MAX,
+    DEMO_SIM_DEAD_TIME_MIN, DEMO_SIM_GAIN_DEFAULT, DEMO_SIM_GAIN_MAX, DEMO_SIM_GAIN_MIN,
     DEMO_SIM_INITIAL_VALUE_DEFAULT, DEMO_SIM_NOISE_DEFAULT, DEMO_SIM_NOISE_MAX_PV_SPAN_FRACTION,
     DEMO_SIM_SEED_DEFAULT, DEMO_SIM_SEED_MAX, DEMO_SIM_TAU_DEFAULT, DEMO_SIM_TAU_MAX,
     DEMO_SIM_TAU_MIN, DEMO_TAG_NAME, DEMO_TEMPLATE_NAME, DemoPolicy, ServerMode,
@@ -281,9 +281,9 @@ fn demo_simulator() -> DemoSimulatorCapabilities {
                 max: u64::from(DEMO_NOISE_PROTECTION_SECS_MAX),
             },
             sim_gain: FloatBounds {
-                min: -DEMO_SIM_GAIN_MAX,
+                min: DEMO_SIM_GAIN_MIN,
                 max: DEMO_SIM_GAIN_MAX,
-                absolute_min: Some(DEMO_SIM_GAIN_ABS_MIN),
+                absolute_min: None,
             },
             sim_tau: FloatBounds {
                 min: DEMO_SIM_TAU_MIN,
@@ -446,9 +446,9 @@ mod tests {
         assert_eq!(
             response.simulator.as_ref().unwrap().limits.sim_gain,
             FloatBounds {
-                min: -5.0,
+                min: 0.1,
                 max: 5.0,
-                absolute_min: Some(0.1),
+                absolute_min: None,
             }
         );
         assert_eq!(

@@ -210,7 +210,7 @@ const demoCapabilities = {
       cycles_skip: { min: 0, max: 2 },
       cycles_count: { min: 1, max: 3 },
       noise_protection_secs: { min: 0, max: 3 },
-      sim_gain: { min: -5, max: 5, absolute_min: 0.1 },
+      sim_gain: { min: 0.1, max: 5, absolute_min: null },
       sim_tau: { min: 0.05, max: 5 },
       sim_dead_time: { min: 0, max: 2 },
       sim_seed: { min: 0, max: 4294967295 },

@@ -1965,10 +1965,10 @@ Flow/PI, reverse action, relay amplitude 10%, cycles skip/count `1/2`, zero nois
 simulator gain/time constant/dead time/noise/seed `1.0/0.5/1.0/0/0`, PV/MV ranges `0–100`,
 and initial PV/MV `50`. Explicit values are bounded before the owned `prepare()` path: relay
 amplitude `1–20%`, skipped cycles `0–2`, counted cycles `1–3`, noise protection `0–3` seconds,
-gain magnitude `0.1–5.0` excluding zero, time constant `0.05–5` seconds, dead time `0–2`
+positive gain `0.1–5.0`, time constant `0.05–5` seconds, dead time `0–2`
 seconds, range endpoints `-1,000–1,000` with spans `1–1,000`, non-negative noise up to 5% of
 the PV span, and initial values inside their ranges. Demo uses Reverse controller action by
-default, while process-gain sign remains independent from controller direction; the normal
+default, while Demo process gain remains constrained to positive values; the normal
 process/controller compatibility rules still apply.
 OPC server/bridge values, tag overrides, notes, `write_pid`, and write confirmation are
 rejected rather than ignored. The persisted/display identity is the fixed label

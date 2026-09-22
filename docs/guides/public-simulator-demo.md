@@ -134,7 +134,7 @@ contract:
 | Relay amplitude        |     10% |                                     1–20% |
 | Cycles to skip / count |   1 / 2 |                                 0–2 / 1–3 |
 | Noise protection       |     0 s |                                     0–3 s |
-| Process gain           |     1.0 |       magnitude 0.1–5.0; zero is rejected |
+| Process gain           |     1.0 |                                   0.1–5.0 |
 | Time constant          |   0.5 s |                                  0.05–5 s |
 | Dead time              |   1.0 s |                                     0–2 s |
 | PV/MV range            |   0–100 | endpoints -1000–1000; ordered span 1–1000 |
@@ -142,9 +142,7 @@ contract:
 | Measurement noise      |       0 |            0–5% of the configured PV span |
 | Random seed            |       0 |                           0–2,147,483,647 |
 
-Demo uses Reverse controller action by default as a simple, consistent convention. Process-gain
-sign is independent from controller direction, so both positive and negative gain values are
-supported without changing the selected action.
+Demo uses Reverse controller action by default as a simple, consistent convention.
 
 ## Self-hosting requirements
 

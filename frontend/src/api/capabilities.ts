@@ -469,8 +469,8 @@ function validateDemoSimulator(value: unknown) {
   );
   requireWithin(simGain, gainBounds, "sim_gain");
   if (
-    gainBounds.absoluteMin === null ||
-    Math.abs(simGain) < gainBounds.absoluteMin ||
+    gainBounds.min <= 0 ||
+    gainBounds.max <= 0 ||
     defaults.direction !== "reverse"
   ) {
     throw new Error("The server returned unsafe simulator gain defaults.");

@@ -402,14 +402,6 @@ function SimulatorModelInfo({
         </div>
       </dl>
 
-      {simulatorCapabilities ? (
-        <p className="mt-4 text-xs text-slate-500">
-          Demo uses Reverse controller action as a simple consistent convention.
-          Process-gain sign is independent from controller direction, so both
-          positive and negative gain values are supported.
-        </p>
-      ) : null}
-
       <p className="mt-4 text-xs text-slate-500">
         {samplingDescription} Dead time is represented by delaying MV through
         approximately ceil(θ / Δt) samples. Measurement noise is sampled
@@ -448,7 +440,9 @@ function SimulatorProcessFields({
         hint={
           limits?.sim_gain.absolute_min
             ? `Allowed magnitude: ${limits.sim_gain.absolute_min}–${limits.sim_gain.max}.`
-            : undefined
+            : limits
+              ? `Allowed range: ${limits.sim_gain.min}–${limits.sim_gain.max}.`
+              : undefined
         }
       />
       <NumberField
@@ -693,11 +687,10 @@ function demoFields({
           required
         />
         <p className="text-sm text-slate-400 sm:col-span-2">
-          The server fixes the tag identity and uses Reverse controller action
-          by default. Process-gain sign is independent from controller
-          direction. It uses {simulatorCapabilities.defaults.poll_interval_ms}{" "}
-          ms sampling and a {simulatorCapabilities.defaults.run_timeout_secs}s
-          run timeout. Demo runs never connect to OPC DA or write PID values.
+          The server fixes the tag identity. It uses{" "}
+          {simulatorCapabilities.defaults.poll_interval_ms} ms sampling and a{" "}
+          {simulatorCapabilities.defaults.run_timeout_secs}s run timeout. Demo
+          runs never connect to OPC DA or write PID values.
         </p>
       </FormSection>
       {simulatorParameterFields({ form, onChange, simulatorCapabilities })}

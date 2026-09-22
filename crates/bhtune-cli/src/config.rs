@@ -93,9 +93,9 @@ pub const DEMO_RANGE_ENDPOINT_MAX: f32 = 1_000.0;
 pub const DEMO_RANGE_SPAN_MIN: f32 = 1.0;
 /// Maximum PV/MV span accepted by the public Demo.
 pub const DEMO_RANGE_SPAN_MAX: f32 = 1_000.0;
-/// Minimum non-zero process-gain magnitude accepted by the public Demo.
-pub const DEMO_SIM_GAIN_ABS_MIN: f32 = 0.1;
-/// Maximum process-gain magnitude accepted by the public Demo.
+/// Minimum positive process gain accepted by the public Demo.
+pub const DEMO_SIM_GAIN_MIN: f32 = 0.1;
+/// Maximum positive process gain accepted by the public Demo.
 pub const DEMO_SIM_GAIN_MAX: f32 = 5.0;
 /// Minimum simulator time constant accepted by the public Demo.
 pub const DEMO_SIM_TAU_MIN: f32 = 0.05;

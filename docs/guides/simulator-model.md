@@ -88,6 +88,5 @@ calculated constants using that system's native conventions, such as gain versus
 band and the applicable integral or derivative units. It changes result interpretation, not the
 FOPDT physics.
 
-In Demo mode, Reverse controller action is the default convention for every process. The sign of
-the process gain is independent from controller direction, so positive and negative gain values
-can be explored without the browser deriving or changing the action.
+In Demo mode, Reverse controller action is the default convention for every process, and the
+process gain is constrained to positive values from 0.1 through 5.0.

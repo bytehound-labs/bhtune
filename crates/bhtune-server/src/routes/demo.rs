@@ -20,8 +20,8 @@ use bhtune_cli::config::{
     DEMO_NOISE_PROTECTION_SECS_MIN, DEMO_RANGE_ENDPOINT_MAX, DEMO_RANGE_ENDPOINT_MIN,
     DEMO_RANGE_HIGH, DEMO_RANGE_LOW, DEMO_RANGE_SPAN_MAX, DEMO_RANGE_SPAN_MIN,
     DEMO_RELAY_AMP_DEFAULT, DEMO_RELAY_AMP_MAX, DEMO_RELAY_AMP_MIN, DEMO_SIM_DEAD_TIME_DEFAULT,
-    DEMO_SIM_DEAD_TIME_MAX, DEMO_SIM_DEAD_TIME_MIN, DEMO_SIM_GAIN_ABS_MIN, DEMO_SIM_GAIN_DEFAULT,
-    DEMO_SIM_GAIN_MAX, DEMO_SIM_INITIAL_VALUE_DEFAULT, DEMO_SIM_NOISE_DEFAULT,
+    DEMO_SIM_DEAD_TIME_MAX, DEMO_SIM_DEAD_TIME_MIN, DEMO_SIM_GAIN_DEFAULT, DEMO_SIM_GAIN_MAX,
+    DEMO_SIM_GAIN_MIN, DEMO_SIM_INITIAL_VALUE_DEFAULT, DEMO_SIM_NOISE_DEFAULT,
     DEMO_SIM_NOISE_MAX_PV_SPAN_FRACTION, DEMO_SIM_SEED_DEFAULT, DEMO_SIM_SEED_MAX,
     DEMO_SIM_TAU_DEFAULT, DEMO_SIM_TAU_MAX, DEMO_SIM_TAU_MIN, DEMO_TAG_NAME, DemoPolicy,
     ServerMode,
@@ -189,11 +189,11 @@ fn validate_demo_scalar_ranges(request: &StartRunRequest) -> Result<(), ApiError
 
 fn validate_demo_gain(request: &StartRunRequest) -> Result<(), ApiError> {
     if !request.sim_gain.is_finite()
-        || !(DEMO_SIM_GAIN_ABS_MIN..=DEMO_SIM_GAIN_MAX).contains(&request.sim_gain.abs())
+        || !(DEMO_SIM_GAIN_MIN..=DEMO_SIM_GAIN_MAX).contains(&request.sim_gain)
     {
         return Err(bad_request(format!(
-            "demo field 'sim_gain' must be finite and between -{DEMO_SIM_GAIN_MAX} and \
-             -{DEMO_SIM_GAIN_ABS_MIN} or between {DEMO_SIM_GAIN_ABS_MIN} and {DEMO_SIM_GAIN_MAX}"
+            "demo field 'sim_gain' must be finite and between {DEMO_SIM_GAIN_MIN} and \
+             {DEMO_SIM_GAIN_MAX}"
         )));
     }
     Ok(())
@@ -1625,19 +1625,13 @@ mod tests {
     }
 
     #[test]
-    fn gain_magnitude_is_valid_independently_of_direction() {
-        for (gain, direction) in [
-            (1.0, ControllerDirection::Reverse),
-            (-1.0, ControllerDirection::Reverse),
-            (DEMO_SIM_GAIN_MAX, ControllerDirection::Direct),
-            (-DEMO_SIM_GAIN_MAX, ControllerDirection::Direct),
-        ] {
+    fn demo_process_gain_must_be_positive() {
+        for gain in [DEMO_SIM_GAIN_MIN, 1.0, DEMO_SIM_GAIN_MAX] {
             let mut request = valid_request(ProcessType::Flow, ControllerType::Pi);
             request["sim_gain"] = serde_json::json!(gain);
-            request["direction"] = serde_json::json!(direction);
             assert!(parse_demo_request(request).is_ok());
         }
-        for gain in [0.0, DEMO_SIM_GAIN_ABS_MIN / 2.0] {
+        for gain in [-DEMO_SIM_GAIN_MAX, -DEMO_SIM_GAIN_MIN, 0.0] {
             let mut request = valid_request(ProcessType::Flow, ControllerType::Pi);
             request["sim_gain"] = serde_json::json!(gain);
             assert!(parse_demo_request(request).is_err());

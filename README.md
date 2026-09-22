@@ -74,8 +74,8 @@ category; the [simulator model guide](docs/guides/simulator-model.md) documents 
 dead-time queue, exact discrete update, noise, and simulated timing.
 The selected template formats calculated PID constants using that system's native conventions
 (for example, gain versus proportional band). Demo mode uses Reverse controller action by
-default as a simple consistent convention; process-gain sign is independent from controller
-direction. Full mode retains the complete
+default as a simple consistent convention and accepts positive process gain values from 0.1
+through 5.0. Full mode retains the complete
 OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing
 requests require the exact configured browser origin; non-loopback self-hosting therefore uses
 an HTTPS reverse proxy rather than direct HTTP access to the bound application port.
