@@ -116,7 +116,9 @@ browser-visible origin.
      selected template formats calculated PID constants using that system's native conventions
      (for example, gain versus proportional band). The simulator ignores its DCS tag mappings.
      PV/MV ranges, controller direction, and every engine parameter also
-     stay enabled because the simulator needs them.
+     stay enabled because the simulator needs them. The Simulator parameters section also
+     explains the generic FOPDT model and its exact discrete update; see the
+     [simulator model guide](../guides/simulator-model.md) for the full equations.
    - Test parameters show concrete **Process defaults** for cycles to skip, cycles to count, and
      noise protection based on the selected Process type. Changing Process type replaces all
      three values; **Reset process defaults** restores those values without resetting the rest

@@ -28,7 +28,10 @@ The Demo tune page is clearly labeled and keeps the controls that affect simulat
 visitors can choose a built-in template, process/controller type, relay and cycle settings,
 noise protection, and bounded simulator physics. Controls that require live equipment are
 omitted from the page rather than presented as no-op options.
-The simulator model remains generic. The selected template formats calculated PID constants
+The simulator model remains generic: every current process category uses the same FOPDT physical
+model, while process type changes tuning correlations and defaults. The [simulator model
+guide](simulator-model.md) documents its transfer function, exact discrete update, dead-time
+queue, noise, and simulated timing. The selected template formats calculated PID constants
 using that system's native conventions (for example, gain versus proportional band).
 The interface presents the simulator boundary, history limit, and session lifetime in one
 persistent Demo notice rather than repeating the same warning on each page.

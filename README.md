@@ -69,6 +69,9 @@ values; deployment configuration may repeat them for validation but cannot widen
 runs use the stable identity **Simulator demo**, not an external plant tag. The Demo page lets
 visitors choose a built-in template, process/controller type, and bounded MRFT and simulator
 settings while omitting controls that require live equipment. The simulator model is generic.
+It uses the same first-order-plus-dead-time (FOPDT) transfer function for every current process
+category; the [simulator model guide](docs/guides/simulator-model.md) documents the equations,
+dead-time queue, exact discrete update, noise, and simulated timing.
 The selected template formats calculated PID constants using that system's native conventions
 (for example, gain versus proportional band). Full mode retains the complete
 OPC DA, template, configuration, history, and PID write-back workflow. Demo state-changing

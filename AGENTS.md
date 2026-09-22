@@ -4950,6 +4950,9 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    Run identity is
    consistently presented as the **Tag name**; the former
    user-editable run-name override was removed so history cannot hide the submitted tag.
+   Simulator mode now displays the generic FOPDT model, exact zero-order-hold update, dead-time
+   queue, noise, and timing summary directly in the Simulator parameters section; the durable
+   reference is `docs/guides/simulator-model.md`.
    A mutable nullable `notes` field is stored on each run, included in new-run requests, and
    exposed through `PUT`/`DELETE /api/runs/{id}/notes` for editing or clearing before, during,
    or after a tune. `driver-list-servers` adds OPC DA server discovery as a standalone

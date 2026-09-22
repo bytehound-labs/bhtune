@@ -368,6 +368,15 @@ test.describe("Demo mode contract", () => {
         { exact: true },
       ),
     ).toBeVisible();
+    const modelInfo = page.getByTestId("simulator-model-info");
+    await expect(modelInfo).toBeVisible();
+    await expect(modelInfo).toContainText(
+      "Model used: first-order-plus-dead-time (FOPDT)",
+    );
+    await expect(modelInfo).toContainText(
+      "All current process categories use this same generic physical model.",
+    );
+    await expect(modelInfo).toContainText("G(s) = K");
     await expect(
       page.getByRole("combobox", { name: "Controller type", exact: true }),
     ).toHaveValue("pi");

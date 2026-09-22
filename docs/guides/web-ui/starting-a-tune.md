@@ -15,7 +15,9 @@ Choose **Simulator** when learning the workflow or checking a template's PID-uni
 without a plant connection. The form keeps the same layout but disables the OPC server, bridge,
 tag, quality, timeout, and automatic write-back controls because the in-process simulator cannot
 use them. The template remains enabled because it still controls the result convention shown
-after the run.
+after the run. The Simulator parameters section includes a model-information panel describing
+the generic FOPDT transfer function and exact discrete update; see the
+[simulator model guide](../simulator-model.md) for the full reference.
 
 {/* web-ui-screenshot: full-tune-simulator */}
 <figure>

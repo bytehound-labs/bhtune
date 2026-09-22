@@ -341,6 +341,82 @@ function numericBounds(low: NumOrBlank, high: NumOrBlank) {
   };
 }
 
+function SimulatorModelInfo({
+  simulatorCapabilities,
+}: Pick<SimulatorParameterProps, "simulatorCapabilities">) {
+  const samplingDescription = simulatorCapabilities
+    ? `The Demo uses a fixed ${simulatorCapabilities.defaults.poll_interval_ms} ms simulated step.`
+    : "Full mode uses the configured [tuning].poll_interval_ms value.";
+
+  return (
+    <div
+      className="rounded-md border border-slate-700 bg-slate-950/50 p-4 sm:col-span-2"
+      data-testid="simulator-model-info"
+    >
+      <h3 className="text-sm font-semibold text-slate-200">
+        Model used: first-order-plus-dead-time (FOPDT)
+      </h3>
+      <p className="mt-2 text-sm text-slate-400">
+        All current process categories use this same generic physical model.
+        Process type changes MRFT tuning correlations and parameter defaults; it
+        does not select a different simulated plant.
+      </p>
+
+      <div className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+        <div>
+          <p className="font-medium text-slate-300">Transfer function</p>
+          <code className="mt-1 block overflow-x-auto rounded bg-slate-900 px-3 py-2 text-xs text-emerald-300">
+            G(s) = K · exp(−θs) / (τs + 1)
+          </code>
+        </div>
+        <div>
+          <p className="font-medium text-slate-300">Continuous-time form</p>
+          <code className="mt-1 block overflow-x-auto rounded bg-slate-900 px-3 py-2 text-xs text-emerald-300">
+            τ · dPV/dt = −(PV − PV₀) + K · (MV − MV₀)
+          </code>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <p className="font-medium text-slate-300">
+          Exact update for each simulated step
+        </p>
+        <code className="mt-1 block overflow-x-auto rounded bg-slate-900 px-3 py-2 text-xs text-emerald-300">
+          PV_next = PV · e^(−Δt/τ) + (1 − e^(−Δt/τ)) · (PV₀ − K · MV₀ + K ·
+          MV_delayed)
+        </code>
+      </div>
+
+      <dl className="mt-4 grid gap-3 text-xs text-slate-400 sm:grid-cols-3">
+        <div>
+          <dt className="font-medium text-slate-200">K</dt>
+          <dd>Process gain: PV change per unit MV change.</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-slate-200">τ</dt>
+          <dd>Time constant: response speed after the delay.</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-slate-200">θ</dt>
+          <dd>Dead time: MV samples delayed before affecting PV.</dd>
+        </div>
+      </dl>
+
+      <p className="mt-4 text-xs text-slate-500">
+        {samplingDescription} Dead time is represented by delaying MV through
+        approximately ceil(θ / Δt) samples. Measurement noise is sampled
+        uniformly from the configured range and added after the model update.
+        Simulator time advances without waiting on wall-clock time, and the RNG
+        seed makes noisy runs reproducible.
+      </p>
+      <p className="mt-2 text-xs text-slate-500">
+        MRFT drives the simulated MV directly. The separate VirtualPid helper is
+        for closed-loop validation and is not used during a tune.
+      </p>
+    </div>
+  );
+}
+
 function SimulatorProcessFields({
   form,
   onChange,
@@ -504,6 +580,7 @@ function simulatorParameterFields(props: SimulatorParameterProps) {
       defaultOpen
       documentationId="new-tune.simulator-parameters"
     >
+      <SimulatorModelInfo {...props} />
       <SimulatorProcessFields {...props} />
       <SimulatorInitialFields {...props} />
       <SimulatorRangeFields {...props} />

@@ -87,6 +87,12 @@ test.describe("app shell", () => {
         "The selected template formats calculated PID constants using that system's native conventions (for example, gain versus proportional band).",
       ),
     ).toBeVisible();
+    const modelInfo = page.getByTestId("simulator-model-info");
+    await expect(modelInfo).toBeVisible();
+    await expect(modelInfo).toContainText(
+      "Model used: first-order-plus-dead-time (FOPDT)",
+    );
+    await expect(modelInfo).toContainText("G(s) = K");
 
     const startsWithLabel = (label: string) =>
       new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
