@@ -52,6 +52,7 @@ const RESTRICTION_KEYS = [
   "automatic_pid_write_allowed",
   "built_in_templates_only",
   "custom_tag_mappings_allowed",
+  "direction_must_match_process_gain",
   "fixed_tag_name",
   "notes_allowed",
   "post_run_pid_write_allowed",
@@ -509,6 +510,7 @@ function validateDemoContract(
     !restrictions.built_in_templates_only ||
     !restrictions.fixed_tag_name ||
     restrictions.custom_tag_mappings_allowed ||
+    restrictions.direction_must_match_process_gain ||
     restrictions.notes_allowed ||
     restrictions.automatic_pid_write_allowed ||
     restrictions.post_run_pid_write_allowed

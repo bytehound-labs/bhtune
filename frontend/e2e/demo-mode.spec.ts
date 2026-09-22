@@ -111,6 +111,7 @@ const capabilities = {
     built_in_templates_only: true,
     fixed_tag_name: true,
     custom_tag_mappings_allowed: false,
+    direction_must_match_process_gain: false,
     notes_allowed: false,
     automatic_pid_write_allowed: false,
     post_run_pid_write_allowed: false,

@@ -134,6 +134,8 @@ pub struct DemoRestrictions {
     pub built_in_templates_only: bool,
     pub fixed_tag_name: bool,
     pub custom_tag_mappings_allowed: bool,
+    /// Retained for API compatibility; Demo direction is no longer coupled to process gain.
+    pub direction_must_match_process_gain: bool,
     pub notes_allowed: bool,
     pub automatic_pid_write_allowed: bool,
     pub post_run_pid_write_allowed: bool,
@@ -361,6 +363,7 @@ pub(crate) async fn capabilities(
                 built_in_templates_only: true,
                 fixed_tag_name: true,
                 custom_tag_mappings_allowed: false,
+                direction_must_match_process_gain: false,
                 notes_allowed: false,
                 automatic_pid_write_allowed: false,
                 post_run_pid_write_allowed: false,
@@ -414,6 +417,13 @@ mod tests {
         assert!(response.actions.start_simulator_tune);
         assert!(!response.actions.start_opcda_tune);
         assert!(!response.actions.write_pid);
+        assert!(
+            !response
+                .restrictions
+                .as_ref()
+                .unwrap()
+                .direction_must_match_process_gain
+        );
         assert_eq!(
             response
                 .simulator

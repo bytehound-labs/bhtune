@@ -2626,6 +2626,7 @@
           "built_in_templates_only",
           "fixed_tag_name",
           "custom_tag_mappings_allowed",
+          "direction_must_match_process_gain",
           "notes_allowed",
           "automatic_pid_write_allowed",
           "post_run_pid_write_allowed"
@@ -2639,6 +2640,10 @@
           },
           "custom_tag_mappings_allowed": {
             "type": "boolean"
+          },
+          "direction_must_match_process_gain": {
+            "type": "boolean",
+            "description": "Retained for API compatibility; Demo direction is no longer coupled to process gain."
           },
           "fixed_tag_name": {
             "type": "boolean"
