@@ -44,9 +44,9 @@ database row; storage begins only when the browser starts its first accepted tun
 browsing, notes, and PID write-back are absent; templates are limited to the built-in read-only
 catalog. Demo run history, detail, streaming, cancellation, export, and deletion use the same
 `/api/runs` paths as Full mode. Starting a tune sends only the normalized simulator fields shown
-by the Demo form, with a fixed safe tag, bounded simulator ranges and timing values, and a
-controller direction that must provide negative feedback for the selected positive or negative
-process gain. The Demo defaults are a 0–100 PV/MV range with initial values of 50, gain 1.0,
+by the Demo form, with a fixed safe tag, bounded simulator ranges and timing values, and
+Reverse controller action as a simple consistent default. The Demo process gain is positive and
+bounded from 0.1 through 5.0. The Demo defaults are a 0–100 PV/MV range with initial values of 50, gain 1.0,
 time constant 0.5 seconds, dead time 1 second, zero noise, relay amplitude 10%, one skipped
 cycle, two counted cycles, and zero seconds of noise protection.
 
@@ -112,11 +112,13 @@ browser-visible origin.
    - Switching the driver to **Simulator** greys out every field the simulator genuinely
      ignores (OPC server ProgID, bridge host, tag name, automatic PID settings, and quality
      options) rather than hiding them, so the form doesn't reflow and the greyed field itself
-     explains what the simulator doesn't use. The template stays enabled intentionally: the
-     simulator ignores its DCS tag mappings, but its PID type and unit conventions still format
-     calculated results (for example, Yokogawa uses proportional band while the other built-in
-     templates use gain). PV/MV ranges, controller direction, and every engine parameter also
-     stay enabled because the simulator needs them.
+     explains what the simulator doesn't use. The template stays enabled intentionally. The
+     selected template formats calculated PID constants using that system's native conventions
+     (for example, gain versus proportional band). The simulator ignores its DCS tag mappings.
+     PV/MV ranges, controller direction, and every engine parameter also
+     stay enabled because the simulator needs them. The Simulator parameters section also
+     explains the generic FOPDT model and its exact discrete update; see the
+     [simulator model guide](../guides/simulator-model.md) for the full equations.
    - Test parameters show concrete **Process defaults** for cycles to skip, cycles to count, and
      noise protection based on the selected Process type. Changing Process type replaces all
      three values; **Reset process defaults** restores those values without resetting the rest

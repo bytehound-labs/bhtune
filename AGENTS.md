@@ -471,7 +471,9 @@ template is retained in run history. PV/MV ranges, controller direction, process
 controller type, relay amplitude, cycles, poll interval, run timeout, and MRFT delay padding
 fields all stay enabled, since they are genuinely used regardless of driver — and the
 simulator's lack of its own range/direction tags makes those four fields _more_ required, not
-less. `buildRequest()`'s tag-name check is skipped whenever the field is disabled, matching the
+less. The selected template formats calculated PID constants using that system's native
+conventions (for example, gain versus proportional band), while the simulator ignores its DCS
+tag mappings. `buildRequest()`'s tag-name check is skipped whenever the field is disabled, matching the
 rule that a disabled field must be excluded from client-side validation. Manually verified against a real running server via browser automation (not
 just typechecked): confirmed the disabled state, hint text, and enabled/disabled field list
 match exactly in both driver modes, and that the existing Playwright E2E suite (which never
@@ -1963,10 +1965,11 @@ Flow/PI, reverse action, relay amplitude 10%, cycles skip/count `1/2`, zero nois
 simulator gain/time constant/dead time/noise/seed `1.0/0.5/1.0/0/0`, PV/MV ranges `0–100`,
 and initial PV/MV `50`. Explicit values are bounded before the owned `prepare()` path: relay
 amplitude `1–20%`, skipped cycles `0–2`, counted cycles `1–3`, noise protection `0–3` seconds,
-gain magnitude `0.1–5.0` excluding zero, time constant `0.05–5` seconds, dead time `0–2`
+positive gain `0.1–5.0`, time constant `0.05–5` seconds, dead time `0–2`
 seconds, range endpoints `-1,000–1,000` with spans `1–1,000`, non-negative noise up to 5% of
-the PV span, and initial values inside their ranges. Gain sign and controller direction must
-form negative feedback, and the normal process/controller compatibility rules still apply.
+the PV span, and initial values inside their ranges. Demo uses Reverse controller action by
+default, while Demo process gain remains constrained to positive values; the normal
+process/controller compatibility rules still apply.
 OPC server/bridge values, tag overrides, notes, `write_pid`, and write confirmation are
 rejected rather than ignored. The persisted/display identity is the fixed label
 `Simulator demo`; simulator internals remain `Sim.PV` and `Sim.MV`.
@@ -4948,6 +4951,9 @@ service.rs`, `#[cfg(target_os = "windows")]` glue over the `windows-service` cra
    Run identity is
    consistently presented as the **Tag name**; the former
    user-editable run-name override was removed so history cannot hide the submitted tag.
+   Simulator mode now displays the generic FOPDT model, exact zero-order-hold update, dead-time
+   queue, noise, and timing summary directly in the Simulator parameters section; the durable
+   reference is `docs/guides/simulator-model.md`.
    A mutable nullable `notes` field is stored on each run, included in new-run requests, and
    exposed through `PUT`/`DELETE /api/runs/{id}/notes` for editing or clearing before, during,
    or after a tune. `driver-list-servers` adds OPC DA server discovery as a standalone

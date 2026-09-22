@@ -93,7 +93,7 @@ type NewRunFormProps = {
 
 function templateHint(driver: TuneDriver): string {
   if (driver === "simulator") {
-    return "The simulator ignores DCS tag mappings, but the template still formats calculated PID values (for example, gain versus proportional band).";
+    return "The selected template formats calculated PID constants using that system's native conventions (for example, gain versus proportional band).";
   }
   return "Maps the connected DCS/PLC's item IDs and PID conventions.";
 }
@@ -341,6 +341,82 @@ function numericBounds(low: NumOrBlank, high: NumOrBlank) {
   };
 }
 
+function SimulatorModelInfo({
+  simulatorCapabilities,
+}: Pick<SimulatorParameterProps, "simulatorCapabilities">) {
+  const samplingDescription = simulatorCapabilities
+    ? `The Demo uses a fixed ${simulatorCapabilities.defaults.poll_interval_ms} ms simulated step.`
+    : "Full mode uses the configured [tuning].poll_interval_ms value.";
+
+  return (
+    <div
+      className="rounded-md border border-slate-700 bg-slate-950/50 p-4 sm:col-span-2"
+      data-testid="simulator-model-info"
+    >
+      <h3 className="text-sm font-semibold text-slate-200">
+        Model used: first-order-plus-dead-time (FOPDT)
+      </h3>
+      <p className="mt-2 text-sm text-slate-400">
+        All current process categories use this same generic physical model.
+        Process type changes MRFT tuning correlations and parameter defaults; it
+        does not select a different simulated plant.
+      </p>
+
+      <div className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
+        <div>
+          <p className="font-medium text-slate-300">Transfer function</p>
+          <code className="mt-1 block overflow-x-auto rounded bg-slate-900 px-3 py-2 text-xs text-emerald-300">
+            G(s) = K · exp(−θs) / (τs + 1)
+          </code>
+        </div>
+        <div>
+          <p className="font-medium text-slate-300">Continuous-time form</p>
+          <code className="mt-1 block overflow-x-auto rounded bg-slate-900 px-3 py-2 text-xs text-emerald-300">
+            τ · dPV/dt = −(PV − PV₀) + K · (MV − MV₀)
+          </code>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <p className="font-medium text-slate-300">
+          Exact update for each simulated step
+        </p>
+        <code className="mt-1 block overflow-x-auto rounded bg-slate-900 px-3 py-2 text-xs text-emerald-300">
+          PV_next = PV · e^(−Δt/τ) + (1 − e^(−Δt/τ)) · (PV₀ − K · MV₀ + K ·
+          MV_delayed)
+        </code>
+      </div>
+
+      <dl className="mt-4 grid gap-3 text-xs text-slate-400 sm:grid-cols-3">
+        <div>
+          <dt className="font-medium text-slate-200">K</dt>
+          <dd>Process gain: PV change per unit MV change.</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-slate-200">τ</dt>
+          <dd>Time constant: response speed after the delay.</dd>
+        </div>
+        <div>
+          <dt className="font-medium text-slate-200">θ</dt>
+          <dd>Dead time: MV samples delayed before affecting PV.</dd>
+        </div>
+      </dl>
+
+      <p className="mt-4 text-xs text-slate-500">
+        {samplingDescription} Dead time is represented by delaying MV through
+        approximately ceil(θ / Δt) samples. Measurement noise is sampled
+        uniformly from the configured range and added after the model update.
+        Simulator time advances without waiting on wall-clock time, and the RNG
+        seed makes noisy runs reproducible.
+      </p>
+      <p className="mt-2 text-xs text-slate-500">
+        MRFT drives the simulated MV directly. The separate VirtualPid helper is
+        for closed-loop validation and is not used during a tune.
+      </p>
+    </div>
+  );
+}
+
 function SimulatorProcessFields({
   form,
   onChange,
@@ -352,6 +428,14 @@ function SimulatorProcessFields({
     limits && pvSpan !== undefined
       ? Math.max(0, pvSpan * limits.max_noise_fraction_of_pv_span)
       : undefined;
+  let gainHint: string | undefined;
+  if (limits) {
+    if (limits.sim_gain.absolute_min) {
+      gainHint = `Allowed magnitude: ${limits.sim_gain.absolute_min}–${limits.sim_gain.max}.`;
+    } else {
+      gainHint = `Allowed range: ${limits.sim_gain.min}–${limits.sim_gain.max}.`;
+    }
+  }
   return (
     <>
       <NumberField
@@ -361,11 +445,7 @@ function SimulatorProcessFields({
         min={limits?.sim_gain.min}
         max={limits?.sim_gain.max}
         step="any"
-        hint={
-          limits?.sim_gain.absolute_min
-            ? `Allowed magnitude: ${limits.sim_gain.absolute_min}–${limits.sim_gain.max}; negative gain uses Direct action.`
-            : undefined
-        }
+        hint={gainHint}
       />
       <NumberField
         label="Time constant τ (s)"
@@ -495,6 +575,11 @@ function SimulatorRangeFields({
   );
 }
 
+function simulatorModelInfo(props: SimulatorParameterProps) {
+  if (props.form.driver !== "simulator") return null;
+  return <SimulatorModelInfo {...props} />;
+}
+
 function simulatorParameterFields(props: SimulatorParameterProps) {
   if (props.form.driver !== "simulator") return null;
   return (
@@ -540,12 +625,17 @@ function demoFields({
         defaultOpen
         documentationId="new-tune.demo-settings"
       >
-        <SelectField
-          label="Template"
-          value={form.template}
-          onChange={(value) => onChange("template", value)}
-          options={simulatorCapabilities.templates}
-        />
+        <div>
+          <SelectField
+            label="Template"
+            value={form.template}
+            onChange={(value) => onChange("template", value)}
+            options={simulatorCapabilities.templates}
+          />
+          <span className="mt-1 block text-xs text-slate-500">
+            {templateHint("simulator")}
+          </span>
+        </div>
         <SelectField
           label="Process type"
           value={processType ?? ""}
@@ -599,14 +689,14 @@ function demoFields({
           required
         />
         <p className="text-sm text-slate-400 sm:col-span-2">
-          The server fixes the tag identity and derives the negative-feedback
-          direction from process-gain sign. It uses{" "}
+          The server fixes the tag identity. It uses{" "}
           {simulatorCapabilities.defaults.poll_interval_ms} ms sampling and a{" "}
           {simulatorCapabilities.defaults.run_timeout_secs}s run timeout. Demo
           runs never connect to OPC DA or write PID values.
         </p>
       </FormSection>
       {simulatorParameterFields({ form, onChange, simulatorCapabilities })}
+      {simulatorModelInfo({ form, onChange, simulatorCapabilities })}
     </>
   );
 }
@@ -727,6 +817,11 @@ export function NewRunForm({
             simulatorCapabilities: undefined,
           })}
           {automaticPidFields({ form, onChange })}
+          {simulatorModelInfo({
+            form,
+            onChange,
+            simulatorCapabilities: undefined,
+          })}
         </>
       )}
     </form>

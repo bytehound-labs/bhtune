@@ -470,10 +470,9 @@ function validateDemoSimulator(value: unknown) {
   );
   requireWithin(simGain, gainBounds, "sim_gain");
   if (
-    gainBounds.absoluteMin === null ||
-    Math.abs(simGain) < gainBounds.absoluteMin ||
-    (simGain > 0 && defaults.direction !== "reverse") ||
-    (simGain < 0 && defaults.direction !== "direct")
+    gainBounds.min <= 0 ||
+    gainBounds.max <= 0 ||
+    defaults.direction !== "reverse"
   ) {
     throw new Error("The server returned unsafe simulator gain defaults.");
   }
@@ -510,8 +509,8 @@ function validateDemoContract(
     !restrictions.simulator_only ||
     !restrictions.built_in_templates_only ||
     !restrictions.fixed_tag_name ||
-    !restrictions.direction_must_match_process_gain ||
     restrictions.custom_tag_mappings_allowed ||
+    restrictions.direction_must_match_process_gain ||
     restrictions.notes_allowed ||
     restrictions.automatic_pid_write_allowed ||
     restrictions.post_run_pid_write_allowed

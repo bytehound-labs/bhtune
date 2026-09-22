@@ -28,6 +28,11 @@ The Demo tune page is clearly labeled and keeps the controls that affect simulat
 visitors can choose a built-in template, process/controller type, relay and cycle settings,
 noise protection, and bounded simulator physics. Controls that require live equipment are
 omitted from the page rather than presented as no-op options.
+The simulator model remains generic: every current process category uses the same FOPDT physical
+model, while process type changes tuning correlations and defaults. The [simulator model
+guide](simulator-model.md) documents its transfer function, exact discrete update, dead-time
+queue, noise, and simulated timing. The selected template formats calculated PID constants
+using that system's native conventions (for example, gain versus proportional band).
 The interface presents the simulator boundary, history limit, and session lifetime in one
 persistent Demo notice rather than repeating the same warning on each page.
 
@@ -42,8 +47,8 @@ requirements below remain authoritative if images are unavailable.
 
 {/* web-ui-screenshot: demo-tune */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=f085b3a97af1">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=f085b3a97af1" alt="BHTune Demo simulator tune form with the fixed policy notice and bounded fields" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=247546be2c37">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=247546be2c37" alt="BHTune Demo simulator tune form with the fixed policy notice and bounded fields" />
   </a>
   <figcaption>The Demo form exposes bounded simulator controls and makes live-plant features unavailable.</figcaption>
 </figure>
@@ -129,7 +134,7 @@ contract:
 | Relay amplitude        |     10% |                                     1–20% |
 | Cycles to skip / count |   1 / 2 |                                 0–2 / 1–3 |
 | Noise protection       |     0 s |                                     0–3 s |
-| Process gain           |     1.0 |       magnitude 0.1–5.0; zero is rejected |
+| Process gain           |     1.0 |                                   0.1–5.0 |
 | Time constant          |   0.5 s |                                  0.05–5 s |
 | Dead time              |   1.0 s |                                     0–2 s |
 | PV/MV range            |   0–100 | endpoints -1000–1000; ordered span 1–1000 |
@@ -137,9 +142,7 @@ contract:
 | Measurement noise      |       0 |            0–5% of the configured PV span |
 | Random seed            |       0 |                           0–2,147,483,647 |
 
-Positive gain requires Reverse action and negative gain requires Direct action so the simulated
-loop always uses negative feedback. The browser derives that direction from the gain; the server
-independently verifies it.
+Demo uses Reverse controller action by default as a simple, consistent convention.
 
 ## Self-hosting requirements
 

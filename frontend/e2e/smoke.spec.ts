@@ -84,9 +84,19 @@ test.describe("app shell", () => {
     await expect(template).toBeEnabled();
     await expect(
       page.getByText(
-        "The simulator ignores DCS tag mappings, but the template still formats calculated PID values (for example, gain versus proportional band).",
+        "The selected template formats calculated PID constants using that system's native conventions (for example, gain versus proportional band).",
       ),
     ).toBeVisible();
+    const modelInfo = page.getByTestId("simulator-model-info");
+    await expect(modelInfo).toBeVisible();
+    await expect(modelInfo).toContainText(
+      "Model used: first-order-plus-dead-time (FOPDT)",
+    );
+    await expect(modelInfo).toContainText("G(s) = K");
+    await expect(page.locator("form > :last-child")).toHaveAttribute(
+      "data-testid",
+      "simulator-model-info",
+    );
 
     const startsWithLabel = (label: string) =>
       new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);

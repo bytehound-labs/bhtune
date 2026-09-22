@@ -352,15 +352,9 @@ function within(
   bounds: {
     readonly min: number;
     readonly max: number;
-    readonly absolute_min?: number | null;
   },
 ): value is number {
-  return (
-    value !== undefined &&
-    value >= bounds.min &&
-    value <= bounds.max &&
-    (bounds.absolute_min == null || Math.abs(value) >= bounds.absolute_min)
-  );
+  return value !== undefined && value >= bounds.min && value <= bounds.max;
 }
 
 function demoNumber(
@@ -369,7 +363,6 @@ function demoNumber(
   bounds: {
     readonly min: number;
     readonly max: number;
-    readonly absolute_min?: number | null;
   },
   fallback: number,
 ): number {
@@ -499,6 +492,10 @@ function formFromDemoInput(
       capabilities.limits.max_noise_fraction_of_pv_span,
   );
   const processDefaults = demoProcessDefaultsFor(capabilities, processType);
+  const direction =
+    source.direction === "direct" || source.direction === "reverse"
+      ? source.direction
+      : defaults.simDirection;
 
   return {
     ...defaults,
@@ -530,7 +527,7 @@ function formFromDemoInput(
       capabilities.limits.noise_protection_secs,
       capabilities.defaults.noise_protection_secs,
     ),
-    simDirection: simGain < 0 ? "direct" : "reverse",
+    simDirection: direction,
     simPvRangeLow: pvRange.min,
     simPvRangeHigh: pvRange.max,
     simMvRangeLow: mvRange.min,
@@ -1451,15 +1448,11 @@ function bounded(
   range: {
     readonly min: number;
     readonly max: number;
-    readonly absolute_min?: number | null;
   },
   label: string,
 ): number | string {
   if (!Number.isFinite(value) || value < range.min || value > range.max) {
     return `${label} must be between ${range.min} and ${range.max}.`;
-  }
-  if (range.absolute_min != null && Math.abs(value) < range.absolute_min) {
-    return `${label} must be between ${range.min} and -${range.absolute_min}, or between ${range.absolute_min} and ${range.max}.`;
   }
   return value;
 }
@@ -1471,7 +1464,6 @@ function bounded(
 type DemoRangeLimit = {
   readonly min: number;
   readonly max: number;
-  readonly absolute_min?: number | null;
 };
 
 type DemoNumericValues = {
@@ -1672,7 +1664,7 @@ function demoRequest(
     cycles_skip: values.cyclesSkip,
     cycles_count: values.cyclesCount,
     noise_protection_secs: values.noiseProtectionSecs,
-    direction: values.simGain! < 0 ? "direct" : "reverse",
+    direction: form.simDirection || capabilities.defaults.direction,
     pv_range_high: ranges.pvRangeHigh,
     pv_range_low: ranges.pvRangeLow,
     mv_range_high: ranges.mvRangeHigh,

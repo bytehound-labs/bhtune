@@ -32,10 +32,10 @@
         "docs/guides/web-ui/overview.md",
         "docs/guides/web-ui/starting-a-tune.md"
       ],
-      "sha256": "13982ceeafced5460a46173dfa24f2bd29ecb5f9fc2b91f2cbf47b8eb1747da5",
+      "sha256": "d143b13d2191a99d56ca1d013a2e8f7ed06890d7d68255aef32a4e59a07c54eb",
       "width": 1440,
-      "height": 3751,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=13982ceeafce"
+      "height": 4137,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=d143b13d2191"
     },
     {
       "id": "full-tune-opc",
@@ -390,10 +390,10 @@
         "docs/guides/web-ui/overview.md",
         "docs/guides/public-simulator-demo.md"
       ],
-      "sha256": "f085b3a97af18741d5ec0c1c7b33094bea8b2d674f2d403a4bf7bc10dc359063",
+      "sha256": "247546be2c37d2a57f932a0662c0520aea12787f90cc26c0404e5a2dbb3826c1",
       "width": 1440,
-      "height": 1405,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=f085b3a97af1"
+      "height": 1791,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=247546be2c37"
     },
     {
       "id": "demo-history",
