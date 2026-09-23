@@ -39,7 +39,7 @@ pre-commit:
       stage_fixed: true
 
     prettier-format:
-      glob: "**/*.{md,yaml,yml,json,ts,tsx,css}"
+      glob: "**/*.{md,yaml,yml,json,ts,tsx,css,html}"
       # docs/reference/** (clap-markdown, schemars), openapi.json (utoipa), and
       # frontend/src/api/schema.d.ts (openapi-typescript) are all generated and
       # checked for drift in CI via `cargo run --example ... | git diff --exit-code`
