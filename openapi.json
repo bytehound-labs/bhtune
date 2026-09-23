@@ -2350,7 +2350,7 @@
           },
           "revert_mode": {
             "type": "boolean",
-            "description": "If true, the controller mode is switched back to its original mode (e.g.\nAuto/Cascade) after a completed MRFT test. Has no effect if the loop was already in\nManual at test start."
+            "description": "If true, the controller mode is switched back to its original raw value after a test.\nFor a run whose initial raw mode matches the template's Auto value and that has a\nconfigured setpoint tag, the initial setpoint is read and persisted before any live\nwrite; restoration attempts to write it back when this setting permits the mode\nrestore. When this setting is enabled, an eligible live OPC DA Auto-start with a valid\nmeasured period remains in Manual for one-third of that period after MV restoration.\nThe final restore writes Auto before attempting the setpoint and mode-attribute values.\nNon-Auto starts do not capture or write back a setpoint; mode-attribute restoration is\nseparate."
           },
           "setpoint_variable_suffix": {
             "type": "string"

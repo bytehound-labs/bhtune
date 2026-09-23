@@ -42,14 +42,18 @@ unchanged.
    process defaults in the New tune form.
 6. **On the final step, the MV snaps back to its starting value** rather than taking one more
    full relay step — so the loop is left close to where it started, not mid-swing.
-7. **The loop is restored** to its original mode (and setpoint, if it was changed) — see
-   [Safety](safety.md#restoration) for exactly what "restored" guarantees. For a live OPC DA
-   run that started in Auto, BHTune first restores and verifies the original MV, then holds
-   the loop in Manual for one-third of the measured oscillation period before releasing it to
-   the template-defined Auto value. PV samples collected during that interval remain part of
-   the persisted trend and history; the MRFT state is frozen and no replacement relay steps
-   are issued. Simulator/Demo runs and loops that started in Manual do not use this settling
-   interval.
+7. **The loop is restored** on a best-effort basis — see
+   [Safety](safety.md#restoration) for the exact ordering and failure behavior. For an OPC DA
+   run whose original mode is the template-defined Auto value, BHTune reads the configured
+   setpoint before any live write and records that initial value with the run's readings. When
+   the run returns to Auto, restoration attempts to write that captured value back, whether or
+   not the test changed it; a non-Auto start does not capture or rewrite a setpoint. For a
+   normally completed live Auto-start run with mode restoration enabled and a valid measured
+   period, BHTune first restores and verifies the original MV, then holds the loop in Manual
+   for one-third of that period. Persisted PV samples continue during the hold while the MRFT
+   state is frozen. The final restore writes Auto before attempting the setpoint and
+   mode-attribute values, so a later failure can leave a partially restored controller;
+   Simulator/Demo runs and non-Auto starts do not use the settling interval.
 
 For OPC DA runs, each accepted MV relay command is also read back and checked against its
 commanded target before another relay can replace it. This verification uses a fixed internal

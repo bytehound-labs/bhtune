@@ -216,7 +216,9 @@ browser-visible origin.
    relay switch count and cycles remaining. The initial PV/MV snapshot appears as soon as the
    server records it, before the first MRFT sample, so the chart does not wait for a complete
    relay tick to become visible. Independent OPC DA startup values are collected in one
-   batched read; a setpoint is read separately only when the original mode is Auto. Simulator
+   batched read; a configured setpoint tag is read separately only when the original raw mode
+   matches the template's Auto value. That original value is saved with the initial readings
+   before any mode or MV write; non-Auto starts do not capture or write back a setpoint. Simulator
    sample timestamps advance by the configured fixed poll step, matching the FOPDT process time
    rather than host scheduler timing, so repeated simulator runs retain the same trend timing and
    PID calculations across machines. Live OPC DA timestamps instead use actual monotonic elapsed

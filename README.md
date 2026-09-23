@@ -722,14 +722,19 @@ language, including exactly what happens on the first and second Ctrl+C:
   The fresh read started at that deadline has its own one-second bound, so a stalled MV read
   cannot consume the full per-operation timeout and leave the run waiting indefinitely.
 - **Live Auto-start runs settle in Manual before Auto release.** When an OPC DA loop starts in
-  its template-defined Auto value and the MRFT completes normally, BHTune restores and verifies
-  the original MV, then keeps the loop in Manual for one-third of the measured oscillation
-  period before writing the template-defined Auto value. PV samples collected during this
-  interval are persisted in the run trend/history with the normal quality and timing checks;
-  the MRFT state is held, so settling does not issue another relay step. Simulator/Demo runs
-  and loops that started in Manual retain their existing restoration behavior. If settling or
-  any prerequisite restore step cannot be completed safely, Auto release is suppressed and the
-  run remains in Manual for operator follow-up.
+  its template-defined Auto value, mode restoration is enabled, and the MRFT completes with a
+  valid measured period, BHTune restores and verifies the original MV, then keeps the loop in
+  Manual for one-third of that period before writing the template-defined Auto value. PV samples
+  collected during this interval are persisted in the run trend/history with the normal quality
+  and timing checks;
+  the MRFT state is held, so settling does not issue another relay step. When an Auto-start has
+  a configured setpoint tag, its original value is read before any mode or MV write and saved
+  with the run's initial readings; the return-to-Auto restore attempts to write that same value
+  back. Non-Auto starts do not capture or rewrite a setpoint. A failure during the settling hold
+  does not issue the Auto-release write. Final restoration is best-effort, however: it writes
+  Auto before attempting the setpoint and mode-attribute restores, so a later failure, timeout,
+  or cancellation can leave the controller already in Auto with some values unrestored. Check
+  the live DCS/PLC state whenever the restore is incomplete.
 - **`[tuning].restore_timeout_secs`** (default `30`; OPC DA minimum `4`) is the initial budget for
   putting the loop back afterwards, independently of `[tuning].timeout_secs`. When the
   authoritative MV restore write is accepted near the end of that budget, BHTune extends the

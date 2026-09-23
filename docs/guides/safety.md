@@ -113,12 +113,28 @@ persisted as ordinary run samples, so they appear in the trend, history, API res
 exports. The MRFT state remains frozen during the hold: no additional relay decisions or MV
 commands are issued.
 
-After the hold, BHTune writes the template-defined Auto value and restores the setpoint and any
-mode-attribute value. This behavior is limited to live OPC DA runs that began in Auto; Simulator
-and Demo runs, Manual-start runs, and runs without a valid measured period use the normal
-restoration path. If the settling read, quality check, persistence, timeout, cancellation, or a
-restore write/readback fails, BHTune suppresses Auto release and leaves the loop in Manual while
-reporting an incomplete restore for operator follow-up. The settling interval shares the
+When the initial raw mode matches the template's Auto value and a setpoint tag is configured,
+BHTune reads the original setpoint while the loop is still in Auto, before any mode or MV write.
+It persists that value with the run's initial readings before beginning the mode transition.
+The captured value is the restore target even if BHTune did not change the setpoint during the
+test. A non-Auto starting mode (for example, MAN or CAS) does not cause a setpoint read or
+setpoint write-back; the original controller mode is handled separately according to the
+template's `revert_mode` setting.
+
+After the hold, the final restore sequence writes the template-defined Auto value first, then
+attempts to write back the captured setpoint, followed by the original mode-attribute value.
+The setpoint is therefore not restored before the controller is switched to Auto. These steps
+are best-effort and are not atomic: if the Auto-mode write succeeds but the later setpoint or
+mode-attribute write fails, or the restore is interrupted by its deadline or a second Ctrl+C,
+the controller may already be in Auto with some original values unrestored. The run reports an
+incomplete restore; check the actual mode, setpoint, and mode attribute at the DCS/PLC before
+another tune.
+
+If the settling hold itself fails before final mode restoration begins, BHTune skips its
+Auto-release write and leaves the mode as it was at that point (normally Manual). It still
+attempts the remaining applicable restore steps, subject to the remaining restore-time budget,
+and reports an incomplete restore for operator follow-up. Simulator/Demo runs, non-Auto starts,
+and runs without a valid measured period do not use the settling hold. The hold shares the
 configured restore-time budget and never extends it.
 
 The timing snapshot includes successful PV-read, MV-write, MV-verification-read,
@@ -217,16 +233,27 @@ history shows which runs executed under relaxed rules.
 ## Restoration
 
 BHTune guarantees a best-effort restore on **every** exit path — successful completion, an
-error partway through, Ctrl+C, or a timeout — not just the happy path. Each mutation (mode
-switched to manual, setpoint captured, MV stroked, mode-attribute written, where applicable) is
-recorded the instant it actually succeeds, and the restore step always attempts to undo exactly
-what was recorded — nothing more, nothing that was never touched.
+error partway through, Ctrl+C, or a timeout — not just the happy path. Before the first live
+write, BHTune captures and persists the initial mode and mode-attribute values and, only when
+the raw starting mode is the template-defined Auto value and a setpoint tag is configured, the
+initial setpoint. The mutation guard separately records which mode-transition writes were
+attempted. The original MV restore is always attempted; the other restore steps depend on the
+captured values, transition state, and template settings.
 
-The restore itself attempts every step independently rather than stopping at the first failure,
-so a rejected MV write doesn't also prevent the mode from being put back. `bhtune history show
-<run-id>` (or the run detail screen) reports the restore outcome as one of two states:
-**confirmed**, or **incomplete** — naming exactly which step(s) failed so you know what to check
-by hand. An incomplete restore exits with code `6`, distinct from a normal abort.
+In the normal release-to-initial path, restore proceeds in this order: original MV, original
+controller mode when applicable, captured Auto-start setpoint when applicable, and original
+mode-attribute value when applicable. A keep-Manual path omits the controller-mode restore.
+Restore writes are attempted independently, so one failed step does not by itself prevent later
+steps from being tried; a restore deadline or second Ctrl+C can interrupt the sequence.
+
+`bhtune history show <run-id>` (or the run detail screen) reports the restore outcome as
+**confirmed** or **incomplete**, with the failed step details. For live OPC DA, the original MV
+has a separate readback-confirmation step; controller-mode, setpoint, and mode-attribute
+restoration record write results but do not have their own readback verification. An incomplete
+restore does not guarantee that the controller is still in Manual: in the return-to-Auto path,
+Auto is written before the setpoint and mode attribute, so one of those later steps can fail
+after Auto has already been requested. Inspect the actual DCS/PLC values before another tune.
+An incomplete restore exits with code `6`, distinct from a normal abort.
 
 Preparation records the run before writing its effective timing, quality policy, connection,
 and other provenance metadata. If one of those follow-up writes fails, BHTune immediately
