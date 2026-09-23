@@ -175,7 +175,7 @@ jobs:
             --allow-all-tools \
             --deny-tool 'write(AGENTS.md)' \
             --no-ask-user \
-            --model gpt-5.6-luna \
+            --model gpt-6-luna \
             --effort max \
             --secret-env-vars COPILOT_GITHUB_TOKEN \
             --silent \

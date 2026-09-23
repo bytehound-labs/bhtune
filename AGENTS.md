@@ -3603,7 +3603,7 @@ these):
    change.
 6. **Cost.** Each same-repository run consumes Copilot premium requests. The implementation-path
    filter keeps this off PRs that can't have caused prose drift or visual-documentation drift,
-   and `--model`/`--effort` are pinned (`gpt-5.6-luna`/`max`) rather than left on auto-routing or
+   and `--model`/`--effort` are pinned (`gpt-6-luna`/`max`) rather than left on auto-routing or
    default reasoning effort, so a model or effort upgrade never silently changes cost/behavior on
    every future PR without a reviewed change here.
 
