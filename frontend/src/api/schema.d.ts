@@ -753,9 +753,15 @@ export interface components {
       proportional_constant_suffix: string;
       proportional_type: components["schemas"]["ProportionalType"];
       /**
-       * @description If true, the controller mode is switched back to its original mode (e.g.
-       *     Auto/Cascade) after a completed MRFT test. Has no effect if the loop was already in
-       *     Manual at test start.
+       * @description If true, the controller mode is switched back to its original raw value after a test.
+       *     For a run whose initial raw mode matches the template's Auto value and that has a
+       *     configured setpoint tag, the initial setpoint is read and persisted before any live
+       *     write; restoration attempts to write it back when this setting permits the mode
+       *     restore. When this setting is enabled, an eligible live OPC DA Auto-start with a valid
+       *     measured period remains in Manual for one-third of that period after MV restoration.
+       *     The final restore writes Auto before attempting the setpoint and mode-attribute values.
+       *     Non-Auto starts do not capture or write back a setpoint; mode-attribute restoration is
+       *     separate.
        */
       revert_mode: boolean;
       setpoint_variable_suffix: string;

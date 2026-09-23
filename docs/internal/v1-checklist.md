@@ -93,9 +93,10 @@ validation.
 - [ ] REQUIRED — MV boundary clamp for both the upper bound and the lower bound, using a
       dimensionally consistent formula on both sides (see `AGENTS.md`'s correctness-critical
       design details, item 1).
-- [ ] REQUIRED — controller-mode-to-Manual transition at test start, including the mode-attribute
-      "Program" write, the Manual-mode write with a pre-write settle delay, and capturing the
-      setpoint value when transitioning from Auto.
+- [ ] REQUIRED — capture and persist the initial setpoint before any live write when the raw
+      starting mode matches the template's Auto value and a setpoint tag is configured; then
+      perform the controller-mode-to-Manual transition, including the mode-attribute "Program"
+      write and the Manual-mode write with a pre-write settle delay.
 - [ ] REQUIRED — a fixed-interval polling cadence for MRFT evaluation.
 - [ ] REQUIRED — the OPC PV read happening every tick even during pre/post-test delay padding,
       with switch evaluation itself gated separately.
@@ -121,9 +122,10 @@ validation.
       confirmation; P is always written; I is written as a neutralizing sentinel value (not simply
       skipped) when the controller type is P-only; PI writes its calculated I and explicitly writes
       `D = 0`; full PID writes its calculated D.
-- [ ] REQUIRED — abort/error restoration: write the original MV back before anything else, then
-      restore mode/mode-attribute/setpoint to their captured initial values (only if they were
-      changed at test start).
+- [ ] REQUIRED — abort/error restoration: attempt the original MV first, then the original mode
+      when permitted, the captured Auto-start setpoint when applicable, and the mode attribute.
+      These are best-effort steps; a late setpoint or mode-attribute failure can occur after the
+      controller mode has already been written back to Auto.
 
 ## 5. Step Test lifecycle — DEFERRED
 
