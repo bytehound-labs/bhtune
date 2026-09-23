@@ -218,32 +218,39 @@ async fn serve_http(
 
 /// Waits for Ctrl+C (SIGINT), or on Unix, SIGTERM -- so a service manager's ordinary "stop"
 /// request (`systemctl stop`, `launchctl stop`) drains in-flight requests the same way an
-/// interactive Ctrl+C does, rather than dropping connections mid-response. The Windows
-/// Service Control Manager's own Stop/Shutdown control codes don't arrive as either of these
-/// signals -- see `crate::service::windows_impl::run_service` for the SCM-specific
+/// interactive Ctrl+C does, rather than dropping connections mid-response. Unix signal
+/// handlers are installed when this function is called, before the server starts accepting
+/// connections, so an immediate shutdown signal cannot hit the default process handler. The
+/// Windows Service Control Manager's own Stop/Shutdown control codes don't arrive as either of
+/// these signals -- see `crate::service::windows_impl::run_service` for the SCM-specific
 /// equivalent used instead when running as a Windows service.
-pub async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-
+pub fn shutdown_signal() -> impl std::future::Future<Output = ()> + Send + 'static {
     #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    {
+        let mut interrupt =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .expect("failed to install SIGINT handler");
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
 
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
+        async move {
+            tokio::select! {
+                _ = interrupt.recv() => {},
+                _ = terminate.recv() => {},
+            }
+            tracing::info!("shutdown signal received, draining in-flight requests");
+        }
     }
-    tracing::info!("shutdown signal received, draining in-flight requests");
+    #[cfg(not(unix))]
+    {
+        async {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("failed to install Ctrl+C handler");
+            tracing::info!("shutdown signal received, draining in-flight requests");
+        }
+    }
 }
 
 /// Spawns the background task that re-applies `history-retention`'s policy every
