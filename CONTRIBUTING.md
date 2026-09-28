@@ -187,6 +187,9 @@ separate coordination task.
 
 ## Security and compatibility checks
 
+Report suspected vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md), never
+in public issues, discussions, or pull requests.
+
 Security workflows run CodeQL, Semgrep, full-history Gitleaks, actionlint, and zizmor. Keep
 workflow permissions least-privilege and do not replace `pull_request` with
 `pull_request_target` to obtain secrets for forked contributions.
