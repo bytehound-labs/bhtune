@@ -905,6 +905,12 @@ post-merge synchronization hooks. CI uses the repository's GitHub Actions secret
 See the [full roadmap](docs/roadmap.md) for the reasoning behind each item and its current
 status.
 
+## Security
+
+Report suspected vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md), never
+in public issues. Full mode has no authentication and belongs on a trusted network only; see
+[Network exposure](docs/guides/safety.md#network-exposure).
+
 ## Contributing
 
 All changes use a short-lived feature branch and pull request, including documentation and
