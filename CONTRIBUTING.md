@@ -45,8 +45,8 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   SonarQube, and release jobs. The MSRV job separately checks Rust 1.94.0; on rustup-managed
   hosts, run `rustup update stable` if the selected toolchain is older.
 - Format Rust with `cargo fmt --all` (default rustfmt settings) before committing.
-- Lint with `cargo clippy --workspace --all-targets --all-features -- -D warnings`; fix every
-  warning or justify an explicit `#[allow(...)]` with a comment.
+- Lint with `cargo clippy --workspace --all-targets --all-features -- -D warnings`. Lint levels
+  come from the workspace lint policy described under [Lint policy](#lint-policy).
 - Format frontend code (`frontend/`) with `pnpm --filter bhtune-frontend run format:check` /
   `pnpm exec prettier --write .`, and lint it with `pnpm --filter bhtune-frontend run lint`
   ([oxlint](https://oxc.rs/)). The documentation site (`website/`) uses the same tools via
@@ -73,6 +73,41 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   ignored `.env` file and is never committed or printed. Use `ds push` to update the Bitwarden
   note after changing it. The committed `.env.example` contains only the key names and the
   repository's Lefthook hooks keep the schema and local file synchronized.
+
+### Lint policy
+
+The root `Cargo.toml` defines one workspace-wide lint policy in `[workspace.lints]`. Every member
+crate opts in with `[lints] workspace = true`, so libraries, binaries, tests, examples, and build
+scripts share the same baseline. The standalone `fuzz/` package is a separate Cargo workspace and
+is not covered. Code behind `#[cfg(windows)]` is linted by the Windows CI job.
+
+- `deny` marks constructs that must never land and is an error even without `-D warnings`:
+  `unsafe_code`, which every `rustc` build checks, and these lints, which `cargo clippy`
+  checks: leftover `dbg!`, `todo!`, and `unimplemented!` macros, undocumented `unsafe` blocks,
+  and every default Clippy group (`clippy::all`).
+- `warn` marks hygiene findings: `rust_2018_idioms`, the redundant/unused lifetime and unused
+  macro-rule lints, and a curated subset of `clippy::pedantic` whose lints are cheap and
+  mechanical to satisfy. Warnings stay non-fatal in a local build but fail CI, whose Clippy job
+  runs with `-D warnings`.
+- The rest of `clippy::pedantic` stays off because its noisiest lints are subjective or would add
+  hundreds of low-value annotations. `clippy::nursery` (unstable, prone to false positives) and
+  `clippy::cargo` (duplicate transitive versions are not fixable here, and `cargo deny` owns
+  dependency policy) stay off as well. Panic-related restriction lints (`unwrap_used`,
+  `expect_used`, `panic`) are not part of the policy.
+- Fix a finding rather than suppressing it. When a suppression is genuinely correct, put a
+  narrowly scoped `#[expect(lint, reason = "...")]` on the smallest item that needs it. Prefer
+  `#[expect]` over `#[allow]`: once the finding disappears it raises an
+  `unfulfilled_lint_expectations` warning, which fails CI, so a stale suppression cannot
+  linger. Crate-level blanket allows are not accepted.
+- Keep `unsafe` out of production code. When a test genuinely needs it (for example, delivering
+  a real OS signal with `libc::kill`), isolate it in a small function carrying
+  `#[expect(unsafe_code, reason = "...")]` and put a `// SAFETY:` comment inside the function
+  body, directly above the `unsafe` block. `clippy::undocumented_unsafe_blocks` does not
+  recognize a comment placed above the function signature or its attributes, including a doc
+  comment.
+- To propose another lint, measure its findings with
+  `cargo clippy --workspace --all-targets --all-features -- -W clippy::<lint>` and fix them in
+  the same change that enables it.
 
 ## Dependency updates
 

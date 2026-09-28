@@ -665,13 +665,13 @@ mod tests {
             .unwrap();
         let now = chrono::Utc::now();
         sqlx::query(
-            r#"
+            r"
             INSERT INTO loops (
                 name, dcs_template_id, tags_json, process_type, controller_type,
                 relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
                 mrft_delay_secs, created_at, updated_at
             ) VALUES ('LIC101', ?, '{}', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
-            "#,
+            ",
         )
         .bind(row.id)
         .bind(now)

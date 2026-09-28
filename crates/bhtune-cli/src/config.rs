@@ -1059,7 +1059,7 @@ fn load_config_store_from_resolution(
                         document
                             .get("allow_uncertain_quality")
                             .and_then(|item| item.as_value())
-                            .and_then(|value| value.as_bool())
+                            .and_then(toml_edit::Value::as_bool)
                     });
                 let toml_tuning = config.tuning;
                 let tuning_sources = tuning_config_sources(&toml_tuning);
@@ -2045,14 +2045,14 @@ mod tests {
 
     #[test]
     fn tuning_table_round_trips_all_optional_values() {
-        let raw = r#"
+        let raw = r"
 [tuning]
 mrft_delay_secs = 12
 poll_interval_ms = 900
 timeout_secs = 4000
 op_timeout_secs = 31
 restore_timeout_secs = 32
-"#;
+";
         let config = parse_config_contents(raw).unwrap();
 
         assert_eq!(
@@ -3943,12 +3943,12 @@ controller_action_direct_value = "0"
     #[test]
     fn demo_policy_config_rejects_legacy_conflated_rate_keys() {
         let error = toml::from_str::<BhtuneConfig>(
-            r#"
+            r"
 [demo]
 token_requests_per_window = 64
 ip_requests_per_window = 10
 rate_window_secs = 10
-"#,
+",
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));

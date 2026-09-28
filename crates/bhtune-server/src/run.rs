@@ -370,7 +370,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("bhtune.toml");
         let templates_path = dir.path().join("missing-templates.toml");
-        std::fs::write(&config_path, format!("templates = {:?}\n", templates_path)).unwrap();
+        std::fs::write(&config_path, format!("templates = {templates_path:?}\n")).unwrap();
 
         let result = build_server(Some(&config_path)).await;
         assert!(result.is_err());
@@ -387,8 +387,7 @@ mod tests {
             &config_path,
             format!(
                 "server_mode = \"demo\"\norigin = \"http://demo.example\"\n\
-                 bind = \"127.0.0.1:0\"\ndb = {:?}\n",
-                db_path
+                 bind = \"127.0.0.1:0\"\ndb = {db_path:?}\n"
             ),
         )
         .unwrap();
@@ -407,9 +406,8 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "server_mode = \"demo\"\nbind = \"127.0.0.1:0\"\ndb = {:?}\n\
-                 [demo]\nmax_active_runs_global = 9\n",
-                db_path
+                "server_mode = \"demo\"\nbind = \"127.0.0.1:0\"\ndb = {db_path:?}\n\
+                 [demo]\nmax_active_runs_global = 9\n"
             ),
         )
         .unwrap();
@@ -434,8 +432,7 @@ mod tests {
             format!(
                 "server_mode = \"demo\"\norigin = \"http://localhost\"\n\
                  bind = \"127.0.0.1:0\"\n\
-                 trusted_proxy = \"proxy.example\"\ndb = {:?}\n",
-                db_path
+                 trusted_proxy = \"proxy.example\"\ndb = {db_path:?}\n"
             ),
         )
         .unwrap();
@@ -455,8 +452,7 @@ mod tests {
             &config_path,
             format!(
                 "server_mode = \"demo\"\norigin = \"http://localhost\"\n\
-                 db = {:?}\nbind = \"127.0.0.1:0\"\n",
-                db_path
+                 db = {db_path:?}\nbind = \"127.0.0.1:0\"\n"
             ),
         )
         .unwrap();
@@ -528,10 +524,7 @@ mod tests {
         let log_dir = dir.path().join("logs");
         std::fs::write(
             &config_path,
-            format!(
-                "db = {:?}\nbind = \"127.0.0.1:0\"\n[log]\ndir = {:?}\n",
-                db_path, log_dir
-            ),
+            format!("db = {db_path:?}\nbind = \"127.0.0.1:0\"\n[log]\ndir = {log_dir:?}\n"),
         )
         .unwrap();
 

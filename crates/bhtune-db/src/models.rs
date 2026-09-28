@@ -259,7 +259,7 @@ impl DcsTemplateRow {
         let versions_json = serde_json::to_string(&template.versions)
             .expect("Vec<String> serialization is infallible");
         let row = sqlx::query(
-            r#"
+            r"
             INSERT INTO dcs_templates (
                 name, origin, revert_mode, proportional_type, integral_type,
                 integral_unit, derivative_type, derivative_unit,
@@ -274,7 +274,7 @@ impl DcsTemplateRow {
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
-            "#,
+            ",
         )
         .bind(&template.name)
         .bind(enum_to_text(&origin))
@@ -357,7 +357,7 @@ impl DcsTemplateRow {
         let versions_json = serde_json::to_string(&template.versions)
             .expect("Vec<String> serialization is infallible");
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE dcs_templates SET
                 revert_mode = ?, proportional_type = ?, integral_type = ?,
                 integral_unit = ?, derivative_type = ?, derivative_unit = ?,
@@ -373,7 +373,7 @@ impl DcsTemplateRow {
                 updated_at = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(template.revert_mode)
         .bind(enum_to_text(&template.proportional_type))
@@ -963,7 +963,7 @@ impl TuneRunRow {
         let tags_json = serde_json::to_string(tags).expect("LoopTags serialization is infallible");
 
         let row = sqlx::query(
-            r#"
+            r"
             INSERT INTO tune_runs (
                 loop_id, demo_session_id, loop_name, driver, started_at, outcome,
                 process_type, controller_type, relay_amp_percent, num_cycles_skip,
@@ -978,7 +978,7 @@ impl TuneRunRow {
                 WHERE id = ? AND revoked_at IS NULL AND expires_at > ?
             )
             RETURNING *
-            "#,
+            ",
         )
         .bind(loop_id)
         .bind(demo_session_id)
@@ -1196,11 +1196,11 @@ impl TuneRunRow {
         request_json: &str,
     ) -> DbResult<TuneRunRow> {
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs SET opc_server = ?, bridge_host = ?, request_json = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(opc_server)
         .bind(bridge_host)
@@ -1225,11 +1225,11 @@ impl TuneRunRow {
         let effective_tuning_json = serde_json::to_string(&effective_tuning)
             .expect("EffectiveTuning serialization is infallible");
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs SET effective_tuning_json = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(effective_tuning_json)
         .bind(run_id)
@@ -1250,11 +1250,11 @@ impl TuneRunRow {
         notes: Option<&str>,
     ) -> DbResult<TuneRunRow> {
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs SET notes = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(notes)
         .bind(run_id)
@@ -1279,14 +1279,14 @@ impl TuneRunRow {
         readings: TuneRunInitialReadings,
     ) -> DbResult<TuneRunRow> {
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs SET
                 pv_ini = ?, mv_ini = ?, mv_range_low = ?, mv_range_high = ?,
                 pv_range_high = ?, pv_range_low = ?, controller_direction = ?,
                 mode_raw = ?, mode_attribute_raw = ?, setpoint_ini = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(readings.pv_ini)
         .bind(readings.mv_ini)
@@ -1322,11 +1322,11 @@ impl TuneRunRow {
         allow_uncertain_quality: bool,
     ) -> DbResult<TuneRunRow> {
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs SET allow_uncertain_quality = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(allow_uncertain_quality)
         .bind(run_id)
@@ -1351,11 +1351,11 @@ impl TuneRunRow {
         let metrics_json =
             serde_json::to_string(&metrics).expect("TimingMetrics serialization is infallible");
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs SET timing_metrics_json = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(metrics_json)
         .bind(run_id)
@@ -1383,11 +1383,11 @@ impl TuneRunRow {
         detail: Option<&str>,
     ) -> DbResult<TuneRunRow> {
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs SET restore_status = ?, restore_detail = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(enum_to_text(&status))
         .bind(detail)
@@ -1448,11 +1448,11 @@ impl TuneRunRow {
         failure_reason: &str,
     ) -> DbResult<TuneRunRow> {
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs SET outcome = 'failed', completed_at = ?, failure_reason = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(completed_at)
         .bind(failure_reason)
@@ -1537,12 +1537,12 @@ impl TuneRunRow {
             serde_json::to_string(&metrics).expect("TimingMetrics serialization is infallible")
         });
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_runs
             SET outcome = ?, completed_at = ?, timing_metrics_json = ?, failure_reason = ?
             WHERE id = ?
             RETURNING *
-            "#,
+            ",
         )
         .bind(enum_to_text(&outcome))
         .bind(completed_at)
@@ -1890,13 +1890,13 @@ impl TuneSampleRow {
         pv_quality: SampleQuality,
     ) -> DbResult<TuneSampleRow> {
         let row = sqlx::query(
-            r#"
+            r"
             INSERT INTO tune_samples (
                 run_id, tick, time, pv, pv_quality, hysteresis, mv_value_current,
                 mv_sign_next_step, counter_all_switches, cycles_completed, cycles_remaining
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
-            "#,
+            ",
         )
         .bind(run_id)
         .bind(tick_index)
@@ -2055,13 +2055,13 @@ impl TuneResultRow {
     /// completion.
     pub async fn insert(pool: &SqlitePool, row: &TuneResultRow) -> DbResult<TuneResultRow> {
         let inserted = sqlx::query(
-            r#"
+            r"
             INSERT INTO tune_results (
                 run_id, response_level, kp, ti_minutes, td_minutes,
                 proportional, integral, derivative, status, invalid_reason
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
-            "#,
+            ",
         )
         .bind(row.run_id)
         .bind(enum_to_text(&row.response_level))
@@ -2224,13 +2224,13 @@ impl TuneMvActuationRow {
         new: NewTuneMvActuation,
     ) -> DbResult<TuneMvActuationRow> {
         let row = sqlx::query(
-            r#"
+            r"
             INSERT INTO tune_mv_actuations (
                 run_id, sequence, kind, commanded_at, target_mv, previous_commanded_mv,
                 tolerance, confirmation_due_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
-            "#,
+            ",
         )
         .bind(run_id)
         .bind(new.sequence)
@@ -2258,13 +2258,13 @@ impl TuneMvActuationRow {
         readback_quality: Option<SampleQuality>,
     ) -> DbResult<TuneMvActuationRow> {
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_mv_actuations
             SET last_checked_at = ?, readback_mv = ?, readback_quality = ?,
                 attempt_count = attempt_count + 1
             WHERE id = ? AND status = 'pending'
             RETURNING *
-            "#,
+            ",
         )
         .bind(checked_at)
         .bind(readback_mv)
@@ -2292,13 +2292,13 @@ impl TuneMvActuationRow {
     ) -> DbResult<TuneMvActuationRow> {
         status.ensure_terminal()?;
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_mv_actuations
             SET last_checked_at = ?, readback_mv = ?, readback_quality = ?,
                 attempt_count = attempt_count + 1, status = ?, detail = ?
             WHERE id = ? AND status = 'pending'
             RETURNING *
-            "#,
+            ",
         )
         .bind(checked_at)
         .bind(readback_mv)
@@ -2323,12 +2323,12 @@ impl TuneMvActuationRow {
     ) -> DbResult<TuneMvActuationRow> {
         status.ensure_terminal()?;
         let row = sqlx::query(
-            r#"
+            r"
             UPDATE tune_mv_actuations
             SET status = ?, detail = ?
             WHERE id = ? AND status = 'pending'
             RETURNING *
-            "#,
+            ",
         )
         .bind(enum_to_text(&status))
         .bind(detail)
@@ -2352,11 +2352,11 @@ impl TuneMvActuationRow {
     ) -> DbResult<u64> {
         status.ensure_terminal()?;
         let result = sqlx::query(
-            r#"
+            r"
             UPDATE tune_mv_actuations
             SET status = ?, detail = ?
             WHERE run_id = ? AND status = 'pending'
-            "#,
+            ",
         )
         .bind(enum_to_text(&status))
         .bind(detail)
@@ -2557,7 +2557,7 @@ impl TuneWriteRow {
         new: NewTuneWrite,
     ) -> DbResult<TuneWriteRow> {
         let row = sqlx::query(
-            r#"
+            r"
             INSERT INTO tune_writes (
                 run_id, response_level, written_at, kind,
                 allow_uncertain_quality,
@@ -2571,7 +2571,7 @@ impl TuneWriteRow {
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
             RETURNING *
-            "#,
+            ",
         )
         .bind(run_id)
         .bind(enum_to_text(&new.response_level))

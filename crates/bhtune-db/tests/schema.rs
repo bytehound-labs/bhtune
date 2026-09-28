@@ -165,13 +165,13 @@ async fn loop_tags_json_round_trips_exactly() {
     let now = Utc::now();
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO loops (
             name, dcs_template_id, tags_json, process_type, controller_type,
             relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
             mrft_delay_secs, created_at, updated_at
         ) VALUES (?, ?, ?, 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
-        "#,
+        ",
     )
     .bind("LIC101")
     .bind(template_id)
@@ -198,13 +198,13 @@ async fn loops_reject_invalid_json_and_invalid_enum_values() {
     let now = Utc::now();
 
     let bad_json = sqlx::query(
-        r#"
+        r"
         INSERT INTO loops (
             name, dcs_template_id, tags_json, process_type, controller_type,
             relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
             mrft_delay_secs, created_at, updated_at
         ) VALUES ('bad-json', ?, 'not valid json', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
-        "#,
+        ",
     )
     .bind(template_id)
     .bind(now)
@@ -217,13 +217,13 @@ async fn loops_reject_invalid_json_and_invalid_enum_values() {
     );
 
     let bad_enum = sqlx::query(
-        r#"
+        r"
         INSERT INTO loops (
             name, dcs_template_id, tags_json, process_type, controller_type,
             relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
             mrft_delay_secs, created_at, updated_at
         ) VALUES ('bad-enum', ?, '{}', 'not_a_process_type', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
-        "#,
+        ",
     )
     .bind(template_id)
     .bind(now)
@@ -240,13 +240,13 @@ async fn deleting_a_referenced_dcs_template_is_restricted() {
     let now = Utc::now();
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO loops (
             name, dcs_template_id, tags_json, process_type, controller_type,
             relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
             mrft_delay_secs, created_at, updated_at
         ) VALUES ('LIC101', ?, '{}', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
-        "#,
+        ",
     )
     .bind(template_id)
     .bind(now)
@@ -294,13 +294,13 @@ async fn dcs_template_delete_fails_with_template_in_use_when_referenced_by_a_loo
     let now = Utc::now();
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO loops (
             name, dcs_template_id, tags_json, process_type, controller_type,
             relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
             mrft_delay_secs, created_at, updated_at
         ) VALUES ('LIC101', ?, '{}', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
-        "#,
+        ",
     )
     .bind(template_id)
     .bind(now)
@@ -344,14 +344,14 @@ async fn seed_loop(pool: &sqlx::SqlitePool) -> i64 {
     let template_id = seed_template(pool).await;
     let now = Utc::now();
     sqlx::query(
-        r#"
+        r"
         INSERT INTO loops (
             name, dcs_template_id, tags_json, process_type, controller_type,
             relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
             mrft_delay_secs, created_at, updated_at
         ) VALUES ('LIC101', ?, '{}', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
         RETURNING id
-        "#,
+        ",
     )
     .bind(template_id)
     .bind(now)
@@ -368,7 +368,7 @@ async fn seed_loop(pool: &sqlx::SqlitePool) -> i64 {
 /// case that motivated making those columns nullable in the first place.
 async fn seed_failed_run(pool: &sqlx::SqlitePool, loop_id: Option<i64>) -> i64 {
     sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_runs (
             loop_id, loop_name, driver, started_at, outcome, failure_reason,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
@@ -377,7 +377,7 @@ async fn seed_failed_run(pool: &sqlx::SqlitePool, loop_id: Option<i64>) -> i64 {
         ) VALUES (?, 'LIC101', 'opcda', ?, 'failed', 'InvalidCastException reading initial values',
                   'flow', 'pi', 5.0, 1, 2, 3, 0, 'Test Template', 'builtin', '{}', '{}', ?)
         RETURNING id
-        "#,
+        ",
     )
     .bind(loop_id)
     .bind(Utc::now())
@@ -416,7 +416,7 @@ async fn tune_run_rejects_invalid_outcome_and_driver() {
     let loop_id = seed_loop(&pool).await;
 
     let bad_outcome = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_runs (
             loop_id, loop_name, driver, started_at, outcome,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
@@ -424,7 +424,7 @@ async fn tune_run_rejects_invalid_outcome_and_driver() {
             template_name, template_origin, template_snapshot_json, tags_json, created_at
         ) VALUES (?, 'LIC101', 'opcda', ?, 'not_a_real_outcome', 'flow', 'pi', 5.0, 1, 2, 3, 0,
                   'Test Template', 'builtin', '{}', '{}', ?)
-        "#,
+        ",
     )
     .bind(loop_id)
     .bind(Utc::now())
@@ -434,7 +434,7 @@ async fn tune_run_rejects_invalid_outcome_and_driver() {
     assert!(bad_outcome.is_err());
 
     let bad_driver = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_runs (
             loop_id, loop_name, driver, started_at, outcome,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
@@ -442,7 +442,7 @@ async fn tune_run_rejects_invalid_outcome_and_driver() {
             template_name, template_origin, template_snapshot_json, tags_json, created_at
         ) VALUES (?, 'LIC101', 'modbus', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
                   'Test Template', 'builtin', '{}', '{}', ?)
-        "#,
+        ",
     )
     .bind(loop_id)
     .bind(Utc::now())
@@ -470,7 +470,7 @@ async fn tune_runs_reject_invalid_template_origin_and_invalid_json() {
         let pool = pool.clone();
         async move {
             sqlx::query(
-                r#"
+                r"
                 INSERT INTO tune_runs (
                     loop_id, loop_name, driver, started_at, outcome,
                     process_type, controller_type, relay_amp_percent, num_cycles_skip,
@@ -478,7 +478,7 @@ async fn tune_runs_reject_invalid_template_origin_and_invalid_json() {
                     template_name, template_origin, template_snapshot_json, tags_json, created_at
                 ) VALUES (?, 'LIC101', 'opcda', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
                           'Test Template', ?, ?, ?, ?)
-                "#,
+                ",
             )
             .bind(loop_id)
             .bind(Utc::now())
@@ -518,7 +518,7 @@ async fn tune_runs_default_and_reject_invalid_request_json() {
     let loop_id = seed_loop(&pool).await;
 
     let omitted = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_runs (
             loop_id, loop_name, driver, started_at, outcome,
             process_type, controller_type, relay_amp_percent, num_cycles_skip,
@@ -527,7 +527,7 @@ async fn tune_runs_default_and_reject_invalid_request_json() {
         ) VALUES (?, 'LIC101', 'opcda', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
                   'Test Template', 'builtin', '{}', '{}', ?)
         RETURNING request_json
-        "#,
+        ",
     )
     .bind(loop_id)
     .bind(Utc::now())
@@ -545,7 +545,7 @@ async fn tune_runs_default_and_reject_invalid_request_json() {
         let pool = pool.clone();
         async move {
             sqlx::query(
-                r#"
+                r"
                 INSERT INTO tune_runs (
                     loop_id, loop_name, driver, started_at, outcome,
                     process_type, controller_type, relay_amp_percent, num_cycles_skip,
@@ -554,7 +554,7 @@ async fn tune_runs_default_and_reject_invalid_request_json() {
                     request_json, created_at
                 ) VALUES (?, 'LIC101', 'opcda', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
                           'Test Template', 'builtin', '{}', '{}', ?, ?)
-                "#,
+                ",
             )
             .bind(loop_id)
             .bind(Utc::now())
@@ -643,7 +643,7 @@ async fn tune_runs_and_tune_samples_reject_invalid_quality_columns() {
         let pool = pool.clone();
         async move {
             sqlx::query(
-                r#"
+                r"
                 INSERT INTO tune_runs (
                     loop_id, loop_name, driver, started_at, outcome,
                     process_type, controller_type, relay_amp_percent, num_cycles_skip,
@@ -652,7 +652,7 @@ async fn tune_runs_and_tune_samples_reject_invalid_quality_columns() {
                     allow_uncertain_quality, created_at
                 ) VALUES (?, 'LIC101', 'opcda', ?, 'running', 'flow', 'pi', 5.0, 1, 2, 3, 0,
                           'Test Template', 'builtin', '{}', '{}', ?, ?)
-                "#,
+                ",
             )
             .bind(loop_id)
             .bind(Utc::now())
@@ -674,12 +674,12 @@ async fn tune_runs_and_tune_samples_reject_invalid_quality_columns() {
         let pool = pool.clone();
         async move {
             sqlx::query(
-                r#"
+                r"
                 INSERT INTO tune_samples (
                     run_id, tick, time, pv, pv_quality, hysteresis, mv_value_current,
                     mv_sign_next_step, counter_all_switches, cycles_completed, cycles_remaining
                 ) VALUES (?, 0, ?, 50.0, ?, 1.0, 55.0, 1, 0, 0, 2)
-                "#,
+                ",
             )
             .bind(run_id)
             .bind(Utc::now())
@@ -728,12 +728,12 @@ async fn tune_samples_enforce_unique_tick_and_cascade_delete_with_the_run() {
 
     for tick in 0..3 {
         sqlx::query(
-            r#"
+            r"
             INSERT INTO tune_samples (
                 run_id, tick, time, pv, pv_quality, hysteresis, mv_value_current,
                 mv_sign_next_step, counter_all_switches, cycles_completed, cycles_remaining
             ) VALUES (?, ?, ?, 50.0, 'good', 1.0, 55.0, 1, 0, 0, 2)
-            "#,
+            ",
         )
         .bind(run_id)
         .bind(tick)
@@ -744,12 +744,12 @@ async fn tune_samples_enforce_unique_tick_and_cascade_delete_with_the_run() {
     }
 
     let dup = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_samples (
             run_id, tick, time, pv, pv_quality, hysteresis, mv_value_current,
             mv_sign_next_step, counter_all_switches, cycles_completed, cycles_remaining
         ) VALUES (?, 0, ?, 50.0, 'good', 1.0, 55.0, 1, 0, 0, 2)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(Utc::now())
@@ -778,10 +778,10 @@ async fn tune_results_enforce_unique_response_level_and_cascade_delete_with_the_
 
     for level in ["aggressive", "moderate", "sluggish"] {
         sqlx::query(
-            r#"
+            r"
             INSERT INTO tune_results (run_id, response_level, kp, ti_minutes, td_minutes, proportional, integral, derivative)
             VALUES (?, ?, 1.0, 2.0, 0.0, 3.0, 4.0, 0.0)
-            "#,
+            ",
         )
         .bind(run_id)
         .bind(level)
@@ -791,10 +791,10 @@ async fn tune_results_enforce_unique_response_level_and_cascade_delete_with_the_
     }
 
     let dup = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (run_id, response_level, kp, ti_minutes, td_minutes, proportional, integral, derivative)
         VALUES (?, 'aggressive', 1.0, 2.0, 0.0, 3.0, 4.0, 0.0)
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -824,12 +824,12 @@ async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() 
     let run_id = seed_failed_run(&pool, None).await;
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (
             run_id, response_level, kp, ti_minutes, td_minutes,
             proportional, integral, derivative, status, invalid_reason
         ) VALUES (?, 'aggressive', 1.0, 2.0, 0.0, 3.0, 0.0, 0.0, 'valid', NULL)
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -837,12 +837,12 @@ async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() 
     .unwrap();
 
     let valid_without_value = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (
             run_id, response_level, kp, ti_minutes, td_minutes,
             proportional, integral, derivative, status, invalid_reason
         ) VALUES (?, 'moderate', NULL, 2.0, 0.0, 3.0, 0.0, 0.0, 'valid', NULL)
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -853,13 +853,13 @@ async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() 
     );
 
     let invalid_with_value = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (
             run_id, response_level, kp, ti_minutes, td_minutes,
             proportional, integral, derivative, status, invalid_reason
         ) VALUES (?, 'moderate', NULL, NULL, NULL, 3.0, NULL, NULL,
                    'invalid', 'non_positive_pv_amplitude')
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -870,12 +870,12 @@ async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() 
     );
 
     let invalid_without_reason = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (
             run_id, response_level, kp, ti_minutes, td_minutes,
             proportional, integral, derivative, status, invalid_reason
         ) VALUES (?, 'moderate', NULL, NULL, NULL, NULL, NULL, NULL, 'invalid', NULL)
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -886,12 +886,12 @@ async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() 
     );
 
     let unknown_status = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (
             run_id, response_level, kp, ti_minutes, td_minutes,
             proportional, integral, derivative, status, invalid_reason
         ) VALUES (?, 'moderate', 1.0, 2.0, 0.0, 3.0, 0.0, 0.0, 'unknown', NULL)
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -902,13 +902,13 @@ async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() 
     );
 
     let unknown_reason = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (
             run_id, response_level, kp, ti_minutes, td_minutes,
             proportional, integral, derivative, status, invalid_reason
         ) VALUES (?, 'moderate', NULL, NULL, NULL, NULL, NULL, NULL,
                    'invalid', 'not_a_real_reason')
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -919,12 +919,12 @@ async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() 
     );
 
     let non_finite = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (
             run_id, response_level, kp, ti_minutes, td_minutes,
             proportional, integral, derivative, status, invalid_reason
         ) VALUES (?, 'moderate', 1e999, 2.0, 0.0, 3.0, 0.0, 0.0, 'valid', NULL)
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -935,12 +935,12 @@ async fn tune_results_enforce_checked_validity_and_finite_numeric_constraints() 
     );
 
     let above_f32_max = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_results (
             run_id, response_level, kp, ti_minutes, td_minutes,
             proportional, integral, derivative, status, invalid_reason
         ) VALUES (?, 'sluggish', 3.45e38, 2.0, 0.0, 3.0, 0.0, 0.0, 'valid', NULL)
-        "#,
+        ",
     )
     .bind(run_id)
     .execute(&pool)
@@ -959,14 +959,14 @@ async fn tune_mv_actuations_enforce_audit_constraints_and_cascade_with_the_run()
     let confirmation_due_at = commanded_at + chrono::Duration::seconds(4);
 
     sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_mv_actuations (
             run_id, sequence, kind, commanded_at, target_mv, previous_commanded_mv,
             tolerance, confirmation_due_at, last_checked_at, readback_mv,
             readback_quality, attempt_count, status, detail
         ) VALUES (?, 0, 'relay', ?, 55.0, 45.0, 0.1, ?, ?, 55.02, 'good', 1,
                   'confirmed', NULL)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(commanded_at)
@@ -977,11 +977,11 @@ async fn tune_mv_actuations_enforce_audit_constraints_and_cascade_with_the_run()
     .unwrap();
 
     let duplicate_sequence = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_mv_actuations (
             run_id, sequence, kind, commanded_at, target_mv, tolerance, confirmation_due_at
         ) VALUES (?, 0, 'restore', ?, 45.0, 0.1, ?)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(commanded_at)
@@ -1087,13 +1087,13 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
 
     // A successful write, with readback confirmation.
     sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_writes (
             run_id, response_level, written_at, kind, proportional_written, integral_written,
             derivative_written, proportional_readback, integral_readback, derivative_readback,
             success
         ) VALUES (?, 'moderate', ?, 'write', 3.0, 4.0, 0.0, 3.0, 4.0, 0.0, 1)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(Utc::now())
@@ -1114,11 +1114,11 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
     );
 
     let invalid_policy = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_writes (
             run_id, response_level, written_at, kind, allow_uncertain_quality, success
         ) VALUES (?, 'sluggish', ?, 'write', 2, 1)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(Utc::now())
@@ -1130,11 +1130,11 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
     );
 
     let null_policy = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_writes (
             run_id, response_level, written_at, kind, allow_uncertain_quality, success
         ) VALUES (?, 'sluggish', ?, 'write', NULL, 1)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(Utc::now())
@@ -1147,12 +1147,12 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
 
     // A failed write: no readback, an error message instead.
     sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_writes (
             run_id, response_level, written_at, kind, proportional_written, integral_written,
             derivative_written, success, error_message
         ) VALUES (?, 'aggressive', ?, 'write', 1.0, 2.0, 0.0, 0, 'write rejected by DCS')
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(Utc::now())
@@ -1162,13 +1162,13 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
 
     // A revert, undoing an earlier write -- same shape, `kind = 'revert'`.
     sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_writes (
             run_id, response_level, written_at, kind, proportional_written, integral_written,
             derivative_written, proportional_readback, integral_readback, derivative_readback,
             success
         ) VALUES (?, 'moderate', ?, 'revert', 1.0, 2.0, 0.0, 1.0, 2.0, 0.0, 1)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(Utc::now())
@@ -1177,10 +1177,10 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
     .unwrap();
 
     let bad_success = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_writes (run_id, response_level, written_at, kind, proportional_written, integral_written, derivative_written, success)
         VALUES (?, 'sluggish', ?, 'write', 1.0, 2.0, 0.0, 2)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(Utc::now())
@@ -1192,10 +1192,10 @@ async fn tune_writes_supports_failed_write_with_null_readback_and_cascade_delete
     );
 
     let bad_kind = sqlx::query(
-        r#"
+        r"
         INSERT INTO tune_writes (run_id, response_level, written_at, kind, proportional_written, integral_written, derivative_written, success)
         VALUES (?, 'sluggish', ?, 'undo', 1.0, 2.0, 0.0, 1)
-        "#,
+        ",
     )
     .bind(run_id)
     .bind(Utc::now())

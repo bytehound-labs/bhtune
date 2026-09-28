@@ -1357,8 +1357,7 @@ fn mv_actuation_tolerance(
         let minimum_step = MIN_RELAY_STEP
             .max(f32_precision_floor(target, previous) / RELAY_STEP_TOLERANCE_FRACTION);
         anyhow::bail!(
-            "the effective relay step {step} is too small to verify safely (minimum {})",
-            minimum_step
+            "the effective relay step {step} is too small to verify safely (minimum {minimum_step})"
         );
     }
     Ok(uncapped.min(relay_cap))
@@ -5767,13 +5766,13 @@ mod tests {
                 (|args: &mut TuneArgs| args.pv_range_high = None) as fn(&mut TuneArgs),
             ),
             ("pv_range_low", |args: &mut TuneArgs| {
-                args.pv_range_low = None
+                args.pv_range_low = None;
             }),
             ("mv_range_high", |args: &mut TuneArgs| {
-                args.mv_range_high = None
+                args.mv_range_high = None;
             }),
             ("mv_range_low", |args: &mut TuneArgs| {
-                args.mv_range_low = None
+                args.mv_range_low = None;
             }),
             ("direction", |args: &mut TuneArgs| args.direction = None),
         ] {

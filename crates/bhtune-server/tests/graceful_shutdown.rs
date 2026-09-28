@@ -80,9 +80,12 @@ async fn spawn_server() -> (Child, u16, tempfile::TempDir, tempfile::TempDir) {
 }
 
 /// Sends a real signal to `child`'s process ID.
-///
-/// SAFETY: `child.id()` is a live PID for a process this test just spawned and still owns.
+#[expect(
+    unsafe_code,
+    reason = "delivering a real OS signal to the spawned server requires libc::kill"
+)]
 fn send_signal(child: &Child, signal: libc::c_int) {
+    // SAFETY: `child.id()` is a live PID for a process this test just spawned and still owns.
     let result = unsafe { libc::kill(child.id() as libc::pid_t, signal) };
     assert_eq!(
         result, 0,
