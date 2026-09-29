@@ -23,7 +23,7 @@ use serde::Deserialize;
 
 use crate::{
     driver::Driver,
-    error::{DriverError, DriverResult},
+    error::{DriverError, DriverResult, poisoned_lock},
     types::{
         BrowsePage, BrowsePageRequest, DriverCapabilities, Quality, SearchEvent, SearchRequest,
         TagId, TagValue, TagWrite, WriteOutcome,
@@ -201,21 +201,21 @@ impl ReplayDriver {
 
     /// Every MV write observed so far, in call order -- for a validation test to compare
     /// against a golden fixture's own expected per-tick MV sequence.
-    pub fn writes(&self) -> Vec<RecordedWrite> {
-        self.state.lock().unwrap().writes.clone()
+    pub fn writes(&self) -> DriverResult<Vec<RecordedWrite>> {
+        Ok(poisoned_lock(self.state.lock())?.writes.clone())
     }
 
     /// How many configured samples have not yet been consumed by a PV read.
-    pub fn remaining(&self) -> usize {
-        let state = self.state.lock().unwrap();
-        self.samples.len() - state.next_index
+    pub fn remaining(&self) -> DriverResult<usize> {
+        let state = poisoned_lock(self.state.lock())?;
+        Ok(self.samples.len() - state.next_index)
     }
 }
 
 #[async_trait]
 impl Driver for ReplayDriver {
     async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = poisoned_lock(self.state.lock())?;
         tags.iter()
             .map(|tag| {
                 if *tag == self.pv_tag {
@@ -268,7 +268,7 @@ impl Driver for ReplayDriver {
                 }
             },
         };
-        let mut state = self.state.lock().unwrap();
+        let mut state = poisoned_lock(self.state.lock())?;
         state.last_mv = mv;
         state.writes.push(RecordedWrite {
             tag: tag.clone(),
@@ -415,12 +415,12 @@ mod tests {
         driver.read(&["MV".to_string()]).await.unwrap();
         driver.read(&["MV".to_string()]).await.unwrap();
         assert_eq!(
-            driver.remaining(),
+            driver.remaining().unwrap(),
             3,
             "MV reads must not consume PV samples"
         );
         driver.read(&["PV".to_string()]).await.unwrap();
-        assert_eq!(driver.remaining(), 2);
+        assert_eq!(driver.remaining().unwrap(), 2);
     }
 
     #[tokio::test]
@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(read[1].tag, "MV");
         assert_eq!(read[1].value, "5");
         assert_eq!(
-            driver.remaining(),
+            driver.remaining().unwrap(),
             2,
             "the one PV tag in the batch consumed one sample"
         );
@@ -458,7 +458,7 @@ mod tests {
             .write(&"MV".to_string(), TagWrite::Raw("3".to_string()))
             .await
             .unwrap();
-        let writes = driver.writes();
+        let writes = driver.writes().unwrap();
         assert_eq!(
             writes,
             vec![
@@ -488,7 +488,7 @@ mod tests {
         assert!(!outcome.success);
         assert!(outcome.error_message.unwrap().contains("not-a-number"));
         assert!(
-            driver.writes().is_empty(),
+            driver.writes().unwrap().is_empty(),
             "a rejected write must not be recorded"
         );
     }
@@ -539,7 +539,7 @@ mod tests {
         for _ in 0..3 {
             driver.read(&["PV".to_string()]).await.unwrap();
         }
-        assert_eq!(driver.remaining(), 0);
+        assert_eq!(driver.remaining().unwrap(), 0);
         let err = driver.read(&["PV".to_string()]).await.unwrap_err();
         let exhausted = expect_trace_exhaustion(err);
         assert_eq!(exhausted.recorded, 3);
@@ -591,7 +591,7 @@ mod tests {
         }"#;
 
         let driver = ReplayDriver::from_fixture_json("PV", "MV", json, 40.0).unwrap();
-        assert_eq!(driver.remaining(), 2);
+        assert_eq!(driver.remaining().unwrap(), 2);
     }
 
     #[test]
@@ -661,7 +661,7 @@ mod tests {
         let driver =
             ReplayDriver::from_fixture_json(pv_tag.clone(), mv_tag.clone(), &json, initial_mv)
                 .expect("flow_pi_direct.json should parse");
-        let total_samples = driver.remaining();
+        let total_samples = driver.remaining().unwrap();
 
         // This fixture's own config/direction/initial-readings/pv-range, matching
         // `golden_replay.rs`'s hardcoded transcription of the same fixture exactly (that
@@ -793,7 +793,7 @@ mod tests {
         );
 
         assert!(
-            !driver.writes().is_empty(),
+            !driver.writes().unwrap().is_empty(),
             "the engine should have written at least one relay step through the real \
              Driver trait"
         );
@@ -804,7 +804,7 @@ mod tests {
         // assertion is that real consumption happened at all, not that every recorded tick
         // was read.
         assert!(
-            driver.remaining() < total_samples,
+            driver.remaining().unwrap() < total_samples,
             "expected at least one sample to be consumed before completion"
         );
     }

@@ -8,6 +8,13 @@
 //! the exact same tuning result the legacy C# application did, for a real relay test against
 //! a real (simulated) process.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
+
 use std::{fs, path::Path};
 
 use bhtune_core::{

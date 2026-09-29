@@ -37,6 +37,33 @@ use crate::driver::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
 use crate::output::OutputFormat;
 use crate::timing::{PollTimingAccumulator, RunTimeAnchor, TickTimeSource};
 
+/// Turns a missing value that the caller already checked into a recoverable error.
+///
+/// A panic after the loop may already be in manual would skip restore. The message names
+/// the invariant that failed so the error is actionable in logs.
+trait RequireInvariant<T> {
+    fn require_invariant(self, message: &'static str) -> anyhow::Result<T>;
+}
+
+impl<T> RequireInvariant<T> for Option<T> {
+    fn require_invariant(self, message: &'static str) -> anyhow::Result<T> {
+        let Some(value) = self else {
+            return Err(anyhow::anyhow!(message));
+        };
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn require_invariant_returns_the_value_or_an_error() {
+    assert_eq!(Some(3).require_invariant("missing").unwrap(), 3);
+    let err = None::<i32>
+        .require_invariant("missing invariant")
+        .unwrap_err();
+    assert!(err.to_string().contains("missing invariant"));
+}
+
 /// Maximum interval from an accepted OPC DA MV write to its mandatory confirmation check.
 ///
 /// Public so HTTP and other non-clap adapters can expose the same validation policy without
@@ -422,6 +449,10 @@ async fn prepare_internal(
     // below, so a field the caller left unset stays absent here instead of silently baking
     // in a resolved default (`db-run-request-snapshot`) -- see `RequestSnapshot`'s doc
     // comment.
+    #[allow(
+        clippy::expect_used,
+        reason = "RequestSnapshot is plain enums and finite scalars, serialized before any driver I/O"
+    )]
     let request_json = serde_json::to_string(&RequestSnapshot {
         tagname: &args.tagname,
         template: &args.template,
@@ -2732,7 +2763,7 @@ async fn reject_replacement_for_pending_actuation(
     let pending = tracker
         .pending
         .take()
-        .expect("called only when an MV actuation is pending");
+        .require_invariant("called only when an MV actuation is pending")?;
     let (status, detail) = if pending.last_readback.is_some() {
         (
             MvActuationStatus::Failed,
@@ -2984,7 +3015,7 @@ fn pending_verification_ready(
     let pending = tracker
         .pending
         .as_ref()
-        .expect("pending actuation existed after the bounded read");
+        .require_invariant("pending actuation existed after the bounded read")?;
     Ok(PendingMvVerificationRead::Ready {
         operation,
         checked_at: checked_at_for_pending(pending, checked_instant)?,
@@ -3008,7 +3039,7 @@ async fn read_pending_mv_verification_with_timing(
             let pending = tracker
                 .pending
                 .as_ref()
-                .expect("pending actuation existed before the bounded read");
+                .require_invariant("pending actuation existed before the bounded read")?;
             mv_verification_read_limit(trigger, pending, call_limit)
         };
         let read_started = Instant::now();
@@ -3028,10 +3059,8 @@ async fn read_pending_mv_verification_with_timing(
                 }
 
                 MvVerificationLimitKind::Deadline => {
-                    let pending = tracker
-                        .pending
-                        .take()
-                        .expect("pending actuation existed before the deadline read");
+                    const MSG: &str = "pending actuation existed before the deadline read";
+                    let pending = tracker.pending.take().require_invariant(MSG)?;
                     let checked_instant = Instant::now();
                     let checked_at = checked_at_for_pending(&pending, checked_instant)?;
                     return Ok(PendingMvVerificationRead::DeadlineTimedOut {
@@ -3041,10 +3070,8 @@ async fn read_pending_mv_verification_with_timing(
                     });
                 }
                 MvVerificationLimitKind::Restore => {
-                    let pending = tracker
-                        .pending
-                        .take()
-                        .expect("pending actuation existed before the bounded read");
+                    const MSG: &str = "pending actuation existed before the bounded read";
+                    let pending = tracker.pending.take().require_invariant(MSG)?;
                     let checked_instant = Instant::now();
                     let checked_at = checked_at_for_pending(&pending, checked_instant)?;
                     return Ok(PendingMvVerificationRead::RestoreTimedOut {
@@ -3075,7 +3102,7 @@ async fn resolve_pending_mv_read(
             let pending = tracker
                 .pending
                 .take()
-                .expect("pending actuation existed before the verification read");
+                .require_invariant("pending actuation existed before the verification read")?;
             let detail = format!("MV verification read failed: {error}");
             record_final_actuation_observation(
                 pool,
@@ -3097,7 +3124,7 @@ async fn resolve_pending_mv_read(
             let pending = tracker
                 .pending
                 .take()
-                .expect("pending actuation existed before the verification read");
+                .require_invariant("pending actuation existed before the verification read")?;
             finalize_actuation_best_effort(
                 pool,
                 &pending,
@@ -3113,7 +3140,7 @@ async fn resolve_pending_mv_read(
             let pending = tracker
                 .pending
                 .take()
-                .expect("pending actuation existed before the verification read");
+                .require_invariant("pending actuation existed before the verification read")?;
             let detail = format!(
                 "MV verification read did not complete within {} seconds",
                 effective_timing.op_timeout_secs
@@ -3141,7 +3168,7 @@ async fn resolve_pending_mv_read(
         let pending = tracker
             .pending
             .take()
-            .expect("pending actuation existed before the verification read");
+            .require_invariant("pending actuation existed before the verification read")?;
         let detail = format!("MV verification read reported OPC quality {quality:?}");
         record_final_actuation_observation(
             pool,
@@ -3287,7 +3314,7 @@ async fn finalize_pending_mv_verification(
     let pending = tracker
         .pending
         .take()
-        .expect("pending actuation existed before the verification result");
+        .require_invariant("pending actuation existed before the verification result")?;
     if value.checked_instant > pending.deadline {
         let detail = if actuation_matches(pending.target, value.readback, pending.tolerance) {
             "MV readback matched the target only after the confirmation deadline"
@@ -3530,7 +3557,7 @@ async fn try_confirm_final_snapback_handoff_with_timing(
     let pending = tracker
         .pending
         .take()
-        .expect("the final-snapback predicate required a pending actuation");
+        .require_invariant("the final-snapback predicate required a pending actuation")?;
     let now = Instant::now();
     let reserved_restore_window = Duration::from_secs(MV_ACTUATION_CONFIRMATION_SECS);
     let latest_handoff_finish = restore_deadline
@@ -3808,7 +3835,7 @@ async fn restore_mv_with_verification_with_timing(
                 let pending = tracker
                     .pending
                     .as_ref()
-                    .expect("pending state was checked above");
+                    .require_invariant("pending state was checked above")?;
                 let remaining_confirmation =
                     pending.deadline.saturating_duration_since(Instant::now());
                 let remaining_restore =
@@ -3971,10 +3998,8 @@ async fn attempt_restore_with_actuation_with_timing(
     };
     if should_settle_before_auto_release(args, tags, template, initial, guard)
         && matches!(mv, RestoreStepOutcome::Succeeded)
-        && settling_duration(measured_oscillation_period_ms).is_some()
+        && let Some(duration) = settling_duration(measured_oscillation_period_ms)
     {
-        let duration = settling_duration(measured_oscillation_period_ms)
-            .expect("settling duration was checked immediately above");
         let Some(completion) = completion else {
             tracing::warn!(
                 run_id,
@@ -4601,10 +4626,10 @@ async fn run_polling_loop_with_timing(
                     .as_ref()
                     .and_then(|tracker| tracker.pending.as_ref())
                     .and_then(|pending| verification_trigger(pending, Instant::now()))
-                    .expect("a verification wakeup requires a due pending actuation");
+                    .require_invariant("a verification wakeup requires a due pending actuation")?;
                 let tracker = mv_actuations
                     .as_mut()
-                    .expect("a verification trigger requires an OPC DA tracker");
+                    .require_invariant("a verification trigger requires an OPC DA tracker")?;
                 let reason = verify_pending_mv_actuation_with_timing(
                     pool,
                     args,
@@ -4651,11 +4676,11 @@ async fn run_polling_loop_with_timing(
                                 let pending = mv_actuations
                                     .as_ref()
                                     .and_then(|tracker| tracker.pending.as_ref())
-                                    .expect("pending actuation existed for the batched poll");
+                                    .require_invariant("pending actuation existed for the batched poll")?;
                                 let checked_at = checked_at_for_pending(pending, completed_at)?;
                                 let tracker = mv_actuations
                                     .as_mut()
-                                    .expect("pending actuation requires an OPC DA tracker");
+                                    .require_invariant("pending actuation requires an OPC DA tracker")?;
                                 resolve_pending_mv_poll(
                                     pool,
                                     effective_timing,
@@ -4688,7 +4713,7 @@ async fn run_polling_loop_with_timing(
                             let pending = tracker
                                 .pending
                                 .as_ref()
-                                .expect("pending actuation existed for the cancelled poll");
+                                .require_invariant("pending actuation existed for the cancelled poll")?;
                             let checked_at = checked_at_for_pending(pending, completed_at)?;
                             let (reason, _) = resolve_pending_mv_poll(
                                 pool,
@@ -4704,7 +4729,7 @@ async fn run_polling_loop_with_timing(
                             )
                             .await?;
                             let reason =
-                                reason.expect("a cancelled pending MV poll must abort the run");
+                                reason.require_invariant("a cancelled pending MV poll must abort the run")?;
                             return Ok(PollOutcome::Aborted(reason));
                         }
                         tracing::warn!(run_id, tick_index, "Ctrl+C received while reading the PV; aborting run");
@@ -4718,7 +4743,7 @@ async fn run_polling_loop_with_timing(
                             let pending = tracker
                                 .pending
                                 .as_ref()
-                                .expect("pending actuation existed for the timed-out poll");
+                                .require_invariant("pending actuation existed for the timed-out poll")?;
                             let checked_at = checked_at_for_pending(pending, completed_at)?;
                             let (reason, _) = resolve_pending_mv_poll(
                                 pool,
@@ -4734,7 +4759,7 @@ async fn run_polling_loop_with_timing(
                             )
                             .await?;
                             let reason =
-                                reason.expect("a timed-out pending MV poll must abort the run");
+                                reason.require_invariant("a timed-out pending MV poll must abort the run")?;
                             return Ok(PollOutcome::Aborted(reason));
                         }
                         tracing::warn!(
@@ -4832,7 +4857,7 @@ async fn run_polling_loop_with_timing(
                     if actions.iter().any(|action| matches!(action, Action::WriteMv(_))) {
                         let tracker = mv_actuations
                             .as_mut()
-                            .expect("a pending actuation requires an OPC DA tracker");
+                            .require_invariant("a pending actuation requires an OPC DA tracker")?;
                         assert!(
                             poll_provided_mv_evidence,
                             "a pending batched poll must provide MV evidence before replacement preview"
@@ -5008,7 +5033,7 @@ async fn run_polling_loop_with_timing(
     }
 
     Ok(PollOutcome::Completed(CompletedPoll {
-        action: completion.expect("the loop only `break`s after `completion` is set"),
+        action: completion.require_invariant("the loop only `break`s after `completion` is set")?,
         state: engine.state(),
         next_tick_index: tick_index,
         tick_time,

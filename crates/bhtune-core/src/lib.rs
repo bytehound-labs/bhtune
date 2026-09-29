@@ -22,6 +22,16 @@
 //! accurately to a consumer), not by a consumer's I/O or presentation needs — those belong
 //! in `bhtune-driver`, `bhtune-db`, `bhtune-cli`, or `bhtune-server`.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "unit tests may use unwrap, expect, and panic; production code must return typed errors"
+    )
+)]
+
 pub mod constants;
 pub mod controller_type;
 pub mod direction;

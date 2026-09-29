@@ -257,7 +257,7 @@ pub fn measure_oscillation(
     // for a real, measured oscillation (caught by `e2e-simulator`'s real-timing coverage,
     // which -- unlike this module's other tests -- drives a real polling loop with genuine,
     // sub-second switch-time deltas rather than hand-picked whole-second ones).
-    let elapsed_ms = (*switch_times.last().unwrap() - switch_times[0]).num_milliseconds();
+    let elapsed_ms = (switch_times[switch_times.len() - 1] - switch_times[0]).num_milliseconds();
     let secs_for_period = if compat.replicate_period_truncation_bug {
         ((elapsed_ms / 1000) % 86_400) as f32
     } else {

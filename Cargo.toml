@@ -97,6 +97,12 @@ dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
 undocumented_unsafe_blocks = "deny"
+# Production code must not panic. A panic after a live loop is switched to manual would skip
+# restore. Tests, examples, and benches allow these three lints explicitly. The remaining
+# production expects are real invariants, each with a site-level allow and a reason.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
 # A curated subset of `clippy::pedantic`, chosen by measured finding counts: each lint is cheap
 # and mechanical to satisfy and removes needless work or noise. The rest of the group stays off
 # because its noisiest lints (`missing_errors_doc`, `must_use_candidate`, `doc_markdown`,

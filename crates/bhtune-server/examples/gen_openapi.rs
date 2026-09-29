@@ -10,6 +10,13 @@
 //! same regenerate-and-diff pattern the later `docs-generated-cli` phase will reuse for the
 //! CLI reference/man pages/completions -- this is the first one in the repo.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
+
 use std::path::PathBuf;
 
 use utoipa::OpenApi;

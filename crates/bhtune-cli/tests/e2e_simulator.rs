@@ -23,6 +23,13 @@
 //! round trips; there is no scheduler-jitter allowance. Fields that are mathematically absent
 //! for a controller type must remain exactly zero.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
+
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};

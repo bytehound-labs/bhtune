@@ -63,6 +63,38 @@ pub enum DriverError {
 /// (and, further down, `sqlx`-style crate-local aliases already used by `bhtune-db`).
 pub type DriverResult<T> = std::result::Result<T, DriverError>;
 
+/// A mutex whose owner panicked while holding the guard.
+#[derive(Debug)]
+struct PoisonedLock {
+    detail: String,
+}
+
+impl std::fmt::Display for PoisonedLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let detail = &self.detail;
+        write!(f, "mutex poisoned: {detail}")
+    }
+}
+
+impl std::error::Error for PoisonedLock {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
+}
+
+/// Returns the mutex guard, or [`DriverError::Operation`] if the mutex is poisoned.
+///
+/// A poisoned lock means another task panicked while holding it. Recovering the inner
+/// guard could observe a half-updated simulator or replay cursor, so the caller gets an
+/// error it can restore from instead of panicking on the same path.
+pub(crate) fn poisoned_lock<T>(lock: std::sync::LockResult<T>) -> DriverResult<T> {
+    lock.map_err(|poisoned| {
+        DriverError::Operation(Box::new(PoisonedLock {
+            detail: poisoned.to_string(),
+        }))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +165,23 @@ mod tests {
                 .to_string()
                 .contains("reopen the tag browser")
         );
+    }
+
+    #[test]
+    fn poisoned_lock_returns_the_guard_or_an_operation_error() {
+        let live = std::sync::Mutex::new(1);
+        let guard = poisoned_lock(live.lock()).unwrap();
+        assert_eq!(*guard, 1);
+        drop(guard);
+
+        let poisoned = std::sync::Mutex::new(0);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = poisoned.lock().unwrap();
+            panic!("poison the mutex");
+        }));
+        let err = poisoned_lock(poisoned.lock()).unwrap_err();
+        let source = std::error::Error::source(&err).expect("operation error has a source");
+        assert!(source.to_string().contains("mutex poisoned"));
+        assert!(std::error::Error::source(source).is_none());
     }
 }

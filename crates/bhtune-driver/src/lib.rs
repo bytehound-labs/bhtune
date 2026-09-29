@@ -30,6 +30,16 @@
 //!   [`VirtualPid`]/[`VirtualPidConfig`].
 //! - [`replay`] — [`ReplayDriver`], [`ReplaySample`], and [`RecordedWrite`].
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "unit tests may use unwrap, expect, and panic; production code must return typed errors"
+    )
+)]
+
 pub mod driver;
 pub mod error;
 pub mod opcda;

@@ -38,7 +38,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool, sqlite::SqliteRow};
 
 use crate::{
-    convert::{enum_to_text, text_to_enum},
+    convert::{enum_to_text, json_text, option_enum_text, text_to_enum},
     error::{DbError, DbResult},
 };
 
@@ -256,8 +256,7 @@ impl DcsTemplateRow {
         origin: TemplateOrigin,
         now: DateTime<Utc>,
     ) -> DbResult<DcsTemplateRow> {
-        let versions_json = serde_json::to_string(&template.versions)
-            .expect("Vec<String> serialization is infallible");
+        let versions_json = json_text("template versions", &template.versions)?;
         let row = sqlx::query(
             r"
             INSERT INTO dcs_templates (
@@ -277,13 +276,13 @@ impl DcsTemplateRow {
             ",
         )
         .bind(&template.name)
-        .bind(enum_to_text(&origin))
+        .bind(enum_to_text(&origin)?)
         .bind(template.revert_mode)
-        .bind(enum_to_text(&template.proportional_type))
-        .bind(enum_to_text(&template.integral_type))
-        .bind(enum_to_text(&template.integral_unit))
-        .bind(enum_to_text(&template.derivative_type))
-        .bind(enum_to_text(&template.derivative_unit))
+        .bind(enum_to_text(&template.proportional_type)?)
+        .bind(enum_to_text(&template.integral_type)?)
+        .bind(enum_to_text(&template.integral_unit)?)
+        .bind(enum_to_text(&template.derivative_type)?)
+        .bind(enum_to_text(&template.derivative_unit)?)
         .bind(&template.process_variable_suffix)
         .bind(&template.manipulated_variable_suffix)
         .bind(&template.setpoint_variable_suffix)
@@ -354,8 +353,7 @@ impl DcsTemplateRow {
         template: &DcsTemplate,
         now: DateTime<Utc>,
     ) -> DbResult<DcsTemplateRow> {
-        let versions_json = serde_json::to_string(&template.versions)
-            .expect("Vec<String> serialization is infallible");
+        let versions_json = json_text("template versions", &template.versions)?;
         let row = sqlx::query(
             r"
             UPDATE dcs_templates SET
@@ -376,11 +374,11 @@ impl DcsTemplateRow {
             ",
         )
         .bind(template.revert_mode)
-        .bind(enum_to_text(&template.proportional_type))
-        .bind(enum_to_text(&template.integral_type))
-        .bind(enum_to_text(&template.integral_unit))
-        .bind(enum_to_text(&template.derivative_type))
-        .bind(enum_to_text(&template.derivative_unit))
+        .bind(enum_to_text(&template.proportional_type)?)
+        .bind(enum_to_text(&template.integral_type)?)
+        .bind(enum_to_text(&template.integral_unit)?)
+        .bind(enum_to_text(&template.derivative_type)?)
+        .bind(enum_to_text(&template.derivative_unit)?)
         .bind(&template.process_variable_suffix)
         .bind(&template.manipulated_variable_suffix)
         .bind(&template.setpoint_variable_suffix)
@@ -912,12 +910,11 @@ impl TuneRunRow {
     ///
     /// `template_origin`/`template`/`tags` snapshot exactly what this run was configured
     /// against (`safety-run-snapshot`), so a historical run stays interpretable even after
-    /// the template catalog changes underneath it. Serializing `template`/`tags` is treated
-    /// as infallible here, the same way [`enum_to_text`] treats enum serialization as
-    /// infallible: both types are plain, `derive`d, string/enum-only structures with no maps,
-    /// and every `f32` field they can carry is validated finite well before a run reaches
-    /// this call (see `safety-validation`) -- a panic here would mean that contract regressed
-    /// upstream, not a normal runtime failure this function's `DbResult` should model.
+    /// the template catalog changes underneath it. Serializing `template`/`tags` returns
+    /// [`DbError::Serialize`] if the JSON encoder rejects a value. Both types are plain,
+    /// `derive`d structures, and every `f32` field they can carry is validated finite well
+    /// before a run reaches this call (see `safety-validation`); a serialization failure
+    /// means that contract regressed upstream rather than a normal plant condition.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         pool: &SqlitePool,
@@ -958,9 +955,8 @@ impl TuneRunRow {
         tags: &LoopTags,
         now: DateTime<Utc>,
     ) -> DbResult<TuneRunRow> {
-        let template_snapshot_json =
-            serde_json::to_string(template).expect("DcsTemplate serialization is infallible");
-        let tags_json = serde_json::to_string(tags).expect("LoopTags serialization is infallible");
+        let template_snapshot_json = json_text("template snapshot", template)?;
+        let tags_json = json_text("loop tags", tags)?;
 
         let row = sqlx::query(
             r"
@@ -983,17 +979,17 @@ impl TuneRunRow {
         .bind(loop_id)
         .bind(demo_session_id)
         .bind(loop_name)
-        .bind(enum_to_text(&driver))
+        .bind(enum_to_text(&driver)?)
         .bind(now)
-        .bind(enum_to_text(&config.process_type))
-        .bind(enum_to_text(&config.controller_type))
+        .bind(enum_to_text(&config.process_type)?)
+        .bind(enum_to_text(&config.controller_type)?)
         .bind(config.relay_amp_percent)
         .bind(config.num_cycles_skip)
         .bind(config.num_cycles_count)
         .bind(config.noise_protection_secs)
         .bind(config.mrft_delay_secs)
         .bind(&template.name)
-        .bind(enum_to_text(&template_origin))
+        .bind(enum_to_text(&template_origin)?)
         .bind(template_snapshot_json)
         .bind(tags_json)
         .bind(now)
@@ -1222,8 +1218,7 @@ impl TuneRunRow {
         run_id: i64,
         effective_tuning: EffectiveTuning,
     ) -> DbResult<TuneRunRow> {
-        let effective_tuning_json = serde_json::to_string(&effective_tuning)
-            .expect("EffectiveTuning serialization is infallible");
+        let effective_tuning_json = json_text("effective tuning", &effective_tuning)?;
         let row = sqlx::query(
             r"
             UPDATE tune_runs SET effective_tuning_json = ?
@@ -1294,7 +1289,7 @@ impl TuneRunRow {
         .bind(readings.mv_range_high)
         .bind(readings.pv_range_high)
         .bind(readings.pv_range_low)
-        .bind(enum_to_text(&readings.controller_direction))
+        .bind(enum_to_text(&readings.controller_direction)?)
         .bind(readings.mode_raw)
         .bind(readings.mode_attribute_raw)
         .bind(readings.setpoint_ini)
@@ -1348,8 +1343,7 @@ impl TuneRunRow {
         run_id: i64,
         metrics: TimingMetrics,
     ) -> DbResult<TuneRunRow> {
-        let metrics_json =
-            serde_json::to_string(&metrics).expect("TimingMetrics serialization is infallible");
+        let metrics_json = json_text("timing metrics", &metrics)?;
         let row = sqlx::query(
             r"
             UPDATE tune_runs SET timing_metrics_json = ?
@@ -1389,7 +1383,7 @@ impl TuneRunRow {
             RETURNING *
             ",
         )
-        .bind(enum_to_text(&status))
+        .bind(enum_to_text(&status)?)
         .bind(detail)
         .bind(run_id)
         .fetch_one(pool)
@@ -1533,9 +1527,9 @@ impl TuneRunRow {
         timing_metrics: Option<TimingMetrics>,
         failure_reason: Option<&str>,
     ) -> DbResult<TuneRunRow> {
-        let timing_metrics_json = timing_metrics.map(|metrics| {
-            serde_json::to_string(&metrics).expect("TimingMetrics serialization is infallible")
-        });
+        let timing_metrics_json = timing_metrics
+            .map(|metrics| json_text("timing metrics", &metrics))
+            .transpose()?;
         let row = sqlx::query(
             r"
             UPDATE tune_runs
@@ -1544,7 +1538,7 @@ impl TuneRunRow {
             RETURNING *
             ",
         )
-        .bind(enum_to_text(&outcome))
+        .bind(enum_to_text(&outcome)?)
         .bind(completed_at)
         .bind(timing_metrics_json)
         .bind(failure_reason)
@@ -1574,7 +1568,7 @@ impl TuneRunRow {
         pagination: Pagination,
     ) -> DbResult<Vec<TuneRunRow>> {
         let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT * FROM tune_runs");
-        push_filter(&mut builder, filter);
+        push_filter(&mut builder, filter)?;
         builder.push(" ORDER BY started_at DESC LIMIT ");
         builder.push_bind(pagination.limit);
         builder.push(" OFFSET ");
@@ -1592,7 +1586,7 @@ impl TuneRunRow {
     /// would page through.
     pub async fn count(pool: &SqlitePool, filter: &TuneRunFilter) -> DbResult<i64> {
         let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT COUNT(*) FROM tune_runs");
-        push_filter(&mut builder, filter);
+        push_filter(&mut builder, filter)?;
         builder
             .build_query_scalar::<i64>()
             .fetch_one(pool)
@@ -1616,7 +1610,7 @@ impl TuneRunRow {
     /// treating an empty filter as "everything" rather than "nothing".
     pub async fn delete_matching(pool: &SqlitePool, filter: &TuneRunFilter) -> DbResult<u64> {
         let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new("DELETE FROM tune_runs");
-        push_filter(&mut builder, filter);
+        push_filter(&mut builder, filter)?;
         let result = builder
             .build()
             .execute(pool)
@@ -1658,8 +1652,9 @@ impl TuneRunRow {
 
 /// Appends `WHERE <conditions>` to `builder` for every `Some` field in `filter`, or nothing
 /// at all if every field is `None`. Shared by [`TuneRunRow::list`]/[`TuneRunRow::count`] so
-/// the two can never disagree about which rows match a given filter.
-fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) {
+/// the two can never disagree about which rows match a given filter. Returns
+/// [`DbError::Serialize`] if an enum filter value cannot be encoded.
+fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) -> DbResult<()> {
     // `1=1` makes every real condition an unconditional `AND`, rather than needing to track
     // whether it's the first one (and therefore needs `WHERE` instead of `AND`).
     builder.push(" WHERE 1=1");
@@ -1675,22 +1670,22 @@ fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) {
     if let Some(process_type) = filter.process_type {
         builder
             .push(" AND process_type = ")
-            .push_bind(enum_to_text(&process_type));
+            .push_bind(enum_to_text(&process_type)?);
     }
     if let Some(controller_type) = filter.controller_type {
         builder
             .push(" AND controller_type = ")
-            .push_bind(enum_to_text(&controller_type));
+            .push_bind(enum_to_text(&controller_type)?);
     }
     if let Some(outcome) = filter.outcome {
         builder
             .push(" AND outcome = ")
-            .push_bind(enum_to_text(&outcome));
+            .push_bind(enum_to_text(&outcome)?);
     }
     if let Some(driver) = filter.driver {
         builder
             .push(" AND driver = ")
-            .push_bind(enum_to_text(&driver));
+            .push_bind(enum_to_text(&driver)?);
     }
     if let Some(opc_server) = &filter.opc_server {
         builder
@@ -1718,8 +1713,9 @@ fn push_filter(builder: &mut QueryBuilder<Sqlite>, filter: &TuneRunFilter) {
     if let Some(template_origin) = filter.template_origin {
         builder
             .push(" AND template_origin = ")
-            .push_bind(enum_to_text(&template_origin));
+            .push_bind(enum_to_text(&template_origin)?);
     }
+    Ok(())
 }
 
 fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
@@ -1902,7 +1898,7 @@ impl TuneSampleRow {
         .bind(tick_index)
         .bind(sample.time)
         .bind(sample.pv)
-        .bind(enum_to_text(&pv_quality))
+        .bind(enum_to_text(&pv_quality)?)
         .bind(state.hysteresis)
         .bind(state.mv_value_current)
         .bind(state.mv_sign_next_step)
@@ -2064,15 +2060,15 @@ impl TuneResultRow {
             ",
         )
         .bind(row.run_id)
-        .bind(enum_to_text(&row.response_level))
+        .bind(enum_to_text(&row.response_level)?)
         .bind(row.kp)
         .bind(row.ti_minutes)
         .bind(row.td_minutes)
         .bind(row.proportional)
         .bind(row.integral)
         .bind(row.derivative)
-        .bind(enum_to_text(&row.status))
-        .bind(row.invalid_reason.map(|reason| enum_to_text(&reason)))
+        .bind(enum_to_text(&row.status)?)
+        .bind(option_enum_text(row.invalid_reason.as_ref())?)
         .fetch_one(pool)
         .await
         .map_err(DbError::Query)?;
@@ -2234,7 +2230,7 @@ impl TuneMvActuationRow {
         )
         .bind(run_id)
         .bind(new.sequence)
-        .bind(enum_to_text(&new.kind))
+        .bind(enum_to_text(&new.kind)?)
         .bind(new.commanded_at)
         .bind(new.target_mv)
         .bind(new.previous_commanded_mv)
@@ -2268,7 +2264,7 @@ impl TuneMvActuationRow {
         )
         .bind(checked_at)
         .bind(readback_mv)
-        .bind(readback_quality.map(|quality| enum_to_text(&quality)))
+        .bind(option_enum_text(readback_quality.as_ref())?)
         .bind(id)
         .fetch_one(pool)
         .await
@@ -2302,8 +2298,8 @@ impl TuneMvActuationRow {
         )
         .bind(checked_at)
         .bind(readback_mv)
-        .bind(readback_quality.map(|quality| enum_to_text(&quality)))
-        .bind(enum_to_text(&status))
+        .bind(option_enum_text(readback_quality.as_ref())?)
+        .bind(enum_to_text(&status)?)
         .bind(detail)
         .bind(id)
         .fetch_one(pool)
@@ -2330,7 +2326,7 @@ impl TuneMvActuationRow {
             RETURNING *
             ",
         )
-        .bind(enum_to_text(&status))
+        .bind(enum_to_text(&status)?)
         .bind(detail)
         .bind(id)
         .fetch_one(pool)
@@ -2358,7 +2354,7 @@ impl TuneMvActuationRow {
             WHERE run_id = ? AND status = 'pending'
             ",
         )
-        .bind(enum_to_text(&status))
+        .bind(enum_to_text(&status)?)
         .bind(detail)
         .bind(run_id)
         .execute(pool)
@@ -2574,9 +2570,9 @@ impl TuneWriteRow {
             ",
         )
         .bind(run_id)
-        .bind(enum_to_text(&new.response_level))
+        .bind(enum_to_text(&new.response_level)?)
         .bind(new.written_at)
-        .bind(enum_to_text(&new.kind))
+        .bind(enum_to_text(&new.kind)?)
         .bind(new.allow_uncertain_quality)
         .bind(new.previous.map(|p| p.proportional))
         .bind(new.previous.map(|p| p.integral))
@@ -2589,7 +2585,7 @@ impl TuneWriteRow {
         .bind(new.derivative_readback)
         .bind(new.success)
         .bind(new.error_message)
-        .bind(new.rollback_state.map(|s| enum_to_text(&s)))
+        .bind(option_enum_text(new.rollback_state.as_ref())?)
         .bind(new.rollback_error)
         .fetch_one(pool)
         .await
@@ -2776,7 +2772,7 @@ mod tests {
             (TuneDriver::Replay, "replay"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(text_to_enum::<TuneDriver>("driver", text).unwrap(), variant);
         }
     }
@@ -2790,7 +2786,7 @@ mod tests {
             (TuneOutcome::Aborted, "aborted"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<TuneOutcome>("outcome", text).unwrap(),
                 variant

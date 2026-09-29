@@ -524,6 +524,10 @@ async fn collect_browse_pages(
         if pages.len() >= MAX_PAGES {
             anyhow::bail!("browse continuation exceeded the safety limit of {MAX_PAGES} pages");
         }
+        #[allow(
+            clippy::expect_used,
+            reason = "pages always contains the first page; the loop only runs after that page is pushed"
+        )]
         let last = pages.last().expect("pages always contains the first page");
         let page = driver
             .browse(BrowsePageRequest::next(

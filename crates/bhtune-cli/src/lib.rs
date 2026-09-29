@@ -44,6 +44,16 @@
 //! but the write-back failed", "the loop may not have been fully restored", and "never ran at
 //! all" apart without parsing stdout. See AGENTS.md's `cli-automation`/`cli-safety` sections.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "unit tests may use unwrap, expect, and panic; production code must return typed errors"
+    )
+)]
+
 pub mod args;
 pub mod cancel;
 pub mod commands;

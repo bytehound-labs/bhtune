@@ -4,6 +4,13 @@
 //! real `bhtune-core` value (a built-in `DcsTemplate`, a derived `LoopTags`) round-trips
 //! through its column/JSON-blob storage exactly.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
+
 use bhtune_core::{LoopTags, built_in_templates};
 use bhtune_db::{
     DbError, connect_in_memory,

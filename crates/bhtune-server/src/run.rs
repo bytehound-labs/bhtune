@@ -17,6 +17,9 @@ use std::time::Duration;
 
 use bhtune_cli::{config, db, logging};
 
+#[cfg(unix)]
+use anyhow::Context;
+
 use crate::active_run::ActiveRun;
 use crate::{AppState, build_router};
 
@@ -223,33 +226,36 @@ async fn serve_http(
 /// connections, so an immediate shutdown signal cannot hit the default process handler. The
 /// Windows Service Control Manager's own Stop/Shutdown control codes don't arrive as either of
 /// these signals -- see `crate::service::windows_impl::run_service` for the SCM-specific
-/// equivalent used instead when running as a Windows service.
-pub fn shutdown_signal() -> impl std::future::Future<Output = ()> + Send + 'static {
+/// equivalent used instead when running as a Windows service. Installing a handler returns
+/// an error instead of panicking, so a failed install cannot take down a process that may
+/// already be serving requests.
+pub fn shutdown_signal() -> anyhow::Result<impl std::future::Future<Output = ()> + Send + 'static> {
     #[cfg(unix)]
     {
         let mut interrupt =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                .expect("failed to install SIGINT handler");
+                .context("failed to install SIGINT handler")?;
         let mut terminate =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
+                .context("failed to install SIGTERM handler")?;
 
-        async move {
+        Ok(async move {
             tokio::select! {
                 _ = interrupt.recv() => {},
                 _ = terminate.recv() => {},
             }
             tracing::info!("shutdown signal received, draining in-flight requests");
-        }
+        })
     }
     #[cfg(not(unix))]
     {
-        async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to install Ctrl+C handler");
+        Ok(async {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                tracing::error!(%error, "failed to install Ctrl+C handler; waiting indefinitely");
+                std::future::pending::<()>().await;
+            }
             tracing::info!("shutdown signal received, draining in-flight requests");
-        }
+        })
     }
 }
 
