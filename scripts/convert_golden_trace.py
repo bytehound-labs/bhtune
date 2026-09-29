@@ -71,7 +71,9 @@ def repository_path(raw_path: str, *, require_file: bool) -> Path:
         if resolved.exists() and not resolved.is_file():
             raise ValueError(f"Output path is not a file: {raw_path!r}")
         if not resolved.parent.is_dir():
-            raise ValueError(f"Output directory does not exist: {str(resolved.parent)!r}")
+            raise ValueError(
+                f"Output directory does not exist: {str(resolved.parent)!r}"
+            )
 
     return resolved
 
@@ -97,17 +99,45 @@ def first_switch_is_peak(mv_sign_init: int, direction: str) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--static", required=True, help="path to the final _1d.csv (static log)")
-    parser.add_argument("--dynamic", required=True, help="path to the _2d.csv (dynamic, per-tick log)")
-    parser.add_argument("--name", required=True, help="fixture name, e.g. flow_pi_direct")
-    parser.add_argument("--process-type", required=True, help="bhtune ProcessType, snake_case, e.g. flow")
-    parser.add_argument("--controller-type", required=True, help="bhtune ControllerType, snake_case, e.g. pi")
-    parser.add_argument("--direction", choices=["direct", "reverse"], required=True,
-                        help="ControllerDirection, independently derived -- see module docstring")
-    parser.add_argument("--template", required=True, help="built-in template name, e.g. 'Yokogawa CentumVP'")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--static", required=True, help="path to the final _1d.csv (static log)"
+    )
+    parser.add_argument(
+        "--dynamic", required=True, help="path to the _2d.csv (dynamic, per-tick log)"
+    )
+    parser.add_argument(
+        "--name", required=True, help="fixture name, e.g. flow_pi_direct"
+    )
+    parser.add_argument(
+        "--process-type",
+        required=True,
+        help="bhtune ProcessType, snake_case, e.g. flow",
+    )
+    parser.add_argument(
+        "--controller-type",
+        required=True,
+        help="bhtune ControllerType, snake_case, e.g. pi",
+    )
+    parser.add_argument(
+        "--direction",
+        choices=["direct", "reverse"],
+        required=True,
+        help="ControllerDirection, independently derived -- see module docstring",
+    )
+    parser.add_argument(
+        "--template",
+        required=True,
+        help="built-in template name, e.g. 'Yokogawa CentumVP'",
+    )
     parser.add_argument("--out", required=True, help="output fixture JSON path")
-    parser.add_argument("--description", default="", help="extra free-text appended to the fixture description")
+    parser.add_argument(
+        "--description",
+        default="",
+        help="extra free-text appended to the fixture description",
+    )
     parser.add_argument(
         "--nudge-tick",
         action="append",
@@ -155,14 +185,21 @@ def main() -> None:
 
     mv_sign_init = as_int(static_row, "MvSignInit")
     num_cycles_count = as_int(static_row, "NumCyclesCount")
-    switch_times = [parse_dt(static_row[f"MvSwitchTimesList_{n}"]) for n in range(2 * num_cycles_count + 1)]
+    switch_times = [
+        parse_dt(static_row[f"MvSwitchTimesList_{n}"])
+        for n in range(2 * num_cycles_count + 1)
+    ]
 
     # The capture filename convention is `<name>_<YYYYMMDD>_<HHMMSS>_1d/2d.csv` -- pull the
     # date back out for the fixture's own provenance record rather than requiring it as a
     # separate flag.
     stem = static_path.name
     date_part = stem.rsplit("_", 3)[-3] if stem.count("_") >= 3 else ""
-    capture_date = f"{date_part[0:4]}-{date_part[4:6]}-{date_part[6:8]}" if len(date_part) == 8 else "unknown"
+    capture_date = (
+        f"{date_part[0:4]}-{date_part[4:6]}-{date_part[6:8]}"
+        if len(date_part) == 8
+        else "unknown"
+    )
 
     # MaxPVlist/MinPVlist are fixed-size 3-slot legacy arrays; only the meaningful entries are
     # real peaks/troughs, the rest is unused zero-padding. Lengths follow
@@ -246,7 +283,9 @@ def main() -> None:
 
     print(f"Wrote {args.out}")
     print(f"Ticks: {len(ticks)}")
-    print(f"Direction: {args.direction} (first_switch_is_peak={first_switch_is_peak(mv_sign_init, args.direction)})")
+    print(
+        f"Direction: {args.direction} (first_switch_is_peak={first_switch_is_peak(mv_sign_init, args.direction)})"
+    )
     print(f"Switch times: {switch_times}")
     print(f"Peaks ({len(peaks)}): {peaks}")
     print(f"Troughs ({len(troughs)}): {troughs}")

@@ -35,7 +35,10 @@ class RateDecision:
 
     @property
     def allowed(self) -> bool:
-        return self.hourly_count < self.hourly_limit and self.daily_count < self.daily_limit
+        return (
+            self.hourly_count < self.hourly_limit
+            and self.daily_count < self.daily_limit
+        )
 
     def message(self) -> str:
         return (
@@ -69,7 +72,9 @@ def release_timestamp(release: object) -> datetime:
         return parse_timestamp(published_at)
     if created_at:
         return parse_timestamp(created_at)
-    raise ReleaseRateError("GitHub Release entry has neither published_at nor created_at")
+    raise ReleaseRateError(
+        "GitHub Release entry has neither published_at nor created_at"
+    )
 
 
 def count_releases(
@@ -104,8 +109,13 @@ def _read_json_response(response: object) -> object:
     try:
         status = getattr(response, "status", 200)
         payload = response.read()
-    except (AttributeError, OSError) as error:  # pragma: no cover - exercised through fetch_releases
-        raise ReleaseRateError(f"GitHub Releases API response could not be read: {error}") from error
+    except (
+        AttributeError,
+        OSError,
+    ) as error:  # pragma: no cover - exercised through fetch_releases
+        raise ReleaseRateError(
+            f"GitHub Releases API response could not be read: {error}"
+        ) from error
     if status != 200:
         raise ReleaseRateError(f"GitHub Releases API returned HTTP {status}")
     try:
@@ -169,7 +179,9 @@ def fetch_releases(
             response = opener(request, timeout=20)
             payload = _read_json_response(response)
         except OSError as error:
-            raise ReleaseRateError(f"GitHub Releases API request failed: {error}") from error
+            raise ReleaseRateError(
+                f"GitHub Releases API request failed: {error}"
+            ) from error
         payload = _release_page(payload)
         for release in payload:
             release_timestamp(release)
@@ -178,7 +190,9 @@ def fetch_releases(
             return releases
         page += 1
         if page > 1000:
-            raise ReleaseRateError("GitHub Releases API pagination exceeded the safety limit")
+            raise ReleaseRateError(
+                "GitHub Releases API pagination exceeded the safety limit"
+            )
 
 
 def check_repository(
@@ -199,12 +213,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN"))
-    parser.add_argument("--api-url", default=os.environ.get("GITHUB_API_URL", TRUSTED_API_URL))
+    parser.add_argument(
+        "--api-url", default=os.environ.get("GITHUB_API_URL", TRUSTED_API_URL)
+    )
     parser.add_argument("--now", help="UTC ISO-8601 timestamp for deterministic checks")
     args = parser.parse_args()
 
     try:
-        now = datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now else None
+        now = (
+            datetime.fromisoformat(args.now.replace("Z", "+00:00"))
+            if args.now
+            else None
+        )
         decision = check_repository(
             args.repository or "",
             args.token or "",

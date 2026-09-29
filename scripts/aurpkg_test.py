@@ -61,9 +61,7 @@ class AurPkgTests(unittest.TestCase):
 
     def manifest(self) -> Path:
         manifest = self.case_dir / "checksums.sha256"
-        lines = [
-            f"{sha256(ROOT / path)}  {path.as_posix()}" for path in self.inventory
-        ]
+        lines = [f"{sha256(ROOT / path)}  {path.as_posix()}" for path in self.inventory]
         manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return manifest
 
@@ -360,7 +358,7 @@ class AurPkgTests(unittest.TestCase):
         self.assertIn(canonical_source, content)
         self.assertNotIn(legacy_unit_path.as_posix(), content)
         self.assertIn(
-            'install -Dm644 service-bhtune-server.service '
+            "install -Dm644 service-bhtune-server.service "
             '"$pkgdir/usr/lib/systemd/system/bhtune-server.service"',
             content,
         )
@@ -413,11 +411,7 @@ class AurPkgTests(unittest.TestCase):
         source_text = content[source_start:checksums_start]
         checksums_start += len(checksums_marker)
         checksums_end = content.index("\n)", checksums_start)
-        sources = [
-            line.strip()
-            for line in source_text.splitlines()
-            if line.strip()
-        ]
+        sources = [line.strip() for line in source_text.splitlines() if line.strip()]
         hashes = [
             line.strip()
             for line in content[checksums_start:checksums_end].splitlines()

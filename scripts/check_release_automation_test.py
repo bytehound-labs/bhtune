@@ -4,7 +4,7 @@ import json
 import subprocess
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError
@@ -102,9 +102,7 @@ def workspace_files(version=FIRST_RELEASE):
     }
     for name in WORKSPACE_CRATES:
         files[f"crates/{name}/Cargo.toml"] = (
-            "[package]\n"
-            f'name = "{name}"\n'
-            "version.workspace = true\n"
+            f'[package]\nname = "{name}"\nversion.workspace = true\n'
         )
     return files
 
@@ -182,9 +180,17 @@ class ReleaseRateLimitTests(unittest.TestCase):
         with self.assertRaises(ReleaseRateError):
             fetch_releases("", TEST_TOKEN)
         with self.assertRaises(ReleaseRateError):
-            fetch_releases(TEST_REPOSITORY, TEST_TOKEN, opener=lambda *_args, **_kwargs: FakeResponse({}, 401))
+            fetch_releases(
+                TEST_REPOSITORY,
+                TEST_TOKEN,
+                opener=lambda *_args, **_kwargs: FakeResponse({}, 401),
+            )
         with self.assertRaises(ReleaseRateError):
-            fetch_releases(TEST_REPOSITORY, TEST_TOKEN, opener=lambda *_args, **_kwargs: FakeResponse({}))
+            fetch_releases(
+                TEST_REPOSITORY,
+                TEST_TOKEN,
+                opener=lambda *_args, **_kwargs: FakeResponse({}),
+            )
 
         def raise_offline(*_args, **_kwargs):
             raise URLError("offline")
@@ -228,7 +234,9 @@ class ReleaseContentTests(unittest.TestCase):
             head_branch=branch,
         )
 
-    def test_first_release_requires_ancestor_baseline_and_accepts_meaningful_content(self):
+    def test_first_release_requires_ancestor_baseline_and_accepts_meaningful_content(
+        self,
+    ):
         self.fixture.write("crates/bhtune-core/src/lib.rs", "pub fn tune() {}\n")
         head = self.fixture.commit("feat(core): add tuning entry point")
         context = self.validate(head=head, baseline=self.base)
@@ -318,7 +326,9 @@ class DocsVersionTests(unittest.TestCase):
             encoding=UTF8,
         )
         self.path.joinpath("docs/internal/v1-checklist.md").parent.mkdir(parents=True)
-        self.path.joinpath("docs/internal/v1-checklist.md").write_text("# Internal\n", encoding=UTF8)
+        self.path.joinpath("docs/internal/v1-checklist.md").write_text(
+            "# Internal\n", encoding=UTF8
+        )
 
     def write(self, relative, content):
         relative_path = Path(relative)
@@ -347,8 +357,12 @@ class DocsVersionTests(unittest.TestCase):
         self.assertTrue(synchronize(self.path, FIRST_RELEASE))
         self.assertFalse(synchronize(self.path, FIRST_RELEASE))
         self.assertTrue(check(self.path, FIRST_RELEASE))
-        self.assertFalse((self.path / "website/versioned_docs/version-0.1.0/docs/internal").exists())
-        versions = json.loads((self.path / "website/versions.json").read_text(encoding=UTF8))
+        self.assertFalse(
+            (self.path / "website/versioned_docs/version-0.1.0/docs/internal").exists()
+        )
+        versions = json.loads(
+            (self.path / "website/versions.json").read_text(encoding=UTF8)
+        )
         self.assertEqual(versions, [FIRST_RELEASE])
 
     def test_changed_source_refreshes_same_version_and_retains_three(self):

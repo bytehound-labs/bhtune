@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import sys
-import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any, Iterable
@@ -35,7 +34,9 @@ def workspace_version(repository: Path) -> str:
     try:
         return data["workspace"]["package"]["version"]
     except (KeyError, TypeError) as error:
-        raise DocsVersionError("Cargo.toml has no [workspace.package].version") from error
+        raise DocsVersionError(
+            "Cargo.toml has no [workspace.package].version"
+        ) from error
 
 
 def stable_version(value: str) -> tuple[int, int, int] | None:
@@ -56,7 +57,9 @@ def sidebar_path(version: str) -> Path:
 def iter_source_files(repository: Path) -> Iterable[Path]:
     docs_root = repository / DOCS_DIR
     if not docs_root.is_dir():
-        raise DocsVersionError(f"documentation source directory is missing: {docs_root}")
+        raise DocsVersionError(
+            f"documentation source directory is missing: {docs_root}"
+        )
     for path in sorted(docs_root.rglob("*")):
         if not path.is_file():
             continue
@@ -109,7 +112,9 @@ def category_label(path: Path) -> str:
             if isinstance(data, dict) and isinstance(data.get("label"), str):
                 return data["label"]
         except json.JSONDecodeError as error:
-            raise DocsVersionError(f"malformed category metadata: {category_file}: {error}") from error
+            raise DocsVersionError(
+                f"malformed category metadata: {category_file}: {error}"
+            ) from error
     return path.name.replace("-", " ").replace("_", " ").title()
 
 
@@ -117,7 +122,9 @@ def frontmatter_position(path: Path) -> tuple[int, str]:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
-        raise DocsVersionError(f"could not read documentation file {path}: {error}") from error
+        raise DocsVersionError(
+            f"could not read documentation file {path}: {error}"
+        ) from error
     if not text.startswith("---\n"):
         return (10_000, path.name)
     end = text.find("\n---", 4)
@@ -135,7 +142,11 @@ def frontmatter_position(path: Path) -> tuple[int, str]:
 def sidebar_items(repository: Path, directory: Path) -> list[Any]:
     entries: list[tuple[tuple[int, str], Any]] = []
     children = sorted(path for path in directory.iterdir() if path.name != "internal")
-    files = [path for path in children if path.is_file() and path.suffix.lower() in {".md", ".mdx"}]
+    files = [
+        path
+        for path in children
+        if path.is_file() and path.suffix.lower() in {".md", ".mdx"}
+    ]
     for path in files:
         relative = path.relative_to(repository / DOCS_DIR).with_suffix("")
         item = relative.as_posix()
@@ -173,7 +184,9 @@ def read_versions(repository: Path) -> list[str]:
     versions = []
     for item in value:
         if stable_version(item) is None:
-            raise DocsVersionError(f"{VERSIONS_FILE} contains a non-stable version: {item}")
+            raise DocsVersionError(
+                f"{VERSIONS_FILE} contains a non-stable version: {item}"
+            )
         if item not in versions:
             versions.append(item)
     return versions
@@ -196,7 +209,9 @@ def validate_snapshot(repository: Path, version: str, versions: list[str]) -> No
     try:
         actual_sidebar = json.loads(sidebar.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise DocsVersionError(f"malformed versioned sidebar: {sidebar}: {error}") from error
+        raise DocsVersionError(
+            f"malformed versioned sidebar: {sidebar}: {error}"
+        ) from error
     if actual_sidebar != expected_sidebar:
         raise DocsVersionError(f"versioned sidebar is stale for version {version}")
     expected_files = {
@@ -209,19 +224,27 @@ def validate_snapshot(repository: Path, version: str, versions: list[str]) -> No
         if path.is_file() and path.name != DIGEST_FILE
     }
     if actual_files != expected_files:
-        raise DocsVersionError(f"versioned documentation tree is stale for version {version}")
+        raise DocsVersionError(
+            f"versioned documentation tree is stale for version {version}"
+        )
     for relative in expected_files:
         source = repository / DOCS_DIR / relative
         snapshot = root / relative
         if snapshot.read_bytes() != source.read_bytes():
-            raise DocsVersionError(f"versioned documentation content is stale for version {version}")
-    if len(versions) > 3 or versions != sorted(versions, key=lambda item: stable_version(item), reverse=True):
+            raise DocsVersionError(
+                f"versioned documentation content is stale for version {version}"
+            )
+    if len(versions) > 3 or versions != sorted(
+        versions, key=lambda item: stable_version(item), reverse=True
+    ):
         raise DocsVersionError(f"{VERSIONS_FILE} is not sorted newest-first")
     if version not in versions[:3]:
         raise DocsVersionError(f"version {version} is not retained in {VERSIONS_FILE}")
 
 
-def _is_stale_version(name: str, retained: set[str], prefix: str, suffix: str = "") -> bool:
+def _is_stale_version(
+    name: str, retained: set[str], prefix: str, suffix: str = ""
+) -> bool:
     if not name.startswith(prefix) or suffix and not name.endswith(suffix):
         return False
     version = name.removeprefix(prefix)
@@ -257,7 +280,9 @@ def remove_exact_stale_versions(repository: Path, retained: list[str]) -> None:
     _remove_stale_sidebars(repository / VERSIONED_SIDEBARS_DIR, retained_set)
 
 
-def _snapshot_matches(repository: Path, version: str, digest: str, sidebar_value: dict) -> bool:
+def _snapshot_matches(
+    repository: Path, version: str, digest: str, sidebar_value: dict
+) -> bool:
     destination = repository / version_dir(version)
     current_digest = (
         (destination / DIGEST_FILE).read_text(encoding="utf-8").strip()
@@ -285,7 +310,8 @@ def _snapshot_matches(repository: Path, version: str, digest: str, sidebar_value
         else set()
     )
     files_match = actual_files == expected_files and all(
-        (destination / relative).read_bytes() == (repository / DOCS_DIR / relative).read_bytes()
+        (destination / relative).read_bytes()
+        == (repository / DOCS_DIR / relative).read_bytes()
         for relative in expected_files
     )
     return current_digest == digest and current_sidebar == sidebar_value and files_match
@@ -336,7 +362,9 @@ def synchronize(repository: Path, version: str) -> bool:
                 f"version metadata path escapes repository: {versions_path}"
             ) from error
         versions_path.parent.mkdir(parents=True, exist_ok=True)
-        versions_path.write_text(json.dumps(retained, indent=2) + "\n", encoding="utf-8")
+        versions_path.write_text(
+            json.dumps(retained, indent=2) + "\n", encoding="utf-8"
+        )
         changed = True
     remove_exact_stale_versions(repository, retained)
     validate_snapshot(repository, version, retained)
@@ -360,12 +388,18 @@ def main() -> int:
     repository = args.repository.resolve()
     try:
         version = args.version or workspace_version(repository)
-        result = check(repository, version) if args.check else synchronize(repository, version)
+        result = (
+            check(repository, version)
+            if args.check
+            else synchronize(repository, version)
+        )
     except DocsVersionError as error:
         print(f"docs-version: {error}", file=sys.stderr)
         return 1
     if result:
-        print(f"docs-version: {'validated' if args.check else 'synchronized'} {version}")
+        print(
+            f"docs-version: {'validated' if args.check else 'synchronized'} {version}"
+        )
     else:
         print(f"docs-version: skipped prerelease {version}")
     return 0

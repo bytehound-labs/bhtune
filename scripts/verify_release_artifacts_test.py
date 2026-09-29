@@ -36,7 +36,7 @@ class ReleaseArtifactTests(unittest.TestCase):
             )
             if asset in archives:
                 suffix = ".zip" if asset.name.endswith(".zip") else ".tar.gz"
-                checksum_name = f"{asset.name[:-len(suffix)]}.sha256"
+                checksum_name = f"{asset.name[: -len(suffix)]}.sha256"
                 (directory / checksum_name).write_text(
                     f"{digest}  {asset.name}\n",
                     encoding="utf-8",
@@ -46,7 +46,9 @@ class ReleaseArtifactTests(unittest.TestCase):
             f"{hashlib.sha256(asset.read_bytes()).hexdigest()}  {asset.name}"
             for asset in product_assets
         )
-        (directory / "release-assets.sha256").write_text(manifest + "\n", encoding="utf-8")
+        (directory / "release-assets.sha256").write_text(
+            manifest + "\n", encoding="utf-8"
+        )
         (directory / "release-sbom.cdx.json").write_text(
             json.dumps({"bomFormat": "CycloneDX", "components": []}),
             encoding="utf-8",

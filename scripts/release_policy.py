@@ -12,7 +12,9 @@ RELEASE_WORTHY_TYPES = frozenset(
     {"feat", "fix", "perf", "refactor", "docs", "test", "build", "ci", "revert"}
 )
 
-_VERSION = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?"
+_VERSION = (
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?"
+)
 _RELEASE_SUBJECTS = (
     re.compile(rf"^chore\(release\): prepare v{_VERSION}$"),
     re.compile(rf"^chore: release v{_VERSION}$"),
@@ -48,7 +50,9 @@ def is_release_worthy(subject: str) -> bool:
 def release_commits_regex() -> str:
     """Return the regex used by release-plz to gate release proposals."""
 
-    return r"^(feat|fix|perf|refactor|docs|test|build|ci|revert)(\([^)\r\n]+\))?!?:\s+\S"
+    return (
+        r"^(feat|fix|perf|refactor|docs|test|build|ci|revert)(\([^)\r\n]+\))?!?:\s+\S"
+    )
 
 
 def main() -> int:

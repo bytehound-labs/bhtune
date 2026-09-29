@@ -102,7 +102,9 @@ def run_git(repository: Path, *args: str) -> str:
         )
     except (OSError, subprocess.CalledProcessError) as error:
         detail = getattr(error, "stderr", "") or str(error)
-        raise ReleaseContentError(f"git {' '.join(args)} failed: {detail.strip()}") from error
+        raise ReleaseContentError(
+            f"git {' '.join(args)} failed: {detail.strip()}"
+        ) from error
     return result.stdout
 
 
@@ -111,7 +113,9 @@ def parse_version(value: object, label: str) -> tuple[int, int, int]:
         raise ReleaseContentError(f"{label} is not a version string")
     match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", value)
     if not match:
-        raise ReleaseContentError(f"{label} must be a stable X.Y.Z version, got {value!r}")
+        raise ReleaseContentError(
+            f"{label} must be a stable X.Y.Z version, got {value!r}"
+        )
     return tuple(int(part) for part in match.groups())
 
 
@@ -147,7 +151,9 @@ def workspace_versions(repository: Path, revision: str) -> dict[str, str]:
         manifest = read_manifest(repository, safe_revision, path)
         package_table = manifest.get("package")
         if not isinstance(package_table, dict):
-            raise ReleaseContentError(f"{path} at {safe_revision} has no [package] table")
+            raise ReleaseContentError(
+                f"{path} at {safe_revision} has no [package] table"
+            )
         member_version = package_table.get("version")
         if isinstance(member_version, dict) and member_version.get("workspace") is True:
             resolved[member] = resolved["workspace"]
@@ -171,7 +177,9 @@ def version_tuple(value: str) -> tuple[int, int, int]:
 
 def stable_tags(repository: Path, base: str) -> list[tuple[tuple[int, int, int], str]]:
     safe_base = _validate_git_revision(base, "comparison base")
-    tags = run_git(repository, "tag", "--merged", safe_base, "--list", "v*").splitlines()
+    tags = run_git(
+        repository, "tag", "--merged", safe_base, "--list", "v*"
+    ).splitlines()
     result = []
     for tag in tags:
         match = STABLE_TAG.fullmatch(tag.strip())
@@ -189,7 +197,9 @@ def stable_tags(repository: Path, base: str) -> list[tuple[tuple[int, int, int],
     return sorted(result)
 
 
-def resolve_comparison(repository: Path, base: str, baseline: str | None) -> tuple[str, str | None]:
+def resolve_comparison(
+    repository: Path, base: str, baseline: str | None
+) -> tuple[str, str | None]:
     tags = stable_tags(repository, base)
     if tags:
         _, tag = tags[-1]
@@ -198,21 +208,27 @@ def resolve_comparison(repository: Path, base: str, baseline: str | None) -> tup
             raise ReleaseContentError(f"stable tag {tag} has no commit")
         return comparison, tag
     if not baseline:
-        raise ReleaseContentError("RELEASE_BASELINE_SHA is required when no stable product tag exists")
+        raise ReleaseContentError(
+            "RELEASE_BASELINE_SHA is required when no stable product tag exists"
+        )
     safe_baseline = _validate_git_revision(baseline, "release baseline")
     safe_base = _validate_git_revision(base, "comparison base")
     run_git(repository, "cat-file", "-e", f"{safe_baseline}^{{commit}}")
     try:
         run_git(repository, "merge-base", "--is-ancestor", safe_baseline, safe_base)
     except ReleaseContentError as error:
-        raise ReleaseContentError("RELEASE_BASELINE_SHA is not an ancestor of the PR base") from error
+        raise ReleaseContentError(
+            "RELEASE_BASELINE_SHA is not an ancestor of the PR base"
+        ) from error
     return safe_baseline, None
 
 
 def diff_files(repository: Path, comparison: str, head: str) -> list[str]:
     safe_comparison = _validate_git_revision(comparison, "comparison revision")
     safe_head = _validate_git_revision(head, "head revision")
-    output = run_git(repository, "diff", "--name-only", f"{safe_comparison}..{safe_head}")
+    output = run_git(
+        repository, "diff", "--name-only", f"{safe_comparison}..{safe_head}"
+    )
     return [line for line in output.splitlines() if line]
 
 
@@ -238,9 +254,14 @@ def diff_lines(repository: Path, comparison: str, head: str, path: str) -> list[
 def version_metadata_only(path: str, lines: Iterable[str]) -> bool:
     if path.endswith("Cargo.lock"):
         return all(LOCK_VERSION_LINE.fullmatch(line) for line in lines)
-    if path == CARGO_MANIFEST or path.startswith("crates/") and path.endswith(CARGO_MANIFEST):
+    if (
+        path == CARGO_MANIFEST
+        or path.startswith("crates/")
+        and path.endswith(CARGO_MANIFEST)
+    ):
         return all(
-            VERSION_ASSIGNMENT.fullmatch(line) or INLINE_VERSION_ASSIGNMENT.fullmatch(line)
+            VERSION_ASSIGNMENT.fullmatch(line)
+            or INLINE_VERSION_ASSIGNMENT.fullmatch(line)
             for line in lines
         )
     return False
@@ -266,7 +287,9 @@ def is_generated_release_metadata(path: str, lines: Sequence[str]) -> bool:
 def has_meaningful_content(repository: Path, comparison: str, head: str) -> bool:
     paths = diff_files(repository, comparison, head)
     if not paths:
-        raise ReleaseContentError("release PR contains no changes relative to its comparison point")
+        raise ReleaseContentError(
+            "release PR contains no changes relative to its comparison point"
+        )
     meaningful = False
     for path in paths:
         lines = diff_lines(repository, comparison, head, path)
@@ -289,7 +312,9 @@ def validate_context(
     head_versions = workspace_versions(repository, head)
     comparison, stable_tag = resolve_comparison(repository, base, baseline)
     head_version = head_versions["workspace"]
-    if stable_tag is not None and version_tuple(head_version) <= version_tuple(stable_tag.removeprefix("v")):
+    if stable_tag is not None and version_tuple(head_version) <= version_tuple(
+        stable_tag.removeprefix("v")
+    ):
         raise ReleaseContentError(
             f"release version {head_version} is not newer than stable tag {stable_tag}"
         )

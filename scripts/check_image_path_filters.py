@@ -46,9 +46,7 @@ def _github_paths(text: str) -> set[str]:
 
 
 def _woodpecker_paths(text: str) -> set[str]:
-    match = re.search(
-        r"(?ms)^\s*path:\s*\n(?P<block>(?:^[ \t]+.*\n?)*)", text
-    )
+    match = re.search(r"(?ms)^\s*path:\s*\n(?P<block>(?:^[ \t]+.*\n?)*)", text)
     if not match:
         raise ValueError("Woodpecker workflow has no path filter")
     return _quoted_values(match.group("block").splitlines())

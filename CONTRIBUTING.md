@@ -51,6 +51,9 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   `pnpm exec prettier --write .`, and lint it with `pnpm --filter bhtune-frontend run lint`
   ([oxlint](https://oxc.rs/)). The documentation site (`website/`) uses the same tools via
   `pnpm --filter bhtune-website run format:check`/`run lint`.
+- Python scripts in `scripts/` use Ruff 0.16.9 and the standard-library `unittest` runner.
+  Run `ruff check scripts`, `ruff format --check scripts`, and
+  `python3 -m unittest discover -s scripts -p '*_test.py'`.
 - All of the above are enforced automatically by a
   [lefthook](https://github.com/evilmartians/lefthook) `pre-commit` hook (`.lefthook.yml`),
   which also formats `Cargo.toml`/TOML with `taplo` and Markdown/YAML/JSON/TypeScript/CSS with

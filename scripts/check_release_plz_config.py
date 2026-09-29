@@ -68,7 +68,9 @@ def _validate_workspace(workspace: object) -> dict:
     _require(workspace, "git_tag_enable", False, "workspace")
     _require(workspace, "git_release_enable", False, "workspace")
     _require(workspace, "changelog_update", False, "workspace")
-    _require(workspace, "pr_name", "chore(release): prepare v{{ version }}", "workspace")
+    _require(
+        workspace, "pr_name", "chore(release): prepare v{{ version }}", "workspace"
+    )
     _require(workspace, "pr_branch_prefix", "release-plz-", "workspace")
 
     release_commits = workspace.get("release_commits")
@@ -126,9 +128,13 @@ def _validate_anchor(package_map: dict[str, dict], workspace: dict) -> None:
 
 def _reject_registry_tokens(source: str) -> None:
     if re.search(r"(?im)^\s*(?:token|registry_token|cargo_registry_token)\s*=", source):
-        raise ReleasePlzConfigError("release-plz configuration must not contain registry tokens")
+        raise ReleasePlzConfigError(
+            "release-plz configuration must not contain registry tokens"
+        )
     if "CARGO_REGISTRY_TOKEN" in source or "CRATES_IO_TOKEN" in source:
-        raise ReleasePlzConfigError("release-plz configuration must not reference registry tokens")
+        raise ReleasePlzConfigError(
+            "release-plz configuration must not reference registry tokens"
+        )
 
 
 def validate_config(path: Path) -> dict:
