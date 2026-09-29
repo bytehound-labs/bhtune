@@ -49,9 +49,11 @@ class CheckImagePathFiltersTests(unittest.TestCase):
             woodpecker_workflow(woodpecker_paths), encoding="utf-8"
         )
         output = io.StringIO()
-        with patch.object(check_image_path_filters, "__file__", str(self.script_path)):
-            with redirect_stdout(output):
-                result = check_image_path_filters.main()
+        with (
+            patch.object(check_image_path_filters, "__file__", str(self.script_path)),
+            redirect_stdout(output),
+        ):
+            result = check_image_path_filters.main()
         return result, output.getvalue()
 
     def test_quoted_values_accepts_single_and_double_quotes_and_ignores_other_lines(

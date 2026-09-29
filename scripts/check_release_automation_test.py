@@ -14,7 +14,12 @@ from check_release_content import ReleaseContentError, validate_context
 from check_release_plz_config import ReleasePlzConfigError, validate_config
 from release_policy import conventional_type, is_release_commit, is_release_worthy
 from release_rate_limit import ReleaseRateError, count_releases, fetch_releases
-from sync_docs_version import DocsVersionError, check, synchronize
+from sync_docs_version import (
+    DocsVersionError,
+    check,
+    resolve_contained_path,
+    synchronize,
+)
 
 UTF8 = "utf-8"
 GIT = "git"
@@ -35,6 +40,13 @@ WORKSPACE_CRATES = (
     "bhtune-server",
     "bhtune-test-support",
 )
+
+
+def fixture_path(root: Path, relative: str) -> Path:
+    try:
+        return resolve_contained_path(root, Path(relative))
+    except ValueError as error:
+        raise ValueError(f"unsafe fixture path: {relative}") from error
 
 
 class FakeResponse:
@@ -64,23 +76,11 @@ class GitFixture:
         ).stdout.strip()
 
     def write(self, relative, content):
-        relative_path = Path(relative)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            raise ValueError(f"unsafe fixture path: {relative}")
-        root = self.path.resolve()
-        path = (root / relative_path).resolve()
-        path.relative_to(root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding=UTF8)
+        fixture_path(self.path, relative).parent.mkdir(parents=True, exist_ok=True)
+        fixture_path(self.path, relative).write_text(content, encoding=UTF8)
 
     def read(self, relative):
-        relative_path = Path(relative)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            raise ValueError(f"unsafe fixture path: {relative}")
-        root = self.path.resolve()
-        path = (root / relative_path).resolve()
-        path.relative_to(root)
-        return path.read_text(encoding=UTF8)
+        return fixture_path(self.path, relative).read_text(encoding=UTF8)
 
     def commit(self, message):
         self.run(GIT, "add", ".")
@@ -332,23 +332,11 @@ class DocsVersionTests(unittest.TestCase):
         )
 
     def write(self, relative, content):
-        relative_path = Path(relative)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            raise ValueError(f"unsafe fixture path: {relative}")
-        root = self.path.resolve()
-        path = (root / relative_path).resolve()
-        path.relative_to(root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding=UTF8)
+        fixture_path(self.path, relative).parent.mkdir(parents=True, exist_ok=True)
+        fixture_path(self.path, relative).write_text(content, encoding=UTF8)
 
     def read(self, relative):
-        relative_path = Path(relative)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            raise ValueError(f"unsafe fixture path: {relative}")
-        root = self.path.resolve()
-        path = (root / relative_path).resolve()
-        path.relative_to(root)
-        return path.read_text(encoding=UTF8)
+        return fixture_path(self.path, relative).read_text(encoding=UTF8)
 
     def tearDown(self):
         self.tempdir.cleanup()
@@ -386,9 +374,34 @@ class DocsVersionTests(unittest.TestCase):
             check(self.path, FIRST_RELEASE)
 
     def test_snapshot_metadata_path_must_remain_inside_repository(self):
-        with patch.object(sync_docs_version, "VERSIONS_FILE", Path("../versions.json")):
-            with self.assertRaises(DocsVersionError):
+        with (
+            patch.object(sync_docs_version, "VERSIONS_FILE", Path("../versions.json")),
+            self.assertRaises(DocsVersionError),
+        ):
+            synchronize(self.path, FIRST_RELEASE)
+
+    def test_snapshot_metadata_path_must_not_follow_a_symlink_outside_repository(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as outside_directory:
+            external_versions = Path(outside_directory) / "versions.json"
+            (self.path / "website/versions.json").symlink_to(external_versions)
+            with self.assertRaisesRegex(
+                DocsVersionError, "version metadata path escapes repository"
+            ):
                 synchronize(self.path, FIRST_RELEASE)
+            self.assertFalse(external_versions.exists())
+
+    def test_fixture_write_rejects_a_symlink_outside_repository(self):
+        with tempfile.TemporaryDirectory() as outside_directory:
+            (self.path / "outside").symlink_to(
+                outside_directory, target_is_directory=True
+            )
+            with self.assertRaisesRegex(
+                ValueError, "unsafe fixture path: outside/created.txt"
+            ):
+                self.write("outside/created.txt", "outside")
+            self.assertFalse((Path(outside_directory) / "created.txt").exists())
 
 
 if __name__ == "__main__":
