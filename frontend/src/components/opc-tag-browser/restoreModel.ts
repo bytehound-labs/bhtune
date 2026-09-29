@@ -1,8 +1,8 @@
 import type {
   OpcIndexedSearchMatchResponse,
+  OpcLiveSearchMatch,
   OpcTagNodeResponse,
 } from "../../api/opc";
-import type { OpcLiveSearchMatch } from "../../api/opc";
 import { nodeCanExpand, nodeCanSelect, nodeItemId } from "./browseModel";
 
 export type RevealSearchMatch = {

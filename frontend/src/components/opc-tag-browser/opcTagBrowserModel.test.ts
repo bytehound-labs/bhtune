@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   OpcBrowseResponse,
   OpcIndexedSearchMatchResponse,
+  OpcLiveSearchMatch,
   OpcSearchIndexStatusResponse,
   OpcTagNodeResponse,
 } from "../../api/opc";
 import type { ScopeState } from "./browseModel";
-import type { OpcLiveSearchMatch } from "../../api/opc";
 import {
   mergePage,
   nodeCanExpand,

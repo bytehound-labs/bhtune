@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useReducer } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { useOpcSearchIndexStatus } from "../../api/opc";
-import type { OpcTagNodeResponse } from "../../api/opc";
-import type { ScopeState, SelectedNode } from "./browseModel";
-import type { ScopeSnapshot } from "./browseModel";
+import {
+  useOpcSearchIndexStatus,
+  type OpcTagNodeResponse,
+} from "../../api/opc";
+import type { ScopeSnapshot, ScopeState, SelectedNode } from "./browseModel";
 import { hasUsableIndex } from "./searchModel";
 import { scrollSelectedNodeIntoView } from "./treeModel";
 import {
