@@ -34,7 +34,8 @@ pub const DEFAULT_SEARCH_MAX_RESULTS: u32 = opcda_bridge::DEFAULT_SEARCH_MAX_RES
 pub const DEFAULT_INDEX_SEARCH_MAX_RESULTS: u32 = opcda_bridge::DEFAULT_INDEX_SEARCH_MAX_RESULTS;
 
 /// A gateway-wide protocol feature reported by `opcda-bridge`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OpcDaGatewayFeature {
     Core,
     Namespace,
@@ -66,6 +67,317 @@ pub struct OpcDaGatewayInfo {
     pub application_version: String,
     pub compatibility_schema_version: u32,
     pub features: Vec<OpcDaGatewayFeatureSupport>,
+}
+
+/// An inclusive protocol-version range supported by bhtune or reported by a gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OpcDaProtocolRange {
+    /// Lowest supported protocol version.
+    pub min: u32,
+    /// Highest supported protocol version.
+    pub max: u32,
+}
+
+impl std::fmt::Display for OpcDaProtocolRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}", self.min, self.max)
+    }
+}
+
+/// Overall protocol compatibility between this bhtune build and an `opcda-bridge` gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpcDaCompatibilityStatus {
+    /// Every protocol feature bhtune uses overlaps with the gateway.
+    Full,
+    /// The core protocol overlaps, but at least one optional feature is degraded.
+    Partial,
+    /// The core protocol does not overlap; live operations must be refused.
+    Incompatible,
+    /// The gateway did not report enough metadata to verify compatibility.
+    Unknown,
+}
+
+impl OpcDaCompatibilityStatus {
+    /// Stable `snake_case` identifier used in logs and stored run provenance.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Partial => "partial",
+            Self::Incompatible => "incompatible",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Where the gateway protocol metadata behind a compatibility result came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpcDaCompatibilitySource {
+    /// The gateway-wide version and protocol metadata RPC.
+    GatewayInfo,
+    /// Per-server capability metadata from a gateway that predates gateway-wide metadata.
+    LegacyCapabilities,
+    /// The gateway reported no usable protocol metadata.
+    Unknown,
+}
+
+impl OpcDaCompatibilitySource {
+    /// Stable `snake_case` identifier used in logs and stored run provenance.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GatewayInfo => "gateway_info",
+            Self::LegacyCapabilities => "legacy_capabilities",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Compatibility of one gateway protocol feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpcDaFeatureCompatibilityStatus {
+    /// bhtune and the gateway share at least one protocol version for this feature.
+    Compatible,
+    /// The gateway does not offer this optional feature.
+    Unsupported,
+    /// The gateway offers this feature, but no protocol version overlaps.
+    Incompatible,
+    /// The gateway did not report this feature.
+    Unknown,
+}
+
+impl OpcDaFeatureCompatibilityStatus {
+    /// Stable `snake_case` identifier used in logs and stored run provenance.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compatible => "compatible",
+            Self::Unsupported => "unsupported",
+            Self::Incompatible => "incompatible",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// The compatibility evaluation of one gateway protocol feature.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OpcDaFeatureCompatibility {
+    /// The protocol feature evaluated.
+    pub feature: OpcDaGatewayFeature,
+    /// Whether this bhtune build can use the feature with the gateway.
+    pub status: OpcDaFeatureCompatibilityStatus,
+    /// The protocol versions this bhtune build supports for the feature.
+    pub client_versions: OpcDaProtocolRange,
+    /// The protocol versions the gateway reported, if any.
+    pub gateway_versions: Option<OpcDaProtocolRange>,
+    /// The highest protocol version both sides support, if any.
+    pub negotiated_version: Option<u32>,
+    /// A human-readable explanation from the compatibility evaluation.
+    pub reason: String,
+}
+
+impl OpcDaFeatureCompatibility {
+    /// Describes the feature's status and both protocol ranges in one line.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let gateway = self
+            .gateway_versions
+            .map_or_else(|| "none".to_string(), |range| range.to_string());
+        format!(
+            "{} protocol {}: bhtune supports {}, gateway reports {gateway}",
+            self.feature.as_str(),
+            self.status.as_str(),
+            self.client_versions,
+        )
+    }
+}
+
+/// The result of checking whether an `opcda-bridge` gateway can safely serve this bhtune
+/// build.
+///
+/// Live mutations must be refused when [`Self::is_incompatible`] is true. `Partial` and
+/// `Unknown` results allow live operations but should surface [`Self::warning_message`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OpcDaGatewayCompatibility {
+    /// The bhtune version whose protocol profile was evaluated.
+    pub client_version: String,
+    /// The gateway application version, when the gateway reported one.
+    pub gateway_version: Option<String>,
+    /// Where the gateway protocol metadata came from.
+    pub source: OpcDaCompatibilitySource,
+    /// The overall compatibility result.
+    pub status: OpcDaCompatibilityStatus,
+    /// The per-feature evaluations behind [`Self::status`].
+    pub features: Vec<OpcDaFeatureCompatibility>,
+}
+
+impl OpcDaGatewayCompatibility {
+    /// Returns true when live operations against this gateway must be refused.
+    #[must_use]
+    pub const fn is_incompatible(&self) -> bool {
+        matches!(self.status, OpcDaCompatibilityStatus::Incompatible)
+    }
+
+    /// The refusal text for an incompatible gateway, or `None` when live operations may proceed.
+    #[must_use]
+    pub fn live_mutation_refusal(&self) -> Option<String> {
+        self.is_incompatible()
+            .then(|| self.incompatibility_message())
+    }
+
+    /// A synthetic `Unknown` result used when inspection cannot classify the gateway.
+    #[must_use]
+    pub fn unverified() -> Self {
+        gateway_compatibility_from_report(opcda_bridge::unknown_compatibility_report(
+            CLIENT_VERSION,
+        ))
+    }
+
+    fn gateway_label(&self) -> String {
+        self.gateway_version.as_deref().map_or_else(
+            || "opcda-bridge gateway (version not reported)".to_string(),
+            |version| format!("opcda-bridge gateway {version}"),
+        )
+    }
+
+    fn details(&self) -> String {
+        let issues: Vec<String> = self
+            .features
+            .iter()
+            .filter(|feature| feature.status != OpcDaFeatureCompatibilityStatus::Compatible)
+            .map(OpcDaFeatureCompatibility::describe)
+            .collect();
+        if issues.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", issues.join("; "))
+        }
+    }
+
+    /// An actionable refusal message naming the gateway version, both protocol ranges for
+    /// every affected feature, and the fix.
+    #[must_use]
+    pub fn incompatibility_message(&self) -> String {
+        format!(
+            "{} is incompatible with bhtune {}{}; upgrade the opcda-bridge gateway or bhtune so \
+             their core protocol versions overlap",
+            self.gateway_label(),
+            self.client_version,
+            self.details(),
+        )
+    }
+
+    /// An operator warning for a `Partial` or `Unknown` result, or `None` when the result
+    /// needs no warning (`Full`) or must be refused instead (`Incompatible`).
+    #[must_use]
+    pub fn warning_message(&self) -> Option<String> {
+        match self.status {
+            OpcDaCompatibilityStatus::Full | OpcDaCompatibilityStatus::Incompatible => None,
+            OpcDaCompatibilityStatus::Partial => Some(format!(
+                "{} is partially compatible with bhtune {}; affected optional features are \
+                 degraded{}",
+                self.gateway_label(),
+                self.client_version,
+                self.details(),
+            )),
+            OpcDaCompatibilityStatus::Unknown => Some(format!(
+                "{} did not report enough protocol metadata to verify compatibility with bhtune \
+                 {}; proceeding without verification{}",
+                self.gateway_label(),
+                self.client_version,
+                self.details(),
+            )),
+        }
+    }
+}
+
+const fn gateway_feature_from_bridge(
+    feature: opcda_bridge::CompatibilityFeature,
+) -> OpcDaGatewayFeature {
+    match feature {
+        opcda_bridge::CompatibilityFeature::Core => OpcDaGatewayFeature::Core,
+        opcda_bridge::CompatibilityFeature::Namespace => OpcDaGatewayFeature::Namespace,
+        opcda_bridge::CompatibilityFeature::IndexedSearch => OpcDaGatewayFeature::IndexedSearch,
+    }
+}
+
+const fn compatibility_status_from_bridge(
+    status: opcda_bridge::CompatibilityStatus,
+) -> OpcDaCompatibilityStatus {
+    match status {
+        opcda_bridge::CompatibilityStatus::Full => OpcDaCompatibilityStatus::Full,
+        opcda_bridge::CompatibilityStatus::Partial => OpcDaCompatibilityStatus::Partial,
+        opcda_bridge::CompatibilityStatus::Incompatible => OpcDaCompatibilityStatus::Incompatible,
+        opcda_bridge::CompatibilityStatus::Unknown => OpcDaCompatibilityStatus::Unknown,
+    }
+}
+
+const fn compatibility_source_from_bridge(
+    source: opcda_bridge::CompatibilitySource,
+) -> OpcDaCompatibilitySource {
+    match source {
+        opcda_bridge::CompatibilitySource::GatewayInfo => OpcDaCompatibilitySource::GatewayInfo,
+        opcda_bridge::CompatibilitySource::LegacyCapabilities => {
+            OpcDaCompatibilitySource::LegacyCapabilities
+        }
+        opcda_bridge::CompatibilitySource::Unknown => OpcDaCompatibilitySource::Unknown,
+    }
+}
+
+const fn feature_status_from_bridge(
+    status: opcda_bridge::FeatureCompatibilityStatus,
+) -> OpcDaFeatureCompatibilityStatus {
+    match status {
+        opcda_bridge::FeatureCompatibilityStatus::Compatible => {
+            OpcDaFeatureCompatibilityStatus::Compatible
+        }
+        opcda_bridge::FeatureCompatibilityStatus::Unsupported => {
+            OpcDaFeatureCompatibilityStatus::Unsupported
+        }
+        opcda_bridge::FeatureCompatibilityStatus::Incompatible => {
+            OpcDaFeatureCompatibilityStatus::Incompatible
+        }
+        opcda_bridge::FeatureCompatibilityStatus::Unknown => {
+            OpcDaFeatureCompatibilityStatus::Unknown
+        }
+    }
+}
+
+const fn protocol_range_from_bridge(
+    range: opcda_bridge::ProtocolVersionRange,
+) -> OpcDaProtocolRange {
+    OpcDaProtocolRange {
+        min: range.min,
+        max: range.max,
+    }
+}
+
+fn gateway_compatibility_from_report(
+    report: opcda_bridge::CompatibilityReport,
+) -> OpcDaGatewayCompatibility {
+    OpcDaGatewayCompatibility {
+        client_version: report.client_version,
+        gateway_version: report
+            .gateway_version
+            .filter(|version| !version.trim().is_empty()),
+        source: compatibility_source_from_bridge(report.source),
+        status: compatibility_status_from_bridge(report.status),
+        features: report
+            .features
+            .into_iter()
+            .map(|feature| OpcDaFeatureCompatibility {
+                feature: gateway_feature_from_bridge(feature.feature),
+                status: feature_status_from_bridge(feature.status),
+                client_versions: protocol_range_from_bridge(feature.client_versions),
+                gateway_versions: feature.gateway_versions.map(protocol_range_from_bridge),
+                negotiated_version: feature.negotiated_version,
+                reason: feature.reason,
+            })
+            .collect(),
+    }
 }
 
 /// A cancellable stream of typed namespace-search events.
@@ -268,18 +580,91 @@ pub async fn get_opcda_gateway_info(bridge_host: &str) -> DriverResult<OpcDaGate
             .features
             .into_iter()
             .map(|support| OpcDaGatewayFeatureSupport {
-                feature: match support.feature {
-                    opcda_bridge::CompatibilityFeature::Core => OpcDaGatewayFeature::Core,
-                    opcda_bridge::CompatibilityFeature::Namespace => OpcDaGatewayFeature::Namespace,
-                    opcda_bridge::CompatibilityFeature::IndexedSearch => {
-                        OpcDaGatewayFeature::IndexedSearch
-                    }
-                },
+                feature: gateway_feature_from_bridge(support.feature),
                 min_version: support.versions.min,
                 max_version: support.versions.max,
             })
             .collect(),
     })
+}
+
+/// The bhtune version whose protocol profile is evaluated against a gateway. Every workspace
+/// crate inherits the same version, so this is bhtune's own release version.
+const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Builds an `Incompatible` report when the gateway rejects a metadata RPC outright.
+///
+/// The published facade reports that rejection as an error rather than a compatibility
+/// status. Inspection still needs a structured result, and live mutations need a refusal, so
+/// the core feature is marked incompatible and the rejected operation is named in each
+/// feature reason.
+fn incompatible_gateway_report(operation: &str) -> OpcDaGatewayCompatibility {
+    let profile = opcda_bridge::current_client_profile(CLIENT_VERSION);
+    let reason = format!("gateway rejected {operation} as incompatible with this client");
+    let features = profile
+        .features
+        .into_iter()
+        .map(|support| {
+            let feature = gateway_feature_from_bridge(support.feature);
+            let status = if matches!(feature, OpcDaGatewayFeature::Core) {
+                OpcDaFeatureCompatibilityStatus::Incompatible
+            } else {
+                OpcDaFeatureCompatibilityStatus::Unknown
+            };
+            OpcDaFeatureCompatibility {
+                feature,
+                status,
+                client_versions: OpcDaProtocolRange {
+                    min: support.versions.min,
+                    max: support.versions.max,
+                },
+                gateway_versions: None,
+                negotiated_version: None,
+                reason: reason.clone(),
+            }
+        })
+        .collect();
+    OpcDaGatewayCompatibility {
+        client_version: CLIENT_VERSION.to_string(),
+        gateway_version: None,
+        source: OpcDaCompatibilitySource::Unknown,
+        status: OpcDaCompatibilityStatus::Incompatible,
+        features,
+    }
+}
+
+/// Checks whether the `opcda-bridge` gateway at `bridge_host` speaks a protocol compatible
+/// with this bhtune build, without reading or writing any OPC DA tag.
+///
+/// Uses the gateway-wide metadata RPC first. A gateway that predates that RPC is evaluated
+/// from the named `server`'s legacy capability metadata when a server is supplied. When that
+/// fallback is also rejected as incompatible, the result is an `Incompatible` report rather
+/// than an error, so inspection can show the refusal and live mutations can refuse it. A
+/// gateway that cannot be classified, and does not reject the client, is reported as
+/// `Unknown`.
+///
+/// # Errors
+///
+/// Returns [`DriverError::Connect`] when the gateway cannot be reached, and
+/// [`DriverError::Operation`] when a metadata RPC fails for a reason other than an
+/// incompatible-gateway rejection.
+pub async fn check_gateway_compatibility(
+    bridge_host: &str,
+    server: Option<&str>,
+) -> DriverResult<OpcDaGatewayCompatibility> {
+    let mut client = opcda_bridge::Client::connect(bridge_host)
+        .await
+        .map_err(|err| map_bridge_error_for(err, "connect to OPC DA bridge"))?;
+    match client
+        .compatibility_with_client_version(server, CLIENT_VERSION)
+        .await
+    {
+        Ok(report) => Ok(gateway_compatibility_from_report(report)),
+        Err(opcda_bridge::Error::IncompatibleGateway { operation }) => {
+            Ok(incompatible_gateway_report(operation))
+        }
+        Err(err) => Err(map_bridge_error_for(err, "gateway compatibility")),
+    }
 }
 
 /// Lists the OPC DA servers registered on the `opcda-bridge` gateway's own host at
@@ -1189,6 +1574,301 @@ mod tests {
         let err = get_opcda_gateway_info("127.0.0.1:1").await.unwrap_err();
         assert!(matches!(err, DriverError::Connect(_)));
     }
+
+    #[tokio::test]
+    async fn check_gateway_compatibility_connect_failure_maps_to_driver_error_connect() {
+        let err = check_gateway_compatibility("127.0.0.1:1", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DriverError::Connect(_)));
+    }
+
+    fn sample_feature(
+        feature: OpcDaGatewayFeature,
+        status: OpcDaFeatureCompatibilityStatus,
+        gateway_versions: Option<OpcDaProtocolRange>,
+    ) -> OpcDaFeatureCompatibility {
+        OpcDaFeatureCompatibility {
+            feature,
+            status,
+            client_versions: OpcDaProtocolRange { min: 1, max: 1 },
+            gateway_versions,
+            negotiated_version: None,
+            reason: String::new(),
+        }
+    }
+
+    fn sample_compatibility(
+        status: OpcDaCompatibilityStatus,
+        gateway_version: Option<&str>,
+        features: Vec<OpcDaFeatureCompatibility>,
+    ) -> OpcDaGatewayCompatibility {
+        OpcDaGatewayCompatibility {
+            client_version: "0.1.0".into(),
+            gateway_version: gateway_version.map(str::to_string),
+            source: OpcDaCompatibilitySource::GatewayInfo,
+            status,
+            features,
+        }
+    }
+
+    #[test]
+    fn compatibility_identifiers_are_stable_snake_case() {
+        assert_eq!(OpcDaProtocolRange { min: 1, max: 2 }.to_string(), "1-2");
+        assert_eq!(
+            [
+                OpcDaCompatibilityStatus::Full,
+                OpcDaCompatibilityStatus::Partial,
+                OpcDaCompatibilityStatus::Incompatible,
+                OpcDaCompatibilityStatus::Unknown,
+            ]
+            .map(OpcDaCompatibilityStatus::as_str),
+            ["full", "partial", "incompatible", "unknown"]
+        );
+        assert_eq!(
+            [
+                OpcDaCompatibilitySource::GatewayInfo,
+                OpcDaCompatibilitySource::LegacyCapabilities,
+                OpcDaCompatibilitySource::Unknown,
+            ]
+            .map(OpcDaCompatibilitySource::as_str),
+            ["gateway_info", "legacy_capabilities", "unknown"]
+        );
+        assert_eq!(
+            [
+                OpcDaFeatureCompatibilityStatus::Compatible,
+                OpcDaFeatureCompatibilityStatus::Unsupported,
+                OpcDaFeatureCompatibilityStatus::Incompatible,
+                OpcDaFeatureCompatibilityStatus::Unknown,
+            ]
+            .map(OpcDaFeatureCompatibilityStatus::as_str),
+            ["compatible", "unsupported", "incompatible", "unknown"]
+        );
+    }
+
+    #[test]
+    fn feature_description_names_both_protocol_ranges() {
+        let reported = sample_feature(
+            OpcDaGatewayFeature::Core,
+            OpcDaFeatureCompatibilityStatus::Incompatible,
+            Some(OpcDaProtocolRange { min: 3, max: 3 }),
+        );
+        assert_eq!(
+            reported.describe(),
+            "core protocol incompatible: bhtune supports 1-1, gateway reports 3-3"
+        );
+        let missing = sample_feature(
+            OpcDaGatewayFeature::IndexedSearch,
+            OpcDaFeatureCompatibilityStatus::Unsupported,
+            None,
+        );
+        assert_eq!(
+            missing.describe(),
+            "indexed_search protocol unsupported: bhtune supports 1-1, gateway reports none"
+        );
+    }
+
+    #[test]
+    fn an_incompatible_gateway_gets_an_actionable_refusal_and_no_warning() {
+        let compatibility = sample_compatibility(
+            OpcDaCompatibilityStatus::Incompatible,
+            Some("0.9.0"),
+            vec![sample_feature(
+                OpcDaGatewayFeature::Core,
+                OpcDaFeatureCompatibilityStatus::Incompatible,
+                Some(OpcDaProtocolRange { min: 3, max: 3 }),
+            )],
+        );
+        assert!(compatibility.is_incompatible());
+        assert_eq!(compatibility.warning_message(), None);
+        assert_eq!(
+            compatibility.live_mutation_refusal().as_deref(),
+            Some(compatibility.incompatibility_message().as_str())
+        );
+        assert_eq!(
+            compatibility.incompatibility_message(),
+            "opcda-bridge gateway 0.9.0 is incompatible with bhtune 0.1.0 (core protocol \
+             incompatible: bhtune supports 1-1, gateway reports 3-3); upgrade the opcda-bridge \
+             gateway or bhtune so their core protocol versions overlap"
+        );
+    }
+
+    #[test]
+    fn a_partially_compatible_gateway_warns_about_only_the_degraded_features() {
+        let compatibility = sample_compatibility(
+            OpcDaCompatibilityStatus::Partial,
+            Some("0.3.2"),
+            vec![
+                sample_feature(
+                    OpcDaGatewayFeature::Core,
+                    OpcDaFeatureCompatibilityStatus::Compatible,
+                    Some(OpcDaProtocolRange { min: 1, max: 1 }),
+                ),
+                sample_feature(
+                    OpcDaGatewayFeature::IndexedSearch,
+                    OpcDaFeatureCompatibilityStatus::Unsupported,
+                    None,
+                ),
+            ],
+        );
+        assert!(!compatibility.is_incompatible());
+        assert_eq!(
+            compatibility.warning_message().as_deref(),
+            Some(
+                "opcda-bridge gateway 0.3.2 is partially compatible with bhtune 0.1.0; affected \
+                 optional features are degraded (indexed_search protocol unsupported: bhtune \
+                 supports 1-1, gateway reports none)"
+            )
+        );
+    }
+
+    #[test]
+    fn an_unverifiable_gateway_warns_without_a_version_or_feature_details() {
+        let compatibility = sample_compatibility(OpcDaCompatibilityStatus::Unknown, None, vec![]);
+        assert!(!compatibility.is_incompatible());
+        assert_eq!(
+            compatibility.warning_message().as_deref(),
+            Some(
+                "opcda-bridge gateway (version not reported) did not report enough protocol \
+                 metadata to verify compatibility with bhtune 0.1.0; proceeding without \
+                 verification"
+            )
+        );
+    }
+
+    #[test]
+    fn a_fully_compatible_gateway_needs_no_warning() {
+        let compatibility = sample_compatibility(
+            OpcDaCompatibilityStatus::Full,
+            Some("0.5.9"),
+            vec![sample_feature(
+                OpcDaGatewayFeature::Core,
+                OpcDaFeatureCompatibilityStatus::Compatible,
+                Some(OpcDaProtocolRange { min: 1, max: 1 }),
+            )],
+        );
+        assert!(!compatibility.is_incompatible());
+        assert_eq!(compatibility.warning_message(), None);
+        assert_eq!(compatibility.live_mutation_refusal(), None);
+    }
+
+    #[test]
+    fn an_unverified_report_is_unknown_and_does_not_refuse_live_mutations() {
+        let compatibility = OpcDaGatewayCompatibility::unverified();
+        assert_eq!(compatibility.status, OpcDaCompatibilityStatus::Unknown);
+        assert_eq!(compatibility.client_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(compatibility.live_mutation_refusal(), None);
+        assert!(compatibility.warning_message().is_some());
+    }
+
+    #[test]
+    fn bridge_compatibility_enums_map_exhaustively() {
+        assert_eq!(
+            [
+                opcda_bridge::CompatibilityFeature::Core,
+                opcda_bridge::CompatibilityFeature::Namespace,
+                opcda_bridge::CompatibilityFeature::IndexedSearch,
+            ]
+            .map(gateway_feature_from_bridge),
+            [
+                OpcDaGatewayFeature::Core,
+                OpcDaGatewayFeature::Namespace,
+                OpcDaGatewayFeature::IndexedSearch,
+            ]
+        );
+        assert_eq!(
+            [
+                opcda_bridge::CompatibilityStatus::Full,
+                opcda_bridge::CompatibilityStatus::Partial,
+                opcda_bridge::CompatibilityStatus::Incompatible,
+                opcda_bridge::CompatibilityStatus::Unknown,
+            ]
+            .map(compatibility_status_from_bridge),
+            [
+                OpcDaCompatibilityStatus::Full,
+                OpcDaCompatibilityStatus::Partial,
+                OpcDaCompatibilityStatus::Incompatible,
+                OpcDaCompatibilityStatus::Unknown,
+            ]
+        );
+        assert_eq!(
+            [
+                opcda_bridge::CompatibilitySource::GatewayInfo,
+                opcda_bridge::CompatibilitySource::LegacyCapabilities,
+                opcda_bridge::CompatibilitySource::Unknown,
+            ]
+            .map(compatibility_source_from_bridge),
+            [
+                OpcDaCompatibilitySource::GatewayInfo,
+                OpcDaCompatibilitySource::LegacyCapabilities,
+                OpcDaCompatibilitySource::Unknown,
+            ]
+        );
+        assert_eq!(
+            [
+                opcda_bridge::FeatureCompatibilityStatus::Compatible,
+                opcda_bridge::FeatureCompatibilityStatus::Unsupported,
+                opcda_bridge::FeatureCompatibilityStatus::Incompatible,
+                opcda_bridge::FeatureCompatibilityStatus::Unknown,
+            ]
+            .map(feature_status_from_bridge),
+            [
+                OpcDaFeatureCompatibilityStatus::Compatible,
+                OpcDaFeatureCompatibilityStatus::Unsupported,
+                OpcDaFeatureCompatibilityStatus::Incompatible,
+                OpcDaFeatureCompatibilityStatus::Unknown,
+            ]
+        );
+    }
+
+    fn bridge_report(gateway_version: Option<&str>) -> opcda_bridge::CompatibilityReport {
+        opcda_bridge::CompatibilityReport {
+            client_version: "0.1.0".into(),
+            library_version: "0.5.0".into(),
+            gateway_version: gateway_version.map(str::to_string),
+            source: opcda_bridge::CompatibilitySource::GatewayInfo,
+            status: opcda_bridge::CompatibilityStatus::Partial,
+            evidence: opcda_bridge::CompatibilityEvidence::Unverified,
+            features: vec![opcda_bridge::FeatureCompatibility {
+                feature: opcda_bridge::CompatibilityFeature::Namespace,
+                status: opcda_bridge::FeatureCompatibilityStatus::Compatible,
+                client_versions: opcda_bridge::ProtocolVersionRange { min: 2, max: 2 },
+                gateway_versions: Some(opcda_bridge::ProtocolVersionRange { min: 1, max: 2 }),
+                negotiated_version: Some(2),
+                reason: "overlap".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn a_bridge_report_maps_every_field_and_drops_a_blank_gateway_version() {
+        let mapped = gateway_compatibility_from_report(bridge_report(Some("0.5.9")));
+        assert_eq!(
+            mapped,
+            OpcDaGatewayCompatibility {
+                client_version: "0.1.0".into(),
+                gateway_version: Some("0.5.9".into()),
+                source: OpcDaCompatibilitySource::GatewayInfo,
+                status: OpcDaCompatibilityStatus::Partial,
+                features: vec![OpcDaFeatureCompatibility {
+                    feature: OpcDaGatewayFeature::Namespace,
+                    status: OpcDaFeatureCompatibilityStatus::Compatible,
+                    client_versions: OpcDaProtocolRange { min: 2, max: 2 },
+                    gateway_versions: Some(OpcDaProtocolRange { min: 1, max: 2 }),
+                    negotiated_version: Some(2),
+                    reason: "overlap".into(),
+                }],
+            }
+        );
+        assert_eq!(
+            gateway_compatibility_from_report(bridge_report(Some("  "))).gateway_version,
+            None
+        );
+        assert_eq!(
+            gateway_compatibility_from_report(bridge_report(None)).gateway_version,
+            None
+        );
+    }
 }
 
 /// End-to-end smoke tests against a minimal mock `Bridge` gRPC service. These prove the typed
@@ -1231,6 +1911,8 @@ mod smoke_tests {
         search_index_response: ProtoSearchIndexResponse,
         close_error: Option<Status>,
         gateway_info_response: GetGatewayInfoResponse,
+        gateway_info_error: Option<Status>,
+        capabilities_error: Option<Status>,
     }
 
     #[tonic::async_trait]
@@ -1239,6 +1921,9 @@ mod smoke_tests {
             &self,
             _request: Request<GetGatewayInfoRequest>,
         ) -> Result<Response<GetGatewayInfoResponse>, Status> {
+            if let Some(status) = self.gateway_info_error.clone() {
+                return Err(status);
+            }
             Ok(Response::new(self.gateway_info_response.clone()))
         }
 
@@ -1246,6 +1931,9 @@ mod smoke_tests {
             &self,
             _request: Request<GetCapabilitiesRequest>,
         ) -> Result<Response<GetCapabilitiesResponse>, Status> {
+            if let Some(status) = self.capabilities_error.clone() {
+                return Err(status);
+            }
             Ok(Response::new(self.capabilities_response.clone()))
         }
 
@@ -1698,6 +2386,122 @@ mod smoke_tests {
                 .collect::<Vec<_>>(),
             vec!["core", "namespace", "indexed_search"]
         );
+    }
+
+    fn protocol_feature(
+        kind: ProtocolFeatureKind,
+        min_version: u32,
+        max_version: u32,
+    ) -> ProtocolFeature {
+        ProtocolFeature {
+            kind: kind as i32,
+            min_version,
+            max_version,
+        }
+    }
+
+    fn gateway_info_with_features(features: Vec<ProtocolFeature>) -> GetGatewayInfoResponse {
+        GetGatewayInfoResponse {
+            application_version: "0.5.9".into(),
+            compatibility_schema_version: 1,
+            features,
+        }
+    }
+
+    #[tokio::test]
+    async fn check_gateway_compatibility_classifies_full_partial_unknown_and_incompatible() {
+        let full = start_mock_server(MockBridgeService {
+            gateway_info_response: gateway_info_with_features(vec![
+                protocol_feature(ProtocolFeatureKind::Core, 1, 1),
+                protocol_feature(ProtocolFeatureKind::Namespace, 2, 3),
+                protocol_feature(ProtocolFeatureKind::IndexedSearch, 2, 2),
+            ]),
+            ..Default::default()
+        })
+        .await;
+        let full_report = check_gateway_compatibility(&full, None).await.unwrap();
+        assert_eq!(full_report.status, OpcDaCompatibilityStatus::Full);
+        assert_eq!(full_report.live_mutation_refusal(), None);
+
+        let partial = start_mock_server(MockBridgeService {
+            gateway_info_response: gateway_info_with_features(vec![protocol_feature(
+                ProtocolFeatureKind::Core,
+                1,
+                1,
+            )]),
+            ..Default::default()
+        })
+        .await;
+        let partial_report = check_gateway_compatibility(&partial, None).await.unwrap();
+        assert_eq!(partial_report.status, OpcDaCompatibilityStatus::Partial);
+        assert!(partial_report.warning_message().is_some());
+        assert_eq!(partial_report.live_mutation_refusal(), None);
+
+        let unknown = start_mock_server(MockBridgeService::default()).await;
+        let unknown_report = check_gateway_compatibility(&unknown, None).await.unwrap();
+        assert_eq!(unknown_report.status, OpcDaCompatibilityStatus::Unknown);
+        assert!(unknown_report.warning_message().is_some());
+        assert_eq!(unknown_report.live_mutation_refusal(), None);
+
+        let incompatible = start_mock_server(MockBridgeService {
+            gateway_info_response: gateway_info_with_features(vec![protocol_feature(
+                ProtocolFeatureKind::Core,
+                9,
+                9,
+            )]),
+            ..Default::default()
+        })
+        .await;
+        let incompatible_report = check_gateway_compatibility(&incompatible, Some("Plant.Server"))
+            .await
+            .unwrap();
+        assert!(incompatible_report.is_incompatible());
+        assert!(incompatible_report.live_mutation_refusal().is_some());
+    }
+
+    #[tokio::test]
+    async fn unimplemented_metadata_with_a_server_is_an_incompatible_report() {
+        let host = start_mock_server(MockBridgeService {
+            gateway_info_error: Some(Status::unimplemented("no gateway info")),
+            capabilities_error: Some(Status::unimplemented("no capabilities")),
+            ..Default::default()
+        })
+        .await;
+        let report = check_gateway_compatibility(&host, Some("Plant.Server"))
+            .await
+            .unwrap();
+        assert!(report.is_incompatible());
+        assert!(report.features.iter().any(|feature| {
+            feature.reason.contains("capability discovery")
+                && matches!(feature.feature, OpcDaGatewayFeature::Core)
+                && matches!(
+                    feature.status,
+                    OpcDaFeatureCompatibilityStatus::Incompatible
+                )
+        }));
+    }
+
+    #[tokio::test]
+    async fn unimplemented_metadata_without_a_server_is_unknown() {
+        let host = start_mock_server(MockBridgeService {
+            gateway_info_error: Some(Status::unimplemented("no gateway info")),
+            ..Default::default()
+        })
+        .await;
+        let report = check_gateway_compatibility(&host, None).await.unwrap();
+        assert_eq!(report.status, OpcDaCompatibilityStatus::Unknown);
+        assert_eq!(report.live_mutation_refusal(), None);
+    }
+
+    #[tokio::test]
+    async fn other_metadata_failures_remain_operation_errors() {
+        let host = start_mock_server(MockBridgeService {
+            gateway_info_error: Some(Status::internal("metadata failed")),
+            ..Default::default()
+        })
+        .await;
+        let err = check_gateway_compatibility(&host, None).await.unwrap_err();
+        assert!(matches!(err, DriverError::Operation(_)));
     }
 
     #[tokio::test]

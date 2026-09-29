@@ -21,6 +21,7 @@ use bhtune_cli::output::OutputFormat;
 use bhtune_core::{
     ControllerDirection, ControllerType, ProcessType, ResponseLevel, TagOverrides, opc_write_values,
 };
+use bhtune_db::SqlitePool;
 use bhtune_db::models::{
     TuneDriver, TuneOutcome, TuneResultRow, TuneRunRow, TuneWriteRow, WriteKind, WriteReadback,
 };
@@ -517,18 +518,30 @@ const D_TAG_PRESENT: &str = "require_writable_run already checked derivative_con
 /// re-resolved at write/revert time could silently point at a different gateway than the
 /// run itself actually used. [`require_writable_run`] must already have confirmed both
 /// fields are present.
-async fn connect_to_runs_recorded_driver(run: &TuneRunRow) -> Result<OpcDaDriver, ApiError> {
+async fn connect_to_runs_recorded_driver(
+    pool: &SqlitePool,
+    run: &TuneRunRow,
+) -> Result<OpcDaDriver, ApiError> {
     const OPC_SERVER_PRESENT: &str = "require_writable_run already checked opc_server is Some";
     const BRIDGE_HOST_PRESENT: &str = "require_writable_run already checked bridge_host is Some";
     let opc_server = require_present(run.opc_server.as_deref(), OPC_SERVER_PRESENT)?;
     let bridge_host = require_present(run.bridge_host.as_deref(), BRIDGE_HOST_PRESENT)?;
-    OpcDaDriver::connect(bridge_host, opc_server)
+    let driver = OpcDaDriver::connect(bridge_host, opc_server)
         .await
         .map_err(|e| {
             ApiError::BadRequest(format!(
                 "failed to connect to OPC server '{opc_server}' via bridge '{bridge_host}': {e}"
             ))
-        })
+        })?;
+    let report =
+        bhtune_cli::gateway::require_live_gateway_compatible(bridge_host, Some(opc_server))
+            .await
+            .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    if run.gateway_compatibility_json.is_none() {
+        let snapshot = bhtune_cli::gateway::compatibility_json(&report);
+        TuneRunRow::record_gateway_compatibility(pool, run.id, &snapshot).await?;
+    }
+    Ok(driver)
 }
 
 /// Reserves the [`crate::active_run::ActiveRun`] exclusive write/revert reservation for
@@ -640,7 +653,7 @@ where
         })?;
 
     let result: Result<PidWriteOutcome, ApiError> = async {
-        let driver = connect_to_runs_recorded_driver(run).await?;
+        let driver = connect_to_runs_recorded_driver(&state.pool, run).await?;
         before_write(state).await;
         let outcome = write_pid_values(
             &state.pool,
@@ -1712,6 +1725,42 @@ mod tests {
         state.active_run.release(999).await;
     }
 
+    /// A later write must not replace the snapshot recorded when the run started.
+    #[tokio::test]
+    async fn write_run_keeps_an_existing_gateway_compatibility_snapshot() {
+        use crate::test_support::mock_bridge::{
+            MockBridgeService, good_reading, start_mock_server,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            read_response: good_reading("10.0"),
+            write_response: opcda_bridge_proto::bridge::WriteResponse {
+                tag_id: "ignored".to_string(),
+                success: true,
+                error: None,
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+        let existing = r#"{"status":"full","source":"prior"}"#;
+        TuneRunRow::record_gateway_compatibility(&state.pool, run_id, existing)
+            .await
+            .unwrap();
+
+        let response = post_json(
+            crate::build_router(state.clone()),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+        assert_eq!(run.gateway_compatibility_json.as_deref(), Some(existing));
+    }
+
     #[tokio::test]
     async fn write_reports_an_internal_error_when_the_run_vanishes_after_the_write() {
         use crate::test_support::mock_bridge::{
@@ -2151,6 +2200,49 @@ mod tests {
                 .unwrap()
                 .contains("failed to connect")
         );
+    }
+
+    #[tokio::test]
+    async fn write_run_returns_400_when_the_gateway_core_is_incompatible() {
+        use crate::test_support::mock_bridge::{MockBridgeService, start_mock_server};
+        use opcda_bridge_proto::bridge::{
+            GetGatewayInfoResponse, ProtocolFeature, ProtocolFeatureKind,
+        };
+
+        let host = start_mock_server(MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "0.5.9".to_string(),
+                compatibility_schema_version: 1,
+                features: vec![ProtocolFeature {
+                    kind: ProtocolFeatureKind::Core as i32,
+                    min_version: 9,
+                    max_version: 9,
+                }],
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+
+        let response = post_json(
+            crate::build_router(state.clone()),
+            &format!("/api/runs/{run_id}/write"),
+            serde_json::json!({ "response_level": "moderate" }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error = body_json(response).await;
+        assert!(error["error"].as_str().unwrap().contains("incompatible"));
+        assert!(
+            TuneWriteRow::list_for_run(&state.pool, run_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let run = TuneRunRow::get(&state.pool, run_id).await.unwrap().unwrap();
+        assert!(run.gateway_compatibility_json.is_none());
     }
 
     #[tokio::test]

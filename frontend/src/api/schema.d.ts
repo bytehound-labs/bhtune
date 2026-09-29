@@ -1050,6 +1050,39 @@ export interface components {
       /** Format: float */
       min: number;
     };
+    /**
+     * @description Gateway protocol compatibility attached to inspection responses and run detail.
+     *
+     *     String fields match the snake_case snapshot stored in
+     *     `tune_runs.gateway_compatibility_json`. Discovery, browse, and read attach this even when
+     *     the gateway is only partially compatible or predates a requested operation; live mutations
+     *     refuse an incompatible core instead.
+     */
+    GatewayCompatibilityResponse: {
+      client_version: string;
+      features: components["schemas"]["GatewayFeatureCompatibilityResponse"][];
+      gateway_version?: string | null;
+      source: string;
+      status: string;
+    };
+    /** @description One protocol feature in a gateway compatibility snapshot. */
+    GatewayFeatureCompatibilityResponse: {
+      client_versions: components["schemas"]["GatewayProtocolRangeResponse"];
+      feature: string;
+      gateway_versions?:
+        null | components["schemas"]["GatewayProtocolRangeResponse"];
+      /** Format: int32 */
+      negotiated_version?: number | null;
+      reason: string;
+      status: string;
+    };
+    /** @description Inclusive protocol range stored with a gateway compatibility snapshot. */
+    GatewayProtocolRangeResponse: {
+      /** Format: int32 */
+      max: number;
+      /** Format: int32 */
+      min: number;
+    };
     Health: {
       status: string;
       version: string;
@@ -1269,6 +1302,8 @@ export interface components {
     };
     OpcBrowseResponse: {
       complete: boolean;
+      gateway_compatibility?:
+        null | components["schemas"]["GatewayCompatibilityResponse"];
       next_page_token?: string | null;
       nodes: components["schemas"]["OpcBrowseNodeResponse"][];
       organization: string;
@@ -1278,6 +1313,8 @@ export interface components {
     };
     OpcCapabilitiesResponse: {
       application_version: string;
+      gateway_compatibility?:
+        null | components["schemas"]["GatewayCompatibilityResponse"];
       indexed_search_protocol_version: string;
       /** Format: int32 */
       max_indexed_search_results: number;
@@ -1337,6 +1374,8 @@ export interface components {
      *     follows that same precedent instead of inventing a parallel `OpcQualityResponse` enum.
      */
     OpcReadResponse: {
+      gateway_compatibility?:
+        null | components["schemas"]["GatewayCompatibilityResponse"];
       quality: components["schemas"]["SampleQuality"];
       tag: string;
       /**
@@ -1379,6 +1418,8 @@ export interface components {
     };
     /** @description Response body of `GET /api/opc/servers`. */
     OpcServersResponse: {
+      gateway_compatibility?:
+        null | components["schemas"]["GatewayCompatibilityResponse"];
       servers: string[];
     };
     /**
@@ -1492,6 +1533,8 @@ export interface components {
       driver: components["schemas"]["TuneDriver"];
       effective_tuning?: null | components["schemas"]["EffectiveTuning"];
       failure_reason?: string | null;
+      gateway_compatibility?:
+        null | components["schemas"]["GatewayCompatibilityResponse"];
       /** Format: int64 */
       id: number;
       initial_readings?:

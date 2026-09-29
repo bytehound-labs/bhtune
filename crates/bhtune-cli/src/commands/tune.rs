@@ -508,6 +508,15 @@ async fn prepare_internal(
     let config = build_loop_config_with_timing(&args, timing)?;
     let tags = build_loop_tags(&args, &template)?;
     let driver = crate::driver::build_with_poll_interval(&args, timing.poll_interval_ms).await?;
+    let gateway_compatibility = if let (DriverKindArg::Opcda, Some(bridge_host), Some(server)) = (
+        args.driver,
+        args.bridge_host.as_deref(),
+        args.server.as_deref(),
+    ) {
+        Some(crate::gateway::require_live_gateway_compatible(bridge_host, Some(server)).await?)
+    } else {
+        None
+    };
 
     let time_anchor = RunTimeAnchor::now();
     let started_at = time_anchor.utc();
@@ -540,6 +549,14 @@ async fn prepare_internal(
             (None, None)
         };
         TuneRunRow::record_connection(pool, run.id, opc_server, bridge_host, &request_json).await?;
+        if let Some(report) = gateway_compatibility.as_ref() {
+            TuneRunRow::record_gateway_compatibility(
+                pool,
+                run.id,
+                &crate::gateway::compatibility_json(report),
+            )
+            .await?;
+        }
         let notes = args
             .notes
             .as_deref()
@@ -6805,6 +6822,92 @@ mod tests {
             .unwrap()
             .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_refuses_an_incompatible_gateway_before_creating_a_run() {
+        use crate::test_support::{MockBridgeService, start_mock_server};
+        use opcda_bridge_proto::bridge::{
+            GetGatewayInfoResponse, ProtocolFeature, ProtocolFeatureKind,
+        };
+
+        let (host, server) = start_mock_server(MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "0.5.9".to_string(),
+                compatibility_schema_version: 1,
+                features: vec![ProtocolFeature {
+                    kind: ProtocolFeatureKind::Core as i32,
+                    min_version: 9,
+                    max_version: 9,
+                }],
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.tagname = "Unit1.LIC101.PV".to_string();
+        args.bridge_host = Some(host);
+        args.server = Some("Sim.Server".to_string());
+
+        let result = prepare(&pool, args, &test_config()).await;
+        assert!(result.is_err(), "an incompatible core must refuse prepare");
+        let error = result.err().unwrap();
+        assert!(error.to_string().contains("incompatible"));
+        assert!(
+            TuneRunRow::list(
+                &pool,
+                &bhtune_db::models::TuneRunFilter::default(),
+                bhtune_db::models::Pagination::first(10),
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn prepare_records_a_partial_gateway_snapshot() {
+        use crate::test_support::{MockBridgeService, start_mock_server};
+        use opcda_bridge_proto::bridge::{
+            GetGatewayInfoResponse, ProtocolFeature, ProtocolFeatureKind,
+        };
+
+        let (host, server) = start_mock_server(MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "0.5.9".to_string(),
+                compatibility_schema_version: 1,
+                features: vec![ProtocolFeature {
+                    kind: ProtocolFeatureKind::Core as i32,
+                    min_version: 1,
+                    max_version: 1,
+                }],
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let pool = seeded_pool().await;
+        let mut args = fast_simulator_args();
+        args.driver = DriverKindArg::Opcda;
+        args.tagname = "Unit1.LIC101.PV".to_string();
+        args.bridge_host = Some(host);
+        args.server = Some("Sim.Server".to_string());
+
+        let prepared = prepare(&pool, args, &test_config()).await.unwrap();
+        let run = TuneRunRow::get(&pool, prepared.run_id())
+            .await
+            .unwrap()
+            .unwrap();
+        let snapshot = run
+            .gateway_compatibility_json
+            .expect("a partial gateway check must be stored before the run starts");
+        assert!(snapshot.contains("\"status\":\"partial\""));
+        assert!(snapshot.contains("0.5.9"));
+        server.shutdown().await;
     }
 
     #[tokio::test]

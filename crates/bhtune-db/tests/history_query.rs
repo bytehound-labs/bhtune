@@ -235,6 +235,10 @@ async fn run_lifecycle_start_then_record_initial_readings_then_complete() {
         started.effective_tuning.is_none(),
         "old/source-compatible start calls have no effective tuning snapshot"
     );
+    assert!(
+        started.gateway_compatibility_json.is_none(),
+        "gateway compatibility stays absent until a live OPC DA snapshot is recorded"
+    );
 
     let readings = sample_initial_readings();
     let with_readings = TuneRunRow::record_initial_readings(&pool, started.id, readings.clone())

@@ -6,7 +6,8 @@ use bhtune_driver::{
     BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, Driver, OpcDaDriver,
     OpcDaGatewayInfo, Quality, SearchEvent, SearchIndexControlAction, SearchIndexRequest,
     SearchIndexResponse, SearchIndexStatus, SearchMatch, SearchRequest, TagWrite,
-    close_opcda_browse_session, get_opcda_gateway_info, list_opcda_servers,
+    check_gateway_compatibility, close_opcda_browse_session, get_opcda_gateway_info,
+    list_opcda_servers,
 };
 
 use crate::args::{OpcCommand, OpcSearchMatchModeArg, SearchIndexCommand};
@@ -187,11 +188,11 @@ async fn gateway_info(bridge_host: &str) -> anyhow::Result<()> {
 
 async fn gateway_info_with_output(bridge_host: &str, output: OutputFormat) -> anyhow::Result<()> {
     let info = get_opcda_gateway_info(bridge_host).await?;
+    let compatibility = check_gateway_compatibility(bridge_host, None).await?;
     if output == OutputFormat::Json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&gateway_info_json(&info))?
-        );
+        let mut value = gateway_info_json(&info);
+        value["compatibility"] = serde_json::to_value(&compatibility)?;
+        println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }
     println!("Application version: {}", info.application_version);
@@ -206,6 +207,10 @@ async fn gateway_info_with_output(bridge_host: &str, output: OutputFormat) -> an
             feature.min_version,
             feature.max_version
         );
+    }
+    println!("Compatibility: {}", compatibility.status.as_str());
+    if let Some(warning) = compatibility.warning_message() {
+        println!("Compatibility warning: {warning}");
     }
     Ok(())
 }
@@ -853,6 +858,45 @@ mod tests {
                 }],
             })
         );
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gateway_info_prints_a_full_result_without_a_warning() {
+        let (host, server) = start_mock_server(MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "0.5.9".into(),
+                compatibility_schema_version: 1,
+                features: vec![
+                    ProtocolFeature {
+                        kind: ProtocolFeatureKind::Core as i32,
+                        min_version: 1,
+                        max_version: 1,
+                    },
+                    ProtocolFeature {
+                        kind: ProtocolFeatureKind::Namespace as i32,
+                        min_version: 2,
+                        max_version: 3,
+                    },
+                    ProtocolFeature {
+                        kind: ProtocolFeatureKind::IndexedSearch as i32,
+                        min_version: 2,
+                        max_version: 2,
+                    },
+                ],
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let report = check_gateway_compatibility(&host, None).await.unwrap();
+        assert_eq!(report.status.as_str(), "full");
+        assert!(report.warning_message().is_none());
+        gateway_info(&host).await.unwrap();
+        gateway_info_with_output(&host, OutputFormat::Json)
+            .await
+            .unwrap();
 
         server.shutdown().await;
     }

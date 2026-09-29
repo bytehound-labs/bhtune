@@ -3032,6 +3032,101 @@
           }
         }
       },
+      "GatewayCompatibilityResponse": {
+        "type": "object",
+        "description": "Gateway protocol compatibility attached to inspection responses and run detail.\n\nString fields match the snake_case snapshot stored in\n`tune_runs.gateway_compatibility_json`. Discovery, browse, and read attach this even when\nthe gateway is only partially compatible or predates a requested operation; live mutations\nrefuse an incompatible core instead.",
+        "required": [
+          "client_version",
+          "source",
+          "status",
+          "features"
+        ],
+        "properties": {
+          "client_version": {
+            "type": "string"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayFeatureCompatibilityResponse"
+            }
+          },
+          "gateway_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "GatewayFeatureCompatibilityResponse": {
+        "type": "object",
+        "description": "One protocol feature in a gateway compatibility snapshot.",
+        "required": [
+          "feature",
+          "status",
+          "client_versions",
+          "reason"
+        ],
+        "properties": {
+          "client_versions": {
+            "$ref": "#/components/schemas/GatewayProtocolRangeResponse"
+          },
+          "feature": {
+            "type": "string"
+          },
+          "gateway_versions": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GatewayProtocolRangeResponse"
+              }
+            ]
+          },
+          "negotiated_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "GatewayProtocolRangeResponse": {
+        "type": "object",
+        "description": "Inclusive protocol range stored with a gateway compatibility snapshot.",
+        "required": [
+          "min",
+          "max"
+        ],
+        "properties": {
+          "max": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "min": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "required": [
@@ -3694,6 +3789,17 @@
           "complete": {
             "type": "boolean"
           },
+          "gateway_compatibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GatewayCompatibilityResponse",
+                "description": "Compatibility observed for this browse. An unsupported page still returns this field\nwith an empty, explicitly degraded page instead of failing the request."
+              }
+            ]
+          },
           "next_page_token": {
             "type": [
               "string",
@@ -3741,6 +3847,17 @@
         "properties": {
           "application_version": {
             "type": "string"
+          },
+          "gateway_compatibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GatewayCompatibilityResponse",
+                "description": "Compatibility observed while discovering capabilities. Present even when capability\ndiscovery itself is unsupported and the rest of this response is degraded."
+              }
+            ]
           },
           "indexed_search_protocol_version": {
             "type": "string"
@@ -3923,6 +4040,17 @@
           "quality"
         ],
         "properties": {
+          "gateway_compatibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GatewayCompatibilityResponse",
+                "description": "Compatibility of the gateway that served this diagnostic read. A partial or unknown\ngateway still returns the tag value."
+              }
+            ]
+          },
           "quality": {
             "$ref": "#/components/schemas/SampleQuality"
           },
@@ -4054,6 +4182,17 @@
           "servers"
         ],
         "properties": {
+          "gateway_compatibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GatewayCompatibilityResponse",
+                "description": "Compatibility of the gateway that answered this discovery call. Discovery itself is\nnot refused when the gateway is partial, unknown, or incompatible."
+              }
+            ]
+          },
           "servers": {
             "type": "array",
             "items": {
@@ -4319,6 +4458,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "gateway_compatibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GatewayCompatibilityResponse",
+                "description": "Gateway protocol snapshot recorded before this run's live mutation, when the run used\nOPC DA. `None` for simulator/replay runs and for OPC runs that predate the snapshot."
+              }
             ]
           },
           "id": {

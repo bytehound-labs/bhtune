@@ -201,6 +201,31 @@ record the successful operation in both the PV-read and MV-verification latency 
 those categories overlap because they describe one request. `bhtune history show <run>` records
 each accepted command, observation, tolerance, deadline, and final status.
 
+## Gateway compatibility
+
+Before an OPC DA tune switches a loop to manual, and before a PID write or revert touches the
+loop, BHTune asks the opcda-bridge gateway which protocol versions it supports. The result is
+stored with the run and shown by `bhtune history show`, `bhtune opc gateway-info`, and the run
+detail page.
+
+- **Full** means the gateway covers every protocol version this BHTune build requires. The
+  operation proceeds with no compatibility warning.
+- **Partial** means the core protocol overlaps, but an optional feature such as namespace browse
+  or indexed search does not. The tune, write, or revert proceeds. Affected inspection features
+  are degraded, and BHTune logs a warning.
+- **Unknown** means the gateway did not report a protocol range. Live operations proceed with a
+  warning. Discovery, browse, and read stay available and report the unverified result instead of
+  failing the request.
+- **Incompatible** means the core protocol ranges do not overlap. BHTune refuses the tune, write,
+  or revert before changing the loop and tells you to upgrade the gateway or BHTune so the core
+  ranges overlap. A refused tune is a setup failure (exit code `1`) and does not create a running
+  run. The web GUI returns the same refusal as an error and writes nothing.
+
+Read-only OPC discovery, browse, and tag reads are not refused for an incompatible gateway. They
+return the compatibility result so you can see what the gateway cannot do. See
+[OPC gateway compatibility](opc-gateway-compatibility.md) for the checks and where the snapshot is
+shown.
+
 ## OPC quality
 
 Every OPC DA read reports a quality alongside its value (`Good`/`Uncertain`/`Bad`). BHTune
@@ -431,6 +456,8 @@ restore.
 
 ## Next steps
 
+- [OPC gateway compatibility](opc-gateway-compatibility.md) — how BHTune decides whether a
+  gateway is safe to mutate, and where that result is recorded.
 - [MRFT concepts](mrft-concepts.md) — what the test is actually doing while these guardrails
   watch over it.
 - [CLI quickstart](../getting-started/cli-quickstart.md) — see `--output json` and the automation
