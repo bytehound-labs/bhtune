@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 # Prepared ahead of standing up the `bytehound-labs/homebrew-bhtune` tap repo (deliberately
-# not yet created -- see AGENTS.md's "Packaging and distribution" section, `pkg-eval-homebrew`
-# under `pkg-evaluate-others`). This file is not installable as-is: it belongs at
+# not yet created -- see docs/internal/design/packaging-and-release.md,
+# `pkg-evaluate-others`). This file is not installable as-is: it belongs at
 # `Formula/bhtune.rb` in that tap once it exists, and every `sha256` placeholder below must
 # be filled in from a real release's checksums.txt first -- there is no release yet to
 # compute them from.
@@ -10,7 +10,8 @@
 # Supports only the two platforms `release.yml`'s build matrix actually produces: Linux
 # x86_64 and macOS arm64 (Apple Silicon). There is no Intel Mac or Linux ARM archive to
 # point at -- matches the "one package, not two"/opcda-bridge-derived precedent documented
-# in AGENTS.md. `brew install` on any other platform fails naturally with "no url" for the
+# in docs/internal/design/packaging-and-release.md. `brew install` on any other
+# platform fails naturally with "no url" for the
 # current platform rather than silently installing something that doesn't exist.
 #
 # Installs only the two binaries plus LICENSE/README, matching exactly what's in the

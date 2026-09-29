@@ -10,7 +10,8 @@ name: Docs agent
 # narrative updates and screenshot metadata together on same-repository PRs. Screenshot PNGs
 # remain generated-only review artifacts; the agent never edits their lock by hand. Every
 # guardrail below is load-bearing -- read the comment before changing it. See the
-# `docs-agent-ci` entry in AGENTS.md for the full design rationale.
+# `docs-agent-ci` entry in docs/internal/design/docs-site-and-generated-docs.md for the
+# full design rationale.
 
 on:
   pull_request:

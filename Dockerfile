@@ -7,7 +7,7 @@
 #
 # This is a *secondary* distribution channel for IT-managed Linux hosts. The Windows MSI
 # (`pkg-windows-installer`) is the primary path, since OT sites frequently prohibit or
-# simply lack container runtimes -- see AGENTS.md's "Packaging and distribution" section.
+# simply lack container runtimes -- see docs/internal/design/packaging-and-release.md.
 
 # ---- Frontend --------------------------------------------------------------------------
 FROM node:22-slim AS frontend

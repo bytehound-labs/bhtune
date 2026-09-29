@@ -30,6 +30,6 @@ See the [release guide](../guides/releasing.md) for the release policy.
 ## Reading the source directly
 
 Every crate's `Cargo.toml` also has a one-line `description`, and `AGENTS.md`'s
-["Crate map"](https://github.com/bytehound-labs/bhtune/blob/main/AGENTS.md) table in the
-repository summarizes what each one is responsible for and which phase(s) of the project
-built it — a good starting point before diving into the generated reference above.
+[Crate map](https://github.com/bytehound-labs/bhtune/blob/main/AGENTS.md#crate-map)
+summarizes what each crate is responsible for — a good starting point before diving into
+the generated reference above.

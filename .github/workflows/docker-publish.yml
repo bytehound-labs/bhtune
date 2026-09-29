@@ -1,7 +1,7 @@
 name: Docker image
 
 # Builds the multi-stage Dockerfile (frontend build -> cargo build -> slim runtime; see
-# AGENTS.md's "pkg-docker" design section) and publishes it to
+# docs/internal/design/packaging-and-release.md) and publishes it to
 # ghcr.io/bytehound-labs/bhtune. This is a *secondary* distribution channel for
 # IT-managed Linux hosts -- the Windows MSI installer (pkg-windows-installer) is the
 # primary path, since OT sites frequently prohibit or simply lack container runtimes.
@@ -69,7 +69,8 @@ jobs:
 
       # No credentials are needed for a build-only run (pull_request/workflow_dispatch),
       # and forked PRs wouldn't have them anyway -- see docs-agent-ci's identical reasoning
-      # in AGENTS.md for why a secrets-gated step must never run unconditionally.
+      # in docs/internal/design/docs-site-and-generated-docs.md for why a secrets-gated
+      # step must never run unconditionally.
       - name: Log in to GHCR
         if: github.event_name == 'push'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
