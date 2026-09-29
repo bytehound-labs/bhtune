@@ -95,7 +95,8 @@ def _verify_manifest_entry(
 
 def _archive_paths(assets_dir: Path, tag: str) -> dict[str, Path]:
     return {
-        target: assets_dir / f"bhtune-{tag}-{target}{'.zip' if target.endswith('msvc') else '.tar.gz'}"
+        target: assets_dir
+        / f"bhtune-{tag}-{target}{'.zip' if target.endswith('msvc') else '.tar.gz'}"
         for target in ARCHIVE_TARGETS
     }
 
@@ -122,7 +123,9 @@ def _require_packages(assets_dir: Path) -> list[Path]:
     return [debs[0], rpms[0]]
 
 
-def _verify_evidence(assets_dir: Path, product_assets: list[Path]) -> tuple[Path, Path, Path]:
+def _verify_evidence(
+    assets_dir: Path, product_assets: list[Path]
+) -> tuple[Path, Path, Path]:
     manifest_path = assets_dir / "release-assets.sha256"
     if not manifest_path.is_file():
         raise ArtifactVerificationError("missing release-assets.sha256")
@@ -154,13 +157,15 @@ def _verify_evidence(assets_dir: Path, product_assets: list[Path]) -> tuple[Path
 def _verify_archive_checksums(assets_dir: Path, archives: dict[str, Path]) -> None:
     for archive in archives.values():
         suffix = ".zip" if archive.name.endswith(".zip") else ".tar.gz"
-        checksum_path = assets_dir / f"{archive.name[:-len(suffix)]}.sha256"
+        checksum_path = assets_dir / f"{archive.name[: -len(suffix)]}.sha256"
         if not checksum_path.is_file():
             raise ArtifactVerificationError(
                 f"missing published checksum file for {archive.name}"
             )
         archive_manifest = _checksum_entries(checksum_path)
-        _verify_manifest_entry(archive_manifest, archive, manifest_name=checksum_path.name)
+        _verify_manifest_entry(
+            archive_manifest, archive, manifest_name=checksum_path.name
+        )
 
 
 def verify_release_assets(assets_dir: Path, tag: str) -> dict:
@@ -194,7 +199,9 @@ def _safe_report_path(path: Path) -> Path:
         raise ArtifactVerificationError(f"unsafe report path: {path}")
     resolved = path.expanduser().resolve()
     if not resolved.parent.is_dir():
-        raise ArtifactVerificationError(f"report directory does not exist: {resolved.parent}")
+        raise ArtifactVerificationError(
+            f"report directory does not exist: {resolved.parent}"
+        )
     return resolved
 
 

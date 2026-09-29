@@ -79,7 +79,9 @@ def spec_with_quality_field(*, remove_quality=False, remove_unrelated=False):
                         "required": True,
                         "content": {
                             JSON_CONTENT_TYPE: {
-                                "schema": {"$ref": "#/components/schemas/StartRunRequest"}
+                                "schema": {
+                                    "$ref": "#/components/schemas/StartRunRequest"
+                                }
                             }
                         },
                     },
@@ -109,7 +111,9 @@ def spec_with_timing_fields(*, remove_timing=False):
                         "required": True,
                         "content": {
                             JSON_CONTENT_TYPE: {
-                                "schema": {"$ref": "#/components/schemas/StartRunRequest"}
+                                "schema": {
+                                    "$ref": "#/components/schemas/StartRunRequest"
+                                }
                             }
                         },
                     },
@@ -131,7 +135,9 @@ RESULT_FIELDS = (
 )
 
 
-def spec_with_result_response(*, nullable=False, include_unrelated=False, other_schema=False):
+def spec_with_result_response(
+    *, nullable=False, include_unrelated=False, other_schema=False
+):
     properties = {name: {"type": "number"} for name in RESULT_FIELDS}
     required = list(RESULT_FIELDS)
     if include_unrelated:
@@ -151,7 +157,9 @@ def spec_with_result_response(*, nullable=False, include_unrelated=False, other_
                         "200": {
                             "content": {
                                 JSON_CONTENT_TYPE: {
-                                    "schema": {"$ref": f"#/components/schemas/{response_schema_name}"}
+                                    "schema": {
+                                        "$ref": f"#/components/schemas/{response_schema_name}"
+                                    }
                                 }
                             }
                         }
@@ -200,7 +208,9 @@ def spec_with_browse_contract(*, current=False, remove_unrelated_parameter=False
         }
     return {
         "openapi": "3.1.0",
-        "paths": {OPC_BROWSE_PATH: {"get": {"parameters": parameters, "responses": {}}}},
+        "paths": {
+            OPC_BROWSE_PATH: {"get": {"parameters": parameters, "responses": {}}}
+        },
         "components": {"schemas": schemas},
     }
 
@@ -223,23 +233,36 @@ class OpenApiBreakingTests(unittest.TestCase):
         del new["paths"]["/api/example"]["post"]["responses"]["200"]["content"][
             JSON_CONTENT_TYPE
         ]["schema"]["properties"]["id"]
-        self.assertTrue(any("response property" in error for error in find_breaking_changes(old, new)))
+        self.assertTrue(
+            any(
+                "response property" in error
+                for error in find_breaking_changes(old, new)
+            )
+        )
 
     def test_removed_component_schema_is_breaking(self):
         old = spec()
         new = spec()
         del new["components"]["schemas"]["Example"]
-        self.assertTrue(any("component schema" in error for error in find_breaking_changes(old, new)))
+        self.assertTrue(
+            any(
+                "component schema" in error for error in find_breaking_changes(old, new)
+            )
+        )
 
     def test_intentional_quality_request_removal_is_allowed(self):
         self.assertEqual(
-            find_breaking_changes(spec_with_quality_field(), spec_with_quality_field(remove_quality=True)),
+            find_breaking_changes(
+                spec_with_quality_field(), spec_with_quality_field(remove_quality=True)
+            ),
             [],
         )
 
     def test_intentional_timing_request_removals_are_allowed(self):
         self.assertEqual(
-            find_breaking_changes(spec_with_timing_fields(), spec_with_timing_fields(remove_timing=True)),
+            find_breaking_changes(
+                spec_with_timing_fields(), spec_with_timing_fields(remove_timing=True)
+            ),
             [],
         )
 
@@ -255,7 +278,9 @@ class OpenApiBreakingTests(unittest.TestCase):
         old["paths"][OTHER_PATH] = old["paths"].pop(RUNS_PATH)
         new["paths"][OTHER_PATH] = new["paths"].pop(RUNS_PATH)
         errors = find_breaking_changes(old, new)
-        self.assertTrue(any("'allow_uncertain_quality' was removed" in error for error in errors))
+        self.assertTrue(
+            any("'allow_uncertain_quality' was removed" in error for error in errors)
+        )
 
     def test_timing_removals_on_another_operation_remain_breaking(self):
         old = spec_with_timing_fields()
@@ -305,7 +330,10 @@ class OpenApiBreakingTests(unittest.TestCase):
         new = spec_with_browse_contract(current=True)
         errors = find_breaking_changes(old, new)
         self.assertTrue(
-            any("parameter" in error and "page_size" in error and "was removed" in error for error in errors)
+            any(
+                "parameter" in error and "page_size" in error and "was removed" in error
+                for error in errors
+            )
         )
 
     def test_browse_allowance_does_not_hide_unrelated_component_removal(self):

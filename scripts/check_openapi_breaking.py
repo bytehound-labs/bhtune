@@ -73,8 +73,10 @@ def _schema_type(schema: dict[str, Any]) -> str | None:
 def _enum_removed(old: dict[str, Any], new: dict[str, Any]) -> bool:
     old_enum = old.get("enum")
     new_enum = new.get("enum")
-    return isinstance(old_enum, list) and isinstance(new_enum, list) and not set(old_enum) <= set(
-        new_enum
+    return (
+        isinstance(old_enum, list)
+        and isinstance(new_enum, list)
+        and not set(old_enum) <= set(new_enum)
     )
 
 
@@ -88,12 +90,16 @@ def _is_nullable_expansion(old: dict[str, Any], new: dict[str, Any]) -> bool:
     )
 
 
-def _schema_header_breaks(old: dict[str, Any], new: dict[str, Any], location: str) -> list[str]:
+def _schema_header_breaks(
+    old: dict[str, Any], new: dict[str, Any], location: str
+) -> list[str]:
     errors: list[str] = []
     old_type = _schema_type(old)
     new_type = _schema_type(new)
     if old_type and new_type and old_type != new_type:
-        errors.append(f"{location}: schema type changed from {old_type!r} to {new_type!r}")
+        errors.append(
+            f"{location}: schema type changed from {old_type!r} to {new_type!r}"
+        )
     if _enum_removed(old, new):
         errors.append(f"{location}: an existing enum value was removed")
     return errors
@@ -124,11 +130,15 @@ def _required_breaks(
                     name in allowed_nullable_properties
                     and isinstance(old_properties.get(name), dict)
                     and isinstance(new_properties.get(name), dict)
-                    and _is_nullable_expansion(old_properties[name], new_properties[name])
+                    and _is_nullable_expansion(
+                        old_properties[name], new_properties[name]
+                    )
                 )
             ]
         if changed:
-            return [f"{location}: response fields stopped being required: {', '.join(changed)}"]
+            return [
+                f"{location}: response fields stopped being required: {', '.join(changed)}"
+            ]
     return []
 
 
@@ -271,12 +281,17 @@ def _parameters_break(
             errors.append(f"{location}: parameter {key!r} was removed")
             continue
         new_parameter = new_by_key[key]
-        if old_parameter.get("required") is not True and new_parameter.get("required") is True:
+        if (
+            old_parameter.get("required") is not True
+            and new_parameter.get("required") is True
+        ):
             errors.append(f"{location}: parameter {key!r} became required")
         old_schema = old_parameter.get("schema", {})
         new_schema = new_parameter.get("schema", {})
         if isinstance(old_schema, dict) and isinstance(new_schema, dict):
-            errors.extend(_schema_breaks(old_schema, new_schema, "request", f"{location} {key!r}"))
+            errors.extend(
+                _schema_breaks(old_schema, new_schema, "request", f"{location} {key!r}")
+            )
     return errors
 
 
@@ -351,7 +366,9 @@ def _response_breaks(
     return errors
 
 
-def _security_breaks(old: dict[str, Any], new: dict[str, Any], location: str) -> list[str]:
+def _security_breaks(
+    old: dict[str, Any], new: dict[str, Any], location: str
+) -> list[str]:
     if not old.get("security", []) and new.get("security", []):
         return [f"{location}: authentication became mandatory"]
     return []
@@ -369,8 +386,12 @@ def _operation_breaks(
         location,
         allowed_removed_parameters,
     )
-    errors.extend(_request_body_breaks(old.get("requestBody"), new.get("requestBody"), location))
-    errors.extend(_response_breaks(old.get("responses", {}), new.get("responses", {}), location))
+    errors.extend(
+        _request_body_breaks(old.get("requestBody"), new.get("requestBody"), location)
+    )
+    errors.extend(
+        _response_breaks(old.get("responses", {}), new.get("responses", {}), location)
+    )
     errors.extend(_security_breaks(old, new, location))
     return errors
 
@@ -413,7 +434,9 @@ def _component_request_allowances(
     allowances: dict[str, frozenset[str]] = {}
     for method, path, schema, property_name in INTENTIONAL_REMOVED_REQUEST_PROPERTIES:
         if (method, path) in request_refs.get(schema, set()):
-            allowances[schema] = allowances.get(schema, frozenset()) | frozenset({property_name})
+            allowances[schema] = allowances.get(schema, frozenset()) | frozenset(
+                {property_name}
+            )
     return allowances
 
 

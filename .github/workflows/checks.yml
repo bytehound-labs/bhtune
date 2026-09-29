@@ -27,6 +27,7 @@ jobs:
       package: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.package == 'true' }}
       knip: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.knip == 'true' }}
       installer: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.installer == 'true' }}
+      python: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.python == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -124,6 +125,17 @@ jobs:
               - 'scripts/**'
               - '.github/actions/**'
               - '.github/workflows/windows-installer.yml'
+            python:
+              - 'pyproject.toml'
+              - 'scripts/*.py'
+              - 'scripts/**/*.py'
+              - 'openapi.json'
+              - 'release-plz.toml'
+              - 'Cargo.toml'
+              - 'crates/**/Cargo.toml'
+              - '.github/workflows/**'
+              - '.woodpecker.yml'
+              - '.dockerignore'
 
   check:
     needs: changes
@@ -164,18 +176,6 @@ jobs:
         run: |
           cargo run --locked -p bhtune-server --example gen_openapi
           git diff --exit-code openapi.json
-
-      - name: Check OpenAPI compatibility comparator
-        run: python3 scripts/check_openapi_breaking_test.py
-
-      - name: Check image path filter consistency
-        run: python3 scripts/check_image_path_filters.py
-
-      - name: Run release automation policy tests
-        run: python3 -m unittest discover -s scripts -p '*_test.py'
-
-      - name: Check release-plz policy
-        run: python3 scripts/check_release_plz_config.py
 
       - name: Fetch base OpenAPI spec
         if: github.event_name == 'pull_request'
@@ -286,6 +286,38 @@ jobs:
 
       - name: Check the declared MSRV
         run: cargo check --workspace --all-targets --all-features --locked
+
+  python:
+    name: Python tooling
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Ruff
+        run: |
+          python3 -m venv /tmp/bhtune-python-tools
+          /tmp/bhtune-python-tools/bin/python -m pip install \
+            --disable-pip-version-check --no-cache-dir "ruff==0.16.9"
+
+      - name: Lint Python scripts
+        run: /tmp/bhtune-python-tools/bin/ruff check scripts
+
+      - name: Check Python formatting
+        run: /tmp/bhtune-python-tools/bin/ruff format --check scripts
+
+      - name: Run Python unit tests
+        run: python3 -m unittest discover -s scripts -p '*_test.py'
+
+      - name: Check image path filter consistency
+        run: python3 scripts/check_image_path_filters.py
+
+      - name: Check release-plz policy
+        run: python3 scripts/check_release_plz_config.py
 
   frontend:
     needs: changes
@@ -459,6 +491,7 @@ jobs:
         package,
         aur,
         msrv,
+        python,
         frontend,
         screenshots,
         website,
@@ -482,6 +515,7 @@ jobs:
           needs.changes.outputs.website != 'true' &&
           needs.changes.outputs.package != 'true' &&
           needs.changes.outputs.knip != 'true' &&
+          needs.changes.outputs.python != 'true' &&
           needs.changes.outputs.installer != 'true'
         run: echo "No validation-affecting files changed; heavy validation skipped."
 
@@ -492,6 +526,7 @@ jobs:
           SCREENSHOTS_CHANGED: ${{ needs.changes.outputs.screenshots }}
           WEBSITE_CHANGED: ${{ needs.changes.outputs.website }}
           PACKAGE_CHANGED: ${{ needs.changes.outputs.package }}
+          PYTHON_CHANGED: ${{ needs.changes.outputs.python }}
           CHECK_RESULT: ${{ needs.check.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
           MSRV_RESULT: ${{ needs.msrv.result }}
@@ -500,6 +535,7 @@ jobs:
           WEBSITE_RESULT: ${{ needs.website.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
           AUR_RESULT: ${{ needs.aur.result }}
+          PYTHON_RESULT: ${{ needs.python.result }}
           KNIP_CHANGED: ${{ needs.changes.outputs.knip }}
           KNIP_RESULT: ${{ needs.knip.result }}
           INSTALLER_CHANGED: ${{ needs.changes.outputs.installer }}
@@ -514,6 +550,11 @@ jobs:
                 failed=1
               fi
             done
+          fi
+
+          if [[ "$PYTHON_CHANGED" == "true" && "$PYTHON_RESULT" != "success" ]]; then
+            echo "Python tooling validation ended with: $PYTHON_RESULT"
+            failed=1
           fi
 
           if [[ "$FRONTEND_CHANGED" == "true" && "$FRONTEND_RESULT" != "success" ]]; then
