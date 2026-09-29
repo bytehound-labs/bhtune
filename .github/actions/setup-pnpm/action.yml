@@ -1,0 +1,51 @@
+name: Setup pnpm
+description: >
+  Install pnpm through the pinned pnpm/setup action. That action runs
+  `pnpm install` itself when its install input is left at the default (true);
+  this action does not add a second install step. runtime and cache are
+  optional and are omitted when empty, so a caller that does not set one does
+  not force a new value over pnpm/setup's own default. Existing BHTune jobs
+  pass runtime node@lts and cache true.
+
+inputs:
+  runtime:
+    description: >
+      Runtime passed to pnpm/setup, such as node@lts. Leave empty to omit the
+      input.
+    required: false
+    default: ""
+  cache:
+    description: >
+      Whether pnpm/setup caches the store. Leave empty to omit the input.
+      Existing jobs pass true. pnpm/setup's own default is false, so this
+      action does not default the input to true.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Composite `uses` steps cannot omit an individual `with` key. An explicit
+    # empty runtime or cache string is not the same as leaving the input unset.
+    - name: Setup pnpm
+      if: ${{ inputs.runtime != '' && inputs.cache != '' }}
+      uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+      with:
+        runtime: ${{ inputs.runtime }}
+        cache: ${{ inputs.cache }}
+
+    - name: Setup pnpm
+      if: ${{ inputs.runtime != '' && inputs.cache == '' }}
+      uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+      with:
+        runtime: ${{ inputs.runtime }}
+
+    - name: Setup pnpm
+      if: ${{ inputs.runtime == '' && inputs.cache != '' }}
+      uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
+      with:
+        cache: ${{ inputs.cache }}
+
+    - name: Setup pnpm
+      if: ${{ inputs.runtime == '' && inputs.cache == '' }}
+      uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2
