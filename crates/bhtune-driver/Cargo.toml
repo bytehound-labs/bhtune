@@ -69,10 +69,10 @@ tokio = { version = "1", features = [
 # against `SimulatorDriver` through the actual `Driver` trait -- everywhere else in this
 # crate stays `bhtune-core`-free (see `driver-trait`'s design notes in `AGENTS.md`).
 bhtune-core.workspace = true
-# Pinned to the same versions `opcda-bridge` itself declares in its own `Cargo.toml`: this
-# crate's tests stand up a mock `Bridge` gRPC service to test `OpcDaDriver` end-to-end
-# against, and the generated `tonic`/`prost` types on both sides of that connection (the mock
-# service here, `opcda_bridge::Client`'s generated stub on the other) must agree on the exact
-# wire types or they won't type-check against each other.
+# Smoke tests construct generated browse/read/search messages. The mock `Bridge` service
+# lives in `bhtune-test-support` and is not enabled with `mock-driver`, which would cycle
+# back through this crate. The proto pin stays so those messages match the client stub.
+# Versionless path only: Cargo strips a versionless dev-dependency when packaging, so
+# this unpublished crate is never resolved from crates.io. Do not add a version.
 opcda-bridge-proto = "0.5"
-tokio-stream = "0.1"
+bhtune-test-support = { path = "../bhtune-test-support" }

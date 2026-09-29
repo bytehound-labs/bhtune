@@ -1687,7 +1687,7 @@ mod tests {
             MockBridgeService, good_reading, start_mock_server,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
             write_response: opcda_bridge_proto::bridge::WriteResponse {
                 tag_id: "ignored".to_string(),
@@ -1732,7 +1732,7 @@ mod tests {
             MockBridgeService, good_reading, start_mock_server,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
             write_response: opcda_bridge_proto::bridge::WriteResponse {
                 tag_id: "ignored".to_string(),
@@ -1767,7 +1767,7 @@ mod tests {
             MockBridgeService, good_reading, start_mock_server,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
             write_response: opcda_bridge_proto::bridge::WriteResponse {
                 tag_id: "ignored".to_string(),
@@ -1816,7 +1816,7 @@ mod tests {
             MockBridgeService, good_reading, start_mock_server,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
             write_response: opcda_bridge_proto::bridge::WriteResponse {
                 tag_id: "ignored".to_string(),
@@ -1868,7 +1868,7 @@ mod tests {
             MockBridgeService, good_reading, start_mock_server,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             // The pre-read (all three constants) still succeeds; every subsequent *write*
             // is rejected at the transport level, so the very first write attempted
             // (Proportional) fails before anything is confirmed -- no rollback is even
@@ -1914,7 +1914,7 @@ mod tests {
     async fn write_run_reports_a_failed_pre_read_as_200_not_an_http_error() {
         use crate::test_support::mock_bridge::{MockBridgeService, start_mock_server};
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             // Every `read` (including the Proportional pre-read, the very first driver call
             // `write_pid_values` makes) is rejected at the transport level -- no `write` is
             // ever attempted, and the resulting row's `previous` stays entirely unset.
@@ -2209,7 +2209,7 @@ mod tests {
             GetGatewayInfoResponse, ProtocolFeature, ProtocolFeatureKind,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             gateway_info_response: GetGatewayInfoResponse {
                 application_version: "0.5.9".to_string(),
                 compatibility_schema_version: 1,
@@ -2251,7 +2251,7 @@ mod tests {
             MockBridgeService, good_reading, start_mock_server,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
             write_response: opcda_bridge_proto::bridge::WriteResponse {
                 tag_id: "ignored".to_string(),
@@ -2285,7 +2285,7 @@ mod tests {
             MockBridgeService, good_reading, start_mock_server,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
             write_response: opcda_bridge_proto::bridge::WriteResponse {
                 tag_id: "ignored".to_string(),
@@ -2343,7 +2343,7 @@ mod tests {
             MockBridgeService, good_reading, start_mock_server,
         };
 
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: good_reading("10.0"),
             write_response: opcda_bridge_proto::bridge::WriteResponse {
                 tag_id: "ignored".to_string(),

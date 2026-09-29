@@ -14,6 +14,8 @@ class ReleasePlzConfigError(ValueError):
     """Raised when release-plz configuration violates the BHTune release policy."""
 
 
+# Product crates only. `bhtune-test-support` is unpublished and is not a changelog
+# or release package.
 WORKSPACE_PACKAGES = {
     "bhtune-core",
     "bhtune-driver",
@@ -122,7 +124,7 @@ def _validate_anchor(package_map: dict[str, dict], workspace: dict) -> None:
     included = anchor.get("changelog_include")
     if set(included or ()) != WORKSPACE_PACKAGES - {"bhtune-cli"}:
         raise ReleasePlzConfigError(
-            f"{ANCHOR_CONTEXT}.changelog_include must contain the other four workspace crates"
+            f"{ANCHOR_CONTEXT}.changelog_include must contain the other four product crates"
         )
 
 

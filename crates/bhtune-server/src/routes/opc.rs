@@ -1383,7 +1383,7 @@ mod tests {
 
     #[tokio::test]
     async fn servers_returns_every_registered_server_from_a_mock_gateway() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             list_servers_response: ListServersResponse {
                 servers: vec![
                     "Matrikon.OPC.Simulation.1".to_string(),
@@ -1406,7 +1406,7 @@ mod tests {
 
     #[tokio::test]
     async fn servers_handles_an_empty_result() {
-        let host = start_mock_server(MockBridgeService::default()).await;
+        let (host, _host_server) = start_mock_server(MockBridgeService::default()).await;
         let app = crate::build_router(state_with(Some(&host), None).await);
 
         let response = get(app, "/api/opc/servers").await;
@@ -1433,7 +1433,7 @@ mod tests {
 
     #[tokio::test]
     async fn servers_query_param_overrides_the_configured_bridge_host() {
-        let host = start_mock_server(MockBridgeService::default()).await;
+        let (host, _host_server) = start_mock_server(MockBridgeService::default()).await;
         // Config points at an unreachable host; the query param must win.
         let app = crate::build_router(state_with(Some("127.0.0.1:1"), None).await);
 
@@ -1443,7 +1443,7 @@ mod tests {
 
     #[tokio::test]
     async fn capabilities_reports_the_indexed_search_contract() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             capabilities_response: opcda_bridge_proto::bridge::GetCapabilitiesResponse {
                 application_version: "0.4.0".to_string(),
                 protocol_version: "2".to_string(),
@@ -1488,7 +1488,7 @@ mod tests {
 
         for (state, expected_state) in states {
             let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let host = start_mock_server(MockBridgeService {
+            let (host, _host_server) = start_mock_server(MockBridgeService {
                 search_index_status_response: proto_index_status(state),
                 search_index_status_requests: requests.clone(),
                 ..Default::default()
@@ -1535,7 +1535,7 @@ mod tests {
     #[tokio::test]
     async fn search_index_returns_exact_matches_status_and_has_more() {
         let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             search_index_response: ProtoSearchIndexResponse {
                 matches: vec![ProtoIndexedSearchMatch {
                     item_id: "FCS0201!204FI00510.PV".to_string(),
@@ -1582,7 +1582,7 @@ mod tests {
     async fn search_index_refresh_and_control_forward_actions() {
         let refresh_requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let control_requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             search_index_status_response: proto_index_status(ProtoSearchIndexState::Refreshing),
             refresh_search_index_requests: refresh_requests.clone(),
             control_search_index_requests: control_requests.clone(),
@@ -1686,7 +1686,7 @@ mod tests {
 
     #[tokio::test]
     async fn indexed_search_routes_surface_gateway_errors() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             search_index_status_error: Some(tonic::Status::internal("status failed")),
             search_index_error: Some(tonic::Status::internal("search failed")),
             refresh_search_index_error: Some(tonic::Status::internal("refresh failed")),
@@ -1748,7 +1748,7 @@ mod tests {
 
     #[tokio::test]
     async fn indexed_search_status_reports_an_unsupported_gateway() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             search_index_status_error: Some(tonic::Status::new(
                 Code::Unimplemented,
                 "indexed search is unavailable",
@@ -1773,7 +1773,7 @@ mod tests {
 
     #[tokio::test]
     async fn browse_returns_nodes_from_a_mock_gateway() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             browse_response: BrowsePage {
                 session_id: "session".to_string(),
                 nodes: vec![ProtoBrowseNode {
@@ -1800,7 +1800,7 @@ mod tests {
 
     #[tokio::test]
     async fn browse_handles_an_empty_result() {
-        let host = start_mock_server(MockBridgeService::default()).await;
+        let (host, _host_server) = start_mock_server(MockBridgeService::default()).await;
         let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
 
         let response = get(
@@ -1846,7 +1846,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_browse_session_forwards_the_opaque_session_id() {
-        let host = start_mock_server(MockBridgeService::default()).await;
+        let (host, _host_server) = start_mock_server(MockBridgeService::default()).await;
         let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
         let response = get(
             app,
@@ -1870,7 +1870,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_stream_returns_match_progress_and_completed_events() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             search_events: vec![
                 opcda_bridge_proto::bridge::SearchEvent {
                     event: Some(opcda_bridge_proto::bridge::search_event::Event::Match(
@@ -1928,7 +1928,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_returns_the_value_quality_and_timestamp_from_a_mock_gateway() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             // Constructed directly (rather than via `good_reading`, which hardcodes an
             // `"ignored"` tag_id -- fine for `runs.rs`'s tests, which don't echo it back, but
             // this handler does) so the mocked response's tag_id matches what was requested,
@@ -1967,7 +1967,7 @@ mod tests {
         // implementation), which makes this defensive `ApiError::Internal` branch (a bug in
         // the driver, not a client mistake) reachable in a test without needing a real
         // misbehaving gateway.
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: ReadResponse { values: vec![] },
             ..Default::default()
         })
@@ -2051,7 +2051,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_returns_400_when_the_connected_gateway_rejects_the_read() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_error: Some(tonic::Status::unavailable("read unavailable")),
             ..Default::default()
         })
@@ -2070,7 +2070,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_surfaces_uncertain_and_bad_quality_without_failing() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: opcda_bridge_proto::bridge::ReadResponse {
                 values: vec![opcda_bridge_proto::bridge::TagValue {
                     tag_id: "ignored".to_string(),
@@ -2265,7 +2265,7 @@ mod tests {
 
     #[tokio::test]
     async fn capabilities_degrades_when_the_gateway_predates_capability_discovery() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             capabilities_error: Some(tonic::Status::unimplemented("capability discovery")),
             ..Default::default()
         })
@@ -2284,7 +2284,7 @@ mod tests {
 
     #[tokio::test]
     async fn capabilities_returns_400_when_capability_discovery_fails() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             capabilities_error: Some(tonic::Status::internal("boom")),
             ..Default::default()
         })
@@ -2305,7 +2305,7 @@ mod tests {
 
     #[tokio::test]
     async fn browse_degrades_when_the_gateway_predates_paged_browse() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             browse_error: Some(tonic::Status::unimplemented("paged browse")),
             ..Default::default()
         })
@@ -2325,7 +2325,7 @@ mod tests {
 
     #[tokio::test]
     async fn browse_returns_400_when_paged_browse_fails() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             browse_error: Some(tonic::Status::internal("boom")),
             ..Default::default()
         })

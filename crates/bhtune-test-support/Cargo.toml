@@ -1,0 +1,31 @@
+[package]
+name = "bhtune-test-support"
+description = "Unpublished shared test doubles for BHTune. Not a product crate and not a release artifact."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Cycle guard for a future shared in-process driver double. It is intentionally empty:
+# the existing CLI and driver `MockDriver` types are each used by only one crate, and
+# moving either one would create a dev-dependency cycle or change test behavior.
+# `bhtune-driver` must not enable this feature.
+mock-driver = []
+
+[dependencies]
+# Same pins `bhtune-driver` uses for its smoke-test mock. This crate must not depend on
+# `bhtune-driver`, `bhtune-cli`, `bhtune-server`, or `bhtune-core`.
+opcda-bridge-proto = "0.5"
+tokio = { version = "1", features = ["net", "rt", "sync"] }
+tokio-stream = "0.1"
+tonic = "0.14"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

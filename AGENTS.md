@@ -14,16 +14,17 @@ v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only repl
 
 ## Crate map
 
-| Path | Responsibility |
-| --- | --- |
-| `bhtune-core` | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads. |
-| `bhtune-driver` | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`. |
-| `bhtune-db` | SQLite schema, migrations, template seeding, run history, backup/restore, and retention. |
-| `bhtune-cli` | `bhtune` binary and the shared config, logging, and `prepare()`/`drive()` orchestration. |
-| `bhtune-server` | Axum API and the embedded React SPA. It reuses the CLI tune path instead of a second implementation. |
-| `frontend/` | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`. |
-| `website/` | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`. |
-| `fuzz/` | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member. |
+| Path                  | Responsibility                                                                                                                                                                          |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`         | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                               |
+| `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                 |
+| `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                |
+| `bhtune-cli`          | `bhtune` binary and the shared config, logging, and `prepare()`/`drive()` orchestration.                                                                                                |
+| `bhtune-server`       | Axum API and the embedded React SPA. It reuses the CLI tune path instead of a second implementation.                                                                                    |
+| `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not. |
+| `frontend/`           | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                            |
+| `website/`            | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`.                                                                                               |
+| `fuzz/`               | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member.                                                                                                       |
 
 The server package and `[[bin]]` are both named `bhtune-server`, so tests must use `env!("CARGO_BIN_EXE_bhtune-server")`. The CLI binary is `bhtune` (`CARGO_BIN_EXE_bhtune`).
 
@@ -101,16 +102,16 @@ Required status names stay `Required validation status`, `Required coverage stat
 
 Resolution is CLI flag, then environment variable, then TOML, then the built-in default. An explicit missing path is an error. A missing auto-discovered file means all defaults. A file that exists but does not parse is always an error. The example file is [`crates/bhtune-cli/bhtune.example.toml`](crates/bhtune-cli/bhtune.example.toml). Rationale is in [`docs/internal/design/config.md`](docs/internal/design/config.md).
 
-| Setting | Flag | Env | TOML | Default |
-| --- | --- | --- | --- | --- |
-| Database | `--db` | `BHTUNE_DB` | `db` | platform data dir `bhtune.db` |
-| Gateway | `--bridge-host` | `BHTUNE_BRIDGE_HOST` | `bridge_host` | `localhost:7600` |
-| OPC server | `--server` |  | `server` | none; required for OPC DA tune and `opc` |
-| User catalog | `--templates` | `BHTUNE_TEMPLATES` | `templates` | platform config dir `templates.toml`; a missing default is not an error |
-| Retention | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days` | retain forever |
-| Server mode |  | `BHTUNE_SERVER_MODE` | `server_mode` | `full` |
-| Origin |  | `BHTUNE_ORIGIN` | `origin` | same-host check in Full when unset; required in Demo |
-| Trusted proxy |  |  | `trusted_proxy` | none |
+| Setting       | Flag               | Env                     | TOML             | Default                                                                 |
+| ------------- | ------------------ | ----------------------- | ---------------- | ----------------------------------------------------------------------- |
+| Database      | `--db`             | `BHTUNE_DB`             | `db`             | platform data dir `bhtune.db`                                           |
+| Gateway       | `--bridge-host`    | `BHTUNE_BRIDGE_HOST`    | `bridge_host`    | `localhost:7600`                                                        |
+| OPC server    | `--server`         |                         | `server`         | none; required for OPC DA tune and `opc`                                |
+| User catalog  | `--templates`      | `BHTUNE_TEMPLATES`      | `templates`      | platform config dir `templates.toml`; a missing default is not an error |
+| Retention     | `--retention-days` | `BHTUNE_RETENTION_DAYS` | `retention_days` | retain forever                                                          |
+| Server mode   |                    | `BHTUNE_SERVER_MODE`    | `server_mode`    | `full`                                                                  |
+| Origin        |                    | `BHTUNE_ORIGIN`         | `origin`         | same-host check in Full when unset; required in Demo                    |
+| Trusted proxy |                    |                         | `trusted_proxy`  | none                                                                    |
 
 `allow_uncertain_quality` defaults to true. `Good` always passes, `Bad` never passes, and `Uncertain` follows the policy and logs a warning. The decision is snapshotted onto the run. `/config` edits this same TOML file. It does not create a second settings database. Saves preserve comments and unknown keys, validate, back up, and replace the file atomically. A stale revision returns `409`. A retention save does not delete history immediately.
 
@@ -122,16 +123,16 @@ Global `[tuning]` timeouts are resolved before any driver connection or live mut
 
 JSON mode prints nothing but the final object on stdout. Prompts go to stderr. JSON mode without `--write-pid` does not read stdin.
 
-| Code | Name | Meaning |
-| --- | --- | --- |
-| 0 | `EXIT_SUCCESS` | Completed, or write-back was skipped cleanly. |
-| 1 | `EXIT_FAILURE` | Setup or command error before a normal tune outcome. |
-| 2 | `EXIT_ABORTED` | Ctrl+C, with restore confirmed. |
-| 3 | `EXIT_WRITE_BACK_FAILED` | The test completed and the PID write-back failed. |
-| 4 | `EXIT_TIMED_OUT` | `[tuning].timeout_secs` elapsed. |
-| 5 | `EXIT_POOR_QUALITY` | A tuning-critical read was `Bad`, or `Uncertain` while the quality policy rejected it. |
-| 6 | `EXIT_RESTORE_INCOMPLETE` | Restore was not confirmed, including a second Ctrl+C during restore. |
-| 7 | `EXIT_ACTUATION_FAILED` | MV actuation failed and restore was confirmed. |
+| Code | Name                      | Meaning                                                                                |
+| ---- | ------------------------- | -------------------------------------------------------------------------------------- |
+| 0    | `EXIT_SUCCESS`            | Completed, or write-back was skipped cleanly.                                          |
+| 1    | `EXIT_FAILURE`            | Setup or command error before a normal tune outcome.                                   |
+| 2    | `EXIT_ABORTED`            | Ctrl+C, with restore confirmed.                                                        |
+| 3    | `EXIT_WRITE_BACK_FAILED`  | The test completed and the PID write-back failed.                                      |
+| 4    | `EXIT_TIMED_OUT`          | `[tuning].timeout_secs` elapsed.                                                       |
+| 5    | `EXIT_POOR_QUALITY`       | A tuning-critical read was `Bad`, or `Uncertain` while the quality policy rejected it. |
+| 6    | `EXIT_RESTORE_INCOMPLETE` | Restore was not confirmed, including a second Ctrl+C during restore.                   |
+| 7    | `EXIT_ACTUATION_FAILED`   | MV actuation failed and restore was confirmed.                                         |
 
 `tune_runs.outcome` stores only `Completed`, `Aborted`, or `Failed`. A write-back failure does not rewrite an already completed row. Exit 6 outranks exit 7 when restore is incomplete.
 
@@ -223,29 +224,29 @@ Condensed register. Item numbers and decision tags match [`docs/internal/design/
 
 ## Design notes
 
-| Note | What it holds |
-| --- | --- |
-| [architecture-decisions.md](docs/internal/design/architecture-decisions.md) | Scope, driver seam, OpenAPI, SPA embedding, and SQLite rules. |
-| [safety-hardening.md](docs/internal/design/safety-hardening.md) | Live-plant findings, restore, write-back, and actuation. |
-| [correctness-register.md](docs/internal/design/correctness-register.md) | Full numbered register and evidence. |
-| [mrft-measurement.md](docs/internal/design/mrft-measurement.md) | Boundary correction and result validity. |
-| [drivers.md](docs/internal/design/drivers.md) | OPC DA, simulator, and replay drivers. |
-| [opc-browser.md](docs/internal/design/opc-browser.md) | Session-aware browse and indexed search. |
-| [config.md](docs/internal/design/config.md) | Precedence, tuning, and quality policy. |
-| [cli.md](docs/internal/design/cli.md) | CLI surface and automation. |
-| [logging.md](docs/internal/design/logging.md) | Tracing file plus stderr-only console mirroring. |
-| [templates.md](docs/internal/design/templates.md) | Catalog, provenance, user catalog, import, export, and delete. |
-| [persistence.md](docs/internal/design/persistence.md) | Schema, history, backup, and retention. |
-| [server-and-api.md](docs/internal/design/server-and-api.md) | HTTP API, tune start, and OpenAPI. |
-| [frontend.md](docs/internal/design/frontend.md) | SPA screens, live stream, and OPC browser. |
-| [demo-mode.md](docs/internal/design/demo-mode.md) | Public simulator Demo boundary and fixed limits. |
-| [testing.md](docs/internal/design/testing.md) | Simulator, Playwright, and release-matrix tests. |
-| [validation-golden-replay.md](docs/internal/design/validation-golden-replay.md) | Golden-master replay. |
-| [packaging-and-release.md](docs/internal/design/packaging-and-release.md) | Archives, Docker, deb/rpm, and AUR. |
-| [windows-installer.md](docs/internal/design/windows-installer.md) | NSIS installer and optional gateway. |
-| [docs-site-and-generated-docs.md](docs/internal/design/docs-site-and-generated-docs.md) | Docs site, rustdoc, and the docs agent. |
-| [ci-and-hardening.md](docs/internal/design/ci-and-hardening.md) | CI, security workflows, and API compatibility. |
-| [cla.md](docs/internal/design/cla.md) | CLA text and enforcement workflow. |
+| Note                                                                                    | What it holds                                                  |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [architecture-decisions.md](docs/internal/design/architecture-decisions.md)             | Scope, driver seam, OpenAPI, SPA embedding, and SQLite rules.  |
+| [safety-hardening.md](docs/internal/design/safety-hardening.md)                         | Live-plant findings, restore, write-back, and actuation.       |
+| [correctness-register.md](docs/internal/design/correctness-register.md)                 | Full numbered register and evidence.                           |
+| [mrft-measurement.md](docs/internal/design/mrft-measurement.md)                         | Boundary correction and result validity.                       |
+| [drivers.md](docs/internal/design/drivers.md)                                           | OPC DA, simulator, and replay drivers.                         |
+| [opc-browser.md](docs/internal/design/opc-browser.md)                                   | Session-aware browse and indexed search.                       |
+| [config.md](docs/internal/design/config.md)                                             | Precedence, tuning, and quality policy.                        |
+| [cli.md](docs/internal/design/cli.md)                                                   | CLI surface and automation.                                    |
+| [logging.md](docs/internal/design/logging.md)                                           | Tracing file plus stderr-only console mirroring.               |
+| [templates.md](docs/internal/design/templates.md)                                       | Catalog, provenance, user catalog, import, export, and delete. |
+| [persistence.md](docs/internal/design/persistence.md)                                   | Schema, history, backup, and retention.                        |
+| [server-and-api.md](docs/internal/design/server-and-api.md)                             | HTTP API, tune start, and OpenAPI.                             |
+| [frontend.md](docs/internal/design/frontend.md)                                         | SPA screens, live stream, and OPC browser.                     |
+| [demo-mode.md](docs/internal/design/demo-mode.md)                                       | Public simulator Demo boundary and fixed limits.               |
+| [testing.md](docs/internal/design/testing.md)                                           | Simulator, Playwright, and release-matrix tests.               |
+| [validation-golden-replay.md](docs/internal/design/validation-golden-replay.md)         | Golden-master replay.                                          |
+| [packaging-and-release.md](docs/internal/design/packaging-and-release.md)               | Archives, Docker, deb/rpm, and AUR.                            |
+| [windows-installer.md](docs/internal/design/windows-installer.md)                       | NSIS installer and optional gateway.                           |
+| [docs-site-and-generated-docs.md](docs/internal/design/docs-site-and-generated-docs.md) | Docs site, rustdoc, and the docs agent.                        |
+| [ci-and-hardening.md](docs/internal/design/ci-and-hardening.md)                         | CI, security workflows, and API compatibility.                 |
+| [cla.md](docs/internal/design/cla.md)                                                   | CLA text and enforcement workflow.                             |
 
 ## Open questions
 

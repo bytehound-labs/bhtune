@@ -115,12 +115,14 @@ sqlx = { version = "0.9", default-features = false, features = [
   "runtime-tokio",
   "chrono",
 ] }
-# Pinned to the same versions `opcda-bridge` (and `bhtune-driver`'s own tests) use, so the
-# `opc` subcommand's tests can stand up a mock `Bridge` gRPC service and get wire-compatible
-# generated types to test `OpcDaDriver`-backed commands end-to-end.
+# Tests still construct generated browse/read/write messages. The mock `Bridge` service
+# itself comes from `bhtune-test-support`, pinned to the same proto/tonic versions.
+# Versionless path only: Cargo strips a versionless dev-dependency when packaging, so
+# this unpublished crate is never resolved from crates.io. Do not add a version.
 opcda-bridge-proto = "0.5"
-tonic = "0.14"
-tokio-stream = "0.1"
+bhtune-test-support = { path = "../bhtune-test-support", features = [
+  "mock-driver",
+] }
 # Test-only: `tune.rs`'s tests implement `bhtune_driver::Driver` for a local in-memory mock
 # to exercise the opcda-style mode-transition/restore/write-back logic (which the simulator
 # driver's tag-less design never exercises) without a real gRPC gateway.

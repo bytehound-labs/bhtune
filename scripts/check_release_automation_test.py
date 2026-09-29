@@ -33,6 +33,7 @@ WORKSPACE_CRATES = (
     "bhtune-db",
     "bhtune-cli",
     "bhtune-server",
+    "bhtune-test-support",
 )
 
 

@@ -6,6 +6,7 @@ members = [
   "crates/bhtune-db",
   "crates/bhtune-cli",
   "crates/bhtune-server",
+  "crates/bhtune-test-support",
 ]
 
 [workspace.package]
@@ -26,10 +27,16 @@ homepage = "https://github.com/bytehound-labs/bhtune"
 # Internal workspace crates, each pinned to `path` + an explicit `version` requirement
 # (mirroring opcda-bridge's own `opcda-bridge`/`opcda-bridge-proto` entries) rather than a
 # bare `path`-only dependency. This is required, not stylistic: `cargo package` refuses to
-# package any crate whose path dependency has no version requirement ("all dependencies
-# must have a version requirement specified when packaging"), which would otherwise make
-# every crate depending on another workspace member unpublishable. `bhtune-server` has no
-# entry here since nothing in the workspace depends on it.
+# package any crate whose normal or build path dependency has no version requirement
+# ("all dependencies must have a version requirement specified when packaging"), which
+# would otherwise make every crate depending on another workspace member unpublishable.
+# `bhtune-server` has no entry here since nothing in the workspace depends on the server
+# crate.
+# `bhtune-test-support` is intentionally absent. It is unpublished (`publish = false`) and
+# only a dev-dependency. A versioned path dev-dependency is rewritten to a crates.io
+# requirement during `cargo package` and then cannot be resolved. Each consumer declares
+# a versionless path dev-dependency, which Cargo strips from packaged manifests. Do not
+# add a version to those declarations.
 bhtune-core = { path = "crates/bhtune-core", version = "0.1.0" }
 bhtune-driver = { path = "crates/bhtune-driver", version = "0.1.0" }
 bhtune-db = { path = "crates/bhtune-db", version = "0.1.0" }
