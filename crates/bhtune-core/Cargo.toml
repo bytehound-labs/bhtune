@@ -1,10 +1,19 @@
 [package]
 name = "bhtune-core"
-description = "Pure domain logic for BHTune: the MRFT tuning state machine, PID math, and data model. No I/O, no async, no clock reads — see AGENTS.md."
+description = "Pure domain logic for BHTune: the MRFT tuning state machine, PID math, and data model."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/bhtune-core"
+readme = "README.md"
+keywords = ["control-systems", "industrial", "mrft", "pid", "tuning"]
+categories = ["algorithms"]
+# Include the catalog embedded by src/template.rs. Workspace-only tests and documentation
+# are intentionally omitted from the independently packaged crate.
+include = ["Cargo.toml", "README.md", "src/**", "templates/**"]
 
 [lints]
 workspace = true

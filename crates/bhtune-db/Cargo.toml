@@ -3,8 +3,17 @@ name = "bhtune-db"
 description = "SQLite persistence (sqlx, WAL mode) for BHTune: DCS/PLC templates, loops, tune runs, samples, and results. A single, un-encrypted, open database file."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/bhtune-db"
+readme = "README.md"
+keywords = ["control-systems", "database", "industrial", "pid", "sqlite"]
+categories = ["database"]
+# migrations/ is embedded at compile time by src/pool.rs. Workspace-only tests and
+# documentation are intentionally omitted from the independently packaged crate.
+include = ["Cargo.toml", "README.md", "migrations/**", "src/**"]
 
 [lints]
 workspace = true

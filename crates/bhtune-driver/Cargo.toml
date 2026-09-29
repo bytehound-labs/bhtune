@@ -3,8 +3,17 @@ name = "bhtune-driver"
 description = "The Driver trait (tag read/write/browse) and its implementations: OPC DA (via opcda-bridge), an in-process FOPDT simulator, and a golden-trace replay driver for testing."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/bhtune-driver"
+readme = "README.md"
+keywords = ["control-systems", "industrial", "opc-da", "pid", "simulation"]
+categories = ["simulation"]
+# Keep the registry archive to the crate source and its package documentation; the
+# replay tests use golden fixtures owned by the workspace.
+include = ["Cargo.toml", "README.md", "src/**"]
 
 [lints]
 workspace = true

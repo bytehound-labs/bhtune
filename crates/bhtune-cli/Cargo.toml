@@ -3,8 +3,24 @@ name = "bhtune-cli"
 description = "Headless command-line adapter for BHTune: run MRFT tunes from scripts and schedulers with no GUI."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/bhtune-cli"
+readme = "README.md"
+keywords = ["command-line", "control-systems", "industrial", "pid", "tuning"]
+categories = ["command-line-utilities"]
+# Keep the package self-contained: the example code generator and its sample config are
+# package content, while workspace-only integration tests and generated documentation are
+# not.
+include = [
+  "Cargo.toml",
+  "README.md",
+  "bhtune.example.toml",
+  "examples/**",
+  "src/**",
+]
 
 [lints]
 workspace = true
