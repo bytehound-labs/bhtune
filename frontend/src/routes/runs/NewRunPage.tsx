@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -7,18 +8,35 @@ import {
   type SubmitEvent,
 } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
+import type { AppCapabilities } from "../../api/capabilities";
+import { useDemoDraft } from "../../api/demoDraft";
+import { userFacingErrorMessage } from "../../api/errors";
 import {
   useLastRunRequest,
   useRunDraft,
   useSaveRunDraft,
   useStartRun,
 } from "../../api/runs";
-import type { StartRunRequest } from "../../api/runs";
 import { useTemplates } from "../../api/templates";
-import { userFacingErrorMessage } from "../../api/errors";
 import { OpcTagBrowserModal } from "../../components/OpcTagBrowserModal";
 import { Button, ErrorBanner, PageHeading } from "../../components/ui";
 import { replaceTagSuffix } from "../../lib/opcTags";
+import { ConnectionFields } from "./ConnectionFields";
+import { DemoRunFields } from "./DemoRunFields";
+import { LoopMappingSection } from "./LoopMappingSection";
+import {
+  SimulatorModelSection,
+  SimulatorParameterSection,
+} from "./SimulatorFields";
+import { TestParameterFields } from "./TestParameterFields";
+import { WriteBackFields } from "./WriteBackFields";
+import { applyTagNameChange } from "./applyTagNameChange";
+import {
+  demoDraftFromForm,
+  scheduleDemoDraftSave,
+  scheduleFullDraftSave,
+} from "./draftAutosave";
+import { buildRequest, normalizeSimulatorRequest } from "./formRequest";
 import {
   DEFAULT_TAG_MAPPING_SOURCES,
   DEFAULT_VALUE_MAPPING_SOURCES,
@@ -31,20 +49,9 @@ import {
   type ValueMappingKey,
   type ValueMappingSource,
 } from "./mappingState";
-import { NewRunForm } from "./NewRunForm";
 import {
-  buildRequest,
-  demoControllerTypesFor,
-  demoDefaultControllerTypeFor,
-  demoDraftFromForm,
   demoProcessDefaultsFor,
-  draftFromForm,
   formFromDemoCapabilities,
-  formFromDemoDraft,
-  formFromDemoDuplicate,
-  formFromDraft,
-  formFromRequest,
-  applyTagNameChange,
   initialForm,
   processDefaultsFor,
   templateTagFor,
@@ -52,19 +59,20 @@ import {
   type FormState,
   type ProcessType,
   type TuneDriver,
-  normalizeSimulatorRequest,
-  TEMPERATURE_PROCESS_TYPES,
 } from "./newRunFormState";
-import type {
-  AppCapabilities,
-  SimulatorCapabilities,
-} from "../../api/capabilities";
-import { useDemoDraft } from "../../api/demoDraft";
-
-type DuplicateRunLocationState = {
-  readonly duplicateRequest: StartRunRequest;
-  readonly duplicateFromRunId: number;
-};
+import {
+  controllerTypeForProcess,
+  demoDraftFormFor,
+  hydratedFullPageState,
+  initialPageState,
+  isDuplicateRunState,
+  pageFormFromDuplicate,
+  prefillMessage,
+  resolveTemplateDefaulting,
+  shouldResolveTemplateDefaulting,
+  type DuplicateRunLocationState,
+  type NewRunPageState,
+} from "./prefillPrecedence";
 
 export interface DuplicateRunState extends DuplicateRunLocationState {}
 
@@ -87,195 +95,6 @@ const VALUE_FORM_KEYS: Record<ValueMappingKey, MappingValueKey> = {
   mvRangeHigh: "opcMvRangeHigh",
   mvRangeLow: "opcMvRangeLow",
 };
-
-type PrefillSource =
-  | { readonly kind: "duplicate"; readonly runId: number }
-  | { readonly kind: "draft" }
-  | { readonly kind: "last-run" };
-
-type NewRunPageState = {
-  readonly form: FormState;
-  readonly hydrated: boolean;
-  readonly prefillSource: PrefillSource | null;
-  readonly draftLoadError: string | null;
-  readonly preserveBlankTemplate: boolean;
-  readonly templateDefaultingResolved: boolean;
-};
-
-function prefillMessage(source: PrefillSource): string {
-  switch (source.kind) {
-    case "duplicate":
-      return `Loaded settings from tune #${source.runId}.`;
-    case "draft":
-      return "Loaded your saved Tune draft.";
-    case "last-run":
-      return "Loaded settings from the most recent tune.";
-  }
-}
-
-function isDuplicateRunState(
-  state: unknown,
-): state is DuplicateRunLocationState {
-  if (typeof state !== "object" || state === null) return false;
-  const candidate = state as Record<string, unknown>;
-  return (
-    typeof candidate.duplicateFromRunId === "number" &&
-    typeof candidate.duplicateRequest === "object" &&
-    candidate.duplicateRequest !== null
-  );
-}
-
-function pageFormFromDuplicate(
-  duplicateState: DuplicateRunLocationState | undefined,
-  isDemo: boolean,
-  simulatorCapabilities: SimulatorCapabilities | null,
-  defaultPageForm: FormState,
-): FormState {
-  if (!duplicateState) return defaultPageForm;
-  if (isDemo && simulatorCapabilities) {
-    return formFromDemoDuplicate(
-      duplicateState.duplicateRequest,
-      simulatorCapabilities,
-    );
-  }
-  return formFromRequest(duplicateState.duplicateRequest);
-}
-
-function controllerTypeForProcess(
-  current: FormState["controllerType"],
-  processType: ProcessType,
-  isDemo: boolean,
-  simulatorCapabilities: SimulatorCapabilities | null,
-): FormState["controllerType"] {
-  if (isDemo && simulatorCapabilities) {
-    const controllerTypes = demoControllerTypesFor(
-      simulatorCapabilities,
-      processType,
-    );
-    if (controllerTypes.includes(current)) return current;
-    return demoDefaultControllerTypeFor(simulatorCapabilities, processType);
-  }
-  if (current === "pid" && !TEMPERATURE_PROCESS_TYPES.has(processType)) {
-    return "pi";
-  }
-  return current;
-}
-
-function demoDraftFormFor(
-  isDemo: boolean,
-  demoDraftValue: ReturnType<typeof useDemoDraft>["draft"],
-  simulatorCapabilities: SimulatorCapabilities | null,
-  defaultPageForm: FormState,
-): FormState | null {
-  if (!isDemo || !demoDraftValue) return null;
-  if (!simulatorCapabilities) return defaultPageForm;
-  return formFromDemoDraft(demoDraftValue, simulatorCapabilities);
-}
-
-function initialPrefillSource(
-  duplicateState: DuplicateRunLocationState | undefined,
-  isDemo: boolean,
-  demoDraftValue: ReturnType<typeof useDemoDraft>["draft"],
-): PrefillSource | null {
-  if (duplicateState) {
-    return { kind: "duplicate", runId: duplicateState.duplicateFromRunId };
-  }
-  if (isDemo && demoDraftValue) return { kind: "draft" };
-  return null;
-}
-
-function initialPageState(
-  resolvedInitialForm: FormState,
-  duplicateState: DuplicateRunLocationState | undefined,
-  isDemo: boolean,
-  demoDraftValue: ReturnType<typeof useDemoDraft>["draft"],
-): NewRunPageState {
-  return {
-    form: resolvedInitialForm,
-    hydrated: Boolean(duplicateState) || isDemo,
-    prefillSource: initialPrefillSource(duplicateState, isDemo, demoDraftValue),
-    draftLoadError: null,
-    preserveBlankTemplate: false,
-    templateDefaultingResolved:
-      Boolean(duplicateState) || Boolean(resolvedInitialForm.template),
-  };
-}
-
-function hydratedFullPageState(
-  pageState: NewRunPageState,
-  isDemo: boolean,
-  duplicateState: DuplicateRunLocationState | undefined,
-  runDraft: ReturnType<typeof useRunDraft>,
-  lastRunRequest: ReturnType<typeof useLastRunRequest>,
-): NewRunPageState | null {
-  if (isDemo || pageState.hydrated || duplicateState || runDraft.isPending) {
-    return null;
-  }
-  if (runDraft.data === undefined && !runDraft.isError) return null;
-  if (
-    (runDraft.data === null || runDraft.isError) &&
-    lastRunRequest.isPending
-  ) {
-    return null;
-  }
-
-  let nextForm = pageState.form;
-  let nextPrefillSource = pageState.prefillSource;
-  let nextPreserveBlankTemplate = false;
-  if (runDraft.data) {
-    nextForm = formFromDraft(runDraft.data);
-    nextPrefillSource = { kind: "draft" };
-    nextPreserveBlankTemplate = runDraft.data.template === null;
-  } else if (lastRunRequest.data) {
-    nextForm = formFromRequest(lastRunRequest.data);
-    nextPrefillSource = { kind: "last-run" };
-  }
-  return {
-    ...pageState,
-    form: nextForm,
-    hydrated: true,
-    prefillSource: nextPrefillSource,
-    draftLoadError: runDraft.isError
-      ? userFacingErrorMessage(
-          runDraft.error,
-          "Unable to load the saved Tune draft; using the available fallback.",
-        )
-      : null,
-    preserveBlankTemplate: nextPreserveBlankTemplate,
-    templateDefaultingResolved: nextPreserveBlankTemplate,
-  };
-}
-
-function shouldResolveTemplateDefaulting(
-  pageState: NewRunPageState,
-  hydrated: boolean,
-  hasDuplicate: boolean,
-  preserveBlankTemplate: boolean,
-  firstTemplateName: string | undefined,
-): boolean {
-  return (
-    !pageState.templateDefaultingResolved &&
-    hydrated &&
-    !hasDuplicate &&
-    !preserveBlankTemplate &&
-    Boolean(firstTemplateName)
-  );
-}
-
-function resolveTemplateDefaulting(
-  previous: NewRunPageState,
-  firstTemplateName: string | undefined,
-): NewRunPageState {
-  if (previous.templateDefaultingResolved) return previous;
-  if (previous.form.template || !firstTemplateName) {
-    return { ...previous, templateDefaultingResolved: true };
-  }
-  return {
-    ...previous,
-    form: { ...previous.form, template: firstTemplateName },
-    templateDefaultingResolved: true,
-  };
-}
 
 export function NewRunPage({
   capabilities,
@@ -384,35 +203,41 @@ export function NewRunPage({
     }));
   }
 
+  const clearDraftSaveError = useCallback(() => {
+    setDraftSaveError(null);
+  }, []);
+
+  const reportDraftSaveError = useCallback((error: unknown) => {
+    setDraftSaveError(
+      userFacingErrorMessage(
+        error,
+        "Unable to save the Tune draft. Changes will remain in this page until the server is available.",
+      ),
+    );
+  }, []);
+
   useEffect(() => {
-    if (!hydrated) return;
-    const payload = isDemo ? demoDraftFromForm(form) : draftFromForm(form);
-    const serializedDemoDraft = isDemo ? JSON.stringify(payload) : undefined;
-    if (isDemo && serializedDemoDraft === demoDraftSnapshotRef.current) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      if (isDemo) {
-        if (saveDemoDraft(payload)) {
-          demoDraftSnapshotRef.current = serializedDemoDraft!;
-        }
-        return;
-      }
-      draftSaveChainRef.current = draftSaveChainRef.current
-        .catch(() => undefined)
-        .then(() => saveDraftAsync(payload))
-        .then(() => setDraftSaveError(null))
-        .catch((error: unknown) => {
-          setDraftSaveError(
-            userFacingErrorMessage(
-              error,
-              "Unable to save the Tune draft. Changes will remain in this page until the server is available.",
-            ),
-          );
-        });
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [form, hydrated, isDemo, saveDemoDraft, saveDraftAsync]);
+    if (!hydrated || isDemo) return;
+    return scheduleFullDraftSave(
+      form,
+      draftSaveChainRef,
+      saveDraftAsync,
+      clearDraftSaveError,
+      reportDraftSaveError,
+    );
+  }, [
+    clearDraftSaveError,
+    form,
+    hydrated,
+    isDemo,
+    reportDraftSaveError,
+    saveDraftAsync,
+  ]);
+
+  useEffect(() => {
+    if (!hydrated || !isDemo) return;
+    return scheduleDemoDraftSave(form, demoDraftSnapshotRef, saveDemoDraft);
+  }, [form, hydrated, isDemo, saveDemoDraft]);
 
   const firstTemplateName = templates.data?.[0]?.name;
   if (
@@ -698,30 +523,58 @@ export function NewRunPage({
         </div>
       )}
 
-      <NewRunForm
-        mode={isDemo ? "demo" : "full"}
-        simulatorCapabilities={capabilities.simulator ?? undefined}
-        form={form}
-        template={activeTemplate}
-        templates={templates.data}
-        templatesPending={templates.isPending}
-        onSubmit={handleSubmit}
-        onChange={set}
-        onTagNameChange={setTagName}
-        onDriverChange={setDriver}
-        onTemplateChange={setTemplate}
-        onProcessTypeChange={setProcessType}
-        onResetProcessDefaults={resetProcessDefaults}
-        onTagSourceChange={setTagSource}
-        onTagChange={setTagValue}
-        onValueSourceChange={setValueSource}
-        onValueTagChange={setValueTag}
-        onValueChange={setMappingValue}
-        onResetTag={resetTag}
-        onResetValue={resetValue}
-        onResetAll={resetMapping}
-        onOpenTagBrowser={() => setTagBrowserOpen(true)}
-      />
+      <form onSubmit={handleSubmit}>
+        {isDemo ? (
+          <DemoRunFields
+            form={form}
+            onChange={set}
+            onProcessTypeChange={setProcessType}
+            simulatorCapabilities={capabilities.simulator ?? undefined}
+          />
+        ) : (
+          <>
+            <ConnectionFields
+              form={form}
+              templates={templates.data}
+              templatesPending={templates.isPending}
+              onChange={set}
+              onTagNameChange={setTagName}
+              onDriverChange={setDriver}
+              onTemplateChange={setTemplate}
+              onOpenTagBrowser={() => setTagBrowserOpen(true)}
+            />
+            <TestParameterFields
+              form={form}
+              onChange={set}
+              onProcessTypeChange={setProcessType}
+              onResetProcessDefaults={resetProcessDefaults}
+            />
+            <LoopMappingSection
+              form={form}
+              template={activeTemplate}
+              onTagSourceChange={setTagSource}
+              onTagChange={setTagValue}
+              onValueSourceChange={setValueSource}
+              onValueTagChange={setValueTag}
+              onValueChange={setMappingValue}
+              onResetTag={resetTag}
+              onResetValue={resetValue}
+              onResetAll={resetMapping}
+            />
+            <SimulatorParameterSection
+              form={form}
+              onChange={set}
+              simulatorCapabilities={undefined}
+            />
+            <WriteBackFields form={form} onChange={set} />
+            <SimulatorModelSection
+              form={form}
+              onChange={set}
+              simulatorCapabilities={undefined}
+            />
+          </>
+        )}
+      </form>
 
       {tagBrowserOpen && (
         <OpcTagBrowserModal
