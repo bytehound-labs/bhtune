@@ -204,6 +204,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
+      - name: Configure Git line endings before checkout
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -226,6 +231,16 @@ jobs:
 
       - name: Run Rust tests (including simulator PID regression)
         run: cargo test --workspace --locked
+
+      - name: Regenerate OpenAPI spec and check for drift
+        run: |
+          cargo run --locked -p bhtune-server --example gen_openapi
+          git diff --exit-code openapi.json
+
+      - name: Regenerate CLI docs and check for drift
+        run: |
+          cargo run --locked -p bhtune-cli --example gen_docs --features schemars
+          git diff --exit-code -- docs/reference/ man/ completions/
 
   package:
     name: Package verification

@@ -1,0 +1,16 @@
+* text=auto eol=lf
+
+*.ps1 text eol=lf
+*.nsi text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+
+openapi.json linguist-generated
+frontend/src/api/schema.d.ts linguist-generated
+docs/reference/** linguist-generated
+man/** linguist-generated
+completions/** linguist-generated
