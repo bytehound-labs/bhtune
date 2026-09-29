@@ -16,8 +16,8 @@ place.
 
 {/* web-ui-screenshot: full-template-list */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=82b9ba2f2840">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=82b9ba2f2840" alt="BHTune Templates page listing available DCS and PLC templates" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=bf2bc4c099d9">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=bf2bc4c099d9" alt="BHTune Templates page listing available DCS and PLC templates" />
   </a>
   <figcaption>The template list identifies the available mapping catalog and its ownership origin.</figcaption>
 </figure>
@@ -57,8 +57,8 @@ definitions cause them to return on the next startup if a source-backed row is r
 
 {/* web-ui-screenshot: full-template-delete-confirmation */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=1760c25cdd8e">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=1760c25cdd8e" alt="BHTune failed user-template deletion confirmation with an inline retry error" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=491584f246bb">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=491584f246bb" alt="BHTune failed user-template deletion confirmation with an inline retry error" />
   </a>
   <figcaption>A failed user-template deletion keeps the row and confirmation dialog intact until the retry succeeds.</figcaption>
 </figure>
