@@ -12,7 +12,7 @@ reflected in code and docs, not just here).
 
 - **REQUIRED** — must be implemented for v1. Where the behavior affects tuning math or logged
   output, it must pass golden-master replay against a reference trace, not just "look right". See
-  the correctness-critical design details in [`AGENTS.md`](../AGENTS.md#correctness-critical-design-details)
+  the correctness-critical design details in [`AGENTS.md`](../../AGENTS.md#correctness-critical-design-details)
   for implementation notes on the trickier items.
 - **DEFERRED** — a real feature, genuinely out of scope for v1. Tracked on the roadmap
   (`AGENTS.md`/`README.md`), not silently forgotten.
@@ -157,12 +157,13 @@ Everything in this section is deferred past v1, not permanently out of scope.
       values; mode-attribute "Program" value; controller-action-direct value.
 - [x] REQUIRED — add/delete custom templates.
 - [x] REQUIRED — persist templates to SQLite as the source of truth, seeded from an embedded,
-      community-contributable TOML catalog (`template-catalog`, done — see `AGENTS.md`'s
-      "Community DCS/PLC template catalog"); JSON import/export, TOML export
-      (`template export --format toml`), and `template delete` are all done (`template-cli` —
-      see AGENTS.md's "Multi-template import, TOML export, and `template delete`"), and
-      auto-loading a user-supplied catalog file is done (`template-user-catalog` — see
-      AGENTS.md's "Auto-loading a user template catalog").
+      community-contributable TOML catalog (`template-catalog`, done — see
+      [Community DCS/PLC template catalog](design/templates.md#community-dcsplc-template-catalog-template-catalog));
+      JSON import/export, TOML export (`template export --format toml`), and `template delete`
+      are all done (`template-cli` — see
+      [Multi-template import, TOML export, and template delete](design/templates.md#multi-template-import-toml-export-and-template-delete-template-cli)),
+      and auto-loading a user-supplied catalog file is done (`template-user-catalog` — see
+      [Auto-loading a user template catalog](design/templates.md#auto-loading-a-user-template-catalog-template-user-catalog)).
 - [ ] REQUIRED — assigning the entire active template onto the tuning engine immediately before a
       test starts (§4).
 

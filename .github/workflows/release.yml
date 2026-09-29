@@ -4,8 +4,9 @@ name: Release
 # assets to the GitHub Release for that tag. `workflow_dispatch` runs the exact same matrix
 # in dry-run mode (build + package + checksum, no upload, no release required to exist) --
 # a safe way to smoke-test this workflow, or a dependency bump's effect on it, without
-# cutting a real release. See AGENTS.md's "Windows installer"/"Packaging and distribution"
-# sections for how these archives feed `pkg-windows-installer`/`pkg-aur`/`pkg-docker`.
+# cutting a real release. See docs/internal/design/windows-installer.md and
+# docs/internal/design/packaging-and-release.md for how these archives feed
+# `pkg-windows-installer`/`pkg-aur`/`pkg-docker`.
 on:
   workflow_dispatch:
   push:
@@ -102,7 +103,7 @@ jobs:
 
       # Bundles both v1 adapter binaries (the headless CLI and the primary GUI/HTTP server)
       # into one per-platform archive -- matching the "one package, not two" decision in
-      # AGENTS.md's "Packaging and distribution" section, since there is no GUI-toolkit
+      # docs/internal/design/packaging-and-release.md, since there is no GUI-toolkit
       # dependency to split them apart for anymore now that the UI is browser-served.
       - uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6
         with:
