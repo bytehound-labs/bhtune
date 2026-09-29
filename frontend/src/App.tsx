@@ -1,16 +1,63 @@
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router";
 import { AppLayout } from "./layout/AppLayout";
-import { TemplateListPage } from "./routes/templates/TemplateListPage";
-import { TemplateDetailPage } from "./routes/templates/TemplateDetailPage";
-import { TemplateCreatePage } from "./routes/templates/TemplateCreatePage";
-import { TemplateEditPage } from "./routes/templates/TemplateEditPage";
-import { RunListPage } from "./routes/history/RunListPage";
-import { RunDetailPage } from "./routes/history/RunDetailPage";
-import { NewRunPage } from "./routes/runs/NewRunPage";
-import { ConfigPage } from "./routes/config/ConfigPage";
 import { useCapabilities } from "./api/capabilities";
 import { ErrorBanner, LoadingState } from "./components/ui";
 import { userFacingErrorMessage } from "./api/errors";
+
+const TemplateListPage = lazy(() =>
+  import("./routes/templates/TemplateListPage").then(
+    ({ TemplateListPage }) => ({
+      default: TemplateListPage,
+    }),
+  ),
+);
+const TemplateDetailPage = lazy(() =>
+  import("./routes/templates/TemplateDetailPage").then(
+    ({ TemplateDetailPage }) => ({ default: TemplateDetailPage }),
+  ),
+);
+const TemplateCreatePage = lazy(() =>
+  import("./routes/templates/TemplateCreatePage").then(
+    ({ TemplateCreatePage }) => ({ default: TemplateCreatePage }),
+  ),
+);
+const TemplateEditPage = lazy(() =>
+  import("./routes/templates/TemplateEditPage").then(
+    ({ TemplateEditPage }) => ({
+      default: TemplateEditPage,
+    }),
+  ),
+);
+const RunListPage = lazy(() =>
+  import("./routes/history/RunListPage").then(({ RunListPage }) => ({
+    default: RunListPage,
+  })),
+);
+const RunDetailPage = lazy(() =>
+  import("./routes/history/RunDetailPage").then(({ RunDetailPage }) => ({
+    default: RunDetailPage,
+  })),
+);
+const NewRunPage = lazy(() =>
+  import("./routes/runs/NewRunPage").then(({ NewRunPage }) => ({
+    default: NewRunPage,
+  })),
+);
+const ConfigPage = lazy(() =>
+  import("./routes/config/ConfigPage").then(({ ConfigPage }) => ({
+    default: ConfigPage,
+  })),
+);
+
+function RouteSuspense({ children }: { readonly children: ReactNode }) {
+  // Keep loading feedback in the outlet so the app-wide layout stays mounted.
+  return (
+    <Suspense fallback={<LoadingState message="Loading page…" />}>
+      {children}
+    </Suspense>
+  );
+}
 
 // Route table for the web GUI (`frontend-screens`). Declarative-mode react-router: no
 // loaders, since TanStack Query (wired up in `frontend-shell`) is this project's sole
@@ -42,7 +89,9 @@ function App() {
           path="templates"
           element={
             appCapabilities.actions.manage_templates ? (
-              <TemplateListPage />
+              <RouteSuspense>
+                <TemplateListPage />
+              </RouteSuspense>
             ) : (
               <Navigate to="/runs/new" replace />
             )
@@ -52,7 +101,9 @@ function App() {
           path="templates/new"
           element={
             appCapabilities.actions.manage_templates ? (
-              <TemplateCreatePage />
+              <RouteSuspense>
+                <TemplateCreatePage />
+              </RouteSuspense>
             ) : (
               <Navigate to="/runs/new" replace />
             )
@@ -62,7 +113,9 @@ function App() {
           path="templates/:name"
           element={
             appCapabilities.actions.manage_templates ? (
-              <TemplateDetailPage />
+              <RouteSuspense>
+                <TemplateDetailPage />
+              </RouteSuspense>
             ) : (
               <Navigate to="/runs/new" replace />
             )
@@ -72,7 +125,9 @@ function App() {
           path="templates/:name/edit"
           element={
             appCapabilities.actions.manage_templates ? (
-              <TemplateEditPage />
+              <RouteSuspense>
+                <TemplateEditPage />
+              </RouteSuspense>
             ) : (
               <Navigate to="/runs/new" replace />
             )
@@ -82,7 +137,9 @@ function App() {
           path="runs"
           element={
             appCapabilities.actions.list_history ? (
-              <RunListPage capabilities={appCapabilities} />
+              <RouteSuspense>
+                <RunListPage capabilities={appCapabilities} />
+              </RouteSuspense>
             ) : (
               <Navigate to="/runs/new" replace />
             )
@@ -92,7 +149,9 @@ function App() {
           path="runs/new"
           element={
             appCapabilities.actions.start_simulator_tune ? (
-              <NewRunPage capabilities={appCapabilities} />
+              <RouteSuspense>
+                <NewRunPage capabilities={appCapabilities} />
+              </RouteSuspense>
             ) : (
               <Navigate to="/runs" replace />
             )
@@ -102,7 +161,9 @@ function App() {
           path="runs/:id"
           element={
             appCapabilities.actions.list_history ? (
-              <RunDetailPage capabilities={appCapabilities} />
+              <RouteSuspense>
+                <RunDetailPage capabilities={appCapabilities} />
+              </RouteSuspense>
             ) : (
               <Navigate to="/runs/new" replace />
             )
@@ -112,7 +173,9 @@ function App() {
           path="config"
           element={
             appCapabilities.actions.manage_config ? (
-              <ConfigPage />
+              <RouteSuspense>
+                <ConfigPage />
+              </RouteSuspense>
             ) : (
               <Navigate to="/runs/new" replace />
             )
