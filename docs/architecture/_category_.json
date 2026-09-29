@@ -1,0 +1,8 @@
+{
+  "label": "Architecture",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "How BHTune's runtime components, tuning engine, safety controls, persistence, API, and distribution channels fit together."
+  }
+}
