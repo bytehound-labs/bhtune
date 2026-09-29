@@ -262,6 +262,17 @@ CREATE TABLE tune_runs (
         CHECK (timing_metrics_json IS NULL OR json_valid(timing_metrics_json)),
     effective_tuning_json    TEXT
         CHECK (effective_tuning_json IS NULL OR json_valid(effective_tuning_json)),
+    -- Observed opcda-bridge gateway compatibility for one live OPC DA run.
+    -- Nullable because simulator and replay runs have no gateway, and a run row is
+    -- inserted before the compatibility snapshot is recorded. The JSON is the
+    -- driver's compatibility report (gateway version, overall status, and protocol
+    -- ranges). It is stored raw so a future report field does not require another
+    -- migration; readers that cannot parse it treat the snapshot as absent.
+    gateway_compatibility_json TEXT
+        CHECK (
+            gateway_compatibility_json IS NULL
+            OR json_valid(gateway_compatibility_json)
+        ),
     demo_session_id          INTEGER
         REFERENCES demo_sessions(id) ON DELETE CASCADE
 );

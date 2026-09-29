@@ -122,7 +122,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 1);
     }
 
     #[tokio::test]
@@ -134,7 +134,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 1);
 
         let (migration_version,): (i64,) = sqlx::query_as(
             "SELECT version FROM _sqlx_migrations WHERE success = 1 ORDER BY version DESC LIMIT 1",
@@ -142,7 +142,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(migration_version, 2);
+        assert_eq!(migration_version, 1);
     }
 
     #[tokio::test]
@@ -187,5 +187,17 @@ mod tests {
                 "checked-result column {column} is missing"
             );
         }
+
+        let run_columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('tune_runs')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            run_columns
+                .iter()
+                .any(|name| name == "gateway_compatibility_json"),
+            "gateway compatibility snapshot column is missing from the consolidated schema"
+        );
     }
 }

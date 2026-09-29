@@ -52,5 +52,7 @@ write or revert returns an error and does not insert a PID change row.
   runs and runs recorded before this check have no badge.
 
 The snapshot records the client version, the gateway version when the gateway reported one, where
-the metadata came from, the overall status, and the per-feature ranges. It is part of the run's
-history, so a later gateway upgrade does not rewrite what was true when the run started.
+the metadata came from, the overall status, and the per-feature ranges. It is stored in
+`tune_runs.gateway_compatibility_json` and is part of the run's history, so a later gateway
+upgrade does not rewrite what was true when the run started. Simulator and replay runs leave the
+column null.
