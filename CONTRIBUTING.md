@@ -44,9 +44,10 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 - Use Rust's `stable` toolchain for local development to match the regular validation, coverage,
   SonarQube, and release jobs. The MSRV job separately checks Rust 1.94.0; on rustup-managed
   hosts, run `rustup update stable` if the selected toolchain is older.
-- Format Rust with `cargo fmt --all` (default rustfmt settings) before committing.
-- Lint with `cargo clippy --workspace --all-targets --all-features -- -D warnings`. Lint levels
-  come from the workspace lint policy described under [Lint policy](#lint-policy).
+- Format Rust with `cargo fmt --all` (default rustfmt settings) before committing. The optional
+  `just fmt` recipe applies the same formatter to the workspace.
+- Lint with `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`. Lint
+  levels come from the workspace lint policy described under [Lint policy](#lint-policy).
 - Format frontend code (`frontend/`) with `pnpm --filter bhtune-frontend run format:check` /
   `pnpm exec prettier --write .`, and lint it with `pnpm --filter bhtune-frontend run lint`
   ([oxlint](https://oxc.rs/)). The documentation site (`website/`) uses the same tools via
@@ -54,10 +55,11 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
 - Python scripts in `scripts/` use Ruff 0.16.9 and the standard-library `unittest` runner.
   Run `ruff check scripts`, `ruff format --check scripts`, and
   `python3 -m unittest discover -s scripts -p '*_test.py'`.
-- All of the above are enforced automatically by a
-  [lefthook](https://github.com/evilmartians/lefthook) `pre-commit` hook (`.lefthook.yml`),
-  which also formats `Cargo.toml`/TOML with `taplo` and Markdown/YAML/JSON/TypeScript/CSS with
-  `prettier`. Run `lefthook install` once after cloning to enable it.
+- The [lefthook](https://github.com/evilmartians/lefthook) `pre-commit` hook (`.lefthook.yml`)
+  runs source-triggered lint/build checks and formats staged files with `rustfmt`, `taplo`,
+  `prettier`, and `shfmt`. Its generated-file exclusions are deliberate. Run `lefthook install`
+  once after cloning to enable the hooks; they also keep the `.env.example`/Bitwarden
+  synchronization workflow active.
 - No proprietary or non-open-source dependencies, ever, on either side of the stack.
   `cargo deny check` enforces this in CI for Rust dependencies against the allow-list in
   `deny.toml`; `pnpm run check:licenses` (`scripts/check-frontend-licenses.mjs`) enforces the
@@ -76,6 +78,46 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   ignored `.env` file and is never committed or printed. Use `ds push` to update the Bitwarden
   note after changing it. The committed `.env.example` contains only the key names and the
   repository's Lefthook hooks keep the schema and local file synchronized.
+
+### Optional local task runner (`just`)
+
+The repository-root `justfile` offers shortcuts for local development. `just` is optional:
+GitHub Actions continues to run its workflow commands directly and does not require `just` to be
+installed. Frontend recipes assume the pnpm workspace dependencies are installed with
+`pnpm install --frozen-lockfile`.
+
+- `just check` is the practical local equivalent of the Linux Rust check job: it checks
+  formatting, runs Clippy and workspace tests, runs `cargo deny check` and `cargo machete`,
+  checks OpenAPI and CLI-reference drift, and builds the workspace. PR CI additionally checks
+  OpenAPI compatibility against the base branch.
+- `just fmt` formats all Rust code. `just fmt check` runs the non-mutating
+  `cargo fmt --check --all` gate; use `just check` for validation.
+- `just lint` and `just test` run the locked workspace lint and test commands. `just deny` runs
+  `cargo deny check` and `cargo machete`. `just cov` writes `lcov.info` with the same
+  `cargo llvm-cov` command as CI; the coverage workflow also enforces 100% source-line coverage
+  and uploads the report.
+- `just gen` regenerates `openapi.json`, the CLI reference/man pages/completions/config schema,
+  and the TypeScript API client. Review generated diffs and commit output only when a source
+  change requires it.
+- `just fe` runs the frontend license, generated-client drift, format, lint, unit-test, and
+  typecheck/build checks.
+- `just e2e` builds the server and frontend, installs Chromium, and runs the Full and Demo
+  Playwright projects. Playwright starts its own isolated test servers; a separate production
+  server is not required.
+- `just dev` runs a local `bhtune-server` and Vite against a temporary database and log
+  directory, then removes that temporary state when stopped with Ctrl+C. Ports `8787` and
+  `5173` must be free; the recipe refuses to start when either is occupied and never stops an
+  existing listener. The server binds `0.0.0.0:8787`; use `http://localhost:5173` by default,
+  or set `BHTUNE_ORIGIN` to the exact Vite origin when using another host name.
+
+Lefthook remains independent of `just` and keeps its file-scoped behavior: `rustfmt-format`
+corresponds to `just fmt` but formats only staged Rust files. `clippy-lint` uses the same
+workspace Clippy checks as `just lint` without `--locked`; `oxlint-frontend` and
+`frontend-typecheck` correspond to checks in `just fe`. For frontend files,
+`prettier-format` corresponds to `just fe`'s format check, while the hook formats only staged,
+non-generated files. `taplo-format`, `shfmt-format`, `check-release`, and `ds-sync` remain
+hook-specific. Pre-commit does not run the workspace test suite or invoke `just check`; it
+retains its staged-file inputs and generated-file exclusions.
 
 ### Lint policy
 
