@@ -148,7 +148,7 @@ describe("New Run split behavior", () => {
 
   it("hydrates null direction and ranges as tag sources", () => {
     const request = requestFromForm(createOpcForm());
-    const overrides = { ...(request.tag_overrides ?? {}) };
+    const overrides = { ...request.tag_overrides };
     delete overrides.controller_direction;
     delete overrides.upper_pv_range;
     delete overrides.lower_pv_range;
