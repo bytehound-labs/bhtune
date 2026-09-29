@@ -39,6 +39,12 @@ test("demo-history", async ({ page }) => {
   await page.goto("/runs");
   await settle(page);
   await expect(page.getByRole("heading", { name: "History" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "#4242", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "#4243", exact: true }),
+  ).toBeVisible();
   await captureScenario(page, "demo-history");
 });
 

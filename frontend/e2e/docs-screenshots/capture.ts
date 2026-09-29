@@ -53,7 +53,11 @@ export async function captureScenario(page: Page, scenarioId: string) {
 
   const path = resolve(screenshotDir, scenario.output);
   if (scenario.capture !== "content-fit") {
-    await page.screenshot({ path, fullPage: true });
+    await page.screenshot({
+      path,
+      fullPage: true,
+      animations: "disabled",
+    });
     return;
   }
 
@@ -77,12 +81,17 @@ export async function captureScenario(page: Page, scenarioId: string) {
   );
 
   if (contentHeight >= viewport.height) {
-    await page.screenshot({ path, fullPage: true });
+    await page.screenshot({
+      path,
+      fullPage: true,
+      animations: "disabled",
+    });
     return;
   }
 
   await page.screenshot({
     path,
+    animations: "disabled",
     clip: {
       x: 0,
       y: 0,
