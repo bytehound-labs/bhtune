@@ -1,8 +1,8 @@
-//! Integration tests proving the migration in `migrations/0001_initial_schema.sql` actually
-//! behaves the way its comments claim: every table exists, `CHECK` constraints reject bad
-//! data, `ON DELETE CASCADE`/`SET NULL`/`RESTRICT` behave per-relationship as designed, and a
-//! real `bhtune-core` value (a built-in `DcsTemplate`, a derived `LoopTags`) round-trips
-//! through its column/JSON-blob storage exactly.
+//! Integration tests proving the migrations in `migrations/` actually behave the way their
+//! comments claim: every table exists, `CHECK` constraints reject bad data, `ON DELETE
+//! CASCADE`/`SET NULL`/`RESTRICT` behave per-relationship as designed, and a real
+//! `bhtune-core` value (a built-in `DcsTemplate`, a derived `LoopTags`) round-trips through
+//! its column/JSON-blob storage exactly.
 
 #![allow(
     clippy::unwrap_used,
@@ -11,10 +11,10 @@
     reason = "integration tests and examples may use unwrap, expect, and panic"
 )]
 
-use bhtune_core::{LoopTags, built_in_templates};
+use bhtune_core::{ControllerType, LoopConfig, LoopTags, ProcessType, built_in_templates};
 use bhtune_db::{
     DbError, connect_in_memory,
-    models::{DcsTemplateRow, TemplateOrigin},
+    models::{DcsTemplateRow, TemplateOrigin, TuneDriver, TuneRunRow},
 };
 use chrono::Utc;
 use sqlx::Row;
@@ -637,6 +637,70 @@ async fn tune_runs_effective_tuning_snapshot_is_nullable_and_validated_json() {
     .execute(&pool)
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn tune_runs_gateway_compatibility_snapshot_is_nullable_validated_json() {
+    let pool = connect_in_memory().await.unwrap();
+    let run_id = seed_failed_run(&pool, None).await;
+
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT gateway_compatibility_json FROM tune_runs WHERE id = ?")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        stored.is_none(),
+        "a run has no gateway snapshot until one is recorded"
+    );
+
+    let invalid =
+        sqlx::query("UPDATE tune_runs SET gateway_compatibility_json = 'not json' WHERE id = ?")
+            .bind(run_id)
+            .execute(&pool)
+            .await;
+    assert!(
+        invalid.is_err(),
+        "the column CHECK must reject non-JSON gateway snapshots"
+    );
+
+    let rejected = TuneRunRow::record_gateway_compatibility(&pool, run_id, "not json")
+        .await
+        .expect_err("invalid JSON must fail before the row is rewritten");
+    assert!(matches!(rejected, DbError::Query(_)));
+
+    let template = built_in_templates().remove(0);
+    let started = TuneRunRow::start(
+        &pool,
+        None,
+        "LIC101",
+        TuneDriver::Opcda,
+        LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 5.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 3,
+            mrft_delay_secs: 0,
+        },
+        TemplateOrigin::Builtin,
+        &template,
+        &LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &template),
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    let snapshot = r#"{"status":"unknown","gateway_version":null}"#;
+    let recorded = TuneRunRow::record_gateway_compatibility(&pool, started.id, snapshot)
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded.gateway_compatibility_json.as_deref(),
+        Some(snapshot)
+    );
+    assert_eq!(recorded.outcome, started.outcome);
 }
 
 /// Covers the `CHECK` constraints `safety-quality` added: `tune_runs.allow_uncertain_quality`

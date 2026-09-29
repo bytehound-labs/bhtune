@@ -1,4 +1,4 @@
-//! Row types mirroring the tables in `migrations/0001_initial_schema.sql`.
+//! Row types mirroring the tables in `migrations/`.
 //!
 //! These are deliberately *typed*, not raw-column, shapes: wherever a table's columns are a
 //! clean 1:1 match for an existing `bhtune-core` type (`DcsTemplate`, `LoopTags`,
@@ -775,6 +775,11 @@ pub struct TuneRunRow {
     /// `None` for runs created before effective-tuning snapshots existed or until
     /// [`TuneRunRow::record_effective_tuning`] is called.
     pub effective_tuning: Option<EffectiveTuning>,
+    /// Observed opcda-bridge compatibility report, stored as the driver's JSON snapshot.
+    /// `None` for non-OPC runs, runs started before the snapshot existed, or until
+    /// [`TuneRunRow::record_gateway_compatibility`] is called. Kept as raw JSON because the
+    /// report type lives in `bhtune-driver`, which this crate does not depend on.
+    pub gateway_compatibility_json: Option<String>,
     /// Outcome of the best-effort restore attempted after this run ended -- `None` if no
     /// restore was ever attempted (the run never mutated the loop, or hasn't ended yet). See
     /// [`RestoreStatus`] and [`TuneRunRow::record_restore_status`].
@@ -1227,6 +1232,37 @@ impl TuneRunRow {
             ",
         )
         .bind(effective_tuning_json)
+        .bind(run_id)
+        .fetch_one(pool)
+        .await
+        .map_err(DbError::Query)?;
+
+        row_to_tune_run(row)
+    }
+
+    /// Records the observed opcda-bridge compatibility snapshot for a live OPC DA run.
+    ///
+    /// `gateway_compatibility_json` must already be valid JSON. This is a follow-up update
+    /// rather than another [`Self::start`] parameter so existing repository callers remain
+    /// source-compatible.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DbError::Query`] when the row does not exist or the JSON fails the column
+    /// check.
+    pub async fn record_gateway_compatibility(
+        pool: &SqlitePool,
+        run_id: i64,
+        gateway_compatibility_json: &str,
+    ) -> DbResult<TuneRunRow> {
+        let row = sqlx::query(
+            r"
+            UPDATE tune_runs SET gateway_compatibility_json = ?
+            WHERE id = ?
+            RETURNING *
+            ",
+        )
+        .bind(gateway_compatibility_json)
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -1775,6 +1811,9 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
     let effective_tuning_json: Option<String> = row
         .try_get("effective_tuning_json")
         .map_err(DbError::Query)?;
+    let gateway_compatibility_json: Option<String> = row
+        .try_get("gateway_compatibility_json")
+        .map_err(DbError::Query)?;
     let template: DcsTemplate =
         serde_json::from_str(&template_snapshot_json).map_err(|source| {
             DbError::InvalidJsonShape {
@@ -1828,6 +1867,7 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
             .map_err(DbError::Query)?,
         timing_metrics,
         effective_tuning,
+        gateway_compatibility_json,
         restore_status,
         restore_detail: row.try_get("restore_detail").map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,

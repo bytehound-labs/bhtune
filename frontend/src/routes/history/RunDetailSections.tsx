@@ -176,8 +176,60 @@ function SummarySection({
       {run.restore_detail && (
         <Field label="Restore detail" value={run.restore_detail} full />
       )}
+      {run.gateway_compatibility && (
+        <Field
+          label="Gateway compatibility"
+          value={
+            <Badge
+              tone={gatewayCompatibilityTone(run.gateway_compatibility.status)}
+            >
+              {gatewayCompatibilityLabel(run.gateway_compatibility)}
+            </Badge>
+          }
+        />
+      )}
     </Section>
   );
+}
+
+function gatewayCompatibilityTone(
+  status: string,
+): "success" | "warning" | "neutral" | "error" {
+  switch (status) {
+    case "full":
+      return "success";
+    case "partial":
+      return "warning";
+    case "incompatible":
+      return "error";
+    default:
+      return "neutral";
+  }
+}
+
+function gatewayCompatibilityLabel(compatibility: {
+  readonly status: string;
+  readonly gateway_version?: string | null;
+}): string {
+  const status = gatewayCompatibilityStatusLabel(compatibility.status);
+  return compatibility.gateway_version
+    ? `${status} (${compatibility.gateway_version})`
+    : status;
+}
+
+function gatewayCompatibilityStatusLabel(status: string): string {
+  switch (status) {
+    case "full":
+      return "Full";
+    case "partial":
+      return "Partial";
+    case "unknown":
+      return "Unknown";
+    case "incompatible":
+      return "Incompatible";
+    default:
+      return status;
+  }
 }
 
 const originTone = {

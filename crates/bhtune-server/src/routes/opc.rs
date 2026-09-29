@@ -23,8 +23,9 @@ use bhtune_db::models::SampleQuality;
 use bhtune_driver::{
     BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource, Driver,
     DriverCapabilities, DriverResult, IndexedSearchMatch, IndexedSearchProgress,
-    NamespaceOrganization, OpcDaDriver, SearchEvent, SearchIndexControlAction, SearchIndexRequest,
-    SearchIndexResponse, SearchIndexStatus, SearchMatch, SearchMatchMode, SearchRequest,
+    NamespaceOrganization, OpcDaDriver, OpcDaFeatureCompatibility, OpcDaGatewayCompatibility,
+    SearchEvent, SearchIndexControlAction, SearchIndexRequest, SearchIndexResponse,
+    SearchIndexStatus, SearchMatch, SearchMatchMode, SearchRequest, check_gateway_compatibility,
     list_opcda_servers,
 };
 use chrono::{DateTime, Utc};
@@ -50,16 +51,177 @@ const OPC_QUERY_TIMEOUT_SECS: u64 = 30;
 /// time", a client-actionable diagnostic outcome, never an [`ApiError::Internal`] bug in this
 /// server. `what` names the attempted operation (e.g. `"connect to OPC server 'X'"`) so the
 /// error message identifies which step failed.
+enum TimedDriverCall<T> {
+    Ready(T),
+    Incompatible { operation: &'static str },
+    Failed(ApiError),
+}
+
+async fn timed_driver_call<T>(
+    what: &str,
+    timeout: Duration,
+    fut: impl Future<Output = DriverResult<T>>,
+) -> TimedDriverCall<T> {
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(value)) => TimedDriverCall::Ready(value),
+        Ok(Err(bhtune_driver::DriverError::IncompatibleGateway { operation })) => {
+            TimedDriverCall::Incompatible { operation }
+        }
+        Ok(Err(err)) => TimedDriverCall::Failed(ApiError::BadRequest(format!("{what}: {err}"))),
+        Err(_) => TimedDriverCall::Failed(ApiError::BadRequest(format!(
+            "{what}: no response within {}s",
+            timeout.as_secs()
+        ))),
+    }
+}
+
 async fn with_timeout<T>(
     what: &str,
     fut: impl Future<Output = DriverResult<T>>,
 ) -> Result<T, ApiError> {
-    match tokio::time::timeout(Duration::from_secs(OPC_QUERY_TIMEOUT_SECS), fut).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => Err(ApiError::BadRequest(format!("{what}: {err}"))),
-        Err(_) => Err(ApiError::BadRequest(format!(
-            "{what}: no response within {OPC_QUERY_TIMEOUT_SECS}s"
+    match timed_driver_call(what, Duration::from_secs(OPC_QUERY_TIMEOUT_SECS), fut).await {
+        TimedDriverCall::Ready(value) => Ok(value),
+        TimedDriverCall::Incompatible { operation } => Err(ApiError::BadRequest(format!(
+            "{what}: {}",
+            bhtune_driver::DriverError::IncompatibleGateway { operation }
         ))),
+        TimedDriverCall::Failed(error) => Err(error),
+    }
+}
+
+/// Inclusive protocol range stored with a gateway compatibility snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct GatewayProtocolRangeResponse {
+    pub min: u32,
+    pub max: u32,
+}
+
+/// One protocol feature in a gateway compatibility snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct GatewayFeatureCompatibilityResponse {
+    pub feature: String,
+    pub status: String,
+    pub client_versions: GatewayProtocolRangeResponse,
+    pub gateway_versions: Option<GatewayProtocolRangeResponse>,
+    pub negotiated_version: Option<u32>,
+    pub reason: String,
+}
+
+impl From<&OpcDaFeatureCompatibility> for GatewayFeatureCompatibilityResponse {
+    fn from(feature: &OpcDaFeatureCompatibility) -> Self {
+        Self {
+            feature: feature.feature.as_str().to_string(),
+            status: feature.status.as_str().to_string(),
+            client_versions: GatewayProtocolRangeResponse {
+                min: feature.client_versions.min,
+                max: feature.client_versions.max,
+            },
+            gateway_versions: feature.gateway_versions.as_ref().map(|range| {
+                GatewayProtocolRangeResponse {
+                    min: range.min,
+                    max: range.max,
+                }
+            }),
+            negotiated_version: feature.negotiated_version,
+            reason: feature.reason.clone(),
+        }
+    }
+}
+
+/// Gateway protocol compatibility attached to inspection responses and run detail.
+///
+/// String fields match the snake_case snapshot stored in
+/// `tune_runs.gateway_compatibility_json`. Discovery, browse, and read attach this even when
+/// the gateway is only partially compatible or predates a requested operation; live mutations
+/// refuse an incompatible core instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct GatewayCompatibilityResponse {
+    pub client_version: String,
+    pub gateway_version: Option<String>,
+    pub source: String,
+    pub status: String,
+    pub features: Vec<GatewayFeatureCompatibilityResponse>,
+}
+
+impl From<&OpcDaGatewayCompatibility> for GatewayCompatibilityResponse {
+    fn from(report: &OpcDaGatewayCompatibility) -> Self {
+        Self {
+            client_version: report.client_version.clone(),
+            gateway_version: report.gateway_version.clone(),
+            source: report.source.as_str().to_string(),
+            status: report.status.as_str().to_string(),
+            features: report
+                .features
+                .iter()
+                .map(GatewayFeatureCompatibilityResponse::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<OpcDaGatewayCompatibility> for GatewayCompatibilityResponse {
+    fn from(report: OpcDaGatewayCompatibility) -> Self {
+        Self::from(&report)
+    }
+}
+
+async fn inspect_gateway_compatibility(
+    bridge_host: &str,
+    server: Option<&str>,
+) -> OpcDaGatewayCompatibility {
+    match timed_driver_call(
+        "check OPC DA gateway compatibility",
+        Duration::from_secs(OPC_QUERY_TIMEOUT_SECS),
+        check_gateway_compatibility(bridge_host, server),
+    )
+    .await
+    {
+        TimedDriverCall::Ready(report) => report,
+        TimedDriverCall::Incompatible { .. } | TimedDriverCall::Failed(_) => {
+            OpcDaGatewayCompatibility::unverified()
+        }
+    }
+}
+
+fn degraded_warning(report: &OpcDaGatewayCompatibility, operation: &'static str) -> String {
+    report
+        .live_mutation_refusal()
+        .or_else(|| report.warning_message())
+        .unwrap_or_else(|| {
+            bhtune_driver::DriverError::IncompatibleGateway { operation }.to_string()
+        })
+}
+
+fn degraded_capabilities(report: &OpcDaGatewayCompatibility) -> OpcCapabilitiesResponse {
+    OpcCapabilitiesResponse {
+        application_version: String::new(),
+        protocol_version: String::new(),
+        max_page_size: 0,
+        supports_browse_sessions: false,
+        supports_search: false,
+        organization: "unspecified".to_string(),
+        source: "unspecified".to_string(),
+        supports_indexed_search: false,
+        indexed_search_protocol_version: String::new(),
+        max_indexed_search_results: 0,
+        search_index_state: "unspecified".to_string(),
+        gateway_compatibility: Some(report.into()),
+    }
+}
+
+fn degraded_browse(
+    report: &OpcDaGatewayCompatibility,
+    operation: &'static str,
+) -> OpcBrowseResponse {
+    OpcBrowseResponse {
+        session_id: String::new(),
+        nodes: Vec::new(),
+        next_page_token: None,
+        complete: true,
+        organization: "unspecified".to_string(),
+        source: "unspecified".to_string(),
+        warning: Some(degraded_warning(report, operation)),
+        gateway_compatibility: Some(report.into()),
     }
 }
 
@@ -76,6 +238,10 @@ pub struct OpcServersQuery {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct OpcServersResponse {
     pub servers: Vec<String>,
+    /// Compatibility of the gateway that answered this discovery call. Discovery itself is
+    /// not refused when the gateway is partial, unknown, or incompatible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_compatibility: Option<GatewayCompatibilityResponse>,
 }
 
 /// List every OPC DA server registered on the bridge gateway's own host.
@@ -102,7 +268,15 @@ pub(crate) async fn servers(
     let config = state.config_snapshot()?;
     let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
     let servers = with_timeout("list OPC DA servers", list_opcda_servers(&bridge_host)).await?;
-    Ok(Json(OpcServersResponse { servers }))
+    let gateway_compatibility = Some(
+        inspect_gateway_compatibility(&bridge_host, None)
+            .await
+            .into(),
+    );
+    Ok(Json(OpcServersResponse {
+        servers,
+        gateway_compatibility,
+    }))
 }
 
 /// Query parameters for `GET /api/opc/capabilities`.
@@ -126,6 +300,10 @@ pub struct OpcCapabilitiesResponse {
     pub indexed_search_protocol_version: String,
     pub max_indexed_search_results: u32,
     pub search_index_state: String,
+    /// Compatibility observed while discovering capabilities. Present even when capability
+    /// discovery itself is unsupported and the rest of this response is degraded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_compatibility: Option<GatewayCompatibilityResponse>,
 }
 
 impl From<DriverCapabilities> for OpcCapabilitiesResponse {
@@ -142,6 +320,7 @@ impl From<DriverCapabilities> for OpcCapabilitiesResponse {
             indexed_search_protocol_version: capabilities.indexed_search_protocol_version,
             max_indexed_search_results: capabilities.max_indexed_search_results,
             search_index_state: capabilities.search_index_state.to_string(),
+            gateway_compatibility: None,
         }
     }
 }
@@ -167,12 +346,26 @@ pub(crate) async fn capabilities(
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
-        OpcDaDriver::connect(&bridge_host, opc_server),
+        OpcDaDriver::connect(&bridge_host, opc_server.clone()),
     )
     .await?;
-    let capabilities =
-        with_timeout("discover OPC browse capabilities", driver.capabilities()).await?;
-    Ok(Json(capabilities.into()))
+    let report = inspect_gateway_compatibility(&bridge_host, Some(&opc_server)).await;
+    let capabilities = match timed_driver_call(
+        "discover OPC browse capabilities",
+        Duration::from_secs(OPC_QUERY_TIMEOUT_SECS),
+        driver.capabilities(),
+    )
+    .await
+    {
+        TimedDriverCall::Ready(capabilities) => {
+            let mut response = OpcCapabilitiesResponse::from(capabilities);
+            response.gateway_compatibility = Some((&report).into());
+            response
+        }
+        TimedDriverCall::Incompatible { .. } => degraded_capabilities(&report),
+        TimedDriverCall::Failed(error) => return Err(error),
+    };
+    Ok(Json(capabilities))
 }
 
 /// Query parameters shared by indexed-search status and search-index actions.
@@ -600,6 +793,10 @@ pub struct OpcBrowseResponse {
     pub organization: String,
     pub source: String,
     pub warning: Option<String>,
+    /// Compatibility observed for this browse. An unsupported page still returns this field
+    /// with an empty, explicitly degraded page instead of failing the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_compatibility: Option<GatewayCompatibilityResponse>,
 }
 
 impl From<BrowsePage> for OpcBrowseResponse {
@@ -612,6 +809,7 @@ impl From<BrowsePage> for OpcBrowseResponse {
             organization: organization_name(page.organization).to_string(),
             source: source_name(page.source).to_string(),
             warning: page.warning,
+            gateway_compatibility: None,
         }
     }
 }
@@ -667,8 +865,23 @@ pub(crate) async fn browse(
         page_size,
         refresh: query.refresh.unwrap_or(false),
     };
-    let page = with_timeout("browse OPC DA namespace", driver.browse(request)).await?;
-    Ok(Json(page.into()))
+    let report = inspect_gateway_compatibility(&bridge_host, Some(&opc_server)).await;
+    let page = match timed_driver_call(
+        "browse OPC DA namespace",
+        Duration::from_secs(OPC_QUERY_TIMEOUT_SECS),
+        driver.browse(request),
+    )
+    .await
+    {
+        TimedDriverCall::Ready(page) => {
+            let mut response = OpcBrowseResponse::from(page);
+            response.gateway_compatibility = Some((&report).into());
+            response
+        }
+        TimedDriverCall::Incompatible { operation } => degraded_browse(&report, operation),
+        TimedDriverCall::Failed(error) => return Err(error),
+    };
+    Ok(Json(page))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -906,6 +1119,10 @@ pub struct OpcReadResponse {
     /// trustworthy instant (or a bridge protocol revision that reports the gateway's own
     /// timezone) doesn't need an API shape change to start populating it.
     pub timestamp: Option<DateTime<Utc>>,
+    /// Compatibility of the gateway that served this diagnostic read. A partial or unknown
+    /// gateway still returns the tag value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_compatibility: Option<GatewayCompatibilityResponse>,
 }
 
 /// Read one tag's current value, quality, and timestamp.
@@ -942,6 +1159,11 @@ pub(crate) async fn read(
         OpcDaDriver::connect(&bridge_host, opc_server.clone()),
     )
     .await?;
+    let gateway_compatibility = Some(
+        inspect_gateway_compatibility(&bridge_host, Some(&opc_server))
+            .await
+            .into(),
+    );
     let values = with_timeout(
         &format!("read '{tag}'"),
         driver.read(std::slice::from_ref(&tag)),
@@ -955,6 +1177,7 @@ pub(crate) async fn read(
         value: value.value,
         quality: sample_quality_from_driver(value.quality),
         timestamp: value.timestamp,
+        gateway_compatibility,
     }))
 }
 
@@ -1188,10 +1411,9 @@ mod tests {
 
         let response = get(app, "/api/opc/servers").await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            body_json(response).await,
-            serde_json::json!({"servers": []})
-        );
+        let body = body_json(response).await;
+        assert_eq!(body["servers"], serde_json::json!([]));
+        assert_eq!(body["gateway_compatibility"]["status"], "unknown");
     }
 
     #[tokio::test]
@@ -1934,5 +2156,188 @@ mod tests {
             }
             other => panic!("expected BadRequest, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn with_timeout_maps_an_incompatible_gateway_without_waiting() {
+        let err = with_timeout(
+            "discover OPC browse capabilities",
+            std::future::ready(Err::<(), _>(
+                bhtune_driver::DriverError::IncompatibleGateway {
+                    operation: "capability discovery",
+                },
+            )),
+        )
+        .await
+        .unwrap_err();
+        let message = expect_bad_request(err);
+        assert!(message.contains("capability discovery"), "{message}");
+        assert!(
+            message.contains("upgrade the OPC DA bridge gateway"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_falls_back_to_unknown_when_the_gateway_is_unreachable() {
+        let report = inspect_gateway_compatibility("127.0.0.1:1", None).await;
+        assert_eq!(
+            report.status,
+            bhtune_driver::OpcDaCompatibilityStatus::Unknown
+        );
+        assert!(
+            report
+                .warning_message()
+                .is_some_and(|warning| warning.contains("did not report enough"))
+        );
+    }
+
+    #[test]
+    fn degraded_warning_covers_refusal_warning_and_display_fallback() {
+        let full = sample_report(bhtune_driver::OpcDaCompatibilityStatus::Full);
+        let partial = sample_report(bhtune_driver::OpcDaCompatibilityStatus::Partial);
+        let unknown = sample_report(bhtune_driver::OpcDaCompatibilityStatus::Unknown);
+        let incompatible = sample_report(bhtune_driver::OpcDaCompatibilityStatus::Incompatible);
+
+        let fallback = degraded_warning(&full, "paged browse");
+        assert!(fallback.contains("paged browse"), "{fallback}");
+        assert!(
+            fallback.contains("upgrade the OPC DA bridge gateway"),
+            "{fallback}"
+        );
+        assert!(degraded_warning(&partial, "paged browse").contains("partially compatible"));
+        assert!(degraded_warning(&unknown, "paged browse").contains("did not report enough"));
+        assert!(
+            degraded_warning(&incompatible, "paged browse").contains("is incompatible with bhtune")
+        );
+    }
+
+    #[test]
+    fn feature_compatibility_response_copies_reported_gateway_versions() {
+        use bhtune_driver::{
+            OpcDaFeatureCompatibility, OpcDaFeatureCompatibilityStatus, OpcDaGatewayFeature,
+            OpcDaProtocolRange,
+        };
+
+        let reported = OpcDaFeatureCompatibility {
+            feature: OpcDaGatewayFeature::Namespace,
+            status: OpcDaFeatureCompatibilityStatus::Compatible,
+            client_versions: OpcDaProtocolRange { min: 2, max: 2 },
+            gateway_versions: Some(OpcDaProtocolRange { min: 2, max: 3 }),
+            negotiated_version: Some(2),
+            reason: "namespace overlap".to_string(),
+        };
+        let response = GatewayFeatureCompatibilityResponse::from(&reported);
+        assert_eq!(response.feature, "namespace");
+        assert_eq!(response.status, "compatible");
+        assert_eq!(response.client_versions.min, 2);
+        assert_eq!(response.client_versions.max, 2);
+        assert_eq!(
+            response.gateway_versions,
+            Some(GatewayProtocolRangeResponse { min: 2, max: 3 })
+        );
+        assert_eq!(response.negotiated_version, Some(2));
+        assert_eq!(response.reason, "namespace overlap");
+
+        let unreported = OpcDaFeatureCompatibility {
+            gateway_versions: None,
+            negotiated_version: None,
+            status: OpcDaFeatureCompatibilityStatus::Unknown,
+            reason: "not reported".to_string(),
+            ..reported
+        };
+        let missing = GatewayFeatureCompatibilityResponse::from(&unreported);
+        assert_eq!(missing.gateway_versions, None);
+        assert_eq!(missing.negotiated_version, None);
+    }
+
+    fn sample_report(
+        status: bhtune_driver::OpcDaCompatibilityStatus,
+    ) -> bhtune_driver::OpcDaGatewayCompatibility {
+        bhtune_driver::OpcDaGatewayCompatibility {
+            client_version: "0.1.0".to_string(),
+            gateway_version: Some("0.5.0".to_string()),
+            source: bhtune_driver::OpcDaCompatibilitySource::GatewayInfo,
+            status,
+            features: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn capabilities_degrades_when_the_gateway_predates_capability_discovery() {
+        let host = start_mock_server(MockBridgeService {
+            capabilities_error: Some(tonic::Status::unimplemented("capability discovery")),
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+
+        let response = get(app, "/api/opc/capabilities").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["application_version"], "");
+        assert_eq!(body["max_page_size"], 0);
+        assert_eq!(body["supports_browse_sessions"], false);
+        assert_eq!(body["organization"], "unspecified");
+        assert_eq!(body["gateway_compatibility"]["status"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn capabilities_returns_400_when_capability_discovery_fails() {
+        let host = start_mock_server(MockBridgeService {
+            capabilities_error: Some(tonic::Status::internal("boom")),
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+
+        let response = get(app, "/api/opc/capabilities").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let message = body_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            message.contains("discover OPC browse capabilities"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn browse_degrades_when_the_gateway_predates_paged_browse() {
+        let host = start_mock_server(MockBridgeService {
+            browse_error: Some(tonic::Status::unimplemented("paged browse")),
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+
+        let response = get(app, "/api/opc/browse").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["nodes"], serde_json::json!([]));
+        assert_eq!(body["complete"], true);
+        assert_eq!(body["organization"], "unspecified");
+        assert_eq!(body["gateway_compatibility"]["status"], "unknown");
+        let warning = body["warning"].as_str().unwrap();
+        assert!(warning.contains("did not report enough"), "{warning}");
+    }
+
+    #[tokio::test]
+    async fn browse_returns_400_when_paged_browse_fails() {
+        let host = start_mock_server(MockBridgeService {
+            browse_error: Some(tonic::Status::internal("boom")),
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+
+        let response = get(app, "/api/opc/browse").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let message = body_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(message.contains("browse OPC DA namespace"), "{message}");
     }
 }

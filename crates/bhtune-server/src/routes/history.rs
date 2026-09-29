@@ -482,6 +482,9 @@ pub struct RunDetailResponse {
     /// run, this lets the New tune form seed itself from *this specific* historical run
     /// regardless of how many later runs exist.
     pub original_request: Option<StartRunRequest>,
+    /// Gateway protocol snapshot recorded before this run's live mutation, when the run used
+    /// OPC DA. `None` for simulator/replay runs and for OPC runs that predate the snapshot.
+    pub gateway_compatibility: Option<crate::routes::opc::GatewayCompatibilityResponse>,
 }
 
 /// Builds the full `RunDetailResponse` for one run, or `Ok(None)` if no run has that id --
@@ -544,6 +547,10 @@ pub(crate) async fn build_run_detail(
         restore_status: run.restore_status,
         restore_detail: run.restore_detail,
         original_request: parse_stored_request(run.id, &run.request_json),
+        gateway_compatibility: run.gateway_compatibility_json.as_deref().and_then(|json| {
+            bhtune_cli::gateway::parse_stored_compatibility(json)
+                .map(crate::routes::opc::GatewayCompatibilityResponse::from)
+        }),
     }))
 }
 
@@ -1107,6 +1114,41 @@ mod tests {
         // gracefully read `null` rather than the request failing (see
         // `parse_stored_request`'s doc comment).
         assert!(body["original_request"].is_null());
+    }
+
+    #[tokio::test]
+    async fn show_run_includes_a_stored_gateway_compatibility_snapshot() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        let snapshot = serde_json::json!({
+            "client_version": "0.1.0",
+            "gateway_version": "0.5.9",
+            "source": "gateway_info",
+            "status": "partial",
+            "features": []
+        });
+        bhtune_db::models::TuneRunRow::record_gateway_compatibility(
+            &state.pool,
+            run_id,
+            &snapshot.to_string(),
+        )
+        .await
+        .unwrap();
+
+        let app = router().with_state(state);
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["gateway_compatibility"]["status"], "partial");
+        assert_eq!(body["gateway_compatibility"]["gateway_version"], "0.5.9");
+        assert_eq!(body["gateway_compatibility"]["source"], "gateway_info");
     }
 
     #[test]

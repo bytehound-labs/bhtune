@@ -245,6 +245,8 @@ struct RunDetailJson {
     opc_server: Option<String>,
     /// The resolved bridge host this run actually used, matching `opc_server` above.
     bridge_host: Option<String>,
+    /// The gateway compatibility snapshot recorded before this run mutated the loop.
+    gateway_compatibility: Option<bhtune_driver::OpcDaGatewayCompatibility>,
     initial_readings: Option<InitialReadingsJson>,
     timing_metrics: Option<bhtune_db::models::TimingMetrics>,
     samples_recorded: usize,
@@ -482,6 +484,20 @@ fn print_show_table(
             run.bridge_host.as_deref().unwrap_or("-"),
         );
     }
+    if let Some(snapshot) = run
+        .gateway_compatibility_json
+        .as_deref()
+        .and_then(crate::gateway::parse_stored_compatibility)
+    {
+        println!(
+            "  Gateway compatibility: {} ({})",
+            snapshot.status.as_str(),
+            snapshot
+                .gateway_version
+                .as_deref()
+                .unwrap_or("version not reported"),
+        );
+    }
     println!(
         "  Process/controller: {:?} / {:?}",
         run.config.process_type, run.config.controller_type
@@ -699,6 +715,10 @@ fn print_show_json(
         config: run.config,
         opc_server: run.opc_server.clone(),
         bridge_host: run.bridge_host.clone(),
+        gateway_compatibility: run
+            .gateway_compatibility_json
+            .as_deref()
+            .and_then(crate::gateway::parse_stored_compatibility),
         initial_readings: run
             .initial_readings
             .as_ref()
@@ -881,6 +901,7 @@ async fn revert(
     let (bridge_host, server) =
         resolve_revert_connection(&run, bridge_host.as_deref(), server.as_deref())?;
     let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
+    crate::gateway::require_live_gateway_compatible(&bridge_host, Some(&server)).await?;
 
     if is_table_output(output) {
         println!(
@@ -1385,6 +1406,34 @@ mod tests {
     async fn show_output_json_covers_readings_results_and_writes() {
         let (pool, run_id) = run_with_results_and_writes().await;
         show(&pool, run_id, OutputFormat::Json).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn show_prints_a_stored_gateway_compatibility_snapshot() {
+        let (pool, run_id) = run_with_results_and_writes().await;
+        let snapshot = serde_json::json!({
+            "client_version": "0.1.0",
+            "gateway_version": "0.5.9",
+            "source": "gateway_info",
+            "status": "partial",
+            "features": []
+        });
+        TuneRunRow::record_gateway_compatibility(&pool, run_id, &snapshot.to_string())
+            .await
+            .unwrap();
+
+        show(&pool, run_id, OutputFormat::Table).await.unwrap();
+        show(&pool, run_id, OutputFormat::Json).await.unwrap();
+
+        let stored = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
+        let parsed = crate::gateway::parse_stored_compatibility(
+            stored.gateway_compatibility_json.as_deref().unwrap(),
+        )
+        .expect("stored snapshot should parse");
+        assert_eq!(
+            parsed.status,
+            bhtune_driver::OpcDaCompatibilityStatus::Partial
+        );
     }
 
     #[tokio::test]
@@ -1910,6 +1959,58 @@ mod tests {
             })
         );
 
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn revert_refuses_an_incompatible_gateway_before_writing() {
+        use crate::test_support::{MockBridgeService, start_mock_server};
+        use opcda_bridge_proto::bridge::{
+            GetGatewayInfoResponse, ProtocolFeature, ProtocolFeatureKind,
+        };
+
+        let (host, server) = start_mock_server(MockBridgeService {
+            gateway_info_response: GetGatewayInfoResponse {
+                application_version: "0.5.9".to_string(),
+                compatibility_schema_version: 1,
+                features: vec![ProtocolFeature {
+                    kind: ProtocolFeatureKind::Core as i32,
+                    min_version: 9,
+                    max_version: 9,
+                }],
+            },
+            ..Default::default()
+        })
+        .await;
+
+        let (pool, run_id) = opcda_run_with_no_writes(&host, "Sim.Server").await;
+        let now = chrono::Utc::now();
+        let mut successful =
+            bhtune_db::models::NewTuneWrite::new(bhtune_core::ResponseLevel::Moderate, now);
+        successful.previous = Some(bhtune_db::models::WriteReadback {
+            proportional: 10.0,
+            integral: 10.0,
+            derivative: 10.0,
+        });
+        successful.success = true;
+        TuneWriteRow::insert(&pool, run_id, successful)
+            .await
+            .unwrap();
+
+        let error = revert(
+            &pool,
+            run_id,
+            None,
+            None,
+            true,
+            OutputFormat::Table,
+            &crate::config::BhtuneConfig::default(),
+        )
+        .await
+        .expect_err("an incompatible core must refuse revert");
+        assert!(error.to_string().contains("incompatible"));
+        let writes = TuneWriteRow::list_for_run(&pool, run_id).await.unwrap();
+        assert!(writes.iter().all(|write| write.kind != WriteKind::Revert));
         server.shutdown().await;
     }
 

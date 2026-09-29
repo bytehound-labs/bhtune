@@ -60,6 +60,7 @@ pub mod commands;
 pub mod config;
 pub mod db;
 pub mod driver;
+pub mod gateway;
 pub mod logging;
 pub mod output;
 pub mod retention;

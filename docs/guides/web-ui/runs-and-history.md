@@ -76,7 +76,10 @@ with a reason and cannot be written as PID constants.
 </figure>
 
 The page's independently collapsible sections include Summary, Notes, Test configuration,
-Initial readings, PID change history, and Sampling diagnostics. Sampling adequacy is advisory:
+Initial readings, PID change history, and Sampling diagnostics. When a live OPC DA run stored a
+gateway compatibility snapshot, Summary shows it as a badge: full, partial, unknown, or
+incompatible. Simulator runs and older runs have no badge. See
+[OPC gateway compatibility](../opc-gateway-compatibility.md). Sampling adequacy is advisory:
 adequate means at least six observed samples per measured period, marginal means fewer than six,
 and not assessed means no usable period exists.
 

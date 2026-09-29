@@ -564,6 +564,7 @@ async fn build_owned_run_detail(
         restore_status: run.restore_status,
         restore_detail: run.restore_detail,
         original_request,
+        gateway_compatibility: None,
     }))
 }
 
