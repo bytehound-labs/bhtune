@@ -65,8 +65,7 @@ impl DcsTemplateRow {
         origin: TemplateOrigin,
         now: DateTime<Utc>,
     ) -> DbResult<DcsTemplateRow> {
-        let versions_json = json_text("template versions", &template.versions)?;
-        let row = sqlx::query(
+        let query = sqlx::query(
             r"
             INSERT INTO dcs_templates (
                 name, origin, revert_mode, proportional_type, integral_type,
@@ -85,38 +84,13 @@ impl DcsTemplateRow {
             ",
         )
         .bind(&template.name)
-        .bind(enum_to_text(&origin)?)
-        .bind(template.revert_mode)
-        .bind(enum_to_text(&template.proportional_type)?)
-        .bind(enum_to_text(&template.integral_type)?)
-        .bind(enum_to_text(&template.integral_unit)?)
-        .bind(enum_to_text(&template.derivative_type)?)
-        .bind(enum_to_text(&template.derivative_unit)?)
-        .bind(&template.process_variable_suffix)
-        .bind(&template.manipulated_variable_suffix)
-        .bind(&template.setpoint_variable_suffix)
-        .bind(&template.controller_direction_suffix)
-        .bind(&template.controller_mode_suffix)
-        .bind(&template.mode_attribute_suffix)
-        .bind(&template.upper_pv_range_suffix)
-        .bind(&template.lower_pv_range_suffix)
-        .bind(&template.upper_mv_range_suffix)
-        .bind(&template.lower_mv_range_suffix)
-        .bind(&template.proportional_constant_suffix)
-        .bind(&template.integral_constant_suffix)
-        .bind(&template.derivative_constant_suffix)
-        .bind(&template.mode_manual_value)
-        .bind(&template.mode_auto_value)
-        .bind(&template.mode_attribute_program_value)
-        .bind(&template.controller_action_direct_value)
-        .bind(versions_json)
-        .bind(&template.description)
-        .bind(&template.source)
-        .bind(now)
-        .bind(now)
-        .fetch_one(pool)
-        .await
-        .map_err(DbError::Query)?;
+        .bind(enum_to_text(&origin)?);
+        let row = bind_shared_template_fields(query, template)?
+            .bind(now)
+            .bind(now)
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)?;
 
         row_to_dcs_template(row)
     }
@@ -162,8 +136,7 @@ impl DcsTemplateRow {
         template: &DcsTemplate,
         now: DateTime<Utc>,
     ) -> DbResult<DcsTemplateRow> {
-        let versions_json = json_text("template versions", &template.versions)?;
-        let row = sqlx::query(
+        let query = sqlx::query(
             r"
             UPDATE dcs_templates SET
                 revert_mode = ?, proportional_type = ?, integral_type = ?,
@@ -181,38 +154,13 @@ impl DcsTemplateRow {
             WHERE id = ?
             RETURNING *
             ",
-        )
-        .bind(template.revert_mode)
-        .bind(enum_to_text(&template.proportional_type)?)
-        .bind(enum_to_text(&template.integral_type)?)
-        .bind(enum_to_text(&template.integral_unit)?)
-        .bind(enum_to_text(&template.derivative_type)?)
-        .bind(enum_to_text(&template.derivative_unit)?)
-        .bind(&template.process_variable_suffix)
-        .bind(&template.manipulated_variable_suffix)
-        .bind(&template.setpoint_variable_suffix)
-        .bind(&template.controller_direction_suffix)
-        .bind(&template.controller_mode_suffix)
-        .bind(&template.mode_attribute_suffix)
-        .bind(&template.upper_pv_range_suffix)
-        .bind(&template.lower_pv_range_suffix)
-        .bind(&template.upper_mv_range_suffix)
-        .bind(&template.lower_mv_range_suffix)
-        .bind(&template.proportional_constant_suffix)
-        .bind(&template.integral_constant_suffix)
-        .bind(&template.derivative_constant_suffix)
-        .bind(&template.mode_manual_value)
-        .bind(&template.mode_auto_value)
-        .bind(&template.mode_attribute_program_value)
-        .bind(&template.controller_action_direct_value)
-        .bind(versions_json)
-        .bind(&template.description)
-        .bind(&template.source)
-        .bind(now)
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .map_err(DbError::Query)?;
+        );
+        let row = bind_shared_template_fields(query, template)?
+            .bind(now)
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)?;
 
         row_to_dcs_template(row)
     }
@@ -252,6 +200,40 @@ impl DcsTemplateRow {
             })?;
         Ok(result.rows_affected() > 0)
     }
+}
+
+fn bind_shared_template_fields<'q>(
+    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
+    template: &DcsTemplate,
+) -> DbResult<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>> {
+    let versions_json = json_text("template versions", &template.versions)?;
+    Ok(query
+        .bind(template.revert_mode)
+        .bind(enum_to_text(&template.proportional_type)?)
+        .bind(enum_to_text(&template.integral_type)?)
+        .bind(enum_to_text(&template.integral_unit)?)
+        .bind(enum_to_text(&template.derivative_type)?)
+        .bind(enum_to_text(&template.derivative_unit)?)
+        .bind(&template.process_variable_suffix)
+        .bind(&template.manipulated_variable_suffix)
+        .bind(&template.setpoint_variable_suffix)
+        .bind(&template.controller_direction_suffix)
+        .bind(&template.controller_mode_suffix)
+        .bind(&template.mode_attribute_suffix)
+        .bind(&template.upper_pv_range_suffix)
+        .bind(&template.lower_pv_range_suffix)
+        .bind(&template.upper_mv_range_suffix)
+        .bind(&template.lower_mv_range_suffix)
+        .bind(&template.proportional_constant_suffix)
+        .bind(&template.integral_constant_suffix)
+        .bind(&template.derivative_constant_suffix)
+        .bind(&template.mode_manual_value)
+        .bind(&template.mode_auto_value)
+        .bind(&template.mode_attribute_program_value)
+        .bind(&template.controller_action_direct_value)
+        .bind(versions_json)
+        .bind(&template.description)
+        .bind(&template.source))
 }
 
 fn row_to_dcs_template(row: SqliteRow) -> DbResult<DcsTemplateRow> {
