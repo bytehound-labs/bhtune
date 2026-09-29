@@ -258,9 +258,9 @@ secrets; a maintainer-triggered run is required to apply text updates. Tier 1
 (`docs/reference/**`, generated) is already diff-gated by `checks.yml`; the screenshot lock is
 workflow-owned; tier 3 (`AGENTS.md`) is explicitly off limits to this workflow.
 
-Screenshot capture disables CSS animations, and the History/template-list scenarios wait for
-their fixture-backed rows before capture so lazy-page and request timing do not become part of
-the pixel baseline.
+The History and template-list screenshot scenarios disable CSS animations and wait for their
+fixture-backed rows before capture so lazy-page and request timing do not become part of the
+pixel baseline.
 
 **Guardrails, all load-bearing** (numbered comments in the workflow itself cross-reference
 these):

@@ -52,11 +52,17 @@ export async function captureScenario(page: Page, scenarioId: string) {
   }
 
   const path = resolve(screenshotDir, scenario.output);
+  const screenshotOptions =
+    scenario.id === "full-history" ||
+    scenario.id === "full-template-list" ||
+    scenario.id === "demo-history"
+      ? { animations: "disabled" as const }
+      : {};
   if (scenario.capture !== "content-fit") {
     await page.screenshot({
       path,
       fullPage: true,
-      animations: "disabled",
+      ...screenshotOptions,
     });
     return;
   }
@@ -84,14 +90,14 @@ export async function captureScenario(page: Page, scenarioId: string) {
     await page.screenshot({
       path,
       fullPage: true,
-      animations: "disabled",
+      ...screenshotOptions,
     });
     return;
   }
 
   await page.screenshot({
     path,
-    animations: "disabled",
+    ...screenshotOptions,
     clip: {
       x: 0,
       y: 0,
