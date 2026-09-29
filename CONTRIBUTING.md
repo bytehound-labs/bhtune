@@ -134,6 +134,8 @@ and validation rules rather than treating "latest" as an unconditional upgrade p
 ## Testing
 
 - Unit-test domain logic with `cargo test --workspace`.
+- Frontend helper and component unit tests use Vitest with jsdom:
+  `pnpm --filter bhtune-frontend run test`.
 - `bhtune-core` (the MRFT engine and tuning math) must stay a pure, I/O-free state machine so it
   can be tested deterministically and validated by replaying golden-master traces. See
   `AGENTS.md` for the replay-validation approach and the correctness-critical details that need
@@ -174,8 +176,8 @@ workspace dependencies from crates.io, which cannot compile coordinated unpublis
 changes; the workspace build, Clippy, and test jobs compile the real local dependency graph.
 PRs touching `frontend/` must additionally pass `pnpm run
 check:licenses`, a check that the generated OpenAPI TS client (`frontend/src/api/schema.d.ts`)
-is up to date, `pnpm --filter bhtune-frontend run format:check`, `run lint`, and `run build`
-(which also typechecks `frontend/e2e/`). `.github/workflows/e2e.yml` runs the Playwright
+is up to date, `pnpm --filter bhtune-frontend run test`, `run format:check`, `run lint`, and
+`run build` (which also typechecks `frontend/e2e/`). `.github/workflows/e2e.yml` runs the Playwright
 suite above in CI on every push/PR, uploading the HTML report as an artifact if it fails. PRs
 touching `docs/` or `website/` must pass `pnpm --filter bhtune-website run format:check`,
 `run lint`, `run typecheck`, and `run build` — the build step doubles as a broken-link/anchor

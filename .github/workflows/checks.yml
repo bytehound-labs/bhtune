@@ -316,6 +316,9 @@ jobs:
       - name: Lint
         run: pnpm --filter bhtune-frontend run lint
 
+      - name: Run frontend unit tests
+        run: pnpm --filter bhtune-frontend run test
+
       - name: Build (typecheck + bundle)
         run: pnpm --filter bhtune-frontend run build
 
