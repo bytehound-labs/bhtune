@@ -23,8 +23,8 @@ profile receives the same `404` for another session's run ID.
 
 {/* web-ui-screenshot: demo-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=96a96a40b3a0">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=96a96a40b3a0" alt="BHTune Demo mode visitor-private History page" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=9b3f03c310d8">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=9b3f03c310d8" alt="BHTune Demo mode visitor-private History page" />
   </a>
   <figcaption>Demo history uses the same list shape while the server scopes every row to the current anonymous session.</figcaption>
 </figure>
