@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::active_run::RunAlreadyActive;
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, require_present};
 use crate::routes::history::{RunDetailResponse, build_run_detail};
 use crate::state::AppState;
 
@@ -311,10 +311,8 @@ where
         return Err(ApiError::Conflict(failure_reason));
     }
 
-    let detail = build_run_detail(&state.pool, run_id).await?.expect(
-        "the tune_runs row this handler just inserted via prepare() must exist immediately \
-         afterward",
-    );
+    let built = build_run_detail(&state.pool, run_id).await?;
+    let detail = require_present(built, INSERTED_RUN_PRESENT)?;
     Ok((StatusCode::CREATED, Json(detail)))
 }
 
@@ -507,6 +505,12 @@ fn require_writable_run(run: &TuneRunRow) -> Result<(), ApiError> {
     Ok(())
 }
 
+const INSERTED_RUN_PRESENT: &str =
+    "the tune_runs row this handler just inserted via prepare() must exist immediately afterward";
+const P_TAG_PRESENT: &str = "require_writable_run already checked proportional_constant is Some";
+const I_TAG_PRESENT: &str = "require_writable_run already checked integral_constant is Some";
+const D_TAG_PRESENT: &str = "require_writable_run already checked derivative_constant is Some";
+
 /// Connects an [`OpcDaDriver`] using `run`'s own recorded `opc_server`/`bridge_host` --
 /// never re-resolved from this process's own config/flags, for exactly the reason
 /// `bhtune-cli`'s `commands::history::resolve_revert_connection` documents: a value
@@ -514,14 +518,10 @@ fn require_writable_run(run: &TuneRunRow) -> Result<(), ApiError> {
 /// run itself actually used. [`require_writable_run`] must already have confirmed both
 /// fields are present.
 async fn connect_to_runs_recorded_driver(run: &TuneRunRow) -> Result<OpcDaDriver, ApiError> {
-    let opc_server = run
-        .opc_server
-        .as_deref()
-        .expect("require_writable_run already checked opc_server is Some");
-    let bridge_host = run
-        .bridge_host
-        .as_deref()
-        .expect("require_writable_run already checked bridge_host is Some");
+    const OPC_SERVER_PRESENT: &str = "require_writable_run already checked opc_server is Some";
+    const BRIDGE_HOST_PRESENT: &str = "require_writable_run already checked bridge_host is Some";
+    let opc_server = require_present(run.opc_server.as_deref(), OPC_SERVER_PRESENT)?;
+    let bridge_host = require_present(run.bridge_host.as_deref(), BRIDGE_HOST_PRESENT)?;
     OpcDaDriver::connect(bridge_host, opc_server)
         .await
         .map_err(|e| {
@@ -730,9 +730,9 @@ pub(crate) async fn write_run(
     };
 
     // `require_writable_run` already confirmed all three tags are `Some`.
-    let p_tag = run.tags.proportional_constant.clone().unwrap();
-    let i_tag = run.tags.integral_constant.clone().unwrap();
-    let d_tag = run.tags.derivative_constant.clone().unwrap();
+    let p_tag = require_present(run.tags.proportional_constant.clone(), P_TAG_PRESENT)?;
+    let i_tag = require_present(run.tags.integral_constant.clone(), I_TAG_PRESENT)?;
+    let d_tag = require_present(run.tags.derivative_constant.clone(), D_TAG_PRESENT)?;
 
     let detail = reserve_connect_and_write(
         &state,
@@ -806,9 +806,9 @@ pub(crate) async fn revert_run(
     })?;
 
     // `require_writable_run` already confirmed all three tags are `Some`.
-    let p_tag = run.tags.proportional_constant.clone().unwrap();
-    let i_tag = run.tags.integral_constant.clone().unwrap();
-    let d_tag = run.tags.derivative_constant.clone().unwrap();
+    let p_tag = require_present(run.tags.proportional_constant.clone(), P_TAG_PRESENT)?;
+    let i_tag = require_present(run.tags.integral_constant.clone(), I_TAG_PRESENT)?;
+    let d_tag = require_present(run.tags.derivative_constant.clone(), D_TAG_PRESENT)?;
 
     let detail = reserve_connect_and_write(
         &state,

@@ -21,6 +21,13 @@
 //! `openapi.json` (see that file's doc comment, which names this example as the intended
 //! reuse of the pattern).
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
+
 use clap::CommandFactory;
 use std::path::{Path, PathBuf};
 

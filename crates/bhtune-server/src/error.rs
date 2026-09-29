@@ -89,6 +89,10 @@ impl IntoResponse for ApiError {
         };
         let mut response = (status, Json(ErrorBody { error: message })).into_response();
         if let Some(retry_after_secs) = retry_after_secs {
+            #[allow(
+                clippy::expect_used,
+                reason = "u64 decimal text is always a valid Retry-After header value"
+            )]
             response.headers_mut().insert(
                 header::RETRY_AFTER,
                 HeaderValue::from_str(&retry_after_secs.to_string())
@@ -118,6 +122,16 @@ impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
         ApiError::Internal(err)
     }
+}
+
+/// Returns `value`, or an internal error when a prior check should have proved it present.
+///
+/// A missing value here is a server bug, not a client error, so the response is 500.
+pub(crate) fn require_present<T>(value: Option<T>, message: &'static str) -> Result<T, ApiError> {
+    let Some(value) = value else {
+        return Err(ApiError::Internal(anyhow::anyhow!(message)));
+    };
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -231,5 +245,18 @@ mod tests {
     fn anyhow_errors_map_to_internal() {
         let api_err: ApiError = anyhow::anyhow!("unexpected failure").into();
         assert!(matches!(api_err, ApiError::Internal(_)));
+    }
+
+    #[test]
+    fn require_present_returns_the_value_or_an_internal_error() {
+        let present = require_present(Some(7), "missing value").expect("Some is present");
+        assert_eq!(present, 7);
+        let missing =
+            require_present(None::<i32>, "missing value").expect_err("None is an internal error");
+        assert!(format!("{missing:?}").contains("missing value"));
+        assert_eq!(
+            missing.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

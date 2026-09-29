@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
+
 use bhtune_db::{models::SettingRow, pool::connect_in_memory};
 use chrono::{TimeZone, Utc};
 

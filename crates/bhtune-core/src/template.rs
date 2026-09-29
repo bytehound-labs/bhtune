@@ -228,6 +228,10 @@ const BUILTIN_CATALOG: &str = include_str!("../templates/builtin.toml");
 /// bad edit to `templates/builtin.toml` itself; this module's
 /// `embedded_catalog_parses_and_validates` test proves it never does in practice, so a
 /// malformed contribution fails CI rather than shipping.
+#[allow(
+    clippy::expect_used,
+    reason = "the embedded catalog is compiled into the binary; a parse failure is a build invariant, not a live-loop error"
+)]
 pub fn built_in_templates() -> Vec<DcsTemplate> {
     parse_catalog(BUILTIN_CATALOG).expect("embedded builtin.toml catalog must parse and validate")
 }

@@ -12,6 +12,12 @@
 //! `#[cfg(unix)]`-style precedent for platform-specific test infrastructure.
 
 #![cfg(unix)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
 
 use std::io::Read;
 use std::process::{Child, Command, Stdio};

@@ -21,7 +21,7 @@ use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 use crate::{
     driver::Driver,
-    error::{DriverError, DriverResult},
+    error::{DriverError, DriverResult, poisoned_lock},
     types::{
         BrowsePage, BrowsePageRequest, DriverCapabilities, Quality, SearchEvent, SearchRequest,
         TagId, TagValue, TagWrite, WriteOutcome,
@@ -322,7 +322,7 @@ impl SimulatorDriver {
 #[async_trait]
 impl Driver for SimulatorDriver {
     async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
-        let mut process = self.process.lock().unwrap();
+        let mut process = poisoned_lock(self.process.lock())?;
         tags.iter()
             .map(|tag| {
                 let value = if *tag == self.pv_tag {
@@ -363,7 +363,7 @@ impl Driver for SimulatorDriver {
                 }
             },
         };
-        self.process.lock().unwrap().set_mv(mv);
+        poisoned_lock(self.process.lock())?.set_mv(mv);
         Ok(WriteOutcome::success())
     }
 

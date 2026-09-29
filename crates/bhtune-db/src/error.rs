@@ -76,6 +76,15 @@ pub enum DbError {
         .0.display()
     )]
     DatabaseInUse(std::path::PathBuf),
+
+    /// A value that should have been JSON-representable could not be serialized. This is a
+    /// persistence failure, not a reason to panic while a live loop may already be in manual.
+    #[error("failed to serialize {context}: {source}")]
+    Serialize {
+        context: &'static str,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 pub type DbResult<T> = Result<T, DbError>;

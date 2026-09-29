@@ -12,6 +12,12 @@
 //! `ubuntu-latest` only, see `AGENTS.md`).
 
 #![cfg(unix)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;

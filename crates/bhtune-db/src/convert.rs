@@ -5,41 +5,67 @@
 //! cannot derive `sqlx::Type` itself, and Rust's orphan rules mean `bhtune-db` cannot
 //! implement a foreign trait (`sqlx::Type`) for a foreign type (e.g.
 //! `bhtune_core::ProcessType`) either. Rather than defining a parallel `sqlx`-aware enum for
-//! every `bhtune-core` enum (eight of them, and rising), these two functions reuse each
-//! enum's existing `#[serde(rename_all = "snake_case")]` implementation as the single source
-//! of truth for its wire form — the same string a `ProcessType` would serialize to over the
-//! CLI's `--output json` or the web GUI's HTTP API already matches what gets stored in a
-//! `TEXT` column.
+//! every `bhtune-core` enum (eight of them, and rising), [`enum_to_text`] and
+//! [`text_to_enum`] reuse each enum's existing `#[serde(rename_all = "snake_case")]`
+//! implementation as the single source of truth for its wire form — the same string a
+//! `ProcessType` would serialize to over the CLI's `--output json` or the web GUI's HTTP API
+//! already matches what gets stored in a `TEXT` column.
 
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::error::{DbError, DbResult};
 
-/// Encodes a fieldless, `serde`-tagged enum as the bare string SQLite stores it as.
-///
-/// # Panics
-/// Panics if `T`'s `Serialize` impl doesn't produce a bare JSON string (i.e. `T` isn't a
-/// fieldless enum with `#[serde(rename_all = "snake_case")]` or equivalent). Every
-/// `bhtune-core` enum stored in the database satisfies this; a panic here means a new enum
-/// was wired into a TEXT column without checking that assumption first.
-pub fn enum_to_text<T: Serialize>(value: &T) -> String {
-    enum_to_text_with(value, |value| serde_json::to_value(value))
+/// A serialized value that was not the bare JSON string a fieldless enum must produce.
+#[derive(Debug)]
+struct EnumShapeError(String);
+
+impl std::fmt::Display for EnumShapeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let detail = &self.0;
+        write!(
+            f,
+            "enum_to_text called on a type that doesn't serialize to a bare string, got: {detail}"
+        )
+    }
 }
 
-fn enum_to_text_with<T, E>(
-    value: &T,
-    serialize: impl FnOnce(&T) -> Result<serde_json::Value, E>,
-) -> String
-where
-    T: Serialize,
-    E: std::fmt::Debug,
-{
-    match serialize(value).expect("enum serialization is infallible") {
-        serde_json::Value::String(s) => s,
-        other => panic!(
-            "enum_to_text called on a type that doesn't serialize to a bare string, got: {other}"
-        ),
+impl std::error::Error for EnumShapeError {}
+
+/// Encodes a fieldless, `serde`-tagged enum as the bare string SQLite stores it as.
+///
+/// Returns [`DbError::Serialize`] if `T` does not serialize to a bare JSON string. Every
+/// `bhtune-core` enum stored in the database satisfies that shape; a failure here means a
+/// new type was wired into a TEXT column without checking that assumption first, and must be
+/// reported instead of panicking while a live loop may already be in manual.
+pub fn enum_to_text<T: Serialize>(value: &T) -> DbResult<String> {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(text)) => Ok(text),
+        Ok(other) => Err(serialize_error("enum", EnumShapeError(other.to_string()))),
+        Err(source) => Err(serialize_error("enum", source)),
     }
+}
+
+fn serialize_error(
+    context: &'static str,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> DbError {
+    DbError::Serialize {
+        context,
+        source: Box::new(source),
+    }
+}
+
+/// Serializes `value` for a JSON column, naming `context` in the error if that fails.
+pub(crate) fn json_text<T: Serialize>(context: &'static str, value: &T) -> DbResult<String> {
+    serde_json::to_string(value).map_err(|source| serialize_error(context, source))
+}
+
+/// Encodes an optional fieldless enum, preserving `None` without serializing it.
+pub(crate) fn option_enum_text<T: Serialize>(value: Option<&T>) -> DbResult<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(Some(enum_to_text(value)?))
 }
 
 /// Decodes a value read from `column` back into a fieldless, `serde`-tagged enum.
@@ -94,7 +120,7 @@ mod tests {
             ),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<ProcessType>("process_type", text).unwrap(),
                 variant
@@ -102,18 +128,61 @@ mod tests {
         }
     }
 
-    #[test]
-    #[should_panic(expected = "doesn't serialize to a bare string")]
-    fn enum_to_text_rejects_non_string_serialization() {
-        enum_to_text(&42u8);
+    #[derive(Serialize)]
+    struct HasNan {
+        value: f32,
+    }
+
+    struct RejectsSerialize;
+
+    impl Serialize for RejectsSerialize {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("rejected"))
+        }
     }
 
     #[test]
-    #[should_panic(expected = "enum serialization is infallible")]
-    fn enum_to_text_rejects_a_serialization_failure() {
-        enum_to_text_with(&ProcessType::Flow, |_| {
-            Err::<serde_json::Value, _>("injected serialization failure")
-        });
+    fn enum_to_text_rejects_non_string_serialization() {
+        let err = enum_to_text(&42u8).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("doesn't serialize to a bare string")
+        );
+        assert!(std::error::Error::source(&err).is_some());
+    }
+
+    #[test]
+    fn enum_to_text_rejects_a_non_string_non_finite_value() {
+        let err = enum_to_text(&HasNan { value: f32::NAN }).unwrap_err();
+        assert!(err.to_string().contains("enum"));
+        assert!(std::error::Error::source(&err).is_some());
+    }
+
+    #[test]
+    fn enum_to_text_rejects_a_serializer_error() {
+        let err = enum_to_text(&RejectsSerialize).unwrap_err();
+        assert!(err.to_string().contains("enum"));
+        assert!(err.to_string().contains("rejected"));
+        assert!(std::error::Error::source(&err).is_some());
+    }
+
+    #[test]
+    fn json_text_rejects_a_serialization_failure() {
+        let err = json_text("timing metrics", &RejectsSerialize).unwrap_err();
+        assert!(err.to_string().contains("timing metrics"));
+        assert!(err.to_string().contains("rejected"));
+        assert!(std::error::Error::source(&err).is_some());
+    }
+
+    #[test]
+    fn option_enum_text_preserves_absence_and_encodes_presence() {
+        assert_eq!(option_enum_text::<ProcessType>(None).unwrap(), None);
+        assert_eq!(
+            option_enum_text(Some(&ProcessType::Flow))
+                .unwrap()
+                .as_deref(),
+            Some("flow")
+        );
     }
 
     #[test]
@@ -124,7 +193,7 @@ mod tests {
             (ControllerType::Pid, "pid"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<ControllerType>("controller_type", text).unwrap(),
                 variant
@@ -139,7 +208,7 @@ mod tests {
             (ControllerDirection::Reverse, "reverse"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<ControllerDirection>("controller_direction", text).unwrap(),
                 variant
@@ -155,7 +224,7 @@ mod tests {
             (ResponseLevel::Sluggish, "sluggish"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<ResponseLevel>("response_level", text).unwrap(),
                 variant
@@ -170,7 +239,7 @@ mod tests {
             (ProportionalType::Band, "band"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<ProportionalType>("proportional_type", text).unwrap(),
                 variant
@@ -186,7 +255,7 @@ mod tests {
             (IntegralType::ResetGain, "reset_gain"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<IntegralType>("integral_type", text).unwrap(),
                 variant
@@ -201,7 +270,7 @@ mod tests {
             (DerivativeType::DerivativeGain, "derivative_gain"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<DerivativeType>("derivative_type", text).unwrap(),
                 variant
@@ -216,7 +285,7 @@ mod tests {
             (TimeUnit::Minutes, "minutes"),
         ];
         for (variant, text) in cases {
-            assert_eq!(enum_to_text(&variant), text);
+            assert_eq!(enum_to_text(&variant).unwrap(), text);
             assert_eq!(
                 text_to_enum::<TimeUnit>("integral_unit", text).unwrap(),
                 variant

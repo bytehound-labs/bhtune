@@ -129,7 +129,16 @@ is not covered. Code behind `#[cfg(windows)]` is linted by the Windows CI job.
 - `deny` marks constructs that must never land and is an error even without `-D warnings`:
   `unsafe_code`, which every `rustc` build checks, and these lints, which `cargo clippy`
   checks: leftover `dbg!`, `todo!`, and `unimplemented!` macros, undocumented `unsafe` blocks,
-  and every default Clippy group (`clippy::all`).
+  every default Clippy group (`clippy::all`), and the panic restriction lints
+  `clippy::unwrap_used`, `clippy::expect_used`, and `clippy::panic`.
+- Production code returns a typed error instead of panicking. That includes code that runs
+  after a live loop has been switched to manual, where a panic would skip restore. Unit tests
+  allow those three lints with a crate-root `#![cfg_attr(test, allow(...))]`. Integration
+  tests, examples, and benches allow them with a file-level `#![allow(...)]`, because a
+  crate-root test allow does not cover those targets. Four production `expect` calls remain.
+  Each is a real invariant with a site-level `#[allow(clippy::expect_used, reason = "...")]`:
+  request-snapshot serialization before any driver I/O, the embedded template catalog parse,
+  a non-empty browse-page vector, and an integer `Retry-After` header value.
 - `warn` marks hygiene findings: `rust_2018_idioms`, the redundant/unused lifetime and unused
   macro-rule lints, and a curated subset of `clippy::pedantic` whose lints are cheap and
   mechanical to satisfy. Warnings stay non-fatal in a local build but fail CI, whose Clippy job
@@ -137,13 +146,14 @@ is not covered. Code behind `#[cfg(windows)]` is linted by the Windows CI job.
 - The rest of `clippy::pedantic` stays off because its noisiest lints are subjective or would add
   hundreds of low-value annotations. `clippy::nursery` (unstable, prone to false positives) and
   `clippy::cargo` (duplicate transitive versions are not fixable here, and `cargo deny` owns
-  dependency policy) stay off as well. Panic-related restriction lints (`unwrap_used`,
-  `expect_used`, `panic`) are not part of the policy.
+  dependency policy) stay off as well.
 - Fix a finding rather than suppressing it. When a suppression is genuinely correct, put a
   narrowly scoped `#[expect(lint, reason = "...")]` on the smallest item that needs it. Prefer
   `#[expect]` over `#[allow]`: once the finding disappears it raises an
   `unfulfilled_lint_expectations` warning, which fails CI, so a stale suppression cannot
-  linger. Crate-level blanket allows are not accepted.
+  linger. The panic-lint allows above are the exception, because those lints are intentionally
+  permitted in tests and on the four invariant sites. Other crate-level blanket allows are not
+  accepted.
 - Keep `unsafe` out of production code. When a test genuinely needs it (for example, delivering
   a real OS signal with `libc::kill`), isolate it in a small function carrying
   `#[expect(unsafe_code, reason = "...")]` and put a `// SAFETY:` comment inside the function

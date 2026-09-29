@@ -20,6 +20,16 @@
 //! implementation (the real Windows one, or the explanatory non-Windows stub) got compiled
 //! in.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "unit tests may use unwrap, expect, and panic; production code must return typed errors"
+    )
+)]
+
 #[cfg(target_os = "windows")]
 use std::path::Path;
 
@@ -57,7 +67,7 @@ fn run_interactive(config_path: Option<&Path>) -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let server = run::build_server(config_path).await?;
-        run::serve(server, run::shutdown_signal()).await
+        run::serve(server, run::shutdown_signal()?).await
     })
 }
 
@@ -71,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let server = run::build_server(cli.config.as_deref()).await?;
-    run::serve(server, run::shutdown_signal()).await
+    run::serve(server, run::shutdown_signal()?).await
 }
 
 /// Runs one of the `install`/`uninstall`/`start`/`stop`/`status` subcommands. Plain,

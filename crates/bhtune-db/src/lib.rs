@@ -20,6 +20,16 @@
 //! schema and the rationale behind each design decision (nullability, JSON-vs-columns,
 //! cascade rules).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "unit tests may use unwrap, expect, and panic; production code must return typed errors"
+    )
+)]
+
 pub mod backup;
 pub mod convert;
 pub mod error;

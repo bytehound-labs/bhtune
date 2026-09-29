@@ -4,6 +4,13 @@
 //! `list_for_run` helpers — the actual query patterns the CLI and GUI history explorer will
 //! depend on.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
+
 use bhtune_core::{CheckedTuningResult, TuningResultInvalidReason, TuningResultStatus};
 use bhtune_core::{
     ControllerDirection, ControllerType, DcsTemplate, LoopConfig, LoopTags, MrftState, ProcessType,

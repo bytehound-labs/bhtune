@@ -39,7 +39,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
 use crate::AppState;
-use crate::error::ApiError;
+use crate::error::{ApiError, require_present};
 use crate::routes::history::{
     InitialReadingsResponse, MvActuationResponse, PidConstantTagsResponse,
     PidParameterLabelsResponse, ResultResponse, RunDetailResponse, RunExportFormat, RunExportQuery,
@@ -1063,9 +1063,9 @@ pub(crate) async fn start_run(
         ));
     }
 
-    let detail = build_owned_run_detail(&state, run_id, session_id)
-        .await?
-        .expect("prepare_owned inserted this owner-scoped demo run");
+    let built = build_owned_run_detail(&state, run_id, session_id).await?;
+    const DEMO_RUN_PRESENT: &str = "prepare_owned inserted this owner-scoped demo run";
+    let detail = require_present(built, DEMO_RUN_PRESENT)?;
     Ok((StatusCode::CREATED, Json(detail)))
 }
 

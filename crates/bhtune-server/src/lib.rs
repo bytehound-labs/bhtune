@@ -8,6 +8,16 @@
 //! [`build_router`]'s output, with no bound TCP socket needed -- the same lib/bin split
 //! `bhtune-cli` already uses for the same reason.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "unit tests may use unwrap, expect, and panic; production code must return typed errors"
+    )
+)]
+
 pub mod active_run;
 pub mod cli;
 pub mod error;

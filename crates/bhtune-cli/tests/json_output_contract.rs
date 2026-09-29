@@ -16,6 +16,13 @@
 //! `fast_simulator_args()` test helper (short poll interval, short lag/dead-time) so the
 //! whole subprocess run finishes in well under a second of real wall-clock time.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "integration tests and examples may use unwrap, expect, and panic"
+)]
+
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::Duration;
