@@ -11,6 +11,10 @@ from unittest.mock import patch
 import convert_golden_trace
 
 
+FIRST_SWITCH_LEGACY_TIME = "9/28/2026 7:00:01 PM"
+FIRST_SWITCH_UTC_TIME = "2026-09-28T19:00:01Z"
+
+
 def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
@@ -23,7 +27,7 @@ def static_row() -> dict[str, str]:
         "MvSignInit": "1",
         "NumCyclesCount": "1",
         "MvSwitchTimesList_0": "9/28/2026 7:00:00 PM",
-        "MvSwitchTimesList_1": "9/28/2026 7:00:01 PM",
+        "MvSwitchTimesList_1": FIRST_SWITCH_LEGACY_TIME,
         "MvSwitchTimesList_2": "9/28/2026 7:00:02 PM",
         "MaxPVlist_0": "22.5",
         "MaxPVlist_1": "23.5",
@@ -63,7 +67,7 @@ def static_row() -> dict[str, str]:
 def dynamic_rows() -> list[dict[str, str]]:
     return [
         {
-            "TimeCurrent": "9/28/2026 7:00:01 PM",
+            "TimeCurrent": FIRST_SWITCH_LEGACY_TIME,
             "PvValueCurrent": "20.5",
             "Hysteresis": "0.1",
             "MvValueCurrent": "50",
@@ -139,8 +143,8 @@ class ConvertGoldenTraceTests(unittest.TestCase):
 
     def test_parse_dt_converts_the_legacy_timestamp_to_utc_shape(self):
         self.assertEqual(
-            convert_golden_trace.parse_dt("9/28/2026 7:00:01 PM"),
-            "2026-09-28T19:00:01Z",
+            convert_golden_trace.parse_dt(FIRST_SWITCH_LEGACY_TIME),
+            FIRST_SWITCH_UTC_TIME,
         )
 
     def test_first_switch_peak_rule_uses_direction_and_initial_sign(self):
@@ -179,7 +183,7 @@ class ConvertGoldenTraceTests(unittest.TestCase):
         self.assertEqual(
             fixture["ticks"][0],
             {
-                "time": "2026-09-28T19:00:01Z",
+                "time": FIRST_SWITCH_UTC_TIME,
                 "pv": 20.5,
                 "expected": {
                     "hysteresis": 0.1,
@@ -196,7 +200,7 @@ class ConvertGoldenTraceTests(unittest.TestCase):
             fixture["expected_final"]["switch_times"],
             [
                 "2026-09-28T19:00:00Z",
-                "2026-09-28T19:00:01Z",
+                FIRST_SWITCH_UTC_TIME,
                 "2026-09-28T19:00:02Z",
             ],
         )

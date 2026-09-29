@@ -8,6 +8,9 @@ from unittest.mock import patch
 import check_image_path_filters
 
 
+DOCKERIGNORE_PATH = ".dockerignore"
+
+
 def github_workflow(paths: set[str]) -> str:
     entries = "\n".join(f'      - "{path}"' for path in sorted(paths))
     return (
@@ -55,7 +58,7 @@ class CheckImagePathFiltersTests(unittest.TestCase):
         self,
     ):
         lines = [
-            '  - ".dockerignore" # generated image input',
+            f'  - "{DOCKERIGNORE_PATH}" # generated image input',
             "  - 'Dockerfile'",
             "  - unquoted.yml",
             "    include:",
@@ -66,19 +69,19 @@ class CheckImagePathFiltersTests(unittest.TestCase):
         )
 
     def test_github_paths_collects_each_paths_filter(self):
-        text = github_workflow({".dockerignore", "Dockerfile"})
+        text = github_workflow({DOCKERIGNORE_PATH, "Dockerfile"})
         text += '    paths-ignore:\n      - "ignored.txt"\n'
         self.assertEqual(
             check_image_path_filters._github_paths(text),
-            {".dockerignore", "Dockerfile"},
+            {DOCKERIGNORE_PATH, "Dockerfile"},
         )
 
     def test_woodpecker_paths_reads_the_include_block(self):
         self.assertEqual(
             check_image_path_filters._woodpecker_paths(
-                woodpecker_workflow({".dockerignore", "Dockerfile"})
+                woodpecker_workflow({DOCKERIGNORE_PATH, "Dockerfile"})
             ),
-            {".dockerignore", "Dockerfile"},
+            {DOCKERIGNORE_PATH, "Dockerfile"},
         )
 
     def test_woodpecker_paths_requires_a_filter(self):
