@@ -6,7 +6,7 @@ use bhtune_core::{
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{TimingBasis, TimingMetrics, TuneRunRow};
 
-use super::poll::*;
+use super::poll::{CompletedPoll, PollOutcome};
 
 pub(super) fn completed_oscillation_period_ms(
     poll_result: &anyhow::Result<PollOutcome>,

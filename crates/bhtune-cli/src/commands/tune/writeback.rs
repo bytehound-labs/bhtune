@@ -13,8 +13,8 @@ use chrono::Utc;
 
 use crate::output::OutputFormat;
 
-use super::prepare::*;
-use super::quality::*;
+use super::prepare::WriteBackOutcome;
+use super::quality::{read_f32, write_value};
 
 /// Reads the existing Proportional/Integral/Derivative values before any write is attempted
 /// -- `safety-writeback-rollback`'s pre-read step. Reading all three is a hard stop on the

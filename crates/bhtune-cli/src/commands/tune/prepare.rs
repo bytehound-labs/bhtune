@@ -19,14 +19,29 @@ use crate::args::{DriverKindArg, TuneArgs};
 use crate::cancel::CtrlC;
 use crate::timing::{PollTimingAccumulator, RunTimeAnchor};
 
-use super::actuation::*;
-use super::config::*;
-use super::output::*;
-use super::poll::*;
-use super::quality::*;
-use super::restore::*;
-use super::timing::*;
-use super::writeback::*;
+use super::actuation::{
+    MvActuationTracker, finalize_pending_for_run_best_effort, validate_relay_actuation_step,
+};
+#[cfg(test)]
+use super::config::test_effective_timing;
+use super::config::{EffectiveTiming, build_loop_config_with_timing, build_loop_tags};
+use super::output::{
+    TuneOutcome, format_mv_actuation_abort_reason, print_summary, tune_outcome_for_run,
+};
+use super::poll::{CompletedPoll, PollOutcome, persist_results, run_polling_loop_with_timing};
+use super::quality::{
+    read_batch_f32, read_batch_raw, read_f32, resolve_direction_from_batch, resolve_f32_from_batch,
+    write_raw,
+};
+use super::restore::{
+    RestoreAttempt, attempt_restore_with_actuation_with_timing, record_restore_status_best_effort,
+    restore_best_effort_then_propagate_with_timing,
+};
+use super::timing::{
+    completed_oscillation_period_ms, record_timing_metrics_if_present,
+    warn_on_missed_poll_opportunities,
+};
+use super::writeback::maybe_write_back;
 
 /// Runs one full tune. Never returns `Err` for a tune that simply didn't complete
 /// successfully (a failed/aborted run is recorded in the database and reported to stdout);

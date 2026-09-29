@@ -14,11 +14,25 @@ use crate::cancel::CtrlC;
 use crate::timing::PollTimingAccumulator;
 
 use super::RequireInvariant;
-use super::actuation::*;
-use super::config::*;
-use super::poll::*;
-use super::prepare::*;
-use super::quality::*;
+use super::actuation::{
+    ActuationAuditPolicy, MV_ACTUATION_CONFIRMATION_SECS, MV_ACTUATION_RETRY_INTERVAL,
+    MV_RESTORE_HANDOFF_READ_MAX, MvActuationTracker, MvVerificationCallLimit,
+    MvVerificationTrigger, actuation_matches, checked_at_for_pending,
+    finalize_actuation_best_effort, mv_actuation_uncapped_tolerance,
+    record_handoff_observation_best_effort, supersede_pending_actuation_best_effort,
+    verification_trigger, verify_pending_mv_actuation_with_timing,
+};
+use super::config::EffectiveTiming;
+#[cfg(test)]
+use super::config::test_effective_timing;
+use super::poll::{
+    CompletedPoll, TickOperation, bounded_driver_call, insert_tune_sample_with_timing,
+};
+use super::prepare::{AbortReason, InitialState, MutationGuard};
+use super::quality::{
+    check_quality, read_numeric_from_batch, read_numeric_sample, read_poll_batch,
+    sample_quality_from_driver, write_raw, write_value,
+};
 
 /// One step of a [`RestoreReport`]. `NotNeeded` means the step's precondition wasn't met --
 /// the loop wasn't in a state requiring reverting that aspect, or the corresponding mutation

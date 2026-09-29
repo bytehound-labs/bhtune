@@ -18,10 +18,20 @@ use crate::cancel::CtrlC;
 use crate::timing::{PollTimingAccumulator, RunTimeAnchor, TickTimeSource};
 
 use super::RequireInvariant;
-use super::actuation::*;
-use super::config::*;
-use super::prepare::*;
-use super::quality::*;
+use super::actuation::{
+    ActuationAuditPolicy, MvActuationTracker, MvVerificationCallLimit, checked_at_for_pending,
+    mv_actuation_tolerance, record_relay_actuation, reject_replacement_for_pending_actuation,
+    resolve_pending_mv_poll, verification_trigger, verify_pending_mv_actuation_with_timing,
+    wait_for_mv_verification,
+};
+use super::config::EffectiveTiming;
+#[cfg(test)]
+use super::config::test_effective_timing;
+use super::prepare::{AbortReason, MutationGuard};
+use super::quality::{
+    check_quality, read_numeric_from_batch, read_poll_batch, sample_quality_from_driver,
+    write_value,
+};
 
 /// The outcome of racing one driver call (a poll batch or [`write_value`], during a poll tick)
 /// against Ctrl+C and `[tuning].op_timeout_secs` -- see [`bounded_driver_call`]. Distinct from a
