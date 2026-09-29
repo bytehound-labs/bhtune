@@ -51,7 +51,7 @@ export function TemplateDetailPage() {
     deleteTemplate.mutate(name, {
       onSuccess: () => {
         setDeleteConfirmationOpen(false);
-        navigate("/templates");
+        void navigate("/templates");
       },
     });
   }
