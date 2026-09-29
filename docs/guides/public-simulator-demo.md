@@ -163,9 +163,20 @@ Use an immutable container digest for deployment rather than a mutable tag. Keep
 previous-image reference and a timestamped database backup so a failed migration or local
 health check can restore both the executable and its data. A public ingress failure with a
 healthy local backend is a proxy or network incident, not a reason to discard healthy
-application state. The deployment pipeline verifies the signed build provenance certificate
-and image subject against the BHTune repository, the main-branch Docker workflow, the triggering
-commit, and the resolved image digest before it invokes the host rollout wrapper.
+application state.
+
+### Hosted image publication and deployment handoff
+
+For a qualifying push to `main`, the [Docker image workflow](https://github.com/bytehound-labs/bhtune/blob/main/.github/workflows/docker-publish.yml) publishes
+`ghcr.io/bytehound-labs/bhtune:sha-<full-commit-SHA>` and the `edge` tag, and creates a
+build-provenance attestation for the image. The [Woodpecker deployment pipeline](https://github.com/bytehound-labs/bhtune/blob/main/.woodpecker.yml)
+waits for the matching full-commit tag in GHCR, resolves its manifest to a `sha256` digest,
+and verifies the provenance certificate and image subject against the BHTune repository, the
+`main`-branch Docker workflow, the triggering commit, and that digest. Only after verification
+does it invoke the separate `FrontEnd` repository's `bhtune-demo/deploy.sh` wrapper over SSH,
+passing the immutable `ghcr.io/bytehound-labs/bhtune@sha256:<digest>` reference rather than a
+mutable tag.
+
 The deployment runner downloads a pinned, checksum-verified GitHub CLI release for this
 verification instead of relying on the older distribution-package version in its Alpine base
 image; this keeps Sigstore trust-root support reproducible across runner updates.
@@ -174,6 +185,12 @@ publication and GitHub attestation indexing are eventually consistent.
 The Docker workflow and Woodpecker deployment definition are both image-triggering paths:
 changing either one publishes a matching immutable commit image before deployment, preventing
 a deployment-only fix from being stranded without a corresponding GHCR artifact.
+
+Image publication and deployment do not activate public ingress by default. The public Caddy
+route is a deliberate deployment activation step, not an application default. DNS changes,
+firewall exposure, Cloudflare Tunnel configuration, Caddy activation, and Internet rollout are
+separate infrastructure operations; this guide documents the image path without configuring or
+enabling any of them.
 
 ## Security boundary
 
