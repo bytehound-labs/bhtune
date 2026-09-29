@@ -292,10 +292,10 @@ both kinds correctly (an exclusive reservation has nothing to cancel or wait for
 graceful-shutdown request drain already covers it). A physical write/revert failure is reported as
 an ordinary `200` with the failure visible in the returned `writes[]` audit row, never a `4xx`/`5xx`
 — matching how a failed write already behaved during an in-run write-back, and confirmed directly by
-a dedicated test. Tests use a crate-local minimal mock gRPC `Bridge` service
-(`routes::runs::tests::mock_bridge`), deliberately mirroring — not sharing — the same pattern
-already used by `bhtune-cli::test_support` and `driver-opcda`'s own `smoke_tests`, since three
-internal, already-thorough consumers didn't justify a shared test-support crate. Both new routes
+a dedicated test. Route tests use the shared unpublished `bhtune-test-support` mock
+gRPC `Bridge` service through `crate::test_support::mock_bridge`. The same service backs
+`bhtune-cli::test_support` and `driver-opcda` smoke tests, so the three consumers cannot
+drift. Both new routes
 were initially missing from `openapi.rs`'s explicit `paths(...)`/ `components(schemas(...))` lists —
 that module's own doc comment warns this fails silently (the route works; it's just absent from the
 spec) rather than loudly, and this was exactly the omission it warned about; fixed before

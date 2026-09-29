@@ -379,8 +379,9 @@ release-preparation commits and generic `chore` commits do not create product re
 Scopes are optional, but a specific scope such as `core`, `driver`, `db`, `cli`, or `server` makes
 the root changelog easier to review.
 
-The root [`CHANGELOG.md`](CHANGELOG.md) is the single product changelog for all five workspace
-crates. Contributors should describe user-visible changes in commits and update the relevant
+The root [`CHANGELOG.md`](CHANGELOG.md) is the single product changelog for the five product
+workspace crates. The unpublished `bhtune-test-support` crate is not a release package.
+Contributors should describe user-visible changes in commits and update the relevant
 documentation, but should not hand-edit release version entries or workspace version numbers.
 `release-plz` generates the release preparation commit and owns the versioned changelog entry
 when the release process is activated.

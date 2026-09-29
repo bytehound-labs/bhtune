@@ -164,15 +164,16 @@ tokio = { version = "1", features = ["time", "test-util"] }
 # test's own `#[cfg(unix)]` gate; already present transitively (tokio/mio), so this just names
 # the version directly rather than introducing a new dependency to the build graph.
 libc = "0.2"
-# `routes/runs.rs`'s `write_run`/`revert_run` tests (`api-post-run-write`) stand up a
-# minimal mock `Bridge` gRPC service to prove the two new handlers actually complete a real
-# `OpcDaDriver` connect-write-verify round trip, mirroring `bhtune-driver::opcda`'s own
-# `smoke_tests` module. Pinned to the exact same versions that module (and `opcda-bridge`
-# itself) use, for the same reason: the mock service's generated `tonic`/`prost` types must
-# agree on the wire format with `opcda_bridge::Client`'s generated stub on the other end.
+# Route tests construct generated read/browse messages and `tonic::Status` errors. The
+# shared mock `Bridge` service lives in `bhtune-test-support`; these pins stay so the
+# generated types agree with `opcda_bridge::Client`. Versionless path only: Cargo strips
+# a versionless dev-dependency when packaging, so this unpublished crate is never
+# resolved from crates.io. Do not add a version.
 opcda-bridge-proto = "0.5"
 tonic = "0.14"
-tokio-stream = "0.1"
+bhtune-test-support = { path = "../bhtune-test-support", features = [
+  "mock-driver",
+] }
 
 [[bin]]
 name = "bhtune-server"

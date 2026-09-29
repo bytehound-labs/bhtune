@@ -203,6 +203,7 @@ dependencies = [
  "bhtune-core",
  "bhtune-db",
  "bhtune-driver",
+ "bhtune-test-support",
  "chrono",
  "clap",
  "clap-markdown",
@@ -218,10 +219,8 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
- "tokio-stream",
  "toml",
  "toml_edit",
- "tonic",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -262,6 +261,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bhtune-core",
+ "bhtune-test-support",
  "chrono",
  "opcda-bridge",
  "opcda-bridge-proto",
@@ -271,7 +271,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-stream",
  "tonic",
 ]
 
@@ -286,6 +285,7 @@ dependencies = [
  "bhtune-core",
  "bhtune-db",
  "bhtune-driver",
+ "bhtune-test-support",
  "chrono",
  "clap",
  "futures-core",
@@ -300,7 +300,6 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
- "tokio-stream",
  "tonic",
  "tower",
  "tower-http",
@@ -309,6 +308,16 @@ dependencies = [
  "utoipa",
  "utoipa-scalar",
  "windows-service",
+]
+
+[[package]]
+name = "bhtune-test-support"
+version = "0.1.0"
+dependencies = [
+ "opcda-bridge-proto",
+ "tokio",
+ "tokio-stream",
+ "tonic",
 ]
 
 [[package]]

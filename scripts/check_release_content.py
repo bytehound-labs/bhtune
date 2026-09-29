@@ -18,6 +18,7 @@ WORKSPACE_MEMBERS = (
     "bhtune-db",
     "bhtune-cli",
     "bhtune-server",
+    "bhtune-test-support",
 )
 INITIAL_RELEASE_VERSION = (0, 1, 0)
 STABLE_TAG = re.compile(
@@ -143,7 +144,7 @@ def workspace_versions(repository: Path, revision: str) -> dict[str, str]:
         f"crates/{member}" for member in WORKSPACE_MEMBERS
     }:
         raise ReleaseContentError(
-            f"workspace members at {safe_revision} do not match the five BHTune crates"
+            f"workspace members at {safe_revision} do not match the expected BHTune workspace crates"
         )
 
     for member in WORKSPACE_MEMBERS:

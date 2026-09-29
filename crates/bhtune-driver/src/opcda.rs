@@ -1877,162 +1877,26 @@ mod tests {
 #[cfg(test)]
 mod smoke_tests {
     use super::*;
-    use opcda_bridge_proto::bridge::bridge_server::{Bridge, BridgeServer};
+    use bhtune_test_support::MockBridgeService;
     use opcda_bridge_proto::bridge::search_event;
     use opcda_bridge_proto::bridge::{
         BrowseNode as ProtoBrowseNode, BrowseNodeKind as ProtoNodeKind,
-        BrowsePage as ProtoBrowsePage, BrowseRequest, BrowseSource as ProtoBrowseSource,
-        CloseBrowseSessionRequest, ControlSearchIndexRequest, GetCapabilitiesRequest,
-        GetCapabilitiesResponse, GetGatewayInfoRequest, GetGatewayInfoResponse,
-        GetSearchIndexStatusRequest, IndexedSearchMatch as ProtoIndexedSearchMatch,
-        ListServersRequest, ListServersResponse, NamespaceOrganization as ProtoOrganization,
-        ProtocolFeature, ProtocolFeatureKind, ReadRequest, ReadResponse, RefreshSearchIndexRequest,
-        SearchEvent as ProtoSearchEvent, SearchIndexResponse as ProtoSearchIndexResponse,
-        SearchIndexState as ProtoSearchIndexState, SearchIndexStatus as ProtoSearchIndexStatus,
-        SearchProgress as ProtoSearchProgress, TagValue as ProtoTagValue, WriteRequest,
-        WriteResponse,
+        BrowsePage as ProtoBrowsePage, BrowseSource as ProtoBrowseSource, GetCapabilitiesResponse,
+        GetGatewayInfoResponse, IndexedSearchMatch as ProtoIndexedSearchMatch, ListServersResponse,
+        NamespaceOrganization as ProtoOrganization, ProtocolFeature, ProtocolFeatureKind,
+        ReadResponse, SearchEvent as ProtoSearchEvent,
+        SearchIndexResponse as ProtoSearchIndexResponse, SearchIndexState as ProtoSearchIndexState,
+        SearchIndexStatus as ProtoSearchIndexStatus, SearchProgress as ProtoSearchProgress,
+        TagValue as ProtoTagValue, WriteResponse,
     };
-    use std::net::SocketAddr;
-    use tokio::sync::mpsc;
-    use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
-    use tonic::transport::Server;
-    use tonic::{Request, Response, Status};
+    use tonic::Status;
 
-    #[derive(Default)]
-    struct MockBridgeService {
-        capabilities_response: GetCapabilitiesResponse,
-        browse_response: ProtoBrowsePage,
-        read_response: ReadResponse,
-        write_response: WriteResponse,
-        write_error: Option<Status>,
-        list_servers_response: ListServersResponse,
-        search_events: Vec<ProtoSearchEvent>,
-        search_index_status_response: ProtoSearchIndexStatus,
-        search_index_response: ProtoSearchIndexResponse,
-        close_error: Option<Status>,
-        gateway_info_response: GetGatewayInfoResponse,
-        gateway_info_error: Option<Status>,
-        capabilities_error: Option<Status>,
-    }
-
-    #[tonic::async_trait]
-    impl Bridge for MockBridgeService {
-        async fn get_gateway_info(
-            &self,
-            _request: Request<GetGatewayInfoRequest>,
-        ) -> Result<Response<GetGatewayInfoResponse>, Status> {
-            if let Some(status) = self.gateway_info_error.clone() {
-                return Err(status);
-            }
-            Ok(Response::new(self.gateway_info_response.clone()))
-        }
-
-        async fn get_capabilities(
-            &self,
-            _request: Request<GetCapabilitiesRequest>,
-        ) -> Result<Response<GetCapabilitiesResponse>, Status> {
-            if let Some(status) = self.capabilities_error.clone() {
-                return Err(status);
-            }
-            Ok(Response::new(self.capabilities_response.clone()))
-        }
-
-        async fn list_servers(
-            &self,
-            _request: Request<ListServersRequest>,
-        ) -> Result<Response<ListServersResponse>, Status> {
-            Ok(Response::new(self.list_servers_response.clone()))
-        }
-
-        async fn browse(
-            &self,
-            _request: Request<BrowseRequest>,
-        ) -> Result<Response<ProtoBrowsePage>, Status> {
-            Ok(Response::new(self.browse_response.clone()))
-        }
-
-        async fn close_browse_session(
-            &self,
-            _request: Request<CloseBrowseSessionRequest>,
-        ) -> Result<Response<()>, Status> {
-            if let Some(status) = self.close_error.clone() {
-                return Err(status);
-            }
-            Ok(Response::new(()))
-        }
-
-        async fn get_search_index_status(
-            &self,
-            _request: Request<GetSearchIndexStatusRequest>,
-        ) -> Result<Response<ProtoSearchIndexStatus>, Status> {
-            Ok(Response::new(self.search_index_status_response.clone()))
-        }
-
-        async fn refresh_search_index(
-            &self,
-            _request: Request<RefreshSearchIndexRequest>,
-        ) -> Result<Response<ProtoSearchIndexStatus>, Status> {
-            Ok(Response::new(self.search_index_status_response.clone()))
-        }
-
-        async fn control_search_index(
-            &self,
-            _request: Request<ControlSearchIndexRequest>,
-        ) -> Result<Response<ProtoSearchIndexStatus>, Status> {
-            Ok(Response::new(self.search_index_status_response.clone()))
-        }
-
-        async fn search_index(
-            &self,
-            _request: Request<opcda_bridge_proto::bridge::SearchIndexRequest>,
-        ) -> Result<Response<ProtoSearchIndexResponse>, Status> {
-            Ok(Response::new(self.search_index_response.clone()))
-        }
-
-        type SearchStream = ReceiverStream<Result<ProtoSearchEvent, Status>>;
-
-        async fn search(
-            &self,
-            _request: Request<opcda_bridge_proto::bridge::SearchRequest>,
-        ) -> Result<Response<Self::SearchStream>, Status> {
-            let (tx, rx) = mpsc::channel(4);
-            let events = self.search_events.clone();
-            tokio::spawn(async move {
-                for event in events {
-                    let _ = tx.send(Ok(event)).await;
-                }
-            });
-            Ok(Response::new(ReceiverStream::new(rx)))
-        }
-
-        async fn read(
-            &self,
-            _request: Request<ReadRequest>,
-        ) -> Result<Response<ReadResponse>, Status> {
-            Ok(Response::new(self.read_response.clone()))
-        }
-
-        async fn write(
-            &self,
-            _request: Request<WriteRequest>,
-        ) -> Result<Response<WriteResponse>, Status> {
-            if let Some(status) = self.write_error.clone() {
-                return Err(status);
-            }
-            Ok(Response::new(self.write_response.clone()))
-        }
-    }
-
-    async fn start_mock_server(service: MockBridgeService) -> String {
-        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(
-            Server::builder()
-                .add_service(BridgeServer::new(service))
-                .serve_with_incoming(TcpListenerStream::new(listener)),
-        );
-        format!("127.0.0.1:{port}")
+    async fn start_mock_server(
+        service: MockBridgeService,
+    ) -> (String, bhtune_test_support::MockServerHandle) {
+        bhtune_test_support::start_mock_server(service)
+            .await
+            .expect("bind mock bridge")
     }
 
     fn browse_page() -> ProtoBrowsePage {
@@ -2061,7 +1925,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn read_round_trips_through_a_real_gateway_connection() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             read_response: ReadResponse {
                 values: vec![ProtoTagValue {
                     tag_id: "Area1.LIC101.PV".to_string(),
@@ -2081,7 +1945,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn write_round_trips_a_rejected_write() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             write_response: WriteResponse {
                 tag_id: "Area1.LIC101.MV".to_string(),
                 success: false,
@@ -2100,7 +1964,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn capabilities_and_browse_preserve_typed_namespace_metadata() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             capabilities_response: GetCapabilitiesResponse {
                 application_version: "0.4.0".into(),
                 protocol_version: "2".into(),
@@ -2138,7 +2002,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn indexed_search_round_trips_exact_item_id_and_status() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             search_index_status_response: ProtoSearchIndexStatus {
                 server: "S1".into(),
                 state: ProtoSearchIndexState::Ready as i32,
@@ -2194,7 +2058,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn search_stream_preserves_progress_and_completion() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             search_events: vec![
                 ProtoSearchEvent {
                     event: Some(search_event::Event::Progress(ProtoSearchProgress {
@@ -2228,7 +2092,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn driver_trait_delegates_all_opcda_operations() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             capabilities_response: GetCapabilitiesResponse {
                 protocol_version: "2".into(),
                 ..Default::default()
@@ -2309,24 +2173,8 @@ mod smoke_tests {
     }
 
     #[tokio::test]
-    async fn mock_gateway_info_returns_the_configured_response() {
-        let service = MockBridgeService {
-            gateway_info_response: GetGatewayInfoResponse {
-                application_version: "test-gateway".into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let response = service
-            .get_gateway_info(Request::new(GetGatewayInfoRequest::default()))
-            .await
-            .unwrap();
-        assert_eq!(response.into_inner().application_version, "test-gateway");
-    }
-
-    #[tokio::test]
     async fn gateway_info_reports_gateway_wide_protocols_without_an_opc_server() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             gateway_info_response: GetGatewayInfoResponse {
                 application_version: "0.5.9".into(),
                 compatibility_schema_version: 1,
@@ -2410,7 +2258,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn check_gateway_compatibility_classifies_full_partial_unknown_and_incompatible() {
-        let full = start_mock_server(MockBridgeService {
+        let (full, _full_server) = start_mock_server(MockBridgeService {
             gateway_info_response: gateway_info_with_features(vec![
                 protocol_feature(ProtocolFeatureKind::Core, 1, 1),
                 protocol_feature(ProtocolFeatureKind::Namespace, 2, 3),
@@ -2423,7 +2271,7 @@ mod smoke_tests {
         assert_eq!(full_report.status, OpcDaCompatibilityStatus::Full);
         assert_eq!(full_report.live_mutation_refusal(), None);
 
-        let partial = start_mock_server(MockBridgeService {
+        let (partial, _partial_server) = start_mock_server(MockBridgeService {
             gateway_info_response: gateway_info_with_features(vec![protocol_feature(
                 ProtocolFeatureKind::Core,
                 1,
@@ -2437,13 +2285,13 @@ mod smoke_tests {
         assert!(partial_report.warning_message().is_some());
         assert_eq!(partial_report.live_mutation_refusal(), None);
 
-        let unknown = start_mock_server(MockBridgeService::default()).await;
+        let (unknown, _unknown_server) = start_mock_server(MockBridgeService::default()).await;
         let unknown_report = check_gateway_compatibility(&unknown, None).await.unwrap();
         assert_eq!(unknown_report.status, OpcDaCompatibilityStatus::Unknown);
         assert!(unknown_report.warning_message().is_some());
         assert_eq!(unknown_report.live_mutation_refusal(), None);
 
-        let incompatible = start_mock_server(MockBridgeService {
+        let (incompatible, _incompatible_server) = start_mock_server(MockBridgeService {
             gateway_info_response: gateway_info_with_features(vec![protocol_feature(
                 ProtocolFeatureKind::Core,
                 9,
@@ -2461,7 +2309,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn unimplemented_metadata_with_a_server_is_an_incompatible_report() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             gateway_info_error: Some(Status::unimplemented("no gateway info")),
             capabilities_error: Some(Status::unimplemented("no capabilities")),
             ..Default::default()
@@ -2483,7 +2331,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn unimplemented_metadata_without_a_server_is_unknown() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             gateway_info_error: Some(Status::unimplemented("no gateway info")),
             ..Default::default()
         })
@@ -2495,7 +2343,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn other_metadata_failures_remain_operation_errors() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             gateway_info_error: Some(Status::internal("metadata failed")),
             ..Default::default()
         })
@@ -2506,7 +2354,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn driver_trait_maps_close_browse_rpc_errors() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             close_error: Some(Status::internal("close failed")),
             ..Default::default()
         })
@@ -2520,7 +2368,7 @@ mod smoke_tests {
 
     #[tokio::test]
     async fn list_opcda_servers_returns_the_gateways_registered_servers() {
-        let host = start_mock_server(MockBridgeService {
+        let (host, _host_server) = start_mock_server(MockBridgeService {
             list_servers_response: ListServersResponse {
                 servers: vec!["Matrikon.OPC.Simulation.1".into()],
             },
