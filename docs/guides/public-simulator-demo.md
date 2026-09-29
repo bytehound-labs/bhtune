@@ -55,8 +55,8 @@ requirements below remain authoritative if images are unavailable.
 
 {/* web-ui-screenshot: demo-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=9b3f03c310d8">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=9b3f03c310d8" alt="BHTune Demo visitor history list showing simulator runs for the current session" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=96a96a40b3a0">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=96a96a40b3a0" alt="BHTune Demo visitor history list showing simulator runs for the current session" />
   </a>
   <figcaption>History belongs to the current anonymous browser session and is owner-scoped by the server.</figcaption>
 </figure>
