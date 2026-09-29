@@ -12,8 +12,11 @@ BHTune's **HTTP API**, which is what the web GUI and any external script use to 
 tune: that is documented separately as an OpenAPI 3.1 spec, served as an interactive
 Scalar UI at `/api/docs` by a _running_ `bhtune-server` instance (see
 [Explore the API directly](../getting-started/web-gui-quickstart.md#explore-the-api-directly)).
-None of the crates below are published to crates.io or intended as a stable public
-dependency yet — see [`pkg-evaluate-others`](../roadmap.md) for that possibility.
+`bhtune-core`, `bhtune-driver`, `bhtune-db`, and `bhtune-cli` have package metadata and
+source-file allowlists for Cargo package validation. This does not enable publication:
+`release-plz` remains git-only, no BHTune crate is published to crates.io, and package
+readiness is not a promise of a stable public API. `bhtune-server` remains non-publishable.
+See the [release guide](../guides/releasing.md) for the release policy.
 
 | Crate                                                         | Kind             | What it covers                                                                                                                                                                  |
 | ------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
