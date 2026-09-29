@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { toApiError } from "./errors";
+import { parseRunStreamEvent } from "./eventSource";
 import type { components, operations } from "./schema";
 import type { AppMode } from "./capabilities";
 
@@ -210,37 +211,43 @@ export function useRunStream(
     });
 
     source.addEventListener("initial", (event) => {
-      const initialReadings = JSON.parse(
-        (event as MessageEvent<string>).data,
-      ) as InitialReadingsResponse;
+      const parsed = parseRunStreamEvent(
+        "initial",
+        event instanceof MessageEvent ? event.data : undefined,
+      );
+      if (parsed?.type !== "initial") return;
       updateState((prev) => ({
         ...prev,
-        initialReadings,
+        initialReadings: parsed.data,
       }));
     });
 
     source.addEventListener("sample", (event) => {
-      const sample = JSON.parse(
-        (event as MessageEvent<string>).data,
-      ) as SampleResponse;
+      const parsed = parseRunStreamEvent(
+        "sample",
+        event instanceof MessageEvent ? event.data : undefined,
+      );
+      if (parsed?.type !== "sample") return;
       updateState((prev) => ({
         ...prev,
         reconnecting: false,
-        samples: [...prev.samples, sample],
+        samples: [...prev.samples, parsed.data],
       }));
     });
 
     source.addEventListener("done", (event) => {
-      const done = JSON.parse((event as MessageEvent<string>).data) as {
-        outcome: TuneOutcome;
-      };
+      const parsed = parseRunStreamEvent(
+        "done",
+        event instanceof MessageEvent ? event.data : undefined,
+      );
+      if (parsed?.type !== "done") return;
       // The server has already ended its response by the time this fires; closing here
       // just pre-empts the browser's own auto-reconnect from racing to reopen a stream
       // with nothing left to say.
       source.close();
       updateState((prev) => ({
         ...prev,
-        outcome: done.outcome,
+        outcome: parsed.data.outcome,
         reconnecting: false,
       }));
       void queryClient.invalidateQueries({ queryKey: runKey(id, mode) });

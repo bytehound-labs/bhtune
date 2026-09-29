@@ -110,8 +110,12 @@ export function useDeleteTemplate() {
         throw toApiError(error, response);
       }
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: templatesKey });
+    onSuccess: (_data, name) => {
+      void queryClient.invalidateQueries({
+        queryKey: templatesKey,
+        exact: true,
+      });
+      queryClient.removeQueries({ queryKey: templateKey(name) });
     },
   });
 }
