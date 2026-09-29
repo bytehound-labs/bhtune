@@ -21,6 +21,7 @@ function outcomeBadge(page: Page, outcome: "Completed" | "Aborted") {
 async function startTune(page: Page) {
   const startButton = page.getByRole("button", { name: "Start tune" });
   const startError = page.getByText("Unable to start the tune.");
+  // oxlint-disable no-await-in-loop -- Each retry depends on the preceding submit and UI response.
   for (let attempt = 0; attempt < 20; attempt++) {
     await startButton.click();
     const navigated = page
@@ -38,6 +39,7 @@ async function startTune(page: Page) {
     // caller's own `toHaveURL` assertion below report it with a normal Playwright error.
     return;
   }
+  // oxlint-enable no-await-in-loop
 }
 
 /**

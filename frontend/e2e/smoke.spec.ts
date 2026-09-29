@@ -101,16 +101,18 @@ test.describe("app shell", () => {
     const startsWithLabel = (label: string) =>
       new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
 
-    for (const label of ["Bridge host", "OPC DA server ProgID", "Tag name"]) {
-      await expect(
-        page.getByRole("textbox", { name: startsWithLabel(label) }),
-      ).toBeDisabled();
-    }
-    for (const label of ["Allow automatic PID write"]) {
-      await expect(
-        page.getByRole("checkbox", { name: startsWithLabel(label) }),
-      ).toBeDisabled();
-    }
+    await Promise.all(
+      ["Bridge host", "OPC DA server ProgID", "Tag name"].map((label) =>
+        expect(
+          page.getByRole("textbox", { name: startsWithLabel(label) }),
+        ).toBeDisabled(),
+      ),
+    );
+    await expect(
+      page.getByRole("checkbox", {
+        name: startsWithLabel("Allow automatic PID write"),
+      }),
+    ).toBeDisabled();
     await expect(
       page.getByRole("combobox", {
         name: startsWithLabel("Apply PID settings on completion"),
@@ -124,30 +126,34 @@ test.describe("app shell", () => {
     await expect(
       mapping.getByRole("group", { name: "Controller direction", exact: true }),
     ).toBeVisible();
-    for (const label of ["Process type", "Controller type"]) {
-      await expect(
-        page.getByRole("combobox", { name: startsWithLabel(label) }),
-      ).toBeEnabled();
-    }
+    await Promise.all(
+      ["Process type", "Controller type"].map((label) =>
+        expect(
+          page.getByRole("combobox", { name: startsWithLabel(label) }),
+        ).toBeEnabled(),
+      ),
+    );
     await expect(
       mapping.getByRole("combobox", {
         name: startsWithLabel("Controller direction fixed value"),
       }),
     ).toBeEnabled();
-    for (const label of [
-      "Relay amplitude (%)",
-      "Cycles to skip",
-      "Cycles to count",
-      "Noise protection (s)",
-      "PV range high",
-      "MV range high",
-      "Process gain",
-      "Time constant τ (s)",
-    ]) {
-      await expect(
-        page.getByRole("spinbutton", { name: startsWithLabel(label) }),
-      ).toBeEnabled();
-    }
+    await Promise.all(
+      [
+        "Relay amplitude (%)",
+        "Cycles to skip",
+        "Cycles to count",
+        "Noise protection (s)",
+        "PV range high",
+        "MV range high",
+        "Process gain",
+        "Time constant τ (s)",
+      ].map((label) =>
+        expect(
+          page.getByRole("spinbutton", { name: startsWithLabel(label) }),
+        ).toBeEnabled(),
+      ),
+    );
   });
 
   test("opens every New Tune section by default and toggles each section", async ({
@@ -155,6 +161,7 @@ test.describe("app shell", () => {
   }) => {
     await page.goto("/runs/new");
 
+    // oxlint-disable no-await-in-loop -- Each open/close assertion depends on the preceding click.
     for (const title of [
       "Connection",
       "Test parameters",
@@ -171,6 +178,7 @@ test.describe("app shell", () => {
       await section.locator("summary").click();
       await expect(section).toHaveAttribute("open", "");
     }
+    // oxlint-enable no-await-in-loop
   });
 
   test("toggles and persists the light/dark theme", async ({ page }) => {
@@ -214,14 +222,16 @@ test.describe("app shell", () => {
   test("lists the seeded templates", async ({ page }) => {
     await page.goto("/templates");
 
-    for (const name of [
-      "Yokogawa CentumVP",
-      "Honeywell Experion",
-      "Schneider Modicon",
-      "Allen-Bradley PlantPAx",
-    ]) {
-      await expect(page.getByText(name, { exact: true })).toBeVisible();
-    }
+    await Promise.all(
+      [
+        "Yokogawa CentumVP",
+        "Honeywell Experion",
+        "Schneider Modicon",
+        "Allen-Bradley PlantPAx",
+      ].map((name) =>
+        expect(page.getByText(name, { exact: true })).toBeVisible(),
+      ),
+    );
   });
 
   test("prefills tune settings without carrying forward notes", async ({

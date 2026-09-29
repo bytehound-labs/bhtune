@@ -98,14 +98,14 @@ collapsed.
 
 ## Scripts
 
-| Command                 | Purpose                                                                 |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `pnpm dev`              | Start the Vite dev server with hot module reload.                       |
-| `pnpm build`            | Type-check (`tsc -b`) and produce a production build in `dist/`.        |
-| `pnpm lint`             | Lint with [oxlint](https://oxc.rs/).                                    |
-| `pnpm run format:check` | Check formatting with Prettier (`pnpm exec prettier --write .` to fix). |
-| `pnpm run generate:api` | Regenerate `src/api/schema.d.ts` from `../openapi.json`.                |
-| `pnpm preview`          | Serve the production build locally, for a final check before deploying. |
+| Command                 | Purpose                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm dev`              | Start the Vite dev server with hot module reload.                                                                                                            |
+| `pnpm build`            | Type-check (`tsc -b`, including `noImplicitOverride` and `noUncheckedIndexedAccess` for the app and E2E projects) and produce a production build in `dist/`. |
+| `pnpm lint`             | Lint with [oxlint](https://oxc.rs/); warnings fail the command.                                                                                              |
+| `pnpm run format:check` | Check formatting with Prettier (`pnpm exec prettier --write .` to fix).                                                                                      |
+| `pnpm run generate:api` | Regenerate `src/api/schema.d.ts` from `../openapi.json`.                                                                                                     |
+| `pnpm preview`          | Serve the production build locally, for a final check before deploying.                                                                                      |
 
 ## Documentation screenshots
 

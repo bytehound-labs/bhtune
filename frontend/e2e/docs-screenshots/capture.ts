@@ -44,12 +44,14 @@ export async function captureScenario(page: Page, scenarioId: string) {
     );
   }
 
-  for (const sectionId of scenario.coveredSections) {
-    await expect(
-      page.locator(`[data-doc-section="${sectionId}"]`).first(),
-      `Scenario ${scenarioId} must show documentation section ${sectionId}`,
-    ).toBeVisible();
-  }
+  await Promise.all(
+    scenario.coveredSections.map((sectionId) =>
+      expect(
+        page.locator(`[data-doc-section="${sectionId}"]`).first(),
+        `Scenario ${scenarioId} must show documentation section ${sectionId}`,
+      ).toBeVisible(),
+    ),
+  );
 
   await settle(page);
 

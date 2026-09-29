@@ -739,7 +739,7 @@ function IndexControls({
   indexStatus,
   indexStateLabel,
   indexSearchAvailable,
-  indexUnavailableMessage,
+  indexUnavailableMessage: unavailableMessage,
   refreshPending,
   controlPending,
   autoRefreshPending,
@@ -857,7 +857,7 @@ function IndexControls({
       )}
       {!indexSearchAvailable && (
         <output className="block text-xs text-slate-400">
-          {indexUnavailableMessage}
+          {unavailableMessage}
         </output>
       )}
     </div>
@@ -888,7 +888,7 @@ function IndexedSearchResults({
   searchQuery,
   indexStatus,
   indexSearchAvailable,
-  indexUnavailableMessage,
+  indexUnavailableMessage: unavailableMessage,
   searchPending,
   busy,
   activeSearchIndex,
@@ -966,7 +966,7 @@ function IndexedSearchResults({
             {noSearchMatchesMessage(
               indexStatus,
               indexSearchAvailable,
-              indexUnavailableMessage,
+              unavailableMessage,
             )}
           </p>
         )}
@@ -1297,6 +1297,7 @@ export function OpcTagBrowserModal({
       });
       if (match) return match;
       if (!state.nextPageToken) return null;
+      // oxlint-disable-next-line no-await-in-loop -- Read each continuation page before requesting the next token.
       const snapshot = await load(parentNodeKey, {
         pageToken: state.nextPageToken,
         append: true,
@@ -1317,6 +1318,7 @@ export function OpcTagBrowserModal({
         ? match.breadcrumbs.slice(0, -1)
         : match.breadcrumbs;
 
+    // oxlint-disable no-await-in-loop -- Each child lookup depends on the preceding breadcrumb.
     for (const breadcrumb of breadcrumbs) {
       const branch = await ensureNodeByName(
         parentNodeKey,
@@ -1334,6 +1336,7 @@ export function OpcTagBrowserModal({
       });
       parentNodeKey = branch.node_key;
     }
+    // oxlint-enable no-await-in-loop
 
     const node = await ensureNodeByName(
       parentNodeKey,
@@ -1396,6 +1399,7 @@ export function OpcTagBrowserModal({
       const candidates = rootScopeCandidates(state.nodes, target).filter(
         (candidate) => !attemptedScopes.has(candidate.node_key),
       );
+      // oxlint-disable no-await-in-loop -- Root-scope searches stop at the first exact reveal.
       for (const candidate of candidates) {
         if (isCancelled() || controller.signal.aborted) break;
         attemptedScopes.add(candidate.node_key);
@@ -1410,6 +1414,7 @@ export function OpcTagBrowserModal({
           return { revealed: true, foundScope: true };
         }
       }
+      // oxlint-enable no-await-in-loop
 
       if (!state.nextPageToken || pagesRead >= MAX_ROOT_SCOPE_PAGES) {
         return {
@@ -1417,6 +1422,7 @@ export function OpcTagBrowserModal({
           foundScope: attemptedScopes.size > 0,
         };
       }
+      // oxlint-disable-next-line no-await-in-loop -- The next root page token comes from this page.
       const snapshot = await load(null, {
         pageToken: state.nextPageToken,
         append: true,
@@ -1822,7 +1828,8 @@ export function OpcTagBrowserModal({
       setActiveSearchIndex(event.key === "Home" ? 0 : searchMatches.length - 1);
     } else if (event.key === "Enter" && activeSearchIndex >= 0) {
       event.preventDefault();
-      chooseSearchMatch(searchMatches[activeSearchIndex]);
+      const match = searchMatches[activeSearchIndex];
+      if (match) chooseSearchMatch(match);
     }
   }
 

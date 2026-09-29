@@ -7,46 +7,46 @@ import { userFacingErrorMessage } from "./api/errors";
 
 const TemplateListPage = lazy(() =>
   import("./routes/templates/TemplateListPage").then(
-    ({ TemplateListPage }) => ({
-      default: TemplateListPage,
+    ({ TemplateListPage: page }) => ({
+      default: page,
     }),
   ),
 );
 const TemplateDetailPage = lazy(() =>
   import("./routes/templates/TemplateDetailPage").then(
-    ({ TemplateDetailPage }) => ({ default: TemplateDetailPage }),
+    ({ TemplateDetailPage: page }) => ({ default: page }),
   ),
 );
 const TemplateCreatePage = lazy(() =>
   import("./routes/templates/TemplateCreatePage").then(
-    ({ TemplateCreatePage }) => ({ default: TemplateCreatePage }),
+    ({ TemplateCreatePage: page }) => ({ default: page }),
   ),
 );
 const TemplateEditPage = lazy(() =>
   import("./routes/templates/TemplateEditPage").then(
-    ({ TemplateEditPage }) => ({
-      default: TemplateEditPage,
+    ({ TemplateEditPage: page }) => ({
+      default: page,
     }),
   ),
 );
 const RunListPage = lazy(() =>
-  import("./routes/history/RunListPage").then(({ RunListPage }) => ({
-    default: RunListPage,
+  import("./routes/history/RunListPage").then(({ RunListPage: page }) => ({
+    default: page,
   })),
 );
 const RunDetailPage = lazy(() =>
-  import("./routes/history/RunDetailPage").then(({ RunDetailPage }) => ({
-    default: RunDetailPage,
+  import("./routes/history/RunDetailPage").then(({ RunDetailPage: page }) => ({
+    default: page,
   })),
 );
 const NewRunPage = lazy(() =>
-  import("./routes/runs/NewRunPage").then(({ NewRunPage }) => ({
-    default: NewRunPage,
+  import("./routes/runs/NewRunPage").then(({ NewRunPage: page }) => ({
+    default: page,
   })),
 );
 const ConfigPage = lazy(() =>
-  import("./routes/config/ConfigPage").then(({ ConfigPage }) => ({
-    default: ConfigPage,
+  import("./routes/config/ConfigPage").then(({ ConfigPage: page }) => ({
+    default: page,
   })),
 );
 

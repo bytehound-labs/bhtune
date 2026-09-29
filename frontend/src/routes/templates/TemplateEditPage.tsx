@@ -1,4 +1,4 @@
-import { useEffect, useState, type SubmitEvent } from "react";
+import { useState, type SubmitEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useTemplate, useUpdateTemplate } from "../../api/templates";
 import { userFacingErrorMessage } from "../../api/errors";
@@ -21,22 +21,28 @@ export function TemplateEditPage() {
   const navigate = useNavigate();
   const template = useTemplate(name);
   const updateTemplate = useUpdateTemplate();
-  const [form, setForm] = useState<TemplateFormState>(blankTemplateForm);
-
-  // Populate the form once the existing template loads. Only runs again if the loaded
-  // template itself changes (e.g. a refetch after an unrelated tab edited it) -- not on
-  // every render, which would otherwise stomp on in-progress edits.
-  useEffect(() => {
-    if (template.data) {
-      setForm(templateToFormState(template.data));
-    }
-  }, [template.data]);
+  const [editorState, setEditorState] = useState(() => ({
+    template: template.data,
+    form: template.data
+      ? templateToFormState(template.data)
+      : blankTemplateForm,
+  }));
+  if (template.data && template.data !== editorState.template) {
+    setEditorState({
+      template: template.data,
+      form: templateToFormState(template.data),
+    });
+  }
+  const form = editorState.form;
 
   function set<K extends keyof TemplateFormState>(
     key: K,
     value: TemplateFormState[K],
   ) {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setEditorState((previous) => ({
+      ...previous,
+      form: { ...previous.form, [key]: value },
+    }));
   }
 
   function handleSubmit(e: SubmitEvent<HTMLFormElement>) {

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "format:check": "prettier --check . --ignore-path ../.prettierignore",
     "generate:api": "openapi-typescript ../openapi.json -o src/api/schema.d.ts && prettier --write src/api/schema.d.ts",
     "preview": "vite preview",

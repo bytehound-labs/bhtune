@@ -412,7 +412,10 @@ test.describe("Demo mode contract", () => {
     await page.getByRole("button", { name: "Start tune" }).click();
     await expect(page).toHaveURL(/\/runs\/1001$/);
 
-    expect(Object.keys(api.starts[0]).sort()).toEqual(
+    const firstStart = api.starts[0];
+    if (!firstStart)
+      throw new Error("The first Demo start request was not captured.");
+    expect(Object.keys(firstStart).sort()).toEqual(
       [
         "controller_type",
         "cycles_count",
@@ -437,7 +440,7 @@ test.describe("Demo mode contract", () => {
         "template",
       ].sort(),
     );
-    expect(api.starts[0]).toMatchObject({
+    expect(firstStart).toMatchObject({
       driver: "simulator",
       template: "Honeywell Experion",
       tagname: "Simulator demo",
@@ -512,7 +515,10 @@ test.describe("Demo mode contract", () => {
     await expect(page.getByLabel("Notes")).toHaveCount(0);
     await page.getByRole("button", { name: "Start tune" }).click();
     await expect(page).toHaveURL(/\/runs\/1002$/);
-    expect(api.starts[1]).toMatchObject({
+    const secondStart = api.starts[1];
+    if (!secondStart)
+      throw new Error("The second Demo start request was not captured.");
+    expect(secondStart).toMatchObject({
       driver: "simulator",
       template: "Honeywell Experion",
       tagname: "Simulator demo",
@@ -521,7 +527,7 @@ test.describe("Demo mode contract", () => {
       direction: "reverse",
       sim_gain: 2.5,
     });
-    expect(Object.keys(api.starts[1]).sort()).toEqual(
+    expect(Object.keys(secondStart).sort()).toEqual(
       [
         "controller_type",
         "cycles_count",

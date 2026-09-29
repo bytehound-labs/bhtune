@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type SubmitEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type SetStateAction,
+  type SubmitEvent,
+} from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   useLastRunRequest,
@@ -86,6 +93,15 @@ type PrefillSource =
   | { readonly kind: "draft" }
   | { readonly kind: "last-run" };
 
+type NewRunPageState = {
+  readonly form: FormState;
+  readonly hydrated: boolean;
+  readonly prefillSource: PrefillSource | null;
+  readonly draftLoadError: string | null;
+  readonly preserveBlankTemplate: boolean;
+  readonly templateDefaultingResolved: boolean;
+};
+
 function prefillMessage(source: PrefillSource): string {
   switch (source.kind) {
     case "duplicate":
@@ -145,6 +161,122 @@ function controllerTypeForProcess(
   return current;
 }
 
+function demoDraftFormFor(
+  isDemo: boolean,
+  demoDraftValue: ReturnType<typeof useDemoDraft>["draft"],
+  simulatorCapabilities: SimulatorCapabilities | null,
+  defaultPageForm: FormState,
+): FormState | null {
+  if (!isDemo || !demoDraftValue) return null;
+  if (!simulatorCapabilities) return defaultPageForm;
+  return formFromDemoDraft(demoDraftValue, simulatorCapabilities);
+}
+
+function initialPrefillSource(
+  duplicateState: DuplicateRunLocationState | undefined,
+  isDemo: boolean,
+  demoDraftValue: ReturnType<typeof useDemoDraft>["draft"],
+): PrefillSource | null {
+  if (duplicateState) {
+    return { kind: "duplicate", runId: duplicateState.duplicateFromRunId };
+  }
+  if (isDemo && demoDraftValue) return { kind: "draft" };
+  return null;
+}
+
+function initialPageState(
+  resolvedInitialForm: FormState,
+  duplicateState: DuplicateRunLocationState | undefined,
+  isDemo: boolean,
+  demoDraftValue: ReturnType<typeof useDemoDraft>["draft"],
+): NewRunPageState {
+  return {
+    form: resolvedInitialForm,
+    hydrated: Boolean(duplicateState) || isDemo,
+    prefillSource: initialPrefillSource(duplicateState, isDemo, demoDraftValue),
+    draftLoadError: null,
+    preserveBlankTemplate: false,
+    templateDefaultingResolved:
+      Boolean(duplicateState) || Boolean(resolvedInitialForm.template),
+  };
+}
+
+function hydratedFullPageState(
+  pageState: NewRunPageState,
+  isDemo: boolean,
+  duplicateState: DuplicateRunLocationState | undefined,
+  runDraft: ReturnType<typeof useRunDraft>,
+  lastRunRequest: ReturnType<typeof useLastRunRequest>,
+): NewRunPageState | null {
+  if (isDemo || pageState.hydrated || duplicateState || runDraft.isPending) {
+    return null;
+  }
+  if (runDraft.data === undefined && !runDraft.isError) return null;
+  if (
+    (runDraft.data === null || runDraft.isError) &&
+    lastRunRequest.isPending
+  ) {
+    return null;
+  }
+
+  let nextForm = pageState.form;
+  let nextPrefillSource = pageState.prefillSource;
+  let nextPreserveBlankTemplate = false;
+  if (runDraft.data) {
+    nextForm = formFromDraft(runDraft.data);
+    nextPrefillSource = { kind: "draft" };
+    nextPreserveBlankTemplate = runDraft.data.template === null;
+  } else if (lastRunRequest.data) {
+    nextForm = formFromRequest(lastRunRequest.data);
+    nextPrefillSource = { kind: "last-run" };
+  }
+  return {
+    ...pageState,
+    form: nextForm,
+    hydrated: true,
+    prefillSource: nextPrefillSource,
+    draftLoadError: runDraft.isError
+      ? userFacingErrorMessage(
+          runDraft.error,
+          "Unable to load the saved Tune draft; using the available fallback.",
+        )
+      : null,
+    preserveBlankTemplate: nextPreserveBlankTemplate,
+    templateDefaultingResolved: nextPreserveBlankTemplate,
+  };
+}
+
+function shouldResolveTemplateDefaulting(
+  pageState: NewRunPageState,
+  hydrated: boolean,
+  hasDuplicate: boolean,
+  preserveBlankTemplate: boolean,
+  firstTemplateName: string | undefined,
+): boolean {
+  return (
+    !pageState.templateDefaultingResolved &&
+    hydrated &&
+    !hasDuplicate &&
+    !preserveBlankTemplate &&
+    Boolean(firstTemplateName)
+  );
+}
+
+function resolveTemplateDefaulting(
+  previous: NewRunPageState,
+  firstTemplateName: string | undefined,
+): NewRunPageState {
+  if (previous.templateDefaultingResolved) return previous;
+  if (previous.form.template || !firstTemplateName) {
+    return { ...previous, templateDefaultingResolved: true };
+  }
+  return {
+    ...previous,
+    form: { ...previous.form, template: firstTemplateName },
+    templateDefaultingResolved: true,
+  };
+}
+
 export function NewRunPage({
   capabilities,
 }: {
@@ -166,32 +298,50 @@ export function NewRunPage({
   const duplicateState = isDuplicateRunState(location.state)
     ? location.state
     : undefined;
-  const defaultPageForm =
-    isDemo && capabilities.simulator
-      ? formFromDemoCapabilities(capabilities.simulator)
-      : initialForm;
+  const defaultPageForm = useMemo(
+    () =>
+      isDemo && capabilities.simulator
+        ? formFromDemoCapabilities(capabilities.simulator)
+        : initialForm,
+    [capabilities.simulator, isDemo],
+  );
   const initialPageForm = pageFormFromDuplicate(
     duplicateState,
     isDemo,
     capabilities.simulator,
     defaultPageForm,
   );
-
-  const [form, setForm] = useState<FormState>(() => initialPageForm);
+  const demoDraftForm = useMemo(
+    () =>
+      demoDraftFormFor(
+        isDemo,
+        demoDraftValue,
+        capabilities.simulator,
+        defaultPageForm,
+      ),
+    [capabilities.simulator, defaultPageForm, demoDraftValue, isDemo],
+  );
+  const resolvedInitialForm =
+    duplicateState || !demoDraftForm ? initialPageForm : demoDraftForm;
+  const [pageState, setPageState] = useState<NewRunPageState>(() =>
+    initialPageState(
+      resolvedInitialForm,
+      duplicateState,
+      isDemo,
+      demoDraftValue,
+    ),
+  );
+  const {
+    form,
+    hydrated,
+    prefillSource,
+    draftLoadError,
+    preserveBlankTemplate,
+  } = pageState;
   const demoDraftSnapshotRef = useRef(
-    JSON.stringify(demoDraftFromForm(initialPageForm)),
+    JSON.stringify(demoDraftFromForm(resolvedInitialForm)),
   );
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [prefillSource, setPrefillSource] = useState<PrefillSource | null>(
-    () =>
-      duplicateState
-        ? { kind: "duplicate", runId: duplicateState.duplicateFromRunId }
-        : null,
-  );
-  const [hydrated, setHydrated] = useState(Boolean(duplicateState));
-  const hydratedRef = useRef(Boolean(duplicateState));
-  const preserveBlankTemplateRef = useRef(false);
-  const [draftLoadError, setDraftLoadError] = useState<string | null>(null);
   const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
   const draftSaveChainRef = useRef(Promise.resolve());
   const saveDraftAsync = saveRunDraft.mutateAsync;
@@ -201,74 +351,38 @@ export function NewRunPage({
   );
 
   useEffect(() => {
-    if (!isDemo || hydratedRef.current) return;
-    hydratedRef.current = true;
-    setHydrated(true);
-    if (!demoDraftValue) return;
-
-    const nextForm = capabilities.simulator
-      ? formFromDemoDraft(demoDraftValue, capabilities.simulator)
-      : defaultPageForm;
+    if (!isDemo || !demoDraftValue) return;
+    const nextForm = demoDraftForm ?? defaultPageForm;
     const sanitizedDraft = demoDraftFromForm(nextForm);
     const serializedDraft = JSON.stringify(sanitizedDraft);
     demoDraftSnapshotRef.current = serializedDraft;
     if (JSON.stringify(demoDraftValue) !== serializedDraft) {
       saveDemoDraft(sanitizedDraft, demoDraftSavedAt ?? Date.now());
     }
-    setForm(nextForm);
-    setPrefillSource({ kind: "draft" });
   }, [
-    capabilities.simulator,
     defaultPageForm,
     demoDraftSavedAt,
+    demoDraftForm,
     demoDraftValue,
     isDemo,
     saveDemoDraft,
   ]);
 
-  useEffect(() => {
-    if (isDemo || hydratedRef.current || duplicateState || runDraft.isPending) {
-      return;
-    }
-    if (runDraft.data === undefined && !runDraft.isError) return;
-    if (
-      (runDraft.data === null || runDraft.isError) &&
-      lastRunRequest.isPending
-    ) {
-      return;
-    }
-
-    hydratedRef.current = true;
-    setHydrated(true);
-    if (runDraft.isError) {
-      setDraftLoadError(
-        userFacingErrorMessage(
-          runDraft.error,
-          "Unable to load the saved Tune draft; using the available fallback.",
-        ),
-      );
-    }
-    if (runDraft.data) {
-      preserveBlankTemplateRef.current = runDraft.data.template === null;
-      setForm(formFromDraft(runDraft.data));
-      setPrefillSource({ kind: "draft" });
-    } else if (lastRunRequest.data) {
-      preserveBlankTemplateRef.current = false;
-      setForm(formFromRequest(lastRunRequest.data));
-      setPrefillSource({ kind: "last-run" });
-    } else {
-      preserveBlankTemplateRef.current = false;
-    }
-  }, [
-    duplicateState,
+  const hydratedPageState = hydratedFullPageState(
+    pageState,
     isDemo,
-    lastRunRequest.isPending,
-    lastRunRequest.data,
-    runDraft.data,
-    runDraft.error,
-    runDraft.isError,
-    runDraft.isPending,
-  ]);
+    duplicateState,
+    runDraft,
+    lastRunRequest,
+  );
+  if (hydratedPageState) setPageState(hydratedPageState);
+
+  function setForm(action: SetStateAction<FormState>) {
+    setPageState((previous) => ({
+      ...previous,
+      form: typeof action === "function" ? action(previous.form) : action,
+    }));
+  }
 
   useEffect(() => {
     if (!hydrated) return;
@@ -300,22 +414,30 @@ export function NewRunPage({
     return () => window.clearTimeout(timer);
   }, [form, hydrated, isDemo, saveDemoDraft, saveDraftAsync]);
 
-  useEffect(() => {
-    if (duplicateState || !hydrated || preserveBlankTemplateRef.current) {
-      return;
-    }
-    setForm((previous) => {
-      if (previous.template || !templates.data || templates.data.length === 0) {
-        return previous;
-      }
-      return { ...previous, template: templates.data[0].name };
-    });
-  }, [duplicateState, form.template, hydrated, templates.data]);
+  const firstTemplateName = templates.data?.[0]?.name;
+  if (
+    shouldResolveTemplateDefaulting(
+      pageState,
+      hydrated,
+      Boolean(duplicateState),
+      preserveBlankTemplate,
+      firstTemplateName,
+    )
+  ) {
+    // Apply the fallback against queued form state so same-render prefill wins.
+    setPageState((previous) =>
+      resolveTemplateDefaulting(previous, firstTemplateName),
+    );
+  }
 
   function resetToDefaults() {
-    setPrefillSource(null);
-    preserveBlankTemplateRef.current = false;
-    setForm(defaultPageForm);
+    setPageState((previous) => ({
+      ...previous,
+      form: defaultPageForm,
+      prefillSource: null,
+      preserveBlankTemplate: false,
+      templateDefaultingResolved: false,
+    }));
   }
 
   function resetProcessDefaults() {
@@ -449,12 +571,23 @@ export function NewRunPage({
   }
 
   function setTemplate(value: string) {
-    setForm((previous) => {
+    setPageState((previous) => {
       const template = templates.data?.find((item) => item.name === value);
       const tagname = template
-        ? replaceTagSuffix(previous.tagname, template.process_variable_suffix)
-        : previous.tagname;
-      return { ...applyTagNameChange(previous, tagname), template: value };
+        ? replaceTagSuffix(
+            previous.form.tagname,
+            template.process_variable_suffix,
+          )
+        : previous.form.tagname;
+      return {
+        ...previous,
+        form: {
+          ...applyTagNameChange(previous.form, tagname),
+          template: value,
+        },
+        templateDefaultingResolved:
+          value === "" ? false : previous.templateDefaultingResolved,
+      };
     });
   }
 

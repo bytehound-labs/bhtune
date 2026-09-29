@@ -119,11 +119,11 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
   requires the body's `name` to match the path, so the Name field is disabled with an
   inline hint rather than silently allowed and then 400ing on submit). Splitting into two
   files (rather than one combined `TemplateForm.tsx`, tried first) exists specifically to
-  keep `oxlint`'s `react/only-export-components` rule (configured `"warn"`, not `"error"` —
-  confirmed CI's bare `oxlint` invocation wouldn't have failed either way) genuinely clean:
+  keep `oxlint`'s `react/only-export-components` rule genuinely clean. The rule remains a
+  warning, and the frontend lint command uses `--deny-warnings`, so CI fails on a regression:
   a file mixing component and non-component exports breaks Vite's Fast Refresh for that
-  component, which is a real development-experience cost even though it's not a CI-blocking
-  one. `TemplateDetailPage.tsx` shows an "Edit" button only when `origin === "user"`; a
+  component and is therefore a real development-experience cost. `TemplateDetailPage.tsx`
+  shows an "Edit" button only when `origin === "user"`; a
   direct visit to another origin's edit URL still renders (there is no route guard) but
   shows an explicit warning banner and disables Save, matching what the server would 409 on
   rather than letting a user discover that by submitting. Known cosmetic quirk: deleting

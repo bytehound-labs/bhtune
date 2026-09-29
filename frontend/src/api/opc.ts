@@ -282,6 +282,7 @@ export async function searchOpcLive(params: {
 
   try {
     while (true) {
+      // oxlint-disable-next-line no-await-in-loop -- Stream chunks must be consumed in order.
       const { done, value } = await reader.read();
       buffer += decoder.decode(value, { stream: !done });
       let separatorIndex = buffer.indexOf("\n\n");
