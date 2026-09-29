@@ -43,14 +43,14 @@ async fn seed_template(pool: &sqlx::SqlitePool) -> i64 {
 async fn seed_loop_named(pool: &sqlx::SqlitePool, template_id: i64, name: &str) -> i64 {
     let now = Utc::now();
     sqlx::query(
-        r#"
+        r"
         INSERT INTO loops (
             name, dcs_template_id, tags_json, process_type, controller_type,
             relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
             mrft_delay_secs, created_at, updated_at
         ) VALUES (?, ?, '{}', 'flow', 'pi', 5.0, 1, 2, 3, 0, ?, ?)
         RETURNING id
-        "#,
+        ",
     )
     .bind(name)
     .bind(template_id)

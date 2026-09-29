@@ -14,8 +14,20 @@
 #![cfg(unix)]
 
 use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
+
+/// Sends a real `SIGINT` to `child`'s process ID and returns `libc::kill`'s result. `SIGINT`
+/// is the same signal a terminal's Ctrl+C sends, which is exactly the condition
+/// `tokio::signal::ctrl_c()` listens for.
+#[expect(
+    unsafe_code,
+    reason = "delivering a real SIGINT to the spawned CLI requires libc::kill"
+)]
+fn send_sigint(child: &Child) -> libc::c_int {
+    // SAFETY: `child.id()` is a live PID for a process this test just spawned and still owns.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) }
+}
 
 #[tokio::test]
 async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
@@ -89,11 +101,11 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
     // reach `run_polling_loop`'s `tokio::select!` before signalling it.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // SAFETY: `child.id()` is a live PID for a process this test just spawned and still
-    // owns; `SIGINT` is the same signal a terminal's Ctrl+C sends, which is exactly the
-    // condition `tokio::signal::ctrl_c()` listens for.
-    let kill_result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) };
-    assert_eq!(kill_result, 0, "failed to send SIGINT to the child process");
+    assert_eq!(
+        send_sigint(&child),
+        0,
+        "failed to send SIGINT to the child process"
+    );
 
     let output = tokio::time::timeout(
         Duration::from_secs(10),
@@ -135,7 +147,7 @@ async fn ctrl_c_aborts_a_running_tune_and_restores_the_loop() {
     // reached the rotating file under `--log-dir`, not just that the flag was accepted.
     let log_files: Vec<_> = std::fs::read_dir(log_dir.path())
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
     assert!(
         !log_files.is_empty(),

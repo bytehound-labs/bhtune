@@ -334,7 +334,11 @@ mod windows_impl {
                 // All services must accept Interrogate even as a no-op.
                 ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
                 ServiceControl::Stop | ServiceControl::Shutdown => {
-                    if let Some(tx) = shutdown_tx.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    if let Some(tx) = shutdown_tx
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take()
+                    {
                         let _ = tx.send(());
                     }
                     ServiceControlHandlerResult::NoError

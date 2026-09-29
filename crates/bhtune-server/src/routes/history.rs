@@ -794,13 +794,13 @@ mod tests {
         let now = Utc::now();
 
         let loop_id = sqlx::query(
-            r#"
+            r"
             INSERT INTO loops (
                 name, dcs_template_id, tags_json, process_type, controller_type,
                 relay_amp_percent, num_cycles_skip, num_cycles_count, noise_protection_secs,
                 mrft_delay_secs, created_at, updated_at
             ) VALUES ('Loop2', ?, '{}', 'flow', 'pi', 5.0, 1, 3, 0, 0, ?, ?)
-            "#,
+            ",
         )
         .bind(template_row.id)
         .bind(now)

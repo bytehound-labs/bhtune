@@ -402,7 +402,7 @@ mod tests {
         let overrides = TagOverrides {
             process_variable: Some("  Unit1.LIC101.PY  ".to_string()),
             manipulated_variable: Some("Unit1.LIC101.MY".to_string()),
-            setpoint_variable: Some("".to_string()),
+            setpoint_variable: Some(String::new()),
             controller_mode: None,
             mode_attribute: Some("Unit1.LIC101.MA".to_string()),
             proportional_constant: None,
