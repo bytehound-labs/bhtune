@@ -50,7 +50,7 @@ function createOpcForm(): FormState {
 function requestFromForm(form: FormState): StartRunRequest {
   const request = buildRequest(form);
   if (typeof request === "string") {
-    throw new Error(`Expected a valid form, got: ${request}`);
+    throw new TypeError(`Expected a valid form, got: ${request}`);
   }
   return request;
 }
