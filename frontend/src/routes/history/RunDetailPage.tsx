@@ -162,7 +162,7 @@ export function RunDetailPage({
     deleteRun.mutate(runId, {
       onSuccess: () => {
         setDeleteConfirmationOpen(false);
-        navigate("/runs");
+        void navigate("/runs");
       },
     });
   }
@@ -175,7 +175,7 @@ export function RunDetailPage({
       duplicateRequest: originalRequest,
       duplicateFromRunId: run.data.id,
     };
-    navigate("/runs/new", { state: duplicateState });
+    void navigate("/runs/new", { state: duplicateState });
   }
 
   function requestWrite(result: ValidRunResult) {
