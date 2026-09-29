@@ -20,6 +20,12 @@ VERSIONED_DOCS_DIR = WEBSITE_DIR / "versioned_docs"
 VERSIONED_SIDEBARS_DIR = WEBSITE_DIR / "versioned_sidebars"
 VERSIONS_FILE = WEBSITE_DIR / "versions.json"
 DIGEST_FILE = ".release-docs-digest"
+VERSIONED_DOCUMENTATION_LABEL = "versioned documentation path"
+DOCUMENTATION_SOURCE_LABEL = "documentation source path"
+VERSION_METADATA_LABEL = "version metadata path"
+SNAPSHOT_DIGEST_LABEL = "snapshot digest path"
+VERSIONED_SIDEBAR_LABEL = "versioned sidebar path"
+_DECIMAL_DIGITS = "0123456789"
 
 
 class DocsVersionError(RuntimeError):
@@ -75,6 +81,33 @@ def stable_version(value: str) -> tuple[int, int, int] | None:
         return None
 
 
+def format_stable_version(components: tuple[int, int, int]) -> str:
+    return ".".join(_format_version_component(component) for component in components)
+
+
+def _format_version_component(value: int) -> str:
+    if value == 0:
+        return _DECIMAL_DIGITS[0]
+    digits: list[str] = []
+    remaining = value
+    while remaining:
+        digits.append(_DECIMAL_DIGITS[remaining % 10])
+        remaining //= 10
+    return "".join(reversed(digits))
+
+
+def canonical_version(value: str) -> str | None:
+    parsed = stable_version(value)
+    if parsed is None:
+        return None
+    return format_stable_version(parsed)
+
+
+def _write_utf8(path: Path, content: str) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(content)
+
+
 def version_dir(version: str) -> Path:
     return VERSIONED_DOCS_DIR / f"version-{version}"
 
@@ -116,27 +149,27 @@ def digest_inputs(repository: Path) -> str:
 
 def copy_sources(repository: Path, destination: Path) -> None:
     if _repository_path(
-        repository, destination, "versioned documentation path"
+        repository, destination, VERSIONED_DOCUMENTATION_LABEL
     ).exists():
         shutil.rmtree(
-            _repository_path(repository, destination, "versioned documentation path")
+            _repository_path(repository, destination, VERSIONED_DOCUMENTATION_LABEL)
         )
-    _repository_path(repository, destination, "versioned documentation path").mkdir(
+    _repository_path(repository, destination, VERSIONED_DOCUMENTATION_LABEL).mkdir(
         parents=True, exist_ok=True
     )
     for source in iter_source_files(repository):
         relative = source.relative_to(repository / DOCS_DIR)
         target = destination / relative
         _repository_path(
-            repository, target, "versioned documentation path"
+            repository, target, VERSIONED_DOCUMENTATION_LABEL
         ).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(
             _repository_path(
                 repository,
                 source.relative_to(repository),
-                "documentation source path",
+                DOCUMENTATION_SOURCE_LABEL,
             ),
-            _repository_path(repository, target, "versioned documentation path"),
+            _repository_path(repository, target, VERSIONED_DOCUMENTATION_LABEL),
         )
 
 
@@ -216,42 +249,40 @@ def render_sidebar(repository: Path) -> dict[str, list[Any]]:
 
 
 def read_versions(repository: Path) -> list[str]:
-    path = _repository_path(repository, VERSIONS_FILE, "version metadata path")
+    path = _repository_path(repository, VERSIONS_FILE, VERSION_METADATA_LABEL)
     if not path.exists():
         return []
     try:
-        value = json.loads(
-            _repository_path(
-                repository, VERSIONS_FILE, "version metadata path"
-            ).read_text(encoding="utf-8")
-        )
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise DocsVersionError(f"malformed {VERSIONS_FILE}: {error}") from error
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise DocsVersionError(f"{VERSIONS_FILE} must contain an array of versions")
     versions = []
     for item in value:
-        if stable_version(item) is None:
+        parsed = stable_version(item)
+        if parsed is None:
             raise DocsVersionError(
                 f"{VERSIONS_FILE} contains a non-stable version: {item}"
             )
-        if item not in versions:
-            versions.append(item)
+        canonical = format_stable_version(parsed)
+        if canonical not in versions:
+            versions.append(canonical)
     return versions
 
 
 def validate_snapshot(repository: Path, version: str, versions: list[str]) -> None:
     relative_root = version_dir(version)
-    root = _repository_path(repository, relative_root, "versioned documentation path")
+    root = _repository_path(repository, relative_root, VERSIONED_DOCUMENTATION_LABEL)
     if not root.is_dir():
         raise DocsVersionError(f"missing versioned documentation directory: {root}")
     digest_relative = relative_root / DIGEST_FILE
-    digest_path = _repository_path(repository, digest_relative, "snapshot digest path")
+    digest_path = _repository_path(repository, digest_relative, SNAPSHOT_DIGEST_LABEL)
     if not digest_path.is_file():
         raise DocsVersionError(f"missing snapshot digest: {digest_path}")
     expected_digest = digest_inputs(repository)
     if (
-        _repository_path(repository, digest_relative, "snapshot digest path")
+        _repository_path(repository, digest_relative, SNAPSHOT_DIGEST_LABEL)
         .read_text(encoding="utf-8")
         .strip()
         != expected_digest
@@ -259,13 +290,13 @@ def validate_snapshot(repository: Path, version: str, versions: list[str]) -> No
         raise DocsVersionError(f"documentation snapshot is stale for version {version}")
     expected_sidebar = render_sidebar(repository)
     relative_sidebar = sidebar_path(version)
-    sidebar = _repository_path(repository, relative_sidebar, "versioned sidebar path")
+    sidebar = _repository_path(repository, relative_sidebar, VERSIONED_SIDEBAR_LABEL)
     if not sidebar.is_file():
         raise DocsVersionError(f"missing versioned sidebar: {sidebar}")
     try:
         actual_sidebar = json.loads(
             _repository_path(
-                repository, relative_sidebar, "versioned sidebar path"
+                repository, relative_sidebar, VERSIONED_SIDEBAR_LABEL
             ).read_text(encoding="utf-8")
         )
     except (OSError, json.JSONDecodeError) as error:
@@ -293,10 +324,10 @@ def validate_snapshot(repository: Path, version: str, versions: list[str]) -> No
             _repository_path(
                 repository,
                 relative_root / relative_path,
-                "versioned documentation path",
+                VERSIONED_DOCUMENTATION_LABEL,
             ).read_bytes()
             != _repository_path(
-                repository, DOCS_DIR / relative_path, "documentation source path"
+                repository, DOCS_DIR / relative_path, DOCUMENTATION_SOURCE_LABEL
             ).read_bytes()
         ):
             raise DocsVersionError(
@@ -353,27 +384,27 @@ def _snapshot_matches(
 ) -> bool:
     relative_destination = version_dir(version)
     destination = _repository_path(
-        repository, relative_destination, "versioned documentation path"
+        repository, relative_destination, VERSIONED_DOCUMENTATION_LABEL
     )
     digest_relative = relative_destination / DIGEST_FILE
     current_digest = (
-        _repository_path(repository, digest_relative, "snapshot digest path")
+        _repository_path(repository, digest_relative, SNAPSHOT_DIGEST_LABEL)
         .read_text(encoding="utf-8")
         .strip()
         if _repository_path(
-            repository, digest_relative, "snapshot digest path"
+            repository, digest_relative, SNAPSHOT_DIGEST_LABEL
         ).is_file()
         else None
     )
     relative_sidebar = sidebar_path(version)
     current_sidebar = None
     if _repository_path(
-        repository, relative_sidebar, "versioned sidebar path"
+        repository, relative_sidebar, VERSIONED_SIDEBAR_LABEL
     ).is_file():
         try:
             current_sidebar = json.loads(
                 _repository_path(
-                    repository, relative_sidebar, "versioned sidebar path"
+                    repository, relative_sidebar, VERSIONED_SIDEBAR_LABEL
                 ).read_text(encoding="utf-8")
             )
         except json.JSONDecodeError:
@@ -395,10 +426,10 @@ def _snapshot_matches(
         _repository_path(
             repository,
             relative_destination / Path(relative),
-            "versioned documentation path",
+            VERSIONED_DOCUMENTATION_LABEL,
         ).read_bytes()
         == _repository_path(
-            repository, DOCS_DIR / Path(relative), "documentation source path"
+            repository, DOCS_DIR / Path(relative), DOCUMENTATION_SOURCE_LABEL
         ).read_bytes()
         for relative in expected_files
     )
@@ -418,13 +449,13 @@ def _synchronize_snapshot(
     _repository_path(
         repository,
         relative_destination / DIGEST_FILE,
-        "snapshot digest path",
+        SNAPSHOT_DIGEST_LABEL,
     ).write_text(digest + "\n", encoding="utf-8")
     relative_sidebar = sidebar_path(version)
     _repository_path(
-        repository, relative_sidebar, "versioned sidebar path"
+        repository, relative_sidebar, VERSIONED_SIDEBAR_LABEL
     ).parent.mkdir(parents=True, exist_ok=True)
-    _repository_path(repository, relative_sidebar, "versioned sidebar path").write_text(
+    _repository_path(repository, relative_sidebar, VERSIONED_SIDEBAR_LABEL).write_text(
         json.dumps(sidebar_value, indent=2) + "\n", encoding="utf-8"
     )
     return True
@@ -440,33 +471,34 @@ def _retained_versions(repository: Path, version: str) -> tuple[list[str], list[
 
 def synchronize(repository: Path, version: str) -> bool:
     repository = repository.resolve()
-    if stable_version(version) is None:
+    canonical = canonical_version(version)
+    if canonical is None:
         return False
-    existing_versions, retained = _retained_versions(repository, version)
+    existing_versions, retained = _retained_versions(repository, canonical)
     changed = _synchronize_snapshot(
         repository,
-        version,
+        canonical,
         digest_inputs(repository),
         render_sidebar(repository),
     )
     if existing_versions != retained:
-        _repository_path(
-            repository, VERSIONS_FILE, "version metadata path"
-        ).parent.mkdir(parents=True, exist_ok=True)
-        _repository_path(repository, VERSIONS_FILE, "version metadata path").write_text(
-            json.dumps(retained, indent=2) + "\n", encoding="utf-8"
+        metadata_path = _repository_path(
+            repository, VERSIONS_FILE, VERSION_METADATA_LABEL
         )
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_utf8(metadata_path, json.dumps(retained, indent=2) + "\n")
         changed = True
     remove_exact_stale_versions(repository, retained)
-    validate_snapshot(repository, version, retained)
+    validate_snapshot(repository, canonical, retained)
     return changed
 
 
 def check(repository: Path, version: str) -> bool:
-    if stable_version(version) is None:
+    canonical = canonical_version(version)
+    if canonical is None:
         return False
     versions = read_versions(repository)
-    validate_snapshot(repository, version, versions)
+    validate_snapshot(repository, canonical, versions)
     return True
 
 
