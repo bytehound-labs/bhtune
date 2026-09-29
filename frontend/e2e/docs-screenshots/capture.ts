@@ -51,10 +51,13 @@ export async function captureScenario(page: Page, scenarioId: string) {
     ).toBeVisible();
   }
 
+  await settle(page);
+
   const path = resolve(screenshotDir, scenario.output);
   const screenshotOptions =
     scenario.id === "full-history" ||
     scenario.id === "full-template-list" ||
+    scenario.id === "full-template-delete-confirmation" ||
     scenario.id === "demo-history"
       ? { animations: "disabled" as const }
       : {};
