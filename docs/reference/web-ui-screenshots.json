@@ -262,10 +262,10 @@
       "documentation": [
         "docs/guides/web-ui/templates-and-configuration.md"
       ],
-      "sha256": "6c82257f009e7d5973dd05226c81de173618ec5860f816b2851c2f8fc2fbc11a",
+      "sha256": "bf2bc4c099d98e5a259bc9686e24c4149072a899d8c323eee202d5a68b241e68",
       "width": 1440,
       "height": 514,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=6c82257f009e"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-list.png?v=bf2bc4c099d9"
     },
     {
       "id": "full-template-detail",
@@ -348,10 +348,10 @@
       "documentation": [
         "docs/guides/web-ui/templates-and-configuration.md"
       ],
-      "sha256": "491584f246bb17bf430bdf927fab7c7ee02831f7cdd74ccdac2900f4fe1ac149",
+      "sha256": "ffa8695ee4148a85c1fca1f05fc06a829b3598680320d28ca1b6195cc4f748f5",
       "width": 1440,
       "height": 514,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=491584f246bb"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=ffa8695ee414"
     },
     {
       "id": "full-config",
