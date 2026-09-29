@@ -59,7 +59,7 @@ type SseRecorder = {
 };
 
 type DemoWindow = Window & {
-  __bhtuneDemoSse?: SseRecorder;
+  bhtuneDemoSse?: SseRecorder;
 };
 
 type DemoTuneValues = {
@@ -168,11 +168,13 @@ async function prepareDemoTune(page: Page, values: DemoTuneValues = {}) {
     ["Dead time (s)", values.deadTime],
     ["RNG seed", values.seed],
   ];
+  // oxlint-disable no-await-in-loop -- Keep controlled-field updates deterministic.
   for (const [label, value] of fields) {
     if (value !== undefined) {
       await page.getByLabel(label).fill(value);
     }
   }
+  // oxlint-enable no-await-in-loop
 }
 
 async function startPreparedTune(page: Page): Promise<number> {
@@ -224,7 +226,7 @@ async function startSseRecorder(page: Page, runId: number) {
       done: [],
       errors: 0,
     };
-    demoWindow.__bhtuneDemoSse = recorder;
+    demoWindow.bhtuneDemoSse = recorder;
     recorder.source.addEventListener("initial", () => {
       recorder.initial += 1;
     });
@@ -249,7 +251,7 @@ async function startSseRecorder(page: Page, runId: number) {
 
 async function sseSnapshot(page: Page) {
   return page.evaluate(() => {
-    const recorder = (window as DemoWindow).__bhtuneDemoSse;
+    const recorder = (window as DemoWindow).bhtuneDemoSse;
     return recorder
       ? {
           initial: recorder.initial,
@@ -280,6 +282,7 @@ async function discardRun(
     await context.request.post(`/api/runs/${runId}/cancel`, {
       headers: { Origin: origin },
     });
+    // oxlint-disable no-await-in-loop -- Poll until this run is terminal before deleting it.
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const detail = await context.request.get(`/api/runs/${runId}`);
       if (detail.status() === 404) return;
@@ -289,6 +292,7 @@ async function discardRun(
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    // oxlint-enable no-await-in-loop
     await context.request.delete(`/api/runs/${runId}`, {
       headers: { Origin: origin },
     });
@@ -376,35 +380,39 @@ test.describe("real HTTPS Demo mode", () => {
       });
       expectSecurityHeaders(missingOrigin);
 
-      for (const rejectedOrigin of [
-        `${origin}/`,
-        origin.replace("https://", "http://"),
-        `${origin}.attacker.invalid`,
-      ]) {
-        const response = await first.context.request.post(
-          "/api/runs/999999/cancel",
-          { headers: { Origin: rejectedOrigin } },
-        );
-        expect(response.status()).toBe(403);
-      }
+      await Promise.all(
+        [
+          `${origin}/`,
+          origin.replace("https://", "http://"),
+          `${origin}.attacker.invalid`,
+        ].map(async (rejectedOrigin) => {
+          const response = await first.context.request.post(
+            "/api/runs/999999/cancel",
+            { headers: { Origin: rejectedOrigin } },
+          );
+          expect(response.status()).toBe(403);
+        }),
+      );
       const exactOrigin = await first.context.request.post(
         "/api/runs/999999/cancel",
         { headers: { Origin: origin } },
       );
       expect(exactOrigin.status()).toBe(404);
 
-      for (const path of [
-        "/api/openapi.json",
-        "/api/docs",
-        "/api/config",
-        "/api/opc/servers",
-      ]) {
-        const response = await first.context.request.get(path);
-        expect(response.status(), path).toBe(404);
-        expect(await response.json()).toEqual({
-          error: "API route is not available in Demo mode",
-        });
-      }
+      await Promise.all(
+        [
+          "/api/openapi.json",
+          "/api/docs",
+          "/api/config",
+          "/api/opc/servers",
+        ].map(async (path) => {
+          const response = await first.context.request.get(path);
+          expect(response.status(), path).toBe(404);
+          expect(await response.json()).toEqual({
+            error: "API route is not available in Demo mode",
+          });
+        }),
+      );
       // The dynamic `/api/runs/{id}` route owns this path before the Demo catch-all,
       // so Axum rejects the non-numeric id. It still proves the Full-only draft API is
       // unavailable and, importantly, does not return another visitor's persisted state.

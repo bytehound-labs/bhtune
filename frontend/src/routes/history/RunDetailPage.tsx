@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { userFacingErrorMessage } from "../../api/errors";
 import {
@@ -86,8 +86,22 @@ export function RunDetailPage({
       !isRunning && run.data.restore_status !== "incomplete",
     );
   }, [initialReadings, isRunning, run.data, trendSamples]);
-  const [notes, setNotes] = useState("");
-  const [notesDirty, setNotesDirty] = useState(false);
+  const [noteState, setNoteState] = useState(() => {
+    const initialNotes = run.data?.id === runId ? run.data.notes : undefined;
+    return {
+      sourceRunId: run.data?.id === runId ? runId : null,
+      sourceNotes: initialNotes,
+      notes: initialNotes ?? "",
+      notesDirty: false,
+    };
+  });
+  const { notes, notesDirty } = noteState;
+  const setNotes = (value: string) => {
+    setNoteState((previous) => ({ ...previous, notes: value }));
+  };
+  const setNotesDirty = (value: boolean) => {
+    setNoteState((previous) => ({ ...previous, notesDirty: value }));
+  };
   const [pidAction, setPidAction] = useState<PidAction | null>(null);
   const [pidActionAlert, setPidActionAlert] = useState<string | null>(null);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
@@ -98,12 +112,18 @@ export function RunDetailPage({
     return revertRun.error;
   })();
 
-  useEffect(() => {
-    if (run.data?.id === runId) {
-      setNotes(run.data.notes ?? "");
-      setNotesDirty(false);
-    }
-  }, [runId, run.data?.id, run.data?.notes]);
+  if (
+    run.data?.id === runId &&
+    (noteState.sourceRunId !== runId ||
+      noteState.sourceNotes !== run.data.notes)
+  ) {
+    setNoteState({
+      sourceRunId: runId,
+      sourceNotes: run.data.notes,
+      notes: run.data.notes ?? "",
+      notesDirty: false,
+    });
+  }
 
   function saveNotes() {
     updateNotes.mutate(

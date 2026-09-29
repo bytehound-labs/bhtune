@@ -6,7 +6,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { createConnection } from "node:net";
-import { join, resolve } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { closeHttpsProxy, startHttpsProxy } from "./demo-proxy.mjs";
 
@@ -19,11 +19,17 @@ const STARTUP_TIMEOUT_MS = 30_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 
 const here = fileURLToPath(new URL(".", import.meta.url));
-const repoRoot = resolve(here, "..", "..");
+const repoRoot = resolvePath(here, "..", "..");
 const exeName =
   process.platform === "win32" ? "bhtune-server.exe" : "bhtune-server";
-const bin = resolve(repoRoot, "target", "debug", exeName);
-const stateDir = resolve(here, "..", "test-results", "server-state", "demo");
+const bin = resolvePath(repoRoot, "target", "debug", exeName);
+const stateDir = resolvePath(
+  here,
+  "..",
+  "test-results",
+  "server-state",
+  "demo",
+);
 const configPath = join(stateDir, "bhtune.toml");
 const databasePath = join(stateDir, "bhtune.db");
 const logDir = join(stateDir, "logs");
@@ -128,6 +134,7 @@ async function waitForBackend() {
       );
     }
     try {
+      // oxlint-disable-next-line no-await-in-loop -- The next readiness probe depends on this attempt failing.
       await new Promise((resolve, reject) => {
         const socket = createConnection({
           host: BACKEND_HOST,
@@ -146,6 +153,7 @@ async function waitForBackend() {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
+    // oxlint-disable-next-line no-await-in-loop -- Each retry waits before probing the backend again.
     await delay(100);
   }
   throw new Error(

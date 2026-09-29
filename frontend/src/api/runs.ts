@@ -187,15 +187,24 @@ export function useRunStream(
   mode: AppMode = "full",
 ): RunStreamState {
   const queryClient = useQueryClient();
-  const [state, setState] = useState<RunStreamState>(emptyRunStreamState);
+  const streamKey = `${mode}:${id}`;
+  const [snapshot, setSnapshot] = useState(() => ({
+    key: streamKey,
+    state: emptyRunStreamState,
+  }));
 
   useEffect(() => {
-    if (!enabled || !Number.isFinite(id)) {
-      setState(emptyRunStreamState);
-      return;
-    }
-
-    setState(emptyRunStreamState);
+    if (!enabled || !Number.isFinite(id)) return;
+    const updateState = (
+      update: (previous: RunStreamState) => RunStreamState,
+    ) => {
+      setSnapshot((previous) => ({
+        key: streamKey,
+        state: update(
+          previous.key === streamKey ? previous.state : emptyRunStreamState,
+        ),
+      }));
+    };
     const source = new EventSource(`/api/runs/${id}/stream`, {
       withCredentials: true,
     });
@@ -204,7 +213,7 @@ export function useRunStream(
       const initialReadings = JSON.parse(
         (event as MessageEvent<string>).data,
       ) as InitialReadingsResponse;
-      setState((prev) => ({
+      updateState((prev) => ({
         ...prev,
         initialReadings,
       }));
@@ -214,7 +223,7 @@ export function useRunStream(
       const sample = JSON.parse(
         (event as MessageEvent<string>).data,
       ) as SampleResponse;
-      setState((prev) => ({
+      updateState((prev) => ({
         ...prev,
         reconnecting: false,
         samples: [...prev.samples, sample],
@@ -229,7 +238,7 @@ export function useRunStream(
       // just pre-empts the browser's own auto-reconnect from racing to reopen a stream
       // with nothing left to say.
       source.close();
-      setState((prev) => ({
+      updateState((prev) => ({
         ...prev,
         outcome: done.outcome,
         reconnecting: false,
@@ -238,14 +247,14 @@ export function useRunStream(
     });
 
     source.onopen = () => {
-      setState((prev) => ({ ...prev, reconnecting: false }));
+      updateState((prev) => ({ ...prev, reconnecting: false }));
     };
 
     source.onerror = () => {
       // A connection the browser has given up on (e.g. the run id turned out not to
       // exist, or the server sent a malformed response) reports `readyState === CLOSED`;
       // anything else is a transient drop `EventSource` is already retrying on its own.
-      setState((prev) => ({
+      updateState((prev) => ({
         ...prev,
         reconnecting: source.readyState !== EventSource.CLOSED,
       }));
@@ -254,9 +263,11 @@ export function useRunStream(
     return () => {
       source.close();
     };
-  }, [id, enabled, mode, queryClient]);
+  }, [id, enabled, mode, queryClient, streamKey]);
 
-  return state;
+  return enabled && Number.isFinite(id) && snapshot.key === streamKey
+    ? snapshot.state
+    : emptyRunStreamState;
 }
 
 /**

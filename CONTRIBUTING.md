@@ -50,8 +50,9 @@ Example: `feat(core): port MRFT hysteresis switch detection`.
   levels come from the workspace lint policy described under [Lint policy](#lint-policy).
 - Format frontend code (`frontend/`) with `pnpm --filter bhtune-frontend run format:check` /
   `pnpm exec prettier --write .`, and lint it with `pnpm --filter bhtune-frontend run lint`
-  ([oxlint](https://oxc.rs/)). The documentation site (`website/`) uses the same tools via
-  `pnpm --filter bhtune-website run format:check`/`run lint`.
+  ([oxlint](https://oxc.rs/), with warnings treated as failures). The documentation site
+  (`website/`) uses the same tools via `pnpm --filter bhtune-website run format:check` /
+  `pnpm --filter bhtune-website run lint`.
 - Python scripts in `scripts/` use Ruff 0.16.9 and the standard-library `unittest` runner.
   Run `ruff check scripts`, `ruff format --check scripts`, and
   `python3 -m unittest discover -s scripts -p '*_test.py'`.

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { BrowserRouter } from "react-router";
+// oxlint-disable-next-line import/no-unassigned-import -- Vite loads the global CSS as an entry-point side effect.
 import "./index.css";
 import App from "./App.tsx";
 import { queryClient } from "./queryClient.ts";

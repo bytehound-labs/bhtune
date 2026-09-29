@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import uPlot from "uplot";
+// oxlint-disable-next-line import/no-unassigned-import -- uPlot's stylesheet is a required Vite side effect.
 import "uplot/dist/uPlot.min.css";
 import { trendXRange, type TrendPoint } from "../lib/trend";
 import { useTheme } from "../useTheme";

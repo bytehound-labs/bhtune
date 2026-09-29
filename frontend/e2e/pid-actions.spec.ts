@@ -167,8 +167,12 @@ async function openRun(page: Page, run = completedRun()) {
 
 function completedRunWithInvalidAggressiveResult() {
   const run = completedRun();
+  const aggressiveResult = run.results[0];
+  if (!aggressiveResult) {
+    throw new Error("The completed run is missing its aggressive result.");
+  }
   run.results[0] = {
-    ...run.results[0],
+    ...aggressiveResult,
     kp: null,
     ti_minutes: null,
     td_minutes: null,
@@ -251,9 +255,11 @@ test.describe("post-tune PID actions", () => {
       "Initial readings",
       "PID change history",
     ]);
-    for (const title of sectionTitles) {
-      await expect(detailSection(page, title)).toHaveAttribute("open", "");
-    }
+    await Promise.all(
+      sectionTitles.map((title) =>
+        expect(detailSection(page, title)).toHaveAttribute("open", ""),
+      ),
+    );
     await expect(
       page.getByRole("heading", {
         name: "MV actuation verification",

@@ -235,16 +235,14 @@ function SourceToggle<T extends string>({
   );
 }
 
-function displayTag(tag: string | null, missingTemplateMessage: string) {
+function displayTag(tag: string | null, missingMessage: string) {
   if (tag) {
     return (
       <span className="break-all font-mono text-sm text-slate-100">{tag}</span>
     );
   }
   return (
-    <span className="text-sm italic text-slate-500">
-      {missingTemplateMessage}
-    </span>
+    <span className="text-sm italic text-slate-500">{missingMessage}</span>
   );
 }
 

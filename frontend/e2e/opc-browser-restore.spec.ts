@@ -256,9 +256,9 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const dialog = page.getByRole("dialog", {
       name: "Browse tags on Yokogawa.CSHIS_OPC.1",
     });
-    await expect(dialog.getByRole("status")).toContainText(
-      "Locating saved tag…",
-    );
+    await expect(
+      dialog.getByRole("status").filter({ hasText: "Locating saved tag…" }),
+    ).toBeVisible();
     await expect.poll(() => rootRequestSeen).toBe(true);
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).not.toBeVisible();
