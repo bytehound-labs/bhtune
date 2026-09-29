@@ -156,10 +156,10 @@
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "3ce972e47527a57b4e3218d6e837ef99a9eea4c406f4f48b272df331cbd4ce21",
+      "sha256": "1a222eb34004600b7a9764c264a14e6447dda07d65a0b9213ded19e5015b6a87",
       "width": 1440,
       "height": 480,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=3ce972e47527"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=1a222eb34004"
     },
     {
       "id": "full-run-live",
