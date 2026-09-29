@@ -1,4 +1,4 @@
-//! Integration tests for `history-query-api`: the typed repository/query layer models.rs
+//! Integration tests for `history-query-api`: the typed repository/query layer `bhtune_db::models`
 //! builds on top of the raw schema `tests/schema.rs` already proves. These tests cover run
 //! lifecycle transitions, filter/pagination correctness, and the samples/results/writes
 //! `list_for_run` helpers — the actual query patterns the CLI and GUI history explorer will
