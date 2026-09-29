@@ -6,7 +6,8 @@ import type { NewRunSectionProps } from "./newRunSectionShared";
 export function WriteBackFields({
   form,
   onChange,
-}: Pick<NewRunSectionProps, "form" | "onChange">) {
+  fieldError,
+}: Pick<NewRunSectionProps, "form" | "onChange" | "fieldError">) {
   const isSimulator = form.driver === "simulator";
   const disabledHint = isSimulator
     ? "Disabled — the simulator has no PID constant tags to write to."
@@ -28,6 +29,7 @@ export function WriteBackFields({
         placeholder="Do not apply automatically"
         disabled={isSimulator}
         hint={disabledHint}
+        error={fieldError("writePid")}
       />
       <CheckboxField
         label="Allow automatic PID write"
@@ -38,6 +40,7 @@ export function WriteBackFields({
           disabledHint ??
           "Required when automatic PID settings are selected — applying changes to a live loop without a prompt must be deliberate."
         }
+        error={fieldError("yes")}
       />
     </FormSection>
   );

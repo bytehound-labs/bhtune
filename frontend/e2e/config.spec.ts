@@ -208,6 +208,21 @@ test.describe("global configuration", () => {
     await retentionDays.fill("0");
     await page.getByRole("button", { name: "Save configuration" }).click();
 
+    const validationMessage =
+      "Enter a positive whole number of retention days.";
+    await expect(page.getByText(validationMessage)).toBeVisible();
+    await expect(retentionDays).toHaveAttribute("aria-invalid", "true");
+    const describedBy = await retentionDays.getAttribute("aria-describedby");
+    const inputId = await retentionDays.getAttribute("id");
+    if (!describedBy || !inputId) {
+      throw new Error("Retention validation feedback is not associated.");
+    }
+    const describedByIds = describedBy.split(/\s+/);
+    expect(describedByIds).toContain(`${inputId}-hint`);
+    expect(describedByIds).toContain(`${inputId}-error`);
+    await expect(page.locator(`[id="${inputId}-error"]`)).toHaveText(
+      validationMessage,
+    );
     expect(
       await retentionDays.evaluate(
         (element) => (element as HTMLInputElement).validity.valid,

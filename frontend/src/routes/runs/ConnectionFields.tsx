@@ -24,6 +24,7 @@ export function ConnectionFields({
   onDriverChange,
   onTemplateChange,
   onOpenTagBrowser,
+  fieldError,
 }: Pick<
   NewRunSectionProps,
   | "form"
@@ -34,6 +35,7 @@ export function ConnectionFields({
   | "onDriverChange"
   | "onTemplateChange"
   | "onOpenTagBrowser"
+  | "fieldError"
 >) {
   const isSimulator = form.driver === "simulator";
   const hasServer = form.server.trim().length > 0;
@@ -52,20 +54,17 @@ export function ConnectionFields({
         options={DRIVERS}
         displayLabel={(value) => DRIVER_LABELS[value]}
       />
-      <div>
-        <SelectField
-          label="Template"
-          value={form.template}
-          onChange={onTemplateChange}
-          options={(templates ?? []).map((template) => template.name)}
-          placeholder={
-            templatesPending ? "Loading templates…" : "Choose a template"
-          }
-        />
-        <span className="mt-1 block text-xs text-slate-500">
-          {templateHint(form.driver)}
-        </span>
-      </div>
+      <SelectField
+        label="Template"
+        value={form.template}
+        onChange={onTemplateChange}
+        options={(templates ?? []).map((template) => template.name)}
+        placeholder={
+          templatesPending ? "Loading templates…" : "Choose a template"
+        }
+        hint={templateHint(form.driver)}
+        error={fieldError("template")}
+      />
       <TextField
         label="Bridge host"
         disabled={isSimulator}
@@ -82,7 +81,8 @@ export function ConnectionFields({
           value={form.server}
           onChange={(value) => onChange("server", value)}
           placeholder="e.g. Matrikon.OPC.Simulation"
-          hint={disabledGatewayHint(form.driver)}
+          hint={serverHint(form.driver)}
+          error={fieldError("server")}
         />
         {form.driver === "opcda" && (
           <OpcServerDiscovery
@@ -99,6 +99,7 @@ export function ConnectionFields({
           value={form.tagname}
           onChange={onTagNameChange}
           hint={tagNameHint(form.driver)}
+          error={fieldError("tagname")}
         />
         {form.driver === "opcda" && (
           <div className="mt-1">
@@ -124,4 +125,11 @@ export function ConnectionFields({
       />
     </FormSection>
   );
+}
+
+function serverHint(driver: NewRunSectionProps["form"]["driver"]): string {
+  if (driver === "simulator") {
+    return "Disabled — the simulator does not connect to an OPC DA server.";
+  }
+  return "ProgID of the OPC DA server registered on the gateway.";
 }

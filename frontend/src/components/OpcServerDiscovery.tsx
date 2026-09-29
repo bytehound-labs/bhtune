@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useOpcServers } from "../api/opc";
 import { userFacingErrorMessage } from "../api/errors";
 import { Button, LoadingStatus, Modal } from "./ui";
@@ -23,6 +23,7 @@ export function OpcServerDiscovery({
   onSelect,
 }: OpcServerDiscoveryProps) {
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const servers = useOpcServers(bridgeHost, open);
   const serverContent = (() => {
     if (servers.isPending || servers.isFetching) {
@@ -73,8 +74,9 @@ export function OpcServerDiscovery({
     <div className="mt-1">
       <Button
         onClick={() => setOpen(true)}
-        loading={servers.isFetching}
-        disabled={servers.isFetching}
+        loading={open && servers.isFetching}
+        disabled={open && servers.isFetching}
+        buttonRef={triggerRef}
       >
         Browse servers
       </Button>
@@ -84,6 +86,7 @@ export function OpcServerDiscovery({
           title="Browse OPC DA servers"
           onClose={() => setOpen(false)}
           widthClassName="max-w-lg"
+          restoreFocusRef={triggerRef}
           documentationId="new-tune.opc-server-discovery"
         >
           {serverContent}

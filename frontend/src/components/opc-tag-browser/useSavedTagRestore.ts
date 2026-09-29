@@ -46,12 +46,12 @@ export function useSavedTagRestore({
   disposeBrowse: () => void;
   searchIndexStatus: ReturnType<typeof useOpcSearchIndexStatus>;
   setExpanded: Dispatch<SetStateAction<Set<string>>>;
-  setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>;
+  setSelectedNode: (node: SelectedNode | null) => void;
   disposedRef: { current: boolean };
   selectedNode: SelectedNode | null;
   scopeState: Record<string, ScopeState>;
   expanded: Set<string>;
-  selectedNodeRef: { current: HTMLButtonElement | null };
+  selectedNodeRef: { current: HTMLDivElement | null };
   treeViewportRef: { current: HTMLDivElement | null };
 }) {
   const [phase, dispatch] = useReducer(

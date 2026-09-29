@@ -188,7 +188,7 @@ export function AppLayout({
         </div>
       </header>
       {isDemo && (
-        <div className="border-b-2 border-amber-700 bg-amber-950/70 px-6 py-3 text-center text-sm text-amber-100">
+        <div className="border-b-2 border-amber-700 bg-amber-950/70 px-6 py-3 text-center text-sm text-amber-200">
           <strong>Demo mode — Simulator only.</strong> All measurements and PID
           results are synthetic. No OPC connection or plant write is possible.
           {capabilities.quotas &&

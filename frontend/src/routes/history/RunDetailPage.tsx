@@ -28,7 +28,7 @@ import {
   type RunErrorItem,
 } from "./RunDetailSections";
 import { ConfirmModal, ErrorBanner, LoadingState } from "../../components/ui";
-import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
+import { OUTCOME_LABELS, RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
 import type { AppCapabilities } from "../../api/capabilities";
 
 const EMPTY_TREND_SAMPLES: readonly SampleResponse[] = [];
@@ -290,9 +290,22 @@ export function RunDetailPage({
       fallback: "Unable to clear notes.",
     },
   ];
+  const runStatusAnnouncement = run.data
+    ? `Tune ${OUTCOME_LABELS[run.data.outcome].toLowerCase()}.${run.data.restore_status === "incomplete" ? " Loop restoration is incomplete; review the run details before continuing." : ""}`
+    : "";
 
   return (
     <div>
+      {run.data && (
+        <div
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {runStatusAnnouncement}
+        </div>
+      )}
       <RunDetailActions
         id={id}
         runId={runId}

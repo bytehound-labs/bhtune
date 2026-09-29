@@ -16,6 +16,19 @@ The header provides the primary navigation, a Catppuccin light/dark theme toggle
 health indicator. The health indicator confirms that the BHTune HTTP service responds; it
 does not test an OPC DA gateway or prove that a controller is reachable.
 
+## Keyboard and screen-reader support
+
+Form controls have associated labels, hints, and inline validation messages. Modal dialogs
+move focus into the dialog, keep keyboard focus within it, and return focus to the control
+that opened them when they close. Escape, the close button, and the backdrop dismiss a
+dialog when no operation is pending.
+
+The OPC tag browser uses a keyboard-operable tree: Up and Down move between visible nodes,
+Home and End move to the first and last visible nodes, Left collapses or moves to the parent,
+and Right expands a branch or moves to its first child. Enter or Space selects an ItemID;
+Right expands branch-and-item nodes without changing their exact ItemID. The search field
+offers its indexed matches as an accessible listbox.
+
 {/* web-ui-screenshot: full-tune-simulator */}
 <figure>
   <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=d143b13d2191">

@@ -51,6 +51,7 @@ type IndexedSearchResultsProps = Readonly<{
   searchPending: boolean;
   busy: boolean;
   activeSearchIndex: number;
+  listboxId: string;
   onResultRef: (index: number, element: HTMLButtonElement | null) => void;
   onHover: (index: number) => void;
   onSelect: (match: OpcIndexedSearchMatchResponse) => void;
@@ -68,6 +69,7 @@ export function IndexedSearchResults({
   searchPending,
   busy,
   activeSearchIndex,
+  listboxId,
   onResultRef,
   onHover,
   onSelect,
@@ -92,6 +94,7 @@ export function IndexedSearchResults({
       )}
       {searchMatches.length > 0 && (
         <div
+          id={listboxId}
           role="listbox"
           aria-label="OPC tag search results"
           className="space-y-1"
@@ -102,7 +105,7 @@ export function IndexedSearchResults({
             return (
               <button
                 key={match.item_id}
-                id={`opc-search-result-${index}`}
+                id={`${listboxId}-result-${index}`}
                 ref={(element) => onResultRef(index, element)}
                 role="option"
                 aria-selected={active}
@@ -112,7 +115,7 @@ export function IndexedSearchResults({
                 onClick={() => onSelect(match)}
                 onDoubleClick={() => onConfirm(match)}
                 title={match.item_id}
-                className={`block w-full rounded px-2 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
+                className={`block w-full rounded px-2 py-1.5 text-left text-xs disabled:cursor-not-allowed ${
                   active
                     ? "bg-blue-950/70 text-blue-100"
                     : "text-slate-300 hover:bg-slate-800"

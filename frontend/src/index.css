@@ -9,17 +9,17 @@
   --bhtune-chart-pv: #f38ba8;
   --bhtune-chart-mv: #89b4fa;
   --bhtune-chart-axis: #a6adc8;
-  --bhtune-chart-grid: #585b70;
+  --bhtune-chart-grid: #7f849c;
 
   /* Catppuccin Mocha: base/surface/overlay backgrounds with pastel accents. */
   --color-slate-950: #1e1e2e;
   --color-slate-900: #313244;
   --color-slate-800: #45475a;
-  --color-slate-700: #585b70;
+  --color-slate-700: #7f849c;
   --color-slate-600: #6c7086;
-  --color-slate-500: #7f849c;
-  --color-slate-400: #9399b2;
-  --color-slate-300: #a6adc8;
+  --color-slate-500: #a6adc8;
+  --color-slate-400: #bac2de;
+  --color-slate-300: #bac2de;
   --color-slate-200: #bac2de;
   --color-slate-100: #cdd6f4;
 
@@ -50,25 +50,28 @@
   --bhtune-chart-pv: #d20f39;
   --bhtune-chart-mv: #1e66f5;
   --bhtune-chart-axis: #6c6f85;
-  --bhtune-chart-grid: #bcc0cc;
+  --bhtune-chart-grid: #6c6f85;
 
   /* Catppuccin Latte: bright surfaces with dark purple foreground content. */
   --color-slate-950: #eff1f5;
   --color-slate-900: #ccd0da;
   --color-slate-800: #bcc0cc;
-  --color-slate-700: #acb0be;
+  --color-slate-700: #6c6f85;
   --color-slate-600: #9ca0b0;
-  --color-slate-500: #8c8fa1;
-  --color-slate-400: #7c7f93;
-  --color-slate-300: #6c6f85;
-  --color-slate-200: #5c5f77;
-  --color-slate-100: #4c4f69;
+  --color-slate-500: #4c4f69;
+  --color-slate-400: #4c4f69;
+  --color-slate-300: #4c4f69;
+  --color-slate-200: #4c4f69;
+  --color-slate-100: #3d4058;
 
   --color-emerald-950: #e5f2e4;
   --color-emerald-900: #d1e8d0;
   --color-emerald-800: #40a02b;
-  --color-emerald-400: #40a02b;
-  --color-emerald-300: #40a02b;
+  --color-emerald-400: #1b5f22;
+  --color-emerald-300: #1b5f22;
+
+  --color-blue-300: #1e40af;
+  --color-blue-200: #1e40af;
 
   --color-red-950: #f7e1e5;
   --color-red-900: #efc2ca;
@@ -79,8 +82,8 @@
   --color-amber-950: #f8ead4;
   --color-amber-900: #f3d8ae;
   --color-amber-800: #df8e1d;
-  --color-amber-400: #b56b00;
-  --color-amber-300: #965800;
+  --color-amber-400: #804600;
+  --color-amber-300: #804600;
   --color-amber-200: #7a4700;
 }
 

@@ -32,6 +32,13 @@ interface ConfigForm {
   resetTuning: boolean;
 }
 
+type ConfigValidationField = "retentionDays" | keyof ConfigForm["tuning"];
+
+interface ConfigValidationError {
+  readonly field: ConfigValidationField;
+  readonly message: string;
+}
+
 const defaultTuning = {
   mrftDelaySecs: 0,
   pollIntervalMs: 800,
@@ -100,6 +107,8 @@ export function ConfigPage() {
   const [form, setForm] = useState<ConfigForm>(defaultForm);
   const [savedFormKey, setSavedFormKey] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [validationError, setValidationError] =
+    useState<ConfigValidationError | null>(null);
 
   const loadedForm = config.data ? formFromResponse(config.data) : defaultForm;
   const displayedForm = savedFormKey === null ? loadedForm : form;
@@ -115,6 +124,7 @@ export function ConfigPage() {
 
   const update = <K extends keyof ConfigForm>(key: K, value: ConfigForm[K]) => {
     setSaveMessage(null);
+    setValidationError(null);
     setForm(() => ({ ...displayedForm, [key]: value }));
     if (savedFormKey === null && config.data) {
       setSavedFormKey(formKey(loadedForm));
@@ -126,6 +136,7 @@ export function ConfigPage() {
     value: ConfigForm["tuning"][K],
   ) => {
     setSaveMessage(null);
+    setValidationError(null);
     setForm(() => ({
       ...displayedForm,
       tuning: { ...displayedForm.tuning, [key]: value },
@@ -190,31 +201,36 @@ export function ConfigPage() {
         !Number.isInteger(displayedForm.retentionDays) ||
         displayedForm.retentionDays < 1)
     ) {
-      setSaveMessage("Enter a positive whole number of retention days.");
+      setSaveMessage(null);
+      setValidationError({
+        field: "retentionDays",
+        message: "Enter a positive whole number of retention days.",
+      });
       return;
     }
     const tuningValues = displayedForm.tuning;
-    if (
-      typeof tuningValues.mrftDelaySecs !== "number" ||
-      !Number.isInteger(tuningValues.mrftDelaySecs) ||
-      tuningValues.mrftDelaySecs < 0 ||
-      tuningValues.mrftDelaySecs > 3600 ||
-      typeof tuningValues.pollIntervalMs !== "number" ||
-      !Number.isInteger(tuningValues.pollIntervalMs) ||
-      tuningValues.pollIntervalMs < 1 ||
-      typeof tuningValues.timeoutSecs !== "number" ||
-      !Number.isInteger(tuningValues.timeoutSecs) ||
-      tuningValues.timeoutSecs < 1 ||
-      typeof tuningValues.opTimeoutSecs !== "number" ||
-      !Number.isInteger(tuningValues.opTimeoutSecs) ||
-      tuningValues.opTimeoutSecs < 1 ||
-      typeof tuningValues.restoreTimeoutSecs !== "number" ||
-      !Number.isInteger(tuningValues.restoreTimeoutSecs) ||
-      tuningValues.restoreTimeoutSecs < 1
-    ) {
-      setSaveMessage(
-        "Enter valid whole-number values for all tune timing and safety settings.",
-      );
+    const invalidTuningField = (
+      [
+        ["mrftDelaySecs", tuningValues.mrftDelaySecs, 0, 3600],
+        ["pollIntervalMs", tuningValues.pollIntervalMs, 1, null],
+        ["timeoutSecs", tuningValues.timeoutSecs, 1, null],
+        ["opTimeoutSecs", tuningValues.opTimeoutSecs, 1, null],
+        ["restoreTimeoutSecs", tuningValues.restoreTimeoutSecs, 1, null],
+      ] as const
+    ).find(
+      ([, value, minimum, maximum]) =>
+        typeof value !== "number" ||
+        !Number.isInteger(value) ||
+        value < minimum ||
+        (maximum !== null && value > maximum),
+    );
+    if (invalidTuningField) {
+      setSaveMessage(null);
+      setValidationError({
+        field: invalidTuningField[0],
+        message:
+          "Enter valid whole-number values for all tune timing and safety settings.",
+      });
       return;
     }
 
@@ -232,6 +248,7 @@ export function ConfigPage() {
           setForm(nextForm);
           setSavedFormKey(formKey(nextForm));
           setSaveMessage("Configuration saved successfully.");
+          setValidationError(null);
         },
       },
     );
@@ -244,6 +261,7 @@ export function ConfigPage() {
       setForm(nextForm);
       setSavedFormKey(formKey(nextForm));
       setSaveMessage(null);
+      setValidationError(null);
       saveConfig.reset();
     }
   };
@@ -277,7 +295,7 @@ export function ConfigPage() {
         description="Global policies used by every tune and by history maintenance."
       />
 
-      <form onSubmit={save} className="space-y-6">
+      <form onSubmit={save} noValidate className="space-y-6">
         {isDirty && (
           <div className="rounded-md border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-300">
             You have unsaved changes.
@@ -319,10 +337,10 @@ export function ConfigPage() {
           title="History retention"
           documentationId="config.history-retention"
         >
-          <div>
-            <span className="text-xs uppercase tracking-wide text-slate-500">
+          <fieldset className="min-w-0">
+            <legend className="text-xs uppercase tracking-wide text-slate-500">
               Retain completed runs
-            </span>
+            </legend>
             <div className="mt-2 space-y-2 text-sm text-slate-200">
               <label className="flex items-center gap-2">
                 <input
@@ -331,6 +349,7 @@ export function ConfigPage() {
                   checked={displayedForm.retentionMode === "forever"}
                   onChange={() => {
                     setSaveMessage(null);
+                    setValidationError(null);
                     setForm({
                       ...displayedForm,
                       retentionMode: "forever",
@@ -353,7 +372,7 @@ export function ConfigPage() {
                 Delete older runs automatically
               </label>
             </div>
-          </div>
+          </fieldset>
           <NumberField
             label="Retention days"
             value={displayedForm.retentionDays}
@@ -366,6 +385,11 @@ export function ConfigPage() {
               displayedForm.retentionMode === "forever"
                 ? "No automatic deletion."
                 : "Must be a positive whole number. The server applies retention during maintenance sweeps."
+            }
+            error={
+              validationError?.field === "retentionDays"
+                ? validationError.message
+                : undefined
             }
           />
         </FormSection>
@@ -387,6 +411,11 @@ export function ConfigPage() {
             step={1}
             required
             hint={`Effective: ${currentConfig.effective.tuning.mrft_delay_secs} s (${tuningSource(currentConfig, "mrft_delay_secs")}).`}
+            error={
+              validationError?.field === "mrftDelaySecs"
+                ? validationError.message
+                : undefined
+            }
           />
           <NumberField
             label="Poll interval"
@@ -396,6 +425,11 @@ export function ConfigPage() {
             step={1}
             required
             hint={`Effective: ${currentConfig.effective.tuning.poll_interval_ms} ms (${tuningSource(currentConfig, "poll_interval_ms")}).`}
+            error={
+              validationError?.field === "pollIntervalMs"
+                ? validationError.message
+                : undefined
+            }
           />
           <NumberField
             label="Whole-run timeout"
@@ -405,6 +439,11 @@ export function ConfigPage() {
             step={1}
             required
             hint={`Effective: ${currentConfig.effective.tuning.timeout_secs} s (${tuningSource(currentConfig, "timeout_secs")}).`}
+            error={
+              validationError?.field === "timeoutSecs"
+                ? validationError.message
+                : undefined
+            }
           />
           <NumberField
             label="Driver-operation timeout"
@@ -414,6 +453,11 @@ export function ConfigPage() {
             step={1}
             required
             hint={`Effective: ${currentConfig.effective.tuning.op_timeout_secs} s (${tuningSource(currentConfig, "op_timeout_secs")}).`}
+            error={
+              validationError?.field === "opTimeoutSecs"
+                ? validationError.message
+                : undefined
+            }
           />
           <NumberField
             label="Restore timeout"
@@ -423,11 +467,17 @@ export function ConfigPage() {
             step={1}
             required
             hint={`Effective: ${currentConfig.effective.tuning.restore_timeout_secs} s (${tuningSource(currentConfig, "restore_timeout_secs")}). OPC DA tunes require at least 4 s.`}
+            error={
+              validationError?.field === "restoreTimeoutSecs"
+                ? validationError.message
+                : undefined
+            }
           />
           <div className="flex flex-wrap items-center gap-3">
             <Button
               onClick={() => {
                 setSaveMessage(null);
+                setValidationError(null);
                 setForm({
                   ...displayedForm,
                   tuning: defaultTuning,
@@ -462,6 +512,7 @@ export function ConfigPage() {
                 setForm(formFromResponse(currentConfig));
                 setSavedFormKey(formKey(formFromResponse(currentConfig)));
                 setSaveMessage(null);
+                setValidationError(null);
                 saveConfig.reset();
               }}
             >
@@ -506,12 +557,14 @@ export function ConfigPage() {
                   </dd>
                 </div>
               )}
-              <div className="text-slate-400">
+            </dl>
+            <div className="mt-4 space-y-2 text-sm text-slate-400">
+              <p>
                 Saving writes the global settings to this configuration file.
                 Command-line and environment overrides may take precedence over
                 file values.
-              </div>
-              <div className="text-slate-400">
+              </p>
+              <p>
                 Effective policy: Uncertain quality is{" "}
                 {currentConfig.effective.allow_uncertain_quality
                   ? "accepted"
@@ -521,8 +574,8 @@ export function ConfigPage() {
                   ? "disabled"
                   : `${currentConfig.effective.retention_days} days`}
                 .
-              </div>
-            </dl>
+              </p>
+            </div>
           </Card>
         </section>
       </div>

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
 import { userFacingErrorMessage } from "../../api/errors";
 import { useTestOpcConnection } from "../../api/opc";
 import type { OpcTagNodeResponse } from "../../api/opc";
@@ -29,7 +28,7 @@ export function useTagSelection({
   disposeBrowse: () => void;
   testConnection: ReturnType<typeof useTestOpcConnection>;
   selectedNode: SelectedNode | null;
-  setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>;
+  setSelectedNode: (node: SelectedNode | null) => void;
 }) {
   const [selectionReadError, setSelectionReadError] = useState<string | null>(
     null,

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { components } from "../api/schema";
 import { Button, ConfirmModal, Modal } from "./ui";
@@ -6,6 +6,7 @@ import { QualityWarningPanel } from "./opc-tag-browser/QualityWarningPanel";
 import { TagBrowserContent } from "./opc-tag-browser/TagBrowserContent";
 import { useBrowseSession } from "./opc-tag-browser/useBrowseSession";
 import { savedTagInitializationMessage } from "./opc-tag-browser/restoreModel";
+import type { SelectedNode } from "./opc-tag-browser/browseModel";
 import { useSavedTagRestore } from "./opc-tag-browser/useSavedTagRestore";
 import { useTagSearch } from "./opc-tag-browser/useTagSearch";
 import { useTagSelection } from "./opc-tag-browser/useTagSelection";
@@ -63,12 +64,21 @@ export function OpcTagBrowserModal({
   const deleteSearchIndex = useDeleteOpcSearchIndex();
   const testConnection = useTestOpcConnection();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selectedNode, setSelectedNode] = useState<{
-    nodeKey: string;
-    itemId: string;
-  } | null>(null);
-  const selectedNodeRef = useRef<HTMLButtonElement | null>(null);
+  const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
+  const [activeTreeNodeKey, setActiveTreeNodeKey] = useState<string | null>(
+    null,
+  );
+  const setSelectedNodeAndActiveTreeNode = useCallback(
+    (node: SelectedNode | null) => {
+      setSelectedNode(node);
+      setActiveTreeNodeKey(node?.nodeKey ?? null);
+    },
+    [],
+  );
+  const selectedNodeRef = useRef<HTMLDivElement | null>(null);
   const treeViewportRef = useRef<HTMLDivElement | null>(null);
+  const searchInputId = useId();
+  const searchResultsId = useId();
   const disposedRef = useRef(false);
   const searchAbortRef = useRef<AbortController | null>(null);
   const browse = useBrowseSession({
@@ -81,7 +91,7 @@ export function OpcTagBrowserModal({
     clearCache,
     closeBrowseSession,
     setExpanded,
-    setSelectedNode,
+    setSelectedNode: setSelectedNodeAndActiveTreeNode,
   });
   const restore = useSavedTagRestore({
     bridgeHost,
@@ -92,7 +102,7 @@ export function OpcTagBrowserModal({
     disposeBrowse: browse.disposeBrowse,
     searchIndexStatus,
     setExpanded,
-    setSelectedNode,
+    setSelectedNode: setSelectedNodeAndActiveTreeNode,
     disposedRef,
     selectedNode,
     scopeState: browse.scopeState,
@@ -109,7 +119,7 @@ export function OpcTagBrowserModal({
     disposeBrowse: browse.disposeBrowse,
     testConnection,
     selectedNode,
-    setSelectedNode,
+    setSelectedNode: setSelectedNodeAndActiveTreeNode,
   });
   const search = useTagSearch({
     bridgeHost,
@@ -121,7 +131,7 @@ export function OpcTagBrowserModal({
     setAutoRefreshMutation,
     deleteSearchIndex,
     searchAbortRef,
-    setSelectedNode,
+    setSelectedNode: setSelectedNodeAndActiveTreeNode,
     setSelectionReadError: selection.setSelectionReadError,
     testConnection,
   });
@@ -167,6 +177,10 @@ export function OpcTagBrowserModal({
   const selectedTag = selectedNode?.itemId ?? null;
   const busy = testConnection.isPending || selectionCheckPending;
   const initializationMessage = savedTagInitializationMessage(initialTag);
+  const activeSearchResultId =
+    activeSearchIndex >= 0 && searchMatches[activeSearchIndex]
+      ? `${searchResultsId}-result-${activeSearchIndex}`
+      : undefined;
 
   const modalTitle = qualityWarning
     ? "OPC quality warning"
@@ -190,25 +204,28 @@ export function OpcTagBrowserModal({
     modalContent = (
       <>
         <div className="mb-3 flex gap-2">
-          <label className="sr-only" htmlFor="opc-tag-search">
+          <label className="sr-only" htmlFor={searchInputId}>
             Search OPC tags
           </label>
           <input
-            id="opc-tag-search"
+            id={searchInputId}
+            role="combobox"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
             onKeyDown={handleSearchKeyDown}
             disabled={!indexSearchAvailable}
+            aria-autocomplete="list"
+            aria-haspopup="listbox"
+            aria-expanded={searchMatches.length > 0}
+            aria-controls={
+              searchMatches.length > 0 ? searchResultsId : undefined
+            }
             placeholder={
               indexSearchAvailable
                 ? "Type at least 2 characters to search tags"
                 : "Global search unavailable — browse below or enter an ItemID"
             }
-            aria-activedescendant={
-              activeSearchIndex >= 0
-                ? `opc-search-result-${activeSearchIndex}`
-                : undefined
-            }
+            aria-activedescendant={activeSearchResultId}
             className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
           />
           {indexedSearch.isPending && (
@@ -244,6 +261,7 @@ export function OpcTagBrowserModal({
             searchPending: indexedSearch.isPending,
             busy,
             activeSearchIndex,
+            listboxId: searchResultsId,
             onResultRef: setSearchResultElement,
             onHover: setActiveSearchIndex,
             onSelect: chooseSearchMatch,
@@ -261,6 +279,8 @@ export function OpcTagBrowserModal({
             onRetry: retryBrowse,
             selectedNode,
             selectedNodeRef,
+            activeNodeKey: activeTreeNodeKey,
+            onActiveNodeChange: setActiveTreeNodeKey,
             disabled: busy,
           }}
           treeViewportRef={treeViewportRef}

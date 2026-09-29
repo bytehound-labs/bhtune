@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import uPlot from "uplot";
 // oxlint-disable-next-line import/no-unassigned-import -- uPlot's stylesheet is a required Vite side effect.
 import "uplot/dist/uPlot.min.css";
@@ -20,6 +20,31 @@ function toAlignedData(points: readonly TrendPoint[]): uPlot.AlignedData {
   return [time, pv, mv];
 }
 
+function describeTrend(points: readonly TrendPoint[]): string {
+  const first = points[0];
+  if (!first) return "No PV or MV trend points are available.";
+
+  const range = points.reduce(
+    (current, point) => ({
+      pvMinimum: Math.min(current.pvMinimum, point.pv),
+      pvMaximum: Math.max(current.pvMaximum, point.pv),
+      mvMinimum: Math.min(current.mvMinimum, point.mv),
+      mvMaximum: Math.max(current.mvMaximum, point.mv),
+    }),
+    {
+      pvMinimum: first.pv,
+      pvMaximum: first.pv,
+      mvMinimum: first.mv,
+      mvMaximum: first.mv,
+    },
+  );
+  const last = points.at(-1);
+  const firstTime = new Date(first.time).toLocaleString();
+  const lastTime = last ? new Date(last.time).toLocaleString() : firstTime;
+
+  return `${points.length} plotted points from ${firstTime} to ${lastTime}. PV ranged from ${range.pvMinimum} to ${range.pvMaximum}; MV ranged from ${range.mvMinimum} to ${range.mvMaximum}. Time is on the horizontal axis, PV on the left axis, and MV on the right axis.`;
+}
+
 /**
  * A live-updating PV/MV-vs-time trend chart, backed by uPlot rather than a React charting
  * library — uPlot renders to a plain `<canvas>` and updates via its own imperative
@@ -37,6 +62,7 @@ export function TrendChart({
   height = 320,
   pollIntervalMs,
 }: TrendChartProps) {
+  const descriptionId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
   const { theme } = useTheme();
@@ -119,5 +145,17 @@ export function TrendChart({
     plotRef.current?.setData(toAlignedData(points));
   }, [points]);
 
-  return <div ref={containerRef} />;
+  return (
+    <figure>
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label="Process-variable and manipulated-variable trend chart"
+        aria-describedby={descriptionId}
+      />
+      <figcaption id={descriptionId} className="mt-2 text-xs text-slate-400">
+        {describeTrend(points)}
+      </figcaption>
+    </figure>
+  );
 }

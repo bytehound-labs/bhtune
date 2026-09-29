@@ -49,7 +49,7 @@ export function useTagSearch({
   setAutoRefreshMutation: ReturnType<typeof useSetOpcSearchIndexAutoRefresh>;
   deleteSearchIndex: ReturnType<typeof useDeleteOpcSearchIndex>;
   searchAbortRef: { current: AbortController | null };
-  setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>;
+  setSelectedNode: (node: SelectedNode | null) => void;
   setSelectionReadError: Dispatch<SetStateAction<string | null>>;
   testConnection: ReturnType<typeof useTestOpcConnection>;
 }) {
@@ -104,7 +104,6 @@ export function useTagSearch({
 
   useEffect(() => {
     const query = searchQuery.trim();
-    cancelActiveSearch();
     setSearchError(null);
     setActiveSearchIndex(-1);
 
@@ -114,6 +113,8 @@ export function useTagSearch({
       return;
     }
 
+    // Preserve saved-tag restoration when only index availability changes.
+    cancelActiveSearch();
     const controller = new AbortController();
     searchAbortRef.current = controller;
     const timer = window.setTimeout(async () => {

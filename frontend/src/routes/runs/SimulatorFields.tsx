@@ -7,7 +7,8 @@ import type { NewRunSectionProps } from "./newRunSectionShared";
 type SimulatorParameterProps = Pick<
   NewRunSectionProps,
   "form" | "onChange" | "simulatorCapabilities"
->;
+> &
+  Partial<Pick<NewRunSectionProps, "fieldError">>;
 
 function simulatorPvSpan(form: FormState): number | undefined {
   if (
@@ -106,6 +107,7 @@ function SimulatorProcessFields({
   form,
   onChange,
   simulatorCapabilities,
+  fieldError,
 }: SimulatorParameterProps) {
   const limits = simulatorCapabilities?.limits;
   const pvSpan = simulatorPvSpan(form);
@@ -131,6 +133,7 @@ function SimulatorProcessFields({
         max={limits?.sim_gain.max}
         step="any"
         hint={gainHint}
+        error={fieldError?.("simGain")}
       />
       <NumberField
         label="Time constant τ (s)"
@@ -139,6 +142,7 @@ function SimulatorProcessFields({
         min={limits?.sim_tau.min}
         max={limits?.sim_tau.max}
         step="any"
+        error={fieldError?.("simTau")}
       />
       <NumberField
         label="Dead time (s)"
@@ -147,6 +151,7 @@ function SimulatorProcessFields({
         min={limits?.sim_dead_time.min}
         max={limits?.sim_dead_time.max}
         step="any"
+        error={fieldError?.("simDeadTime")}
       />
       <NumberField
         label="Measurement noise"
@@ -156,6 +161,7 @@ function SimulatorProcessFields({
         max={maxNoise}
         step="any"
         hint={simulatorNoiseHint(limits)}
+        error={fieldError?.("simNoise")}
       />
       <NumberField
         label="RNG seed"
@@ -165,6 +171,7 @@ function SimulatorProcessFields({
         max={limits?.sim_seed.max}
         step={1}
         hint="Fixed seed = reproducible noise."
+        error={fieldError?.("simSeed")}
       />
     </>
   );
@@ -182,6 +189,7 @@ function SimulatorInitialFields({
   form,
   onChange,
   simulatorCapabilities,
+  fieldError,
 }: SimulatorParameterProps) {
   const pvBounds = simulatorCapabilities
     ? numericBounds(form.simPvRangeLow, form.simPvRangeHigh)
@@ -199,6 +207,7 @@ function SimulatorInitialFields({
         min={pvBounds.min}
         max={pvBounds.max}
         step="any"
+        error={fieldError?.("simInitialPv")}
       />
       <NumberField
         label="Initial MV"
@@ -207,6 +216,7 @@ function SimulatorInitialFields({
         min={mvBounds.min}
         max={mvBounds.max}
         step="any"
+        error={fieldError?.("simInitialMv")}
       />
     </>
   );
@@ -216,6 +226,7 @@ function SimulatorRangeFields({
   form,
   onChange,
   simulatorCapabilities,
+  fieldError,
 }: SimulatorParameterProps) {
   if (!simulatorCapabilities) return null;
   const { range_endpoint: endpoint, range_span: span } =
@@ -229,6 +240,7 @@ function SimulatorRangeFields({
         min={endpoint.min}
         max={endpoint.max}
         step="any"
+        error={fieldError?.("simPvRangeLow")}
       />
       <NumberField
         label="PV range high"
@@ -238,6 +250,7 @@ function SimulatorRangeFields({
         max={endpoint.max}
         step="any"
         hint={`PV span must be ${span.min}–${span.max}.`}
+        error={fieldError?.("simPvRangeHigh")}
       />
       <NumberField
         label="MV range low"
@@ -246,6 +259,7 @@ function SimulatorRangeFields({
         min={endpoint.min}
         max={endpoint.max}
         step="any"
+        error={fieldError?.("simMvRangeLow")}
       />
       <NumberField
         label="MV range high"
@@ -255,6 +269,7 @@ function SimulatorRangeFields({
         max={endpoint.max}
         step="any"
         hint={`MV span must be ${span.min}–${span.max}.`}
+        error={fieldError?.("simMvRangeHigh")}
       />
     </>
   );

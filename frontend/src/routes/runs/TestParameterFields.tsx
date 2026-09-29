@@ -29,9 +29,14 @@ export function TestParameterFields({
   onChange,
   onProcessTypeChange,
   onResetProcessDefaults,
+  fieldError,
 }: Pick<
   NewRunSectionProps,
-  "form" | "onChange" | "onProcessTypeChange" | "onResetProcessDefaults"
+  | "form"
+  | "onChange"
+  | "onProcessTypeChange"
+  | "onResetProcessDefaults"
+  | "fieldError"
 >) {
   return (
     <FormSection
@@ -46,6 +51,7 @@ export function TestParameterFields({
         onChange={onProcessTypeChange}
         options={PROCESS_TYPES}
         displayLabel={(value) => PROCESS_TYPE_LABELS[value]}
+        error={fieldError("processType")}
       />
       <SelectField
         label="Controller type"
@@ -53,6 +59,7 @@ export function TestParameterFields({
         onChange={(value) => onChange("controllerType", value)}
         options={controllerTypeOptions(form.processType)}
         displayLabel={(value) => CONTROLLER_TYPE_LABELS[value]}
+        error={fieldError("controllerType")}
       />
       <NumberField
         label="Relay amplitude (%)"
@@ -63,6 +70,7 @@ export function TestParameterFields({
         max={50}
         step={0.1}
         hint="0.1–50% of the MV range."
+        error={fieldError("relayAmp")}
       />
       <div />
       <fieldset className="rounded-md border border-slate-800 p-4 sm:col-span-2">
@@ -81,6 +89,7 @@ export function TestParameterFields({
             onChange={(value) => onChange("cyclesSkip", value)}
             min={0}
             step={1}
+            error={fieldError("cyclesSkip")}
           />
           <NumberField
             label="Cycles to count"
@@ -89,6 +98,7 @@ export function TestParameterFields({
             onChange={(value) => onChange("cyclesCount", value)}
             min={1}
             step={1}
+            error={fieldError("cyclesCount")}
           />
           <NumberField
             label="Noise protection (s)"
@@ -97,6 +107,7 @@ export function TestParameterFields({
             onChange={(value) => onChange("noiseProtectionSecs", value)}
             min={0}
             step={1}
+            error={fieldError("noiseProtectionSecs")}
           />
           <div className="flex items-end">
             <Button onClick={onResetProcessDefaults}>

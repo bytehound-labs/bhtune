@@ -1,4 +1,5 @@
 import type { SimulatorCapabilities } from "../../api/capabilities";
+import type { ValidationFieldKey } from "./formRequest";
 import type {
   ControllerDirection,
   NumOrBlank,
@@ -20,6 +21,7 @@ export type NewRunSectionProps = {
   readonly template: TemplateResponse | undefined;
   readonly templates: readonly TemplateResponse[] | undefined;
   readonly templatesPending: boolean;
+  readonly fieldError: (field: ValidationFieldKey) => string | undefined;
   readonly onChange: <K extends keyof FormState>(
     key: K,
     value: FormState[K],

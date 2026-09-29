@@ -59,6 +59,11 @@ results before the trend. The trend adds presentation-only initial-reading and r
 boundary points; exports contain the persisted sample series. Invalid results remain visible
 with a reason and cannot be written as PID constants.
 
+The run-detail page announces outcome changes through a polite screen-reader status region
+without announcing every streamed sample. The PV/MV chart remains interactive and has a
+visible text summary derived from the plotted points, including the time span and observed
+PV/MV ranges; the summary does not add synthetic measurements.
+
 {/* web-ui-screenshot: full-run-complete */}
 <figure>
   <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=b0a8a6e0c61c">

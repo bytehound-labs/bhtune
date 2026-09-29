@@ -20,6 +20,7 @@ import {
   type ValueMappingSources,
   type ValueTagOverrideFormState,
 } from "./mappingState";
+import type { ValidationFieldKey } from "./formRequest";
 
 type TemplateResponse = components["schemas"]["TemplateResponse"];
 
@@ -191,6 +192,7 @@ type Props = {
   readonly onResetTag: (key: TagOverrideKey) => void;
   readonly onResetValue: (key: ValueMappingKey) => void;
   readonly onResetAll: () => void;
+  readonly fieldError: (field: ValidationFieldKey) => string | undefined;
 };
 
 type SourceToggleProps<T extends string> = {
@@ -224,9 +226,9 @@ function SourceToggle<T extends string>({
           onClick={() => onChange(option.value)}
           className={`px-2.5 py-1 text-xs font-medium transition-colors first:rounded-l-md last:rounded-r-md ${
             value === option.value
-              ? "bg-slate-700 text-slate-100"
+              ? "bg-slate-800 text-slate-100"
               : "bg-slate-950 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-          } disabled:cursor-not-allowed disabled:opacity-50`}
+          } disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-100`}
         >
           {option.label}
         </button>
@@ -402,6 +404,7 @@ type TagValueControlProps = {
   readonly template: TemplateResponse | undefined;
   readonly inactive: boolean;
   readonly onTagChange: (key: TagOverrideKey, value: string) => void;
+  readonly fieldError: (field: ValidationFieldKey) => string | undefined;
 };
 
 function TagValueControl({
@@ -411,6 +414,7 @@ function TagValueControl({
   template,
   inactive,
   onTagChange,
+  fieldError,
 }: TagValueControlProps) {
   if (tags.source === "custom") {
     return (
@@ -421,6 +425,7 @@ function TagValueControl({
         disabled={inactive}
         placeholder={tags.preview ?? "Enter a custom OPC item ID"}
         hint={tagValueHint(tags.preview)}
+        error={fieldError(`tagOverrides.${row.key}`)}
       />
     );
   }
@@ -438,6 +443,7 @@ type TagMappingRowProps = {
   ) => void;
   readonly onTagChange: (key: TagOverrideKey, value: string) => void;
   readonly onResetTag: (key: TagOverrideKey) => void;
+  readonly fieldError: (field: ValidationFieldKey) => string | undefined;
 };
 
 function TagMappingRow({
@@ -447,14 +453,15 @@ function TagMappingRow({
   onTagSourceChange,
   onTagChange,
   onResetTag,
+  fieldError,
 }: TagMappingRowProps) {
   const inactive = state.driver === "simulator";
   const tags = tagValue(row, state, template);
 
   return (
     <fieldset
-      className={`m-0 rounded-md border border-slate-800 p-3 ${
-        inactive ? "opacity-65" : ""
+      className={`m-0 rounded-md border p-3 ${
+        inactive ? "border-slate-700 bg-slate-900/20" : "border-slate-800"
       }`}
     >
       <legend className="sr-only">{row.label}</legend>
@@ -486,6 +493,7 @@ function TagMappingRow({
             template={template}
             inactive={inactive}
             onTagChange={onTagChange}
+            fieldError={fieldError}
           />
         </div>
         <Button
@@ -550,6 +558,7 @@ type ValueEditorProps = {
     key: ValueChangeKey,
     value: NumOrBlank | ControllerDirection,
   ) => void;
+  readonly fieldError: (field: ValidationFieldKey) => string | undefined;
 };
 
 function ValueEditor({
@@ -561,6 +570,7 @@ function ValueEditor({
   valueKey,
   onValueTagChange,
   onValueChange,
+  fieldError,
 }: ValueEditorProps) {
   if (values.source === "custom") {
     return (
@@ -574,6 +584,7 @@ function ValueEditor({
             ? "Reset returns to the template-derived read tag."
             : "This template has no default read tag; enter a site-specific tag."
         }
+        error={fieldError(`valueTagOverrides.${row.key}`)}
       />
     );
   }
@@ -593,6 +604,7 @@ function ValueEditor({
         placeholder="Choose direction"
         required
         hint={fixedValueHint(simulator, row.kind)}
+        error={fieldError(valueKey)}
       />
     );
   }
@@ -605,6 +617,7 @@ function ValueEditor({
       required
       step="any"
       hint={fixedValueHint(simulator, row.kind)}
+      error={fieldError(valueKey)}
     />
   );
 }
@@ -623,6 +636,7 @@ type ValueMappingRowProps = {
     value: NumOrBlank | ControllerDirection,
   ) => void;
   readonly onResetValue: (key: ValueMappingKey) => void;
+  readonly fieldError: (field: ValidationFieldKey) => string | undefined;
 };
 
 function ValueMappingRow({
@@ -633,6 +647,7 @@ function ValueMappingRow({
   onValueTagChange,
   onValueChange,
   onResetValue,
+  fieldError,
 }: ValueMappingRowProps) {
   const simulator = state.driver === "simulator";
   const values = valueState(row, state, template);
@@ -680,6 +695,7 @@ function ValueMappingRow({
             valueKey={valueKey}
             onValueTagChange={onValueTagChange}
             onValueChange={onValueChange}
+            fieldError={fieldError}
           />
           {fixed && (
             <div className="mt-1 text-xs text-slate-500">
@@ -710,6 +726,7 @@ export function LoopMappingEditor({
   onResetTag,
   onResetValue,
   onResetAll,
+  fieldError,
 }: Props) {
   const simulator = state.driver === "simulator";
 
@@ -742,6 +759,7 @@ export function LoopMappingEditor({
             onTagSourceChange={onTagSourceChange}
             onTagChange={onTagChange}
             onResetTag={onResetTag}
+            fieldError={fieldError}
           />
         ))}
 
@@ -755,6 +773,7 @@ export function LoopMappingEditor({
             onValueTagChange={onValueTagChange}
             onValueChange={onValueChange}
             onResetValue={onResetValue}
+            fieldError={fieldError}
           />
         ))}
       </div>

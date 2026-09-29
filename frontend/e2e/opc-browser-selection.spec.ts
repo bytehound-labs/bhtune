@@ -6,6 +6,10 @@ import {
   browseNode,
   browsePage,
 } from "./support/opcBrowser";
+import {
+  expectNoAccessibilityViolations,
+  setTheme,
+} from "./support/accessibility";
 
 /**
  * Tag-tree selection coverage: template-specific PV selection, paged and
@@ -23,9 +27,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const originalTag = "Simulink.Device1._System._DemandPoll";
     const readTags: string[] = [];
     await page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox")
+      .getByRole("combobox", { name: "Template" })
       .selectOption("Yokogawa CentumVP");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
 
@@ -58,19 +60,56 @@ test.describe(OPC_BROWSER_SUITE, () => {
     });
 
     await page.getByRole("button", { name: "Browse tags" }).click();
-    await expect(
-      page.getByRole("button", { name: "Simulink.Device1._System" }),
-    ).toBeVisible();
+    const tree = page.getByRole("tree", { name: "OPC tag hierarchy" });
+    const systemNode = page.getByRole("treeitem", {
+      name: "Simulink.Device1._System",
+      exact: true,
+    });
+    const dialog = page.getByRole("dialog", {
+      name: "Browse tags on Yokogawa.CSHIS_OPC.1",
+    });
+    const closeButton = dialog.getByRole("button", { name: "Close" });
+    await expect(tree).toBeVisible();
+    await expect(systemNode).toHaveAttribute("aria-expanded", "false");
     await expect(
       page.getByText("Select a tag to test its live value and quality."),
     ).toBeVisible();
+    await expect(closeButton).toBeFocused();
+    await expectNoAccessibilityViolations(page);
+    await dialog.evaluate((element) => {
+      (element as HTMLDialogElement).focus();
+    });
+    await page.keyboard.press("Tab");
+    await expect(closeButton).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(dialog.locator(":focus")).toHaveCount(1);
 
-    await page.getByRole("button", { name: "Expand" }).click();
-    await page
-      .getByRole("button", {
-        name: "Simulink.Device1._System._DemandPoll",
-      })
-      .click();
+    const tagNode = page.getByRole("treeitem", { name: originalTag });
+    await systemNode.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(systemNode).toHaveAttribute("aria-expanded", "true");
+    await expect(tagNode).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(tagNode).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(systemNode).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(tagNode).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(systemNode).toBeFocused();
+    await page.keyboard.press("End");
+    await expect(tagNode).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(tagNode).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("ArrowLeft");
+    await expect(systemNode).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(systemNode).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("ArrowRight");
+    await expect(tagNode).toBeVisible();
+    await page.keyboard.press("ArrowRight");
+    await expect(tagNode).toBeFocused();
 
     await page.getByRole("button", { name: "Select tag" }).click();
 
@@ -85,23 +124,28 @@ test.describe(OPC_BROWSER_SUITE, () => {
     ).toHaveAttribute("aria-pressed", "true");
     expect(readTags).toEqual([originalTag]);
 
+    await expect(
+      page.getByRole("button", { name: "Browse tags" }),
+    ).toBeFocused();
+    await setTheme(page, "light");
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(
-      page.getByRole("button", { name: "Simulink.Device1._System" }),
+      page.getByRole("treeitem", { name: "Simulink.Device1._System" }),
     ).toBeVisible();
+    await expectNoAccessibilityViolations(page);
 
     await page
-      .getByRole("button", {
+      .getByRole("treeitem", {
         name: "Simulink.Device1._System",
       })
       .dblclick();
     await expect(
-      page.getByRole("button", {
+      page.getByRole("treeitem", {
         name: "Simulink.Device1._System._DemandPoll",
       }),
     ).toBeVisible();
     await page
-      .getByRole("button", {
+      .getByRole("treeitem", {
         name: "Simulink.Device1._System._DemandPoll",
       })
       .dblclick();
@@ -119,9 +163,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const readTags: string[] = [];
     const closePaths: string[] = [];
     await page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox")
+      .getByRole("combobox", { name: "Template" })
       .selectOption("Yokogawa CentumVP");
     await page
       .getByLabel("OPC DA server ProgID")
@@ -182,12 +224,14 @@ test.describe(OPC_BROWSER_SUITE, () => {
     });
 
     await page.getByRole("button", { name: "Browse tags" }).click();
-    await expect(page.getByRole("button", { name: "First" })).toBeVisible();
+    await expect(page.getByRole("treeitem", { name: "First" })).toBeVisible();
     await page.getByRole("button", { name: "Load more" }).click();
-    await page.getByRole("button", { name: "Unit1.LIC101" }).dblclick();
+    await page.getByRole("treeitem", { name: "Unit1.LIC101" }).dblclick();
     await expect(page.getByText(`Selected: ${selectedItemId}`)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Collapse" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "SV" })).toBeVisible();
+    await expect(
+      page.getByRole("treeitem", { name: "Unit1.LIC101" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("treeitem", { name: "SV" })).toBeVisible();
     await page.getByRole("button", { name: "Select tag" }).click();
 
     await expect(page.getByLabel("Tag name")).toHaveValue(selectedItemId);
@@ -203,11 +247,10 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const originalTag = "Simulink.Device1._System._DemandPoll";
     const readTags: string[] = [];
     await page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox")
+      .getByRole("combobox", { name: "Template" })
       .selectOption("Yokogawa CentumVP");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
+    await page.getByLabel("Tag name").fill("Sim.Loop1.PV");
 
     await page.route("**/api/opc/read**", async (route) => {
       const url = new URL(route.request().url());
@@ -239,10 +282,14 @@ test.describe(OPC_BROWSER_SUITE, () => {
 
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(
-      page.getByRole("button", { name: "Simulink.Device1._System" }),
+      page.getByRole("treeitem", { name: "Simulink.Device1._System" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Expand" }).click();
-    await page.getByRole("button", { name: originalTag }).click();
+    const systemNode = page.getByRole("treeitem", {
+      name: "Simulink.Device1._System",
+    });
+    await systemNode.focus();
+    await page.keyboard.press("ArrowRight");
+    await page.getByRole("treeitem", { name: originalTag }).click();
     await page.getByRole("button", { name: "Select tag" }).click();
 
     await expect(

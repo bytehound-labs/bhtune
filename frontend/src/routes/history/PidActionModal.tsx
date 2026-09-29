@@ -100,7 +100,7 @@ export function PidActionModal({
               <p className="font-semibold text-amber-200">
                 This action changes a live controller.
               </p>
-              <p className="mt-1 text-amber-100/80">
+              <p className="mt-1 text-amber-200">
                 Review every destination tag and value before continuing. BHTune
                 reads each value back and records the result.
               </p>

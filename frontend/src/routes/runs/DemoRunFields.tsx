@@ -18,9 +18,14 @@ export function DemoRunFields({
   onChange,
   onProcessTypeChange,
   simulatorCapabilities,
+  fieldError,
 }: Pick<
   NewRunSectionProps,
-  "form" | "onChange" | "onProcessTypeChange" | "simulatorCapabilities"
+  | "form"
+  | "onChange"
+  | "onProcessTypeChange"
+  | "simulatorCapabilities"
+  | "fieldError"
 >) {
   if (!simulatorCapabilities) return null;
   const processTypes = simulatorCapabilities.process_types;
@@ -42,23 +47,21 @@ export function DemoRunFields({
         defaultOpen
         documentationId="new-tune.demo-settings"
       >
-        <div>
-          <SelectField
-            label="Template"
-            value={form.template}
-            onChange={(value) => onChange("template", value)}
-            options={simulatorCapabilities.templates}
-          />
-          <span className="mt-1 block text-xs text-slate-500">
-            {templateHint("simulator")}
-          </span>
-        </div>
+        <SelectField
+          label="Template"
+          value={form.template}
+          onChange={(value) => onChange("template", value)}
+          options={simulatorCapabilities.templates}
+          hint={templateHint("simulator")}
+          error={fieldError("template")}
+        />
         <SelectField
           label="Process type"
           value={processType ?? ""}
           onChange={onProcessTypeChange}
           options={processTypes}
           displayLabel={(value) => PROCESS_TYPE_LABELS[value]}
+          error={fieldError("processType")}
         />
         <SelectField
           label="Controller type"
@@ -66,6 +69,7 @@ export function DemoRunFields({
           onChange={(value) => onChange("controllerType", value)}
           options={controllerTypes}
           displayLabel={(value) => CONTROLLER_TYPE_LABELS[value]}
+          error={fieldError("controllerType")}
         />
         <NumberField
           label="Relay amplitude (%)"
@@ -76,6 +80,7 @@ export function DemoRunFields({
           step={0.1}
           required
           hint={`Allowed range: ${simulatorCapabilities.limits.relay_amp.min}–${simulatorCapabilities.limits.relay_amp.max}%.`}
+          error={fieldError("relayAmp")}
         />
         <NumberField
           label="Cycles to skip"
@@ -85,6 +90,7 @@ export function DemoRunFields({
           max={simulatorCapabilities.limits.cycles_skip.max}
           step={1}
           required
+          error={fieldError("cyclesSkip")}
         />
         <NumberField
           label="Cycles to count"
@@ -95,6 +101,7 @@ export function DemoRunFields({
           step={1}
           required
           hint={`Demo limit: ${simulatorCapabilities.limits.cycles_count.max} cycles per run.`}
+          error={fieldError("cyclesCount")}
         />
         <NumberField
           label="Noise protection (s)"
@@ -104,6 +111,7 @@ export function DemoRunFields({
           max={simulatorCapabilities.limits.noise_protection_secs.max}
           step={1}
           required
+          error={fieldError("noiseProtectionSecs")}
         />
         <p className="text-sm text-slate-400 sm:col-span-2">
           The server fixes the tag identity. It uses{" "}
@@ -116,6 +124,7 @@ export function DemoRunFields({
         form={form}
         onChange={onChange}
         simulatorCapabilities={simulatorCapabilities}
+        fieldError={fieldError}
       />
       <SimulatorModelSection
         form={form}

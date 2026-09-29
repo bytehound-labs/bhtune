@@ -4,6 +4,8 @@ import {
   DEFAULT_VALUE_MAPPING_SOURCES,
   type ControllerDirection,
   type NumOrBlank,
+  type TagOverrideKey,
+  type ValueMappingKey,
   type ValueMappingSource,
   type ValueMappingSources,
 } from "./mappingState";
@@ -24,6 +26,88 @@ import {
   type TagOverrides,
   type TuneDriver,
 } from "./newRunFormState";
+
+export type ValidationFieldKey =
+  | keyof FormState
+  | `tagOverrides.${TagOverrideKey}`
+  | `valueTagOverrides.${ValueMappingKey}`;
+
+const OPC_VALUE_FORM_FIELDS: Record<ValueMappingKey, ValidationFieldKey> = {
+  direction: "opcDirection",
+  pvRangeHigh: "opcPvRangeHigh",
+  pvRangeLow: "opcPvRangeLow",
+  mvRangeHigh: "opcMvRangeHigh",
+  mvRangeLow: "opcMvRangeLow",
+};
+
+const SIMULATOR_VALUE_FORM_FIELDS: Record<ValueMappingKey, ValidationFieldKey> =
+  {
+    direction: "simDirection",
+    pvRangeHigh: "simPvRangeHigh",
+    pvRangeLow: "simPvRangeLow",
+    mvRangeHigh: "simMvRangeHigh",
+    mvRangeLow: "simMvRangeLow",
+  };
+
+function valueValidationField(
+  form: FormState,
+  key: ValueMappingKey,
+): ValidationFieldKey {
+  if (form.driver === "simulator") return SIMULATOR_VALUE_FORM_FIELDS[key];
+  if (form.valueSources[key] === "custom") {
+    return `valueTagOverrides.${key}`;
+  }
+  return OPC_VALUE_FORM_FIELDS[key];
+}
+
+/** Maps client validation feedback to the form control that can resolve it. */
+export function validationFieldForError(
+  form: FormState,
+  message: string,
+): ValidationFieldKey | undefined {
+  if (
+    message === "Choose a template." ||
+    message.startsWith("Choose a template supported")
+  ) {
+    return "template";
+  }
+  if (message.startsWith("Tag name is required.")) return "tagname";
+  if (message.startsWith("OPC DA server ProgID")) return "server";
+  if (message.startsWith("Relay amplitude")) return "relayAmp";
+  if (message.startsWith("Cycles to skip")) return "cyclesSkip";
+  if (message.startsWith("Cycles to count")) return "cyclesCount";
+  if (message.startsWith("Noise protection")) return "noiseProtectionSecs";
+  if (message.startsWith("Process gain")) return "simGain";
+  if (message.startsWith("Time constant")) return "simTau";
+  if (message.startsWith("Dead time")) return "simDeadTime";
+  if (message.startsWith("RNG seed")) return "simSeed";
+  if (message.startsWith("Choose a process type")) return "processType";
+  if (message.startsWith("Choose a controller type")) {
+    return "controllerType";
+  }
+  if (message.startsWith("Enable Allow automatic PID write")) return "yes";
+  if (message.startsWith("Initial PV")) return "simInitialPv";
+  if (message.startsWith("Initial MV")) return "simInitialMv";
+  if (message.startsWith("Measurement noise")) return "simNoise";
+  if (message.startsWith("PV range span")) return "simPvRangeHigh";
+  if (message.startsWith("MV range span")) return "simMvRangeHigh";
+  if (message.startsWith("Controller direction")) {
+    return valueValidationField(form, "direction");
+  }
+  if (message.startsWith("PV range high")) {
+    return valueValidationField(form, "pvRangeHigh");
+  }
+  if (message.startsWith("PV range low")) {
+    return valueValidationField(form, "pvRangeLow");
+  }
+  if (message.startsWith("MV range high")) {
+    return valueValidationField(form, "mvRangeHigh");
+  }
+  if (message.startsWith("MV range low")) {
+    return valueValidationField(form, "mvRangeLow");
+  }
+  return undefined;
+}
 
 function inferRequestValueSources(
   request: StartRunRequest,
@@ -267,7 +351,7 @@ function validateForm(form: FormState): string | undefined {
       ? validateSimulatorMappings(form)
       : validateOpcMappings(form);
   if (mappingError) return mappingError;
-  if (form.writePid && !form.yes) {
+  if (form.driver === "opcda" && form.writePid && !form.yes) {
     return "Enable Allow automatic PID write to apply PID settings without a prompt, or clear the automatic PID setting.";
   }
   return undefined;

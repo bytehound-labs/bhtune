@@ -1,5 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { RunDetailResponse } from "../src/api/runs";
+import {
+  expectAccessibilityInBothThemes,
+  expectNoAccessibilityViolations,
+  setTheme,
+} from "./support/accessibility";
 
 const RUN_ID = 4242;
 
@@ -234,6 +239,21 @@ test.describe("post-tune PID actions", () => {
     });
 
     await openRun(page);
+    await expect(
+      page.locator('[role="status"][aria-live="polite"][aria-atomic="true"]'),
+    ).toHaveText("Tune completed.");
+    const chart = page.getByRole("img", {
+      name: "Process-variable and manipulated-variable trend chart",
+    });
+    const chartCaption = page
+      .locator("figure")
+      .filter({ has: chart })
+      .locator("figcaption");
+    await expect(chart).toHaveAttribute("aria-describedby");
+    await expect(chartCaption).toContainText("plotted points from");
+    await expect(chartCaption).toContainText("PV ranged from");
+    await expect(chartCaption).toContainText("MV ranged from");
+    await expectAccessibilityInBothThemes(page);
 
     const headings = await page.locator("h2").allTextContents();
     expect(headings.indexOf("Calculated results")).toBe(0);
@@ -275,12 +295,15 @@ test.describe("post-tune PID actions", () => {
     await detailSection(page, "Summary").locator("summary").click();
     await expect(detailSection(page, "Summary")).toHaveAttribute("open", "");
 
-    await resultsSection(page)
+    const reviewTrigger = resultsSection(page)
       .getByRole("button", { name: "Review & write" })
-      .first()
-      .click();
+      .first();
+    await reviewTrigger.click();
 
     const modal = page.getByRole("dialog");
+    const close = modal.getByRole("button", { name: "Close" });
+    const cancel = modal.getByRole("button", { name: "Cancel" });
+    const confirm = modal.getByRole("button", { name: "Write PID settings" });
     await expect(
       modal.getByRole("heading", { name: "Review PID settings" }),
     ).toBeVisible();
@@ -293,11 +316,27 @@ test.describe("post-tune PID actions", () => {
     await expect(modal).toContainText("20.5");
     await expect(modal).toContainText("1.2");
     await expect(modal).toContainText("This action changes a live controller.");
-    await expect(modal.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await expect(cancel).toBeFocused();
+    await expectNoAccessibilityViolations(page);
+    await modal.evaluate((element) => {
+      (element as HTMLDialogElement).focus();
+    });
+    await page.keyboard.press("Tab");
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(confirm).toBeFocused();
 
-    await modal.getByRole("button", { name: "Cancel" }).click();
+    await cancel.click();
     await expect(page.getByRole("dialog")).not.toBeVisible();
+    await expect(reviewTrigger).toBeFocused();
     expect(writeRequestCount).toBe(0);
+
+    await setTheme(page, "dark");
+    await reviewTrigger.click();
+    await expect(modal).toBeVisible();
+    await expectNoAccessibilityViolations(page);
+    await cancel.click();
+    await expect(reviewTrigger).toBeFocused();
   });
 
   test("keeps no-result panels in the lower layout position", async ({

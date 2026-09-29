@@ -116,12 +116,12 @@ test("full-opc-tag-browser", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: /Browse tags on/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Area01", exact: true }).click();
+  await page.getByRole("treeitem", { name: "Area01", exact: true }).click();
   await page
-    .getByRole("button", { name: "Area01.FIC101", exact: true })
+    .getByRole("treeitem", { name: "Area01.FIC101", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Area01.FIC101.OUT", exact: true })
+    .getByRole("treeitem", { name: "Area01.FIC101.OUT", exact: true })
     .click();
   await page.getByRole("button", { name: "Read selected tag" }).click();
   await expect(page.getByText("Good", { exact: true })).toBeVisible();
@@ -131,12 +131,12 @@ test("full-opc-tag-browser", async ({ page }) => {
 test("full-opc-tag-applied", async ({ page }) => {
   await openOpcTune(page);
   await page.getByRole("button", { name: "Browse tags" }).click();
-  await page.getByRole("button", { name: "Area01", exact: true }).click();
+  await page.getByRole("treeitem", { name: "Area01", exact: true }).click();
   await page
-    .getByRole("button", { name: "Area01.FIC101", exact: true })
+    .getByRole("treeitem", { name: "Area01.FIC101", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Area01.FIC101.OUT", exact: true })
+    .getByRole("treeitem", { name: "Area01.FIC101.OUT", exact: true })
     .click();
   await page.getByRole("button", { name: "Select tag" }).click();
   await expect(page.getByLabel("Tag name")).toHaveValue("Area01.FIC101.PV");
@@ -180,11 +180,7 @@ test("full-opc-search-index-delete-confirmation", async ({ page }) => {
     }),
   ).toBeVisible();
   await expect(dialog).toBeVisible();
-  await expect(
-    page
-      .locator('[data-doc-section="new-tune.opc-tag-browser"]')
-      .getByRole("button", { name: "Delete index", exact: true }),
-  ).toHaveCount(1);
+  await expect(confirm).toBeEnabled();
   expect(deleteCount()).toBe(1);
   await captureScenario(page, "full-opc-search-index-delete-confirmation");
 

@@ -19,7 +19,7 @@ export function handleTreeNodeDoubleClick(
 
 export function scrollSelectedNodeIntoView(
   viewport: HTMLDivElement | null,
-  selectedNode: HTMLButtonElement | null,
+  selectedNode: HTMLElement | null,
 ): boolean {
   if (!viewport || !selectedNode) return false;
 
