@@ -515,6 +515,14 @@ authentication and should only be exposed on a trusted network. If no explicit o
 configured, Full mode compares the browser origin with the API request's `Host`; set
 `BHTUNE_ORIGIN` when a proxy presents a different external origin.
 
+### Frontend unit tests
+
+Frontend helper and component tests run with Vitest in a jsdom environment:
+
+```sh
+pnpm --filter bhtune-frontend run test
+```
+
 ### Browser end-to-end tests
 
 The Playwright suite has separate Full and Demo projects. After building the server and
