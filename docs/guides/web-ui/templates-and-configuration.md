@@ -57,8 +57,8 @@ definitions cause them to return on the next startup if a source-backed row is r
 
 {/* web-ui-screenshot: full-template-delete-confirmation */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=1760c25cdd8e">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=1760c25cdd8e" alt="BHTune failed user-template deletion confirmation with an inline retry error" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=2a9498f08f26">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=2a9498f08f26" alt="BHTune failed user-template deletion confirmation with an inline retry error" />
   </a>
   <figcaption>A failed user-template deletion keeps the row and confirmation dialog intact until the retry succeeds.</figcaption>
 </figure>

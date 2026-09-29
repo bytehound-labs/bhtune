@@ -208,6 +208,7 @@ test("full-history", async ({ page }) => {
   await page.goto("/runs");
   await settle(page);
   await expect(page.getByRole("heading", { name: "History" })).toBeVisible();
+  await expect(page.getByRole("row")).toHaveCount(3);
   await captureScenario(page, "full-history");
 });
 
@@ -320,6 +321,9 @@ for (const scenario of templateScenarios) {
     await expect(
       page.getByRole("heading", { name: scenario.heading, exact: true }),
     ).toBeVisible();
+    if (scenario.id === "full-template-list") {
+      await expect(page.getByRole("row")).toHaveCount(5);
+    }
     await captureScenario(page, scenario.id);
   });
 }

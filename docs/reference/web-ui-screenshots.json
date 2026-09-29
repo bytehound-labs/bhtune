@@ -348,10 +348,10 @@
       "documentation": [
         "docs/guides/web-ui/templates-and-configuration.md"
       ],
-      "sha256": "1760c25cdd8e1eba8d82a604a8e347922aa69826ba1a03ec80e655ebbf10cad1",
+      "sha256": "2a9498f08f26540a19c2f28b3c0f02d27d83ed1239d27f174b3ce251a03475bb",
       "width": 1440,
       "height": 514,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=1760c25cdd8e"
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-delete-confirmation.png?v=2a9498f08f26"
     },
     {
       "id": "full-config",
