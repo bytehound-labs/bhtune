@@ -22,6 +22,7 @@
     "uplot": "^1.6.32"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query-devtools": "^5.101.4",

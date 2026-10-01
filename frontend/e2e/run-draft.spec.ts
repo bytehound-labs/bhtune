@@ -236,7 +236,9 @@ test.describe("New Tune draft persistence", () => {
     await page.getByRole("button", { name: "Start tune", exact: true }).click();
 
     await expect(
-      page.getByText("Cycles to count is required.", { exact: true }),
+      page.getByRole("alert").filter({
+        hasText: "Cycles to count is required.",
+      }),
     ).toBeVisible();
   });
 

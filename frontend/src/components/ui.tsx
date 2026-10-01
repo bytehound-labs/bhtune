@@ -6,12 +6,46 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+
+const modalStack: HTMLDialogElement[] = [];
+const modalStackListeners = new Set<() => void>();
+
+function syncModalStack() {
+  const topmostModal = modalStack.at(-1);
+  for (const dialog of modalStack) {
+    const isTopmost = dialog === topmostModal;
+    dialog.inert = !isTopmost;
+    if (isTopmost) {
+      dialog.removeAttribute("aria-hidden");
+      dialog.setAttribute("aria-modal", "true");
+    } else {
+      dialog.setAttribute("aria-hidden", "true");
+      dialog.removeAttribute("aria-modal");
+    }
+  }
+  for (const listener of modalStackListeners) listener();
+}
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+  ).filter(
+    (element) =>
+      element.tabIndex >= 0 &&
+      !element.closest('[aria-hidden="true"], [inert], [hidden]') &&
+      element.getClientRects().length > 0,
+  );
+}
 
 export function PageHeading({
   title,
@@ -108,6 +142,7 @@ export function LoadingOverlay({
     <div className={`relative ${className}`} aria-busy={active || undefined}>
       <div
         aria-hidden={active || undefined}
+        inert={active}
         className={active ? "pointer-events-none select-none" : undefined}
       >
         {children}
@@ -150,7 +185,7 @@ export function Button({
       aria-busy={loading || undefined}
       title={title}
       ref={buttonRef}
-      className={`rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${buttonVariants[variant]}`}
+      className={`rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-100 ${buttonVariants[variant]}`}
     >
       <span className="inline-flex items-center gap-2">
         {loading && <Spinner size="sm" />}
@@ -330,7 +365,7 @@ export function Field({
 }
 
 const fieldControlClass =
-  "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-600 focus:border-slate-500 focus:outline-none";
+  "mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-slate-500 focus:outline-none";
 
 /** A labeled `<input>` inside a form section, mirroring `<Field>`'s read-only counterpart. */
 export function TextField({
@@ -342,6 +377,7 @@ export function TextField({
   full = false,
   hint,
   disabled = false,
+  error,
 }: {
   readonly label: string;
   readonly value: string;
@@ -351,25 +387,76 @@ export function TextField({
   readonly full?: boolean;
   readonly hint?: string;
   readonly disabled?: boolean;
+  readonly error?: string;
 }) {
+  const id = useId();
+  const visibleError = disabled ? undefined : error;
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = visibleError ? `${id}-error` : undefined;
   return (
-    <label className={`block ${full ? "sm:col-span-2" : ""}`}>
-      <span className="text-xs uppercase tracking-wide text-slate-500">
+    <div className={`block ${full ? "sm:col-span-2" : ""}`}>
+      <label
+        htmlFor={id}
+        className="text-xs uppercase tracking-wide text-slate-500"
+      >
         {label}
-        {required && <span className="ml-1 text-red-400">*</span>}
-      </span>
+        {required && (
+          <span aria-hidden="true" className="ml-1 text-red-400">
+            *
+          </span>
+        )}
+      </label>
       <input
+        id={id}
         type="text"
         value={value}
         placeholder={placeholder}
+        required={required && !disabled}
         disabled={disabled}
+        aria-invalid={visibleError ? true : undefined}
+        aria-describedby={
+          [hintId, errorId].filter(Boolean).join(" ") || undefined
+        }
         onChange={(e) => onChange(e.target.value)}
-        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:opacity-50`}
+        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:bg-slate-800/50`}
       />
+      <FieldFeedback
+        hint={hint}
+        hintId={hintId}
+        error={visibleError}
+        errorId={errorId}
+      />
+    </div>
+  );
+}
+
+function FieldFeedback({
+  hint,
+  hintId,
+  error,
+  errorId,
+  className = "",
+}: {
+  readonly hint?: string;
+  readonly hintId?: string;
+  readonly error?: string;
+  readonly errorId?: string;
+  readonly className?: string;
+}) {
+  if (!hint && !error) return null;
+  return (
+    <div className={`mt-1 space-y-1 ${className}`}>
       {hint && (
-        <span className="mt-1 block text-xs text-slate-500">{hint}</span>
+        <span id={hintId} className="block text-xs text-slate-500">
+          {hint}
+        </span>
       )}
-    </label>
+      {error && (
+        <span id={errorId} className="block text-xs text-red-300">
+          {error}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -382,6 +469,7 @@ export function TextAreaField({
   full = false,
   hint,
   rows = 4,
+  error,
 }: {
   readonly label: string;
   readonly value: string;
@@ -390,23 +478,38 @@ export function TextAreaField({
   readonly full?: boolean;
   readonly hint?: string;
   readonly rows?: number;
+  readonly error?: string;
 }) {
+  const id = useId();
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
   return (
-    <label className={`block ${full ? "sm:col-span-2" : ""}`}>
-      <span className="text-xs uppercase tracking-wide text-slate-500">
+    <div className={`block ${full ? "sm:col-span-2" : ""}`}>
+      <label
+        htmlFor={id}
+        className="text-xs uppercase tracking-wide text-slate-500"
+      >
         {label}
-      </span>
+      </label>
       <textarea
+        id={id}
         value={value}
         placeholder={placeholder}
         rows={rows}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={
+          [hintId, errorId].filter(Boolean).join(" ") || undefined
+        }
         onChange={(e) => onChange(e.target.value)}
         className={`${fieldControlClass} resize-y`}
       />
-      {hint && (
-        <span className="mt-1 block text-xs text-slate-500">{hint}</span>
-      )}
-    </label>
+      <FieldFeedback
+        hint={hint}
+        hintId={hintId}
+        error={error}
+        errorId={errorId}
+      />
+    </div>
   );
 }
 
@@ -428,6 +531,7 @@ export function NumberField({
   max,
   full = false,
   disabled = false,
+  error,
 }: {
   readonly label: string;
   readonly value: number | "";
@@ -440,31 +544,51 @@ export function NumberField({
   readonly max?: number;
   readonly full?: boolean;
   readonly disabled?: boolean;
+  readonly error?: string;
 }) {
+  const id = useId();
+  const visibleError = disabled ? undefined : error;
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = visibleError ? `${id}-error` : undefined;
   return (
-    <label className={`block ${full ? "sm:col-span-2" : ""}`}>
-      <span className="text-xs uppercase tracking-wide text-slate-500">
+    <div className={`block ${full ? "sm:col-span-2" : ""}`}>
+      <label
+        htmlFor={id}
+        className="text-xs uppercase tracking-wide text-slate-500"
+      >
         {label}
-        {required && <span className="ml-1 text-red-400">*</span>}
-      </span>
+        {required && (
+          <span aria-hidden="true" className="ml-1 text-red-400">
+            *
+          </span>
+        )}
+      </label>
       <input
+        id={id}
         type="number"
         value={value}
         placeholder={placeholder}
         step={step}
         min={min}
         max={max}
-        required={required}
+        required={required && !disabled}
         disabled={disabled}
+        aria-invalid={visibleError ? true : undefined}
+        aria-describedby={
+          [hintId, errorId].filter(Boolean).join(" ") || undefined
+        }
         onChange={(e) =>
           onChange(e.target.value === "" ? "" : e.target.valueAsNumber)
         }
-        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:opacity-50`}
+        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:bg-slate-800/50`}
       />
-      {hint && (
-        <span className="mt-1 block text-xs text-slate-500">{hint}</span>
-      )}
-    </label>
+      <FieldFeedback
+        hint={hint}
+        hintId={hintId}
+        error={visibleError}
+        errorId={errorId}
+      />
+    </div>
   );
 }
 
@@ -490,6 +614,7 @@ export function SelectField<
   hint,
   disabled = false,
   displayLabel,
+  error,
 }: {
   readonly label: string;
   readonly value: Value;
@@ -501,18 +626,36 @@ export function SelectField<
   readonly hint?: string;
   readonly disabled?: boolean;
   readonly displayLabel?: (value: Option) => string;
+  readonly error?: string;
 }) {
+  const id = useId();
+  const visibleError = disabled ? undefined : error;
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = visibleError ? `${id}-error` : undefined;
   return (
-    <label className={`block ${full ? "sm:col-span-2" : ""}`}>
-      <span className="text-xs uppercase tracking-wide text-slate-500">
+    <div className={`block ${full ? "sm:col-span-2" : ""}`}>
+      <label
+        htmlFor={id}
+        className="text-xs uppercase tracking-wide text-slate-500"
+      >
         {label}
-        {required && <span className="ml-1 text-red-400">*</span>}
-      </span>
+        {required && (
+          <span aria-hidden="true" className="ml-1 text-red-400">
+            *
+          </span>
+        )}
+      </label>
       <select
+        id={id}
         value={value}
         onChange={(e) => onChange(e.target.value as Value)}
+        required={required && !disabled}
         disabled={disabled}
-        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:opacity-50`}
+        aria-invalid={visibleError ? true : undefined}
+        aria-describedby={
+          [hintId, errorId].filter(Boolean).join(" ") || undefined
+        }
+        className={`${fieldControlClass} disabled:cursor-not-allowed disabled:bg-slate-800/50`}
       >
         {placeholder !== undefined && <option value="">{placeholder}</option>}
         {options.map((option) => (
@@ -521,10 +664,13 @@ export function SelectField<
           </option>
         ))}
       </select>
-      {hint && (
-        <span className="mt-1 block text-xs text-slate-500">{hint}</span>
-      )}
-    </label>
+      <FieldFeedback
+        hint={hint}
+        hintId={hintId}
+        error={visibleError}
+        errorId={errorId}
+      />
+    </div>
   );
 }
 
@@ -535,27 +681,49 @@ export function CheckboxField({
   onChange,
   hint,
   disabled = false,
+  error,
 }: {
   readonly label: string;
   readonly checked: boolean;
   readonly onChange: (checked: boolean) => void;
   readonly hint?: string;
   readonly disabled?: boolean;
+  readonly error?: string;
 }) {
+  const id = useId();
+  const visibleError = disabled ? undefined : error;
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = visibleError ? `${id}-error` : undefined;
   return (
-    <label className="flex items-start gap-2 pt-5">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        disabled={disabled}
-        className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+    <div className="pt-5">
+      <div className="flex items-start gap-2">
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          aria-invalid={visibleError ? true : undefined}
+          aria-describedby={
+            [hintId, errorId].filter(Boolean).join(" ") || undefined
+          }
+          onChange={(e) => onChange(e.target.checked)}
+          disabled={disabled}
+          className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-950 disabled:cursor-not-allowed disabled:bg-slate-800"
+        />
+        <label
+          htmlFor={id}
+          className={`text-sm ${disabled ? "text-slate-400" : "text-slate-200"}`}
+        >
+          {label}
+        </label>
+      </div>
+      <FieldFeedback
+        hint={hint}
+        hintId={hintId}
+        error={visibleError}
+        errorId={errorId}
+        className="ml-6"
       />
-      <span className={disabled ? "opacity-50" : undefined}>
-        <span className="block text-sm text-slate-200">{label}</span>
-        {hint && <span className="block text-xs text-slate-500">{hint}</span>}
-      </span>
-    </label>
+    </div>
   );
 }
 
@@ -618,6 +786,7 @@ export function Modal({
   widthClassName = "max-w-lg",
   dismissible = true,
   initialFocusRef,
+  restoreFocusRef,
   documentationId,
 }: {
   readonly title: string;
@@ -626,18 +795,14 @@ export function Modal({
   readonly widthClassName?: string;
   readonly dismissible?: boolean;
   readonly initialFocusRef?: RefObject<HTMLElement | null>;
+  readonly restoreFocusRef?: RefObject<HTMLElement | null>;
   readonly documentationId?: string;
 }) {
   const titleId = useId();
-
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (dismissible && event.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dismissible, onClose]);
-
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const onCloseRef = useRef(onClose);
+  const dismissibleRef = useRef(dismissible);
+  const [isTopmostModal, setIsTopmostModal] = useState(true);
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -646,9 +811,109 @@ export function Modal({
     };
   }, []);
 
-  useEffect(() => {
-    if (dismissible) initialFocusRef?.current?.focus();
-  }, [dismissible, initialFocusRef]);
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+    dismissibleRef.current = dismissible;
+  }, [onClose, dismissible]);
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const focusReturnTarget = restoreFocusRef?.current ?? previouslyFocused;
+    const updateTopmostState = () => {
+      setIsTopmostModal(modalStack.at(-1) === dialog);
+    };
+    modalStack.push(dialog);
+    modalStackListeners.add(updateTopmostState);
+    syncModalStack();
+
+    const focusable = focusableElements(dialog);
+    const preferredFocus = initialFocusRef?.current;
+    const target =
+      preferredFocus &&
+      dialog.contains(preferredFocus) &&
+      focusable.includes(preferredFocus)
+        ? preferredFocus
+        : (focusable[0] ?? dialog);
+    target.focus({ preventScroll: true });
+
+    function onFocusIn(event: FocusEvent) {
+      if (
+        modalStack.at(-1) !== dialog ||
+        !(event.target instanceof Node) ||
+        dialog.contains(event.target)
+      ) {
+        return;
+      }
+
+      const firstFocusable = focusableElements(dialog)[0];
+      (firstFocusable ?? dialog).focus({ preventScroll: true });
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (modalStack.at(-1) !== dialog) return;
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (dismissibleRef.current) onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const currentFocusableElements = focusableElements(dialog);
+      const first = currentFocusableElements[0];
+      if (!first) {
+        event.preventDefault();
+        dialog.focus({ preventScroll: true });
+        return;
+      }
+      const last = currentFocusableElements.at(-1);
+      const active = document.activeElement;
+      const activeIndex =
+        active instanceof HTMLElement
+          ? currentFocusableElements.indexOf(active)
+          : -1;
+      if (event.shiftKey && activeIndex <= 0) {
+        event.preventDefault();
+        last?.focus();
+      } else if (
+        !event.shiftKey &&
+        (activeIndex === -1 ||
+          activeIndex === currentFocusableElements.length - 1)
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("focusin", onFocusIn);
+    dialog.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      dialog.removeEventListener("keydown", onKeyDown);
+      modalStackListeners.delete(updateTopmostState);
+      const stackIndex = modalStack.lastIndexOf(dialog);
+      if (stackIndex >= 0) modalStack.splice(stackIndex, 1);
+      syncModalStack();
+
+      window.requestAnimationFrame(() => {
+        if (
+          dialog.isConnected ||
+          !focusReturnTarget?.isConnected ||
+          focusReturnTarget.closest('[aria-hidden="true"], [inert]') ||
+          focusReturnTarget.hasAttribute("disabled")
+        ) {
+          return;
+        }
+        focusReturnTarget.focus({ preventScroll: true });
+      });
+    };
+  }, [initialFocusRef, restoreFocusRef]);
 
   return createPortal(
     <div
@@ -660,11 +925,16 @@ export function Modal({
         aria-label="Dismiss modal backdrop"
         onClick={onClose}
         disabled={!dismissible}
+        tabIndex={-1}
         className="absolute inset-0 cursor-default disabled:cursor-not-allowed"
       />
       <dialog
+        ref={dialogRef}
         open
-        aria-modal="true"
+        tabIndex={-1}
+        aria-modal={isTopmostModal ? "true" : undefined}
+        aria-hidden={!isTopmostModal || undefined}
+        inert={!isTopmostModal}
         aria-labelledby={titleId}
         className={`relative z-10 max-h-[calc(100vh-2rem)] w-full ${widthClassName} overflow-hidden rounded-lg border border-slate-700 bg-slate-900 shadow-xl`}
       >
@@ -680,7 +950,7 @@ export function Modal({
             title={
               !dismissible ? "Finish the current operation first" : undefined
             }
-            className="text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+            className="text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed"
           >
             ✕
           </button>

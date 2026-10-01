@@ -17,9 +17,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   });
 
   test("orders the OPC DA connection fields before notes", async ({ page }) => {
-    const fieldOrder = await page
-      .locator("form label > span:first-child")
-      .allTextContents();
+    const fieldOrder = await page.locator("form label").allTextContents();
     const indexOfField = (fieldName: string) =>
       fieldOrder.findIndex((label) => label.trim().startsWith(fieldName));
 
@@ -35,10 +33,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   test("updates a PV tag suffix when the template changes", async ({
     page,
   }) => {
-    const templateField = page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox");
+    const templateField = page.getByRole("combobox", { name: "Template" });
     const tagField = page.getByLabel("Tag name");
 
     await templateField.selectOption("Allen-Bradley PlantPAx");
@@ -51,10 +46,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   test("replaces an incorrect existing suffix when the template changes", async ({
     page,
   }) => {
-    const templateField = page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox");
+    const templateField = page.getByRole("combobox", { name: "Template" });
     const tagField = page.getByLabel("Tag name");
 
     await templateField.selectOption("Yokogawa CentumVP");
@@ -80,10 +72,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   test("shows template defaults and applies a per-tune MV tag override", async ({
     page,
   }) => {
-    const templateField = page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox");
+    const templateField = page.getByRole("combobox", { name: "Template" });
     await templateField.selectOption("Yokogawa CentumVP");
     await page.getByLabel("Tag name").fill("Loop101.PV");
 
@@ -109,10 +98,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   test("resets custom mappings when the base tag changes but keeps fixed values", async ({
     page,
   }) => {
-    const templateField = page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox");
+    const templateField = page.getByRole("combobox", { name: "Template" });
     const mvRow = mappingRow(page, "Manipulated variable (MV)");
     const directionRow = mappingRow(page, "Controller direction");
     const pvHighRow = mappingRow(page, "PV range high");
@@ -173,10 +159,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   });
 
   test("resets one mapping row or all mapping overrides", async ({ page }) => {
-    const templateField = page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox");
+    const templateField = page.getByRole("combobox", { name: "Template" });
     await templateField.selectOption("Yokogawa CentumVP");
     await page.getByLabel("Tag name").fill("Loop101.PV");
 
@@ -222,10 +205,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   test("keeps fixed direction and ranges separate from simulator values", async ({
     page,
   }) => {
-    const templateField = page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox");
+    const templateField = page.getByRole("combobox", { name: "Template" });
     await templateField.selectOption("Yokogawa CentumVP");
 
     const directionRow = mappingRow(page, "Controller direction");
@@ -275,10 +255,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   test("submits custom read tags and fixed values as active OPC overrides", async ({
     page,
   }) => {
-    const templateField = page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox");
+    const templateField = page.getByRole("combobox", { name: "Template" });
     await templateField.selectOption("Yokogawa CentumVP");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.getByLabel("Tag name").fill("Loop101.PV");

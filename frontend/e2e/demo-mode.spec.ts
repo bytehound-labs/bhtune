@@ -566,8 +566,8 @@ test.describe("Demo mode contract", () => {
     await page.getByLabel("Process gain").fill("-1");
     await page.getByRole("button", { name: "Start tune" }).click();
     await expect(
-      page.getByText("Process gain must be between 0.1 and 5.", {
-        exact: true,
+      page.getByRole("alert").filter({
+        hasText: "Process gain must be between 0.1 and 5.",
       }),
     ).toBeVisible();
     expect(api.starts).toEqual([]);
@@ -1019,8 +1019,8 @@ test.describe("Demo mode contract", () => {
     await page.getByLabel("Cycles to count").fill("1.5");
     await page.getByRole("button", { name: "Start tune" }).click();
     await expect(
-      page.getByText("Cycles to count must be a whole number.", {
-        exact: true,
+      page.getByRole("alert").filter({
+        hasText: "Cycles to count must be a whole number.",
       }),
     ).toBeVisible();
 
@@ -1028,8 +1028,8 @@ test.describe("Demo mode contract", () => {
     await page.getByLabel("PV range high").fill("0.5");
     await page.getByRole("button", { name: "Start tune" }).click();
     await expect(
-      page.getByText("PV range span must be between 1 and 1000.", {
-        exact: true,
+      page.getByRole("alert").filter({
+        hasText: "PV range span must be between 1 and 1000.",
       }),
     ).toBeVisible();
 
@@ -1037,8 +1037,8 @@ test.describe("Demo mode contract", () => {
     await page.getByLabel("Process gain").fill("0");
     await page.getByRole("button", { name: "Start tune" }).click();
     await expect(
-      page.getByText("Process gain must be between 0.1 and 5.", {
-        exact: true,
+      page.getByRole("alert").filter({
+        hasText: "Process gain must be between 0.1 and 5.",
       }),
     ).toBeVisible();
     expect(api.starts).toEqual([]);

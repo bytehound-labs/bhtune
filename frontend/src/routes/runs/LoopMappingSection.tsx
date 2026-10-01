@@ -13,6 +13,7 @@ export function LoopMappingSection({
   onResetTag,
   onResetValue,
   onResetAll,
+  fieldError,
 }: Pick<
   NewRunSectionProps,
   | "form"
@@ -25,6 +26,7 @@ export function LoopMappingSection({
   | "onResetTag"
   | "onResetValue"
   | "onResetAll"
+  | "fieldError"
 >) {
   return (
     <FormSection
@@ -44,6 +46,7 @@ export function LoopMappingSection({
         onResetTag={onResetTag}
         onResetValue={onResetValue}
         onResetAll={onResetAll}
+        fieldError={fieldError}
       />
     </FormSection>
   );

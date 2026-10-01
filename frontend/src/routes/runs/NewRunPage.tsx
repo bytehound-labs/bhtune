@@ -36,7 +36,12 @@ import {
   scheduleDemoDraftSave,
   scheduleFullDraftSave,
 } from "./draftAutosave";
-import { buildRequest, normalizeSimulatorRequest } from "./formRequest";
+import {
+  buildRequest,
+  normalizeSimulatorRequest,
+  validationFieldForError,
+} from "./formRequest";
+import type { ValidationFieldKey } from "./formRequest";
 import {
   DEFAULT_TAG_MAPPING_SOURCES,
   DEFAULT_VALUE_MAPPING_SOURCES,
@@ -161,6 +166,11 @@ export function NewRunPage({
     JSON.stringify(demoDraftFromForm(resolvedInitialForm)),
   );
   const [validationError, setValidationError] = useState<string | null>(null);
+  const validationField = validationError
+    ? validationFieldForError(form, validationError)
+    : undefined;
+  const fieldError = (field: ValidationFieldKey) =>
+    validationField === field ? (validationError ?? undefined) : undefined;
   const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
   const draftSaveChainRef = useRef(Promise.resolve());
   const saveDraftAsync = saveRunDraft.mutateAsync;
@@ -523,13 +533,14 @@ export function NewRunPage({
         </div>
       )}
 
-      <form onSubmit={handleSubmit}>
+      <form noValidate onSubmit={handleSubmit}>
         {isDemo ? (
           <DemoRunFields
             form={form}
             onChange={set}
             onProcessTypeChange={setProcessType}
             simulatorCapabilities={capabilities.simulator ?? undefined}
+            fieldError={fieldError}
           />
         ) : (
           <>
@@ -542,12 +553,14 @@ export function NewRunPage({
               onDriverChange={setDriver}
               onTemplateChange={setTemplate}
               onOpenTagBrowser={() => setTagBrowserOpen(true)}
+              fieldError={fieldError}
             />
             <TestParameterFields
               form={form}
               onChange={set}
               onProcessTypeChange={setProcessType}
               onResetProcessDefaults={resetProcessDefaults}
+              fieldError={fieldError}
             />
             <LoopMappingSection
               form={form}
@@ -560,13 +573,19 @@ export function NewRunPage({
               onResetTag={resetTag}
               onResetValue={resetValue}
               onResetAll={resetMapping}
+              fieldError={fieldError}
             />
             <SimulatorParameterSection
               form={form}
               onChange={set}
               simulatorCapabilities={undefined}
+              fieldError={fieldError}
             />
-            <WriteBackFields form={form} onChange={set} />
+            <WriteBackFields
+              form={form}
+              onChange={set}
+              fieldError={fieldError}
+            />
             <SimulatorModelSection
               form={form}
               onChange={set}

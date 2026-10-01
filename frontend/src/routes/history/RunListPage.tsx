@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router";
 import { useRuns } from "../../api/runs";
 import type { RunListFilter } from "../../api/runs";
@@ -48,6 +48,9 @@ export function RunListPage({
   const [outcome, setOutcome] = useState("");
   const [driver, setDriver] = useState("");
   const [offset, setOffset] = useState(0);
+  const processTypeFilterId = useId();
+  const outcomeFilterId = useId();
+  const driverFilterId = useId();
 
   const filter: RunListFilter = {
     limit: PAGE_SIZE,
@@ -86,46 +89,64 @@ export function RunListPage({
 
       <div className="mb-4 flex flex-wrap gap-3">
         {!isDemo && (
-          <select
-            value={processType}
-            onChange={(e) => resetPageAnd(setProcessType)(e.target.value)}
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
-          >
-            <option value="">All process types</option>
-            {PROCESS_TYPES.map((p) => (
-              <option key={p} value={p}>
-                {PROCESS_TYPE_LABELS[p]}
-              </option>
-            ))}
-          </select>
+          <>
+            <label className="sr-only" htmlFor={processTypeFilterId}>
+              Filter by process type
+            </label>
+            <select
+              id={processTypeFilterId}
+              value={processType}
+              onChange={(e) => resetPageAnd(setProcessType)(e.target.value)}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
+            >
+              <option value="">All process types</option>
+              {PROCESS_TYPES.map((p) => (
+                <option key={p} value={p}>
+                  {PROCESS_TYPE_LABELS[p]}
+                </option>
+              ))}
+            </select>
+          </>
         )}
         {!isDemo && (
-          <select
-            value={outcome}
-            onChange={(e) => resetPageAnd(setOutcome)(e.target.value)}
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
-          >
-            <option value="">All outcomes</option>
-            {OUTCOMES.map((o) => (
-              <option key={o} value={o}>
-                {OUTCOME_LABELS[o]}
-              </option>
-            ))}
-          </select>
+          <>
+            <label className="sr-only" htmlFor={outcomeFilterId}>
+              Filter by outcome
+            </label>
+            <select
+              id={outcomeFilterId}
+              value={outcome}
+              onChange={(e) => resetPageAnd(setOutcome)(e.target.value)}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
+            >
+              <option value="">All outcomes</option>
+              {OUTCOMES.map((o) => (
+                <option key={o} value={o}>
+                  {OUTCOME_LABELS[o]}
+                </option>
+              ))}
+            </select>
+          </>
         )}
         {!isDemo && (
-          <select
-            value={driver}
-            onChange={(e) => resetPageAnd(setDriver)(e.target.value)}
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
-          >
-            <option value="">All drivers</option>
-            {DRIVERS.map((b) => (
-              <option key={b} value={b}>
-                {DRIVER_LABELS[b]}
-              </option>
-            ))}
-          </select>
+          <>
+            <label className="sr-only" htmlFor={driverFilterId}>
+              Filter by driver
+            </label>
+            <select
+              id={driverFilterId}
+              value={driver}
+              onChange={(e) => resetPageAnd(setDriver)(e.target.value)}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
+            >
+              <option value="">All drivers</option>
+              {DRIVERS.map((b) => (
+                <option key={b} value={b}>
+                  {DRIVER_LABELS[b]}
+                </option>
+              ))}
+            </select>
+          </>
         )}
       </div>
 

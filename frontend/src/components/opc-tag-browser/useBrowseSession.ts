@@ -46,7 +46,7 @@ export function useBrowseSession({
   clearCache: ReturnType<typeof useOpcBrowseFetcher>["clearCache"];
   closeBrowseSession: ReturnType<typeof useCloseOpcBrowseSession>;
   setExpanded: Dispatch<SetStateAction<Set<string>>>;
-  setSelectedNode: Dispatch<SetStateAction<SelectedNode | null>>;
+  setSelectedNode: (node: SelectedNode | null) => void;
 }) {
   const [scopeState, setScopeState] = useState<Record<string, ScopeState>>({});
   const scopeStateRef = useRef(scopeState);

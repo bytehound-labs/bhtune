@@ -4,6 +4,8 @@ import {
   DEFAULT_VALUE_MAPPING_SOURCES,
   type ControllerDirection,
   type NumOrBlank,
+  type TagOverrideKey,
+  type ValueMappingKey,
   type ValueMappingSource,
   type ValueMappingSources,
 } from "./mappingState";
@@ -24,6 +26,97 @@ import {
   type TagOverrides,
   type TuneDriver,
 } from "./newRunFormState";
+
+export type ValidationFieldKey =
+  | keyof FormState
+  | `tagOverrides.${TagOverrideKey}`
+  | `valueTagOverrides.${ValueMappingKey}`;
+
+const OPC_VALUE_FORM_FIELDS: Record<ValueMappingKey, ValidationFieldKey> = {
+  direction: "opcDirection",
+  pvRangeHigh: "opcPvRangeHigh",
+  pvRangeLow: "opcPvRangeLow",
+  mvRangeHigh: "opcMvRangeHigh",
+  mvRangeLow: "opcMvRangeLow",
+};
+
+const SIMULATOR_VALUE_FORM_FIELDS: Record<ValueMappingKey, ValidationFieldKey> =
+  {
+    direction: "simDirection",
+    pvRangeHigh: "simPvRangeHigh",
+    pvRangeLow: "simPvRangeLow",
+    mvRangeHigh: "simMvRangeHigh",
+    mvRangeLow: "simMvRangeLow",
+  };
+
+function valueValidationField(
+  form: FormState,
+  key: ValueMappingKey,
+): ValidationFieldKey {
+  if (form.driver === "simulator") return SIMULATOR_VALUE_FORM_FIELDS[key];
+  if (form.valueSources[key] === "custom") {
+    return `valueTagOverrides.${key}`;
+  }
+  return OPC_VALUE_FORM_FIELDS[key];
+}
+
+const STATIC_VALIDATION_FIELD_PREFIXES: readonly (readonly [
+  string,
+  ValidationFieldKey,
+])[] = [
+  ["Tag name is required.", "tagname"],
+  ["OPC DA server ProgID", "server"],
+  ["Relay amplitude", "relayAmp"],
+  ["Cycles to skip", "cyclesSkip"],
+  ["Cycles to count", "cyclesCount"],
+  ["Noise protection", "noiseProtectionSecs"],
+  ["Process gain", "simGain"],
+  ["Time constant", "simTau"],
+  ["Dead time", "simDeadTime"],
+  ["RNG seed", "simSeed"],
+  ["Choose a process type", "processType"],
+  ["Choose a controller type", "controllerType"],
+  ["Enable Allow automatic PID write", "yes"],
+  ["Initial PV", "simInitialPv"],
+  ["Initial MV", "simInitialMv"],
+  ["Measurement noise", "simNoise"],
+  ["PV range span", "simPvRangeHigh"],
+  ["MV range span", "simMvRangeHigh"],
+];
+
+const VALUE_VALIDATION_PREFIXES: readonly (readonly [
+  string,
+  ValueMappingKey,
+])[] = [
+  ["Controller direction", "direction"],
+  ["PV range high", "pvRangeHigh"],
+  ["PV range low", "pvRangeLow"],
+  ["MV range high", "mvRangeHigh"],
+  ["MV range low", "mvRangeLow"],
+];
+
+/** Maps client validation feedback to the form control that can resolve it. */
+export function validationFieldForError(
+  form: FormState,
+  message: string,
+): ValidationFieldKey | undefined {
+  if (
+    message === "Choose a template." ||
+    message.startsWith("Choose a template supported")
+  ) {
+    return "template";
+  }
+
+  const staticField = STATIC_VALIDATION_FIELD_PREFIXES.find(([prefix]) =>
+    message.startsWith(prefix),
+  );
+  if (staticField) return staticField[1];
+
+  const valueMapping = VALUE_VALIDATION_PREFIXES.find(([prefix]) =>
+    message.startsWith(prefix),
+  );
+  return valueMapping ? valueValidationField(form, valueMapping[1]) : undefined;
+}
 
 function inferRequestValueSources(
   request: StartRunRequest,
@@ -267,7 +360,7 @@ function validateForm(form: FormState): string | undefined {
       ? validateSimulatorMappings(form)
       : validateOpcMappings(form);
   if (mappingError) return mappingError;
-  if (form.writePid && !form.yes) {
+  if (form.driver === "opcda" && form.writePid && !form.yes) {
     return "Enable Allow automatic PID write to apply PID settings without a prompt, or clear the automatic PID setting.";
   }
   return undefined;

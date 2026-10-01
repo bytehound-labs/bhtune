@@ -148,6 +148,9 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const selectedItemId = "FCS0202!204FI00510.PV";
     const readTags: string[] = [];
 
+    await page
+      .getByRole("combobox", { name: "Template" })
+      .selectOption("Allen-Bradley PlantPAx");
     await page.getByLabel("Tag name").fill("");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.route("**/api/opc/browse**", async (route) => {
@@ -258,6 +261,9 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const selectedItemId = "FCS0202!204FI00510.PV";
     const readTags: string[] = [];
 
+    await page
+      .getByRole("combobox", { name: "Template" })
+      .selectOption("Allen-Bradley PlantPAx");
     await page.getByLabel("Tag name").fill("");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.route("**/api/opc/browse**", async (route) => {
@@ -553,24 +559,24 @@ test.describe(OPC_BROWSER_SUITE, () => {
     });
 
     await page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox")
+      .getByRole("combobox", { name: "Template" })
       .selectOption("Yokogawa CentumVP");
     await page.getByLabel("Tag name").fill("");
     await page.getByLabel("OPC DA server ProgID").fill("Yokogawa.CSHIS_OPC.1");
     await page.getByRole("button", { name: "Browse tags" }).click();
 
     await expect(page.getByLabel("Search OPC tags")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "FCS0201" })).toBeVisible();
-    await page.getByRole("button", { name: "Expand" }).click();
+    const rootNode = page.getByRole("treeitem", { name: "FCS0201" });
+    await expect(rootNode).toBeVisible();
+    await rootNode.focus();
+    await page.keyboard.press("ArrowRight");
     await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
     await page.getByRole("button", { name: "Retry" }).click();
     await expect(
-      page.getByRole("button", { name: selectedItemId }),
+      page.getByRole("treeitem", { name: selectedItemId }),
     ).toBeVisible();
 
-    await page.getByRole("button", { name: selectedItemId }).click();
+    await page.getByRole("treeitem", { name: selectedItemId }).click();
     await page.getByRole("button", { name: "Select tag" }).click();
     await expect(page.getByLabel("Tag name")).toHaveValue(selectedItemId);
     expect(indexedSearchRequests).toBe(0);

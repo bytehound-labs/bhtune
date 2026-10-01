@@ -28,6 +28,14 @@ source-build instructions and current distribution status.
 1. Run a plant-free simulated tune with `bhtune simulate` using the [CLI quickstart](docs/getting-started/cli-quickstart.md).
 2. Start `bhtune-server` and open the simulator workflow in your browser using the [Web GUI quickstart](docs/getting-started/web-gui-quickstart.md).
 
+## Web UI accessibility
+
+The browser UI associates form labels, hints, and validation errors with their controls.
+Dialogs keep keyboard focus inside until they close, and the OPC tag tree supports keyboard
+navigation. Run status changes are announced politely, and PV/MV charts expose their plot as
+a figure with a text summary of the time span and observed ranges. See the
+[Web UI guide](docs/guides/web-ui/overview.md).
+
 ## Safety
 
 A live MRFT can switch a loop to Manual and stroke its valve. Read the

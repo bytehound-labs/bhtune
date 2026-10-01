@@ -24,9 +24,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   }) => {
     const originalTag = "Simulink._Statistics.Inp_PV";
     await page
-      .locator("label")
-      .filter({ hasText: /^Template/ })
-      .getByRole("combobox")
+      .getByRole("combobox", { name: "Template" })
       .selectOption("Allen-Bradley PlantPAx");
     await page
       .getByLabel("OPC DA server ProgID")
@@ -86,26 +84,32 @@ test.describe(OPC_BROWSER_SUITE, () => {
     });
 
     await page.getByRole("button", { name: "Browse tags" }).click();
-    await expect(page.getByRole("button", { name: originalTag })).toBeVisible();
+    await expect(
+      page.getByRole("treeitem", { name: originalTag }),
+    ).toBeVisible();
     await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
     const treeViewport = page.getByTestId("opc-tag-tree-viewport");
     await expectTreeNodeVisible(
-      page.getByRole("button", { name: originalTag, exact: true }),
+      page.getByRole("treeitem", { name: originalTag, exact: true }),
       treeViewport,
     );
-    await page.getByRole("button", { name: originalTag }).click();
+    await page.getByRole("treeitem", { name: originalTag }).click();
     await page.getByRole("button", { name: "Select tag" }).click();
 
     await expect(page.getByLabel("Tag name")).toHaveValue(originalTag);
 
     await page.getByRole("button", { name: "Browse tags" }).click();
-    await expect(page.getByRole("button", { name: originalTag })).toBeVisible();
+    await expect(
+      page.getByRole("treeitem", { name: originalTag }),
+    ).toBeVisible();
     await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
     await expectTreeNodeVisible(
-      page.getByRole("button", { name: originalTag, exact: true }),
+      page.getByRole("treeitem", { name: originalTag, exact: true }),
       treeViewport,
     );
-    await expect(page.getByRole("button", { name: "Collapse" })).toHaveCount(2);
+    await expect(
+      page.locator('[role="treeitem"][aria-expanded="true"]'),
+    ).toHaveCount(2);
   });
 
   test("keeps saved-tag restoration covered until the exact row is visible", async ({
@@ -114,6 +118,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const originalTag = "FCS0217!204FC03010.PV";
     let rootRequestSeen = false;
     let searchRequestSeen = false;
+    const browseParentKeys: Array<string | null> = [];
     let releaseSearch: () => void = () => undefined;
     const searchGate = new Promise<void>((resolve) => {
       releaseSearch = resolve;
@@ -155,6 +160,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
 
       const url = new URL(route.request().url());
       const parentNodeKey = url.searchParams.get("parent_node_key");
+      browseParentKeys.push(parentNodeKey);
       if (!parentNodeKey) rootRequestSeen = true;
       const nodes =
         parentNodeKey === "fcs0217"
@@ -204,17 +210,26 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await expect.poll(() => rootRequestSeen).toBe(true);
     await expect.poll(() => searchRequestSeen).toBe(true);
     releaseSearch();
+    await expect.poll(() => browseParentKeys).toContain("fcs0217");
     await expect(
-      dialog.locator("button").filter({ hasText: /^FCS0217$/ }),
+      dialog.getByRole("treeitem", {
+        name: "FCS0217",
+        exact: true,
+        includeHidden: true,
+      }),
     ).toHaveCount(1);
     await expect(
-      dialog.locator("button").filter({ hasText: /^204FC03010$/ }),
+      dialog.getByRole("treeitem", {
+        name: "204FC03010",
+        exact: true,
+        includeHidden: true,
+      }),
     ).toHaveCount(1);
     await expect(restoring).toBeVisible();
-    await expect(dialog.getByRole("button", { name: "PV" })).toHaveCount(0);
+    await expect(dialog.getByRole("treeitem", { name: "PV" })).toHaveCount(0);
 
     releaseLeaf();
-    const selected = dialog.getByRole("button", { name: "PV", exact: true });
+    const selected = dialog.getByRole("treeitem", { name: "PV", exact: true });
     await expect(selected).toBeVisible();
     await expect(dialog.getByText(`Selected: ${originalTag}`)).toBeVisible();
     await expectTreeNodeVisible(
@@ -334,11 +349,11 @@ test.describe(OPC_BROWSER_SUITE, () => {
 
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(page.getByText(`Selected: ${originalTag}`)).toBeVisible();
-    await expect(page.getByRole("button", { name: "FCS0217" })).toBeVisible();
+    await expect(page.getByRole("treeitem", { name: "FCS0217" })).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "204FC03010" }),
+      page.getByRole("treeitem", { name: "204FC03010" }),
     ).toBeVisible();
-    await expect(page.getByRole("button", { name: "PV" })).toBeVisible();
+    await expect(page.getByRole("treeitem", { name: "PV" })).toBeVisible();
     expect(liveSearchRequests).toBe(1);
   });
 
@@ -415,10 +430,10 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(page.getByText("Index: failed")).toBeVisible();
     await expect(page.getByText("Selected: SCS0130.PV")).toBeVisible();
-    await expect(page.getByRole("button", { name: "FCS0217" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "204FC03010" })).toHaveCount(
-      0,
-    );
+    await expect(page.getByRole("treeitem", { name: "FCS0217" })).toBeVisible();
+    await expect(
+      page.getByRole("treeitem", { name: "204FC03010" }),
+    ).toHaveCount(0);
     expect(indexedSearchRequests).toBe(1);
     expect(liveSearchRequests).toBe(1);
   });

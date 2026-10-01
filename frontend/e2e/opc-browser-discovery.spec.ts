@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { OPC_BROWSER_SUITE, openOpcDaRunForm } from "./support/opcBrowser";
+import {
+  expectNoAccessibilityViolations,
+  setTheme,
+} from "./support/accessibility";
 
 /**
  * Server discovery and tag-browser modal coverage: the ProgID gate on Browse tags, the
@@ -37,7 +41,8 @@ test.describe(OPC_BROWSER_SUITE, () => {
     });
 
     const serverField = page.getByLabel("OPC DA server ProgID");
-    await page.getByRole("button", { name: "Browse servers" }).click();
+    const browseTrigger = page.getByRole("button", { name: "Browse servers" });
+    await browseTrigger.click();
 
     await expect(
       page.getByRole("heading", { name: "Browse OPC DA servers" }),
@@ -48,12 +53,32 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await expect(
       page.getByRole("button", { name: "Yokogawa.CSHIS_OPC.1" }),
     ).toBeVisible();
+    const dialog = page.getByRole("dialog", {
+      name: "Browse OPC DA servers",
+    });
+    const close = dialog.getByRole("button", { name: "Close" });
+    const lastServer = dialog.getByRole("button", {
+      name: "Yokogawa.CSHIS_OPC.1",
+    });
+    await expect(close).toBeFocused();
+    await expectNoAccessibilityViolations(page);
+    await page.keyboard.press("Shift+Tab");
+    await expect(lastServer).toBeFocused();
 
-    await page.getByRole("button", { name: "Yokogawa.CSHIS_OPC.1" }).click();
+    await lastServer.click();
     await expect(serverField).toHaveValue("Yokogawa.CSHIS_OPC.1");
+    await expect(browseTrigger).toBeFocused();
     await expect(
       page.getByRole("heading", { name: "Browse OPC DA servers" }),
     ).not.toBeVisible();
+
+    await setTheme(page, "light");
+    await browseTrigger.click();
+    await expect(lastServer).toBeVisible();
+    await expectNoAccessibilityViolations(page);
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(browseTrigger).toBeFocused();
   });
 
   test("shows shared loading feedback while server discovery is pending", async ({
@@ -87,6 +112,36 @@ test.describe(OPC_BROWSER_SUITE, () => {
       dialog.getByRole("button", { name: "Yokogawa.CSHIS_OPC.1" }),
     ).toBeVisible();
     await expect(browseButton).not.toHaveAttribute("aria-busy");
+  });
+
+  test("restores focus when the server picker closes during discovery", async ({
+    page,
+  }) => {
+    let releaseServers: () => void = () => undefined;
+    const serversGate = new Promise<void>((resolve) => {
+      releaseServers = resolve;
+    });
+    await page.route("**/api/opc/servers**", async (route) => {
+      await serversGate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ servers: ["Yokogawa.CSHIS_OPC.1"] }),
+      });
+    });
+
+    const browseButton = page.getByRole("button", { name: "Browse servers" });
+    await browseButton.click();
+    const dialog = page.getByRole("dialog", {
+      name: "Browse OPC DA servers",
+    });
+    await expect(dialog.getByRole("status")).toContainText("Connecting…");
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(browseButton).toBeEnabled();
+    await expect(browseButton).toBeFocused();
+
+    releaseServers();
   });
 
   test("shows a connection error when browsing servers with no gateway present", async ({

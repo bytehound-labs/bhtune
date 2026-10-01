@@ -16,10 +16,23 @@ The header provides the primary navigation, a Catppuccin light/dark theme toggle
 health indicator. The health indicator confirms that the BHTune HTTP service responds; it
 does not test an OPC DA gateway or prove that a controller is reachable.
 
+## Keyboard and screen-reader support
+
+Form controls have associated labels, hints, and inline validation messages. Modal dialogs
+move focus into the dialog, keep keyboard focus within it, and return focus to the control
+that opened them when they close. Escape, the close button, and the backdrop dismiss a
+dialog when no operation is pending.
+
+The OPC tag browser uses a keyboard-operable tree: Up and Down move between visible nodes,
+Home and End move to the first and last visible nodes, Left collapses or moves to the parent,
+and Right expands a branch or moves to its first child. Enter or Space selects an ItemID;
+Right expands branch-and-item nodes without changing their exact ItemID. The search field
+offers its indexed matches as an accessible listbox.
+
 {/* web-ui-screenshot: full-tune-simulator */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=d143b13d2191">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=d143b13d2191" alt="BHTune Full mode New Tune page with the Simulator driver selected" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=4cd88f723658">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=4cd88f723658" alt="BHTune Full mode New Tune page with the Simulator driver selected" />
   </a>
   <figcaption>The New Tune page is the default landing screen. Simulator-only runs keep the form layout stable and disable controls that require live OPC DA equipment.</figcaption>
 </figure>
@@ -45,8 +58,8 @@ system or a route-level substitute for the server's Demo enforcement.
 
 {/* web-ui-screenshot: demo-tune */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=247546be2c37">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=247546be2c37" alt="BHTune Demo mode simulator tune form with the persistent Demo policy notice" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=fae4691752dc">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=fae4691752dc" alt="BHTune Demo mode simulator tune form with the persistent Demo policy notice" />
   </a>
   <figcaption>Demo mode keeps simulator controls visible while omitting live-plant actions. The persistent notice states the boundary, history limit, and session lifetime.</figcaption>
 </figure>
