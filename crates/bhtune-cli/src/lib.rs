@@ -292,24 +292,6 @@ mod tests {
         (dir, path)
     }
 
-    #[cfg(test)]
-    mod config_example_tests {
-        use crate::config::{
-            BhtuneConfig, DemoPolicy, ServerMode, resolve_demo_policy_from_config,
-        };
-
-        #[test]
-        fn example_config_declares_the_approved_demo_contract() {
-            let config: BhtuneConfig =
-                toml::from_str(include_str!("../bhtune.example.toml")).unwrap();
-            assert_eq!(config.server_mode, Some(ServerMode::Full));
-            assert_eq!(
-                resolve_demo_policy_from_config(&config).unwrap(),
-                DemoPolicy::default()
-            );
-        }
-    }
-
     #[tokio::test]
     async fn run_with_cli_config_load_failure_is_exit_failure() {
         // An existing *file* occupying where a parent directory needs to go is a hard,
@@ -671,5 +653,23 @@ mod tests {
             load_startup_config(Some(missing), OutputFormat::Table),
             Err(ExitCode::FAILURE)
         );
+    }
+
+    #[cfg(test)]
+    mod config_example_tests {
+        use crate::config::{
+            BhtuneConfig, DemoPolicy, ServerMode, resolve_demo_policy_from_config,
+        };
+
+        #[test]
+        fn example_config_declares_the_approved_demo_contract() {
+            let config: BhtuneConfig =
+                toml::from_str(include_str!("../bhtune.example.toml")).unwrap();
+            assert_eq!(config.server_mode, Some(ServerMode::Full));
+            assert_eq!(
+                resolve_demo_policy_from_config(&config).unwrap(),
+                DemoPolicy::default()
+            );
+        }
     }
 }
