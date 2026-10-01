@@ -15,7 +15,6 @@ use bhtune_db::models::{
 use bhtune_driver::{Driver, TagValue};
 use chrono::Utc;
 
-use crate::args::{DriverKindArg, TuneArgs};
 use crate::cancel::CtrlC;
 use crate::timing::{PollTimingAccumulator, RunTimeAnchor};
 
@@ -25,14 +24,16 @@ use super::actuation::{
 #[cfg(test)]
 use super::config::test_effective_timing;
 use super::config::{EffectiveTiming, build_loop_config_with_timing, build_loop_tags};
-use super::output::{
-    TuneOutcome, format_mv_actuation_abort_reason, print_summary, tune_outcome_for_run,
+use super::outcome::{
+    AbortReason, RunOutcome, TuneOutcome, TuneRunReport, format_mv_actuation_abort_reason,
+    tune_outcome_for_run,
 };
 use super::poll::{CompletedPoll, PollOutcome, persist_results, run_polling_loop_with_timing};
 use super::quality::{
     read_batch_f32, read_batch_raw, read_f32, resolve_direction_from_batch, resolve_f32_from_batch,
     write_raw,
 };
+use super::request::{DriverKind, TuneRequest};
 use super::restore::{
     RestoreAttempt, attempt_restore_with_actuation_with_timing, record_restore_status_best_effort,
     restore_best_effort_then_propagate_with_timing,
@@ -41,118 +42,23 @@ use super::timing::{
     completed_oscillation_period_ms, record_timing_metrics_if_present,
     warn_on_missed_poll_opportunities,
 };
-use super::writeback::maybe_write_back;
+use super::writeback::{WriteBackHandler, maybe_write_back};
 
-/// Runs one full tune. Never returns `Err` for a tune that simply didn't complete
-/// successfully (a failed/aborted run is recorded in the database and reported to stdout);
-/// `Err` is reserved for setup problems (unknown template, invalid flag combination,
-/// database errors) surfaced directly to the caller.
-///
-/// Test-facing entry point: delegates to [`run_with_ctrl_c`] with a [`CtrlC::never`] handle,
-/// so this crate's large existing test suite never installs a real process-wide signal
-/// handler -- see `cancel`'s module doc comment for why that matters. `#[cfg(test)]`-gated
-/// (rather than merely unused outside tests) because it depends on [`CtrlC::never`], itself
-/// only defined for test builds. Real dispatch (`lib.rs::run_with_cli_and_ctrl_c`) calls
-/// [`run_with_ctrl_c`] directly with a real, installed [`CtrlC`] instead of going through
-/// this wrapper.
-#[cfg(test)]
-pub async fn run(
-    pool: &SqlitePool,
-    args: TuneArgs,
-    app_config: &crate::config::BhtuneConfig,
-) -> anyhow::Result<TuneOutcome> {
-    run_with_ctrl_c(pool, args, app_config, &mut CtrlC::never()).await
-}
-/// Resolves `args.bridge_host` (always) and `args.server` (only for the `opcda` driver,
-/// since the simulator driver has no OPC server concept at all) through `app_config`'s
-/// `CLI > env > config file > default` precedence before anything else runs, so every
-/// downstream consumer (`crate::driver::build`, mainly) can keep reading the plain
-/// `TuneArgs` fields it always has.
-///
-/// `ctrl_c` is threaded through to [`execute`] (and, from there, to every driver await in
-/// [`run_polling_loop`] and the final restore), so a Ctrl+C delivered at any point during
-/// the run -- not just while idle between polls -- is observed. See `safety-cancellation`
-/// in AGENTS.md.
-pub(crate) async fn run_with_ctrl_c(
-    pool: &SqlitePool,
-    args: TuneArgs,
-    app_config: &crate::config::BhtuneConfig,
-    ctrl_c: &mut CtrlC,
-) -> anyhow::Result<TuneOutcome> {
-    let prepared = prepare(pool, args, app_config).await?;
-    let PreparedTune {
-        run_id,
-        args,
-        template,
-        tags,
-        driver,
-        config,
-        timing,
-        time_anchor,
-        write_pid,
-        allow_uncertain_quality,
-    } = prepared;
-
-    let outcome = execute_with_timing(
-        pool,
-        run_id,
-        &args,
-        &template,
-        &tags,
-        driver.as_ref(),
-        config,
-        timing,
-        time_anchor,
-        write_pid,
-        allow_uncertain_quality,
-        ctrl_c,
-        &mut std::io::stdin().lock(),
-    )
-    .await;
-
-    match outcome {
-        Ok(run_outcome) => {
-            let tune_outcome = print_summary(run_id, &run_outcome, args.output);
-            let outcome_label = tune_outcome.label();
-            tracing::info!(run_id, outcome = outcome_label, "tune run finished");
-            Ok(tune_outcome)
-        }
-        Err(e) => {
-            tracing::error!(run_id, error = %e, "tune run failed");
-            finalize_pending_for_run_best_effort(
-                pool,
-                run_id,
-                "the run failed before MV confirmation completed",
-            )
-            .await;
-            TuneRunRow::fail(pool, run_id, Utc::now(), &e.to_string())
-                .await
-                .ok();
-            Err(e)
-        }
-    }
-}
 /// Everything [`prepare`] resolves before a tune's long-running polling phase can start:
-/// the already-validated/defaulted [`TuneArgs`], the resolved template and derived tags, a
+/// the already-validated/defaulted [`TuneRequest`], the resolved template and derived tags, a
 /// connected driver, the built [`LoopConfig`], the run's start time, and the response level
 /// (if any) to write back at the end -- plus the `tune_runs` row's assigned id.
 ///
-/// Exists to split [`run_with_ctrl_c`]'s single monolithic body into a fast, synchronous-ish
-/// setup phase (this struct's construction: template lookup, tag derivation, driver
-/// connect, and the `tune_runs` insert that assigns [`PreparedTune::run_id`]) and a
-/// long-running phase ([`drive`]/[`execute`]'s actual polling loop, potentially minutes
-/// long) -- so an HTTP caller (`bhtune-server`'s `POST /api/runs`) can run the first phase
-/// inline in its request handler (fast enough to await directly, and any failure here -- bad
-/// template name, unreachable driver -- is exactly the kind of problem an HTTP client
-/// expects a synchronous error response for) and `tokio::spawn` the second, returning the
-/// assigned `run_id` immediately rather than blocking the HTTP response for the whole test.
+/// The first phase (template lookup, tag derivation, driver connect, and the `tune_runs`
+/// insert that assigns [`PreparedTune::run_id`]) is fast enough to await in an HTTP request
+/// handler, which can then spawn [`drive`] and return the assigned id before the tune ends.
 ///
 /// Every field but `run_id` is private: a caller that isn't this module has no legitimate
 /// reason to inspect a template/tags/driver/config mid-flight, only to hand the whole
-/// prepared bundle to [`drive`] (or, internally, [`run_with_ctrl_c`]) unchanged.
+/// prepared bundle to [`drive`] unchanged.
 pub struct PreparedTune {
     pub(super) run_id: i64,
-    pub(super) args: TuneArgs,
+    pub(super) args: TuneRequest,
     pub(super) template: DcsTemplate,
     pub(super) tags: LoopTags,
     pub(super) driver: Box<dyn Driver>,
@@ -166,11 +72,11 @@ pub struct PreparedTune {
 /// execution is started. Live OPC DA preparation is intentionally rejected by this helper.
 pub async fn prepare_owned(
     pool: &SqlitePool,
-    args: TuneArgs,
+    args: TuneRequest,
     app_config: &crate::config::BhtuneConfig,
     demo_session_id: i64,
 ) -> anyhow::Result<PreparedTune> {
-    if args.driver != DriverKindArg::Simulator {
+    if args.driver != DriverKind::Simulator {
         anyhow::bail!("demo sessions may only start simulator runs");
     }
     prepare_internal(pool, args, app_config, Some(demo_session_id)).await
@@ -184,13 +90,8 @@ impl PreparedTune {
     }
 }
 /// The shape persisted into `tune_runs.request_json` (`db-run-request-snapshot`).
-/// Deliberately mirrors `bhtune-server`'s `StartRunRequest` DTO field-for-field -- core
-/// types, not this crate's clap-facing `*Arg` wrapper enums -- so a CLI-originated and an
-/// HTTP-originated run produce byte-identical JSON snapshots with no duplicated
-/// construction logic between the two crates (`bhtune-server` can't reuse this struct
-/// directly, since `bhtune-cli` doesn't depend on it, but the two shapes are kept in sync by
-/// convention the same way `StartRunRequest::into_tune_args` already keeps its own field
-/// list in sync with [`TuneArgs`]).
+/// Its stable fields correspond to the transport-neutral [`TuneRequest`] shared by the CLI
+/// and HTTP adapters, so either adapter persists the same snapshot shape.
 ///
 /// Built from `args` *before* [`prepare`]'s own `bridge_host`/`server` resolution mutates
 /// them, so a field left unset by the caller stays absent here rather than silently baking
@@ -228,10 +129,7 @@ pub(super) struct RequestSnapshot<'a> {
     pub(super) yes: bool,
     pub(super) write_pid: Option<ResponseLevel>,
 }
-/// The fast setup phase shared by [`run_with_ctrl_c`] (the CLI's entry point) and [`drive`]
-/// (the entry point for a caller -- `bhtune-server` -- that needs to start a run and return
-/// control to its own caller before the run finishes). See [`PreparedTune`]'s doc comment
-/// for why this split exists.
+/// Resolves and validates runtime inputs before any driver connection or database mutation.
 ///
 /// Identical in behavior to what `run_with_ctrl_c` did inline before this split: the
 /// `--write-pid`-without-`--yes` guard, `bridge_host`/`server` resolution, template lookup,
@@ -240,14 +138,14 @@ pub(super) struct RequestSnapshot<'a> {
 /// own function changes nothing about what runs or when -- only who else can call it.
 pub async fn prepare(
     pool: &SqlitePool,
-    args: TuneArgs,
+    args: TuneRequest,
     app_config: &crate::config::BhtuneConfig,
 ) -> anyhow::Result<PreparedTune> {
     prepare_internal(pool, args, app_config, None).await
 }
 pub(super) async fn prepare_internal(
     pool: &SqlitePool,
-    mut args: TuneArgs,
+    mut args: TuneRequest,
     app_config: &crate::config::BhtuneConfig,
     demo_session_id: Option<i64>,
 ) -> anyhow::Result<PreparedTune> {
@@ -262,7 +160,7 @@ pub(super) async fn prepare_internal(
     }
     let timing: EffectiveTiming = crate::config::resolve_and_validate_tuning_config(
         &app_config.tuning,
-        args.driver == DriverKindArg::Opcda,
+        args.driver == DriverKind::Opcda,
     )?
     .into();
     if let Some(tag_overrides) = &args.tag_overrides {
@@ -270,10 +168,7 @@ pub(super) async fn prepare_internal(
     }
     let allow_uncertain_quality = app_config.allow_uncertain_quality;
 
-    let db_driver = match args.driver {
-        DriverKindArg::Opcda => TuneDriver::Opcda,
-        DriverKindArg::Simulator => TuneDriver::Simulator,
-    };
+    let db_driver = args.driver.into();
 
     // Snapshotted before `bridge_host`/`server` are resolved to their effective values just
     // below, so a field the caller left unset stays absent here instead of silently baking
@@ -286,8 +181,8 @@ pub(super) async fn prepare_internal(
     let request_json = serde_json::to_string(&RequestSnapshot {
         tagname: &args.tagname,
         template: &args.template,
-        process_type: args.process_type.into(),
-        controller_type: args.controller_type.into(),
+        process_type: args.process_type,
+        controller_type: args.controller_type,
         relay_amp: args.relay_amp,
         cycles_skip: args.cycles_skip,
         cycles_count: args.cycles_count,
@@ -306,11 +201,11 @@ pub(super) async fn prepare_internal(
         pv_range_low: args.pv_range_low,
         mv_range_high: args.mv_range_high,
         mv_range_low: args.mv_range_low,
-        direction: args.direction.map(Into::into),
+        direction: args.direction,
         tag_overrides: args.tag_overrides.as_ref(),
         notes: args.notes.as_deref(),
         yes: args.yes,
-        write_pid: args.write_pid.map(Into::into),
+        write_pid: args.write_pid,
     })
     .expect(
         "RequestSnapshot serialization is infallible: plain enum/scalar fields, no maps and \
@@ -322,7 +217,7 @@ pub(super) async fn prepare_internal(
         args.bridge_host.take(),
         app_config,
     ));
-    if matches!(args.driver, DriverKindArg::Opcda) {
+    if matches!(args.driver, DriverKind::Opcda) {
         args.server = Some(crate::config::resolve_server(
             args.server.take(),
             app_config,
@@ -338,7 +233,7 @@ pub(super) async fn prepare_internal(
     let config = build_loop_config_with_timing(&args, timing)?;
     let tags = build_loop_tags(&args, &template)?;
     let driver = crate::driver::build_with_poll_interval(&args, timing.poll_interval_ms).await?;
-    let gateway_compatibility = if let (DriverKindArg::Opcda, Some(bridge_host), Some(server)) = (
+    let gateway_compatibility = if let (DriverKind::Opcda, Some(bridge_host), Some(server)) = (
         args.driver,
         args.bridge_host.as_deref(),
         args.server.as_deref(),
@@ -411,7 +306,7 @@ pub(super) async fn prepare_internal(
         "starting tune run"
     );
 
-    let write_pid: Option<ResponseLevel> = args.write_pid.map(Into::into);
+    let write_pid = args.write_pid;
 
     Ok(PreparedTune {
         run_id: run.id,
@@ -442,39 +337,26 @@ pub(super) async fn finalize_preparation_failure(pool: &SqlitePool, run_id: i64,
         }
     }
 }
-/// Runs an already-[`prepare`]d tune to completion -- the print-free counterpart to
-/// [`run_with_ctrl_c`], for a caller with no terminal to print a summary to and no stdin to
-/// prompt on (`bhtune-server`'s background tune task, `tokio::spawn`ed after its
-/// `POST /api/runs` handler has already returned `prepared.run_id()` to the HTTP client).
-///
-/// Calls the exact same [`execute`] this module's CLI path calls, with the exact same
-/// arguments, so the actual tuning behavior -- quality checks, restore-on-abort, write-back
-/// rollback, all of it -- is identical between the CLI and an HTTP-started run; only the
-/// reporting differs. On success, returns the same coarse [`TuneOutcome`]
-/// `run_with_ctrl_c`'s printed summary would have shown, computed via the same
-/// `tune_outcome_for_run` mapping, and logs it exactly as `run_with_ctrl_c` does. On
-/// failure, records the same `tune_runs.fail` row `run_with_ctrl_c` would have.
-///
-/// A caller that wants the same rich per-response-level detail `print_summary` shows on the
-/// CLI should instead read the run back from the database once this resolves (over HTTP,
-/// `GET /api/runs/{id}`) -- `execute`'s own DB writes (`tune_results`/`tune_writes`) are the
-/// authoritative record of everything `print_summary` would have printed, so there is
-/// nothing this function needs to hand back beyond the coarse outcome.
-///
-/// `prepared.args.output` should be [`OutputFormat::Json`] for every caller of this
-/// function, even though nothing here actually prints: [`maybe_write_back`] (called from
-/// inside [`execute`]) skips its interactive stdin prompt only when `output ==
-/// OutputFormat::Json` (see that function's doc comment) -- a caller with no stdin to read
-/// from at all must never risk hitting that prompt. Accordingly, this function passes
-/// [`execute`] a [`std::io::empty()`] reader rather than real stdin -- besides there being
-/// no human to prompt, `std::io::Empty` is `Send` (unlike a real [`std::io::StdinLock`]),
-/// which is what allows the future returned by a call to this function to be
-/// `tokio::spawn`ed at all (see `execute`'s own doc comment).
+/// Runs an already-prepared tune without an interactive selector and returns its coarse
+/// outcome. An unrequested write-back is skipped.
 pub async fn drive(
     pool: &SqlitePool,
     prepared: PreparedTune,
     ctrl_c: &mut CtrlC,
 ) -> anyhow::Result<TuneOutcome> {
+    let report = drive_report(pool, prepared, ctrl_c, None).await?;
+    Ok(tune_outcome_for_run(&report.outcome))
+}
+
+/// Runs an already-prepared tune and returns the detailed runtime outcome for adapters that
+/// report it to a user. An optional handler may select an interactive PID response level and
+/// observe write-back progress; it never replaces runtime validation or safety checks.
+pub async fn drive_report(
+    pool: &SqlitePool,
+    prepared: PreparedTune,
+    ctrl_c: &mut CtrlC,
+    handler: Option<&mut dyn WriteBackHandler>,
+) -> anyhow::Result<TuneRunReport> {
     let PreparedTune {
         run_id,
         args,
@@ -501,7 +383,7 @@ pub async fn drive(
         write_pid,
         allow_uncertain_quality,
         ctrl_c,
-        &mut std::io::empty(),
+        handler,
     )
     .await;
 
@@ -509,7 +391,10 @@ pub async fn drive(
         Ok(run_outcome) => {
             let tune_outcome = tune_outcome_for_run(&run_outcome);
             tracing::info!(run_id, outcome = tune_outcome.label(), "tune run finished");
-            Ok(tune_outcome)
+            Ok(TuneRunReport {
+                run_id,
+                outcome: run_outcome,
+            })
         }
         Err(e) => {
             tracing::error!(run_id, error = %e, "tune run failed");
@@ -525,87 +410,6 @@ pub async fn drive(
             Err(e)
         }
     }
-}
-#[derive(Debug)]
-pub(super) enum RunOutcome {
-    Completed {
-        write_back: WriteBackOutcome,
-        /// Human-readable reason `write_back` was `Skipped`/`Failed`, or `None` when it
-        /// succeeded ([`WriteBackOutcome::Written`]) or the outcome is otherwise
-        /// self-explanatory. Exists so `--output json` can report the same explanation
-        /// `maybe_write_back`'s suppressed `println!`s would have shown in `Table` mode,
-        /// without printing anything ahead of the run's final JSON object
-        /// (`safety-json-contract`, finding 8).
-        write_back_detail: Option<String>,
-    },
-    Aborted(AbortReason),
-    /// The run ended (via normal completion or [`RunOutcome::Aborted`]) but the subsequent
-    /// restore attempt ([`attempt_restore_with_actuation`]) could not be confirmed -- a
-    /// second Ctrl+C arrived, or `[tuning].restore_timeout_secs` elapsed.
-    /// `reason` is a human-readable description of what happened, already including the
-    /// original abort trigger (if any) -- see `execute`'s composition of it. Write-back is
-    /// always skipped in this case, since writing new PID constants to a loop whose mode/MV
-    /// cannot be confirmed restored would compound the uncertainty.
-    RestoreIncomplete {
-        reason: String,
-    },
-}
-/// Why a run ended via [`RunOutcome::Aborted`] instead of a normal engine completion.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum AbortReason {
-    /// Ctrl+C.
-    UserInterrupt,
-    /// `[tuning].timeout_secs` elapsed before the engine reported completion. Carries the
-    /// configured limit that was hit, for the printed/JSON summary.
-    Timeout { timeout_secs: u64 },
-    /// A single driver read/write during a poll tick did not resolve within
-    /// `[tuning].op_timeout_secs` -- distinct from [`AbortReason::Timeout`], which bounds the whole
-    /// run rather than one operation. Carries the tag that stalled and the configured limit,
-    /// for the printed/JSON summary. Maps to the same [`TuneOutcome::TimedOut`] as
-    /// `Timeout`, since both mean "gave up waiting", differing only in what exactly timed
-    /// out.
-    OperationTimedOut { tag: String, op_timeout_secs: u64 },
-    /// An in-flight PV poll sample's quality was `Bad`, or `Uncertain` without
-    /// the global Config > OPC quality policy set (finding 5 of the live-plant safety
-    /// review). Unlike
-    /// the two variants above, this is checked and constructed from inside
-    /// [`run_polling_loop`] itself rather than from [`execute`]'s outer `tokio::select!`,
-    /// since it depends on the value just read, not an independent timer/signal. A poor
-    /// quality reading *before* the mode transition (any of `read_initial_values`'s
-    /// readings, including the setpoint capture) is instead a hard failure via a plain
-    /// `anyhow::Error` -- see `check_quality` -- since nothing has been mutated yet at that
-    /// point, so there's no loop state to restore and no reason to route it through this
-    /// enum. Carries `tag`/`quality` for the printed/JSON summary.
-    PoorQuality {
-        tag: String,
-        quality: bhtune_driver::Quality,
-    },
-    /// An accepted OPC DA MV write was not physically observed within tolerance before its
-    /// four-second deadline or before a later relay action needed to replace it.
-    MvActuationUnconfirmed {
-        tag: String,
-        target: f32,
-        readback: Option<f32>,
-        tolerance: f32,
-        elapsed_ms: u64,
-        deadline_secs: u64,
-    },
-}
-/// The result of `maybe_write_back`'s attempt (or non-attempt) to write calculated PID
-/// parameters back to the DCS. A real write (`Written`/`Failed`) is always fully recorded in
-/// `tune_writes`; `Skipped` never touches the driver at all, so it leaves no row there. This
-/// enum exists purely to drive the printed summary and the process exit code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WriteBackOutcome {
-    /// No write was attempted: no PID constant tags configured, no results recorded, or
-    /// (interactive path only) the user chose to skip / gave invalid input.
-    Skipped,
-    /// The write succeeded and was confirmed by a readback.
-    Written { response_level: ResponseLevel },
-    /// A write was attempted (interactively selected, or requested via `--write-pid`) but
-    /// failed -- the driver rejected it, the confirmation readback failed, or (defensively)
-    /// `--write-pid` named a response level with no recorded calculated result.
-    Failed,
 }
 /// Everything read from the driver before any mode transition is attempted — mirrors
 /// `ReadInitialOPCvalues`.
@@ -674,21 +478,14 @@ pub(super) async fn persist_completed_results(
     )
     .await
 }
-/// Generic over `reader` (rather than hardcoding `std::io::stdin().lock()` internally) so
-/// this function's generated future is monomorphized separately per call site: [`run_with_ctrl_c`]
-/// (the CLI path) instantiates it with the real, process-wide [`std::io::StdinLock`], which
-/// is `!Send` -- fine there, since that future is only ever `.await`ed directly, never
-/// `tokio::spawn`ed. [`drive`] (the HTTP path) instantiates it with [`std::io::Empty`]
-/// (`std::io::empty()`), which *is* `Send`, so `bhtune-server` can spawn the resulting
-/// future onto its background tune task. Passing a live `StdinLock` through as a plain
-/// parameter of a single non-generic `execute` would force both instantiations to share one
-/// concrete (and therefore `!Send`) future type, which is exactly the compile error this
-/// split avoids -- see `ActiveRun::start`'s `Send` bound in `bhtune-server`.
+/// The runtime owns tune execution and delegates any interactive write-back choice to an
+/// adapter-provided handler. A missing handler means no unrequested write-back; no terminal
+/// or transport I/O is performed here.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn execute_with_timing<R: std::io::BufRead>(
+pub(super) async fn execute_with_timing(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     template: &DcsTemplate,
     tags: &LoopTags,
     driver: &dyn Driver,
@@ -698,7 +495,7 @@ pub(super) async fn execute_with_timing<R: std::io::BufRead>(
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
-    reader: &mut R,
+    handler: Option<&mut dyn WriteBackHandler>,
 ) -> anyhow::Result<RunOutcome> {
     let started_at = time_anchor.utc();
     let initial = read_initial_values(driver, tags, template, allow_uncertain_quality).await?;
@@ -769,8 +566,8 @@ pub(super) async fn execute_with_timing<R: std::io::BufRead>(
         MrftCompat::default(),
     );
     let timing_basis = match args.driver {
-        DriverKindArg::Opcda => TimingBasis::LiveMonotonic,
-        DriverKindArg::Simulator => TimingBasis::SimulatedFixedStep,
+        DriverKind::Opcda => TimingBasis::LiveMonotonic,
+        DriverKind::Simulator => TimingBasis::SimulatedFixedStep,
     };
     let mut timing = PollTimingAccumulator::new(timing_basis, effective_timing.poll_interval_ms);
 
@@ -821,7 +618,7 @@ pub(super) async fn execute_with_timing<R: std::io::BufRead>(
                 write_pid,
                 allow_uncertain_quality,
                 ctrl_c,
-                reader,
+                handler,
                 &mut mv_actuations,
                 completion,
                 &mut timing,
@@ -874,7 +671,7 @@ pub(super) async fn execute_with_timing<R: std::io::BufRead>(
 pub(super) async fn execute<R: std::io::BufRead>(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     template: &DcsTemplate,
     tags: &LoopTags,
     driver: &dyn Driver,
@@ -883,7 +680,7 @@ pub(super) async fn execute<R: std::io::BufRead>(
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
-    reader: &mut R,
+    _reader: &mut R,
 ) -> anyhow::Result<RunOutcome> {
     execute_with_timing(
         pool,
@@ -898,7 +695,7 @@ pub(super) async fn execute<R: std::io::BufRead>(
         write_pid,
         allow_uncertain_quality,
         ctrl_c,
-        reader,
+        None,
     )
     .await
 }
@@ -906,7 +703,7 @@ pub(super) async fn execute<R: std::io::BufRead>(
 pub(super) async fn attempt_and_record_restore(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tags: &LoopTags,
@@ -940,7 +737,7 @@ pub(super) async fn attempt_and_record_restore(
 pub(super) async fn attempt_and_record_restore_with_settling(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tags: &LoopTags,
@@ -982,10 +779,10 @@ pub(super) async fn attempt_and_record_restore_with_settling(
     restore_attempt
 }
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn finish_completed_run<R: std::io::BufRead>(
+pub(super) async fn finish_completed_run(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     template: &DcsTemplate,
     tags: &LoopTags,
@@ -996,7 +793,7 @@ pub(super) async fn finish_completed_run<R: std::io::BufRead>(
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
-    reader: &mut R,
+    handler: Option<&mut dyn WriteBackHandler>,
     mv_actuations: &mut Option<MvActuationTracker>,
     mut completion: CompletedPoll,
     timing: &mut PollTimingAccumulator,
@@ -1085,9 +882,8 @@ pub(super) async fn finish_completed_run<R: std::io::BufRead>(
                 driver,
                 config,
                 write_pid,
-                args.output,
                 allow_uncertain_quality,
-                reader,
+                handler,
             )
             .await?;
             Ok(RunOutcome::Completed {
@@ -1102,7 +898,7 @@ pub(super) async fn finish_completed_run<R: std::io::BufRead>(
 pub(super) async fn finish_aborted_run(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     template: &DcsTemplate,
     tags: &LoopTags,
@@ -1166,7 +962,7 @@ pub(super) async fn finish_failed_run(
     driver: &dyn Driver,
     initial: &InitialState,
     guard: &MutationGuard,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,

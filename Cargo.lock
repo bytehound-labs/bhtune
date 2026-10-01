@@ -203,13 +203,13 @@ dependencies = [
  "bhtune-core",
  "bhtune-db",
  "bhtune-driver",
+ "bhtune-runtime",
  "bhtune-test-support",
  "chrono",
  "clap",
  "clap-markdown",
  "clap_complete",
  "clap_mangen",
- "csv",
  "libc",
  "opcda-bridge-proto",
  "proptest",
@@ -220,11 +220,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
- "toml_edit",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "utoipa",
 ]
 
 [[package]]
@@ -275,16 +271,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "bhtune-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bhtune-core",
+ "bhtune-db",
+ "bhtune-driver",
+ "bhtune-test-support",
+ "chrono",
+ "csv",
+ "opcda-bridge-proto",
+ "proptest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "bhtune-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
  "axum",
- "bhtune-cli",
  "bhtune-core",
  "bhtune-db",
  "bhtune-driver",
+ "bhtune-runtime",
  "bhtune-test-support",
  "chrono",
  "clap",

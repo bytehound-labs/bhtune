@@ -1,31 +1,30 @@
 //! `POST /api/runs` (start a new tune run) and `POST /api/runs/{id}/cancel` (request its
 //! cancellation) -- the write side of the run-history API `routes::history` reads from.
 //!
-//! Reuses `bhtune-cli`'s own [`bhtune_cli::commands::tune::prepare`]/[`bhtune_cli::commands::tune::drive`]
-//! split unchanged, so a run started over HTTP goes through exactly the same template
-//! lookup, tag derivation, driver connection, quality checks, restore-on-abort, and
-//! write-back rollback as a run started by the CLI -- only the setup/reporting differs (see
-//! those functions' own doc comments for the full rationale). `crate::active_run` tracks
-//! every in-flight run so each can be cancelled independently.
+//! Converts the HTTP request into the shared runtime's transport-neutral [`TuneRequest`],
+//! then uses the same preparation and drive path as the CLI. Template lookup, tag
+//! derivation, driver connection, quality checks, restore-on-abort, and write-back rollback
+//! therefore have one implementation; only request validation and reporting stay in this
+//! adapter. `crate::active_run` tracks every in-flight run so each can be cancelled
+//! independently.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{post, put};
 use axum::{Json, Router};
-use bhtune_cli::args::{DriverKindArg, TuneArgs};
-use bhtune_cli::cancel::CtrlC;
-use bhtune_cli::commands::tune::{
-    PidWriteOutcome, drive, pid_parameters_for_result, prepare, write_pid_values,
-};
-use bhtune_cli::output::OutputFormat;
 use bhtune_core::{
     ControllerDirection, ControllerType, ProcessType, ResponseLevel, TagOverrides, opc_write_values,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    TuneDriver, TuneOutcome, TuneResultRow, TuneRunRow, TuneWriteRow, WriteKind, WriteReadback,
+    TuneDriver, TuneOutcome, TuneResultRow, TuneRunRow, WriteKind, WriteReadback,
 };
 use bhtune_driver::OpcDaDriver;
+use bhtune_runtime::cancel::CtrlC;
+use bhtune_runtime::tune::{
+    DriverKind, PidWriteOutcome, TuneRequest, drive, pid_parameters_for_result, prepare,
+    write_pid_values,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -61,12 +60,11 @@ fn default_sim_initial_value() -> f32 {
 /// a run's stored `request_json` straight into a `StartRunRequest` rather than duplicating
 /// its ~30 fields into a second struct, giving a "what you `GET` is exactly what you'd `POST`
 /// to repeat it" symmetry in both the Rust types and the generated OpenAPI schema. This is
-/// safe precisely because `request_json` is *already* built to this exact shape --
-/// `bhtune-cli`'s `RequestSnapshot` doc comment describes the two as kept in sync by
-/// convention.
+/// safe precisely because `request_json` is *already* built to this exact shape -- the
+/// runtime's `RequestSnapshot` serializes the same transport-neutral request fields.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StartRunRequest {
-    /// PV tag prefix; ignored for `driver: "simulator"`. See [`TuneArgs::tagname`].
+    /// PV tag prefix; ignored for `driver: "simulator"`.
     pub tagname: String,
     /// DCS/PLC template name (see `GET /api/templates`).
     pub template: String,
@@ -139,13 +137,10 @@ pub struct StartRunRequest {
     pub write_pid: Option<ResponseLevel>,
 }
 
-/// `value.is_finite()`, as an [`ApiError::BadRequest`] on failure -- the HTTP-path
-/// equivalent of `bhtune-cli`'s `finite_f32` clap `value_parser`, which never runs for a
-/// [`TuneArgs`] built directly in Rust code rather than parsed from `std::env::args()`. Well-
-/// formed JSON can still produce a non-finite `f32` here: a numeric literal within JSON's own
-/// unbounded range (e.g. `1e40`) silently saturates to `f32::INFINITY` on conversion, with no
-/// parse error from `serde_json` -- so this check is a real gap this DTO must close, not
-/// belt-and-suspenders.
+/// `value.is_finite()`, as an [`ApiError::BadRequest`] on failure. Well-formed JSON can still
+/// produce a non-finite `f32` here: a numeric literal within JSON's own unbounded range (e.g.
+/// `1e40`) silently saturates to `f32::INFINITY` on conversion, with no parse error from
+/// `serde_json`.
 fn require_finite(field: &str, value: f32) -> Result<(), ApiError> {
     if value.is_finite() {
         Ok(())
@@ -164,14 +159,12 @@ fn require_finite_if_some(field: &str, value: Option<f32>) -> Result<(), ApiErro
 }
 
 impl StartRunRequest {
-    /// Validates and converts this request into a [`TuneArgs`], ready for
-    /// [`bhtune_cli::commands::tune::prepare`].
+    /// Validates and converts this HTTP request into the shared runtime's [`TuneRequest`].
     ///
-    /// Only validates numeric fields whose clap `value_parser`s are bypassed when a
-    /// [`TuneArgs`] is built directly in Rust code. Operational timing values are not
-    /// request fields; `prepare()` resolves and validates the global configuration before
-    /// connecting to a driver or mutating the database/live loop.
-    pub(crate) fn into_tune_args(self) -> Result<TuneArgs, ApiError> {
+    /// Operational timing values are not request fields; `prepare()` resolves and validates
+    /// the global configuration before connecting to a driver or mutating the database/live
+    /// loop.
+    pub(crate) fn into_tune_request(self) -> Result<TuneRequest, ApiError> {
         require_finite("relay_amp", self.relay_amp)?;
         require_finite("sim_gain", self.sim_gain)?;
         require_finite("sim_tau", self.sim_tau)?;
@@ -189,14 +182,14 @@ impl StartRunRequest {
                 .map_err(|error| ApiError::BadRequest(error.to_string()))?;
         }
 
-        let driver = DriverKindArg::try_from(self.driver)
-            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        let driver =
+            DriverKind::try_from(self.driver).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-        Ok(TuneArgs {
+        Ok(TuneRequest {
             tagname: self.tagname,
             template: self.template,
-            process_type: self.process_type.into(),
-            controller_type: self.controller_type.into(),
+            process_type: self.process_type,
+            controller_type: self.controller_type,
             relay_amp: self.relay_amp,
             cycles_skip: self.cycles_skip,
             cycles_count: self.cycles_count,
@@ -215,16 +208,11 @@ impl StartRunRequest {
             pv_range_low: self.pv_range_low,
             mv_range_high: self.mv_range_high,
             mv_range_low: self.mv_range_low,
-            direction: self.direction.map(Into::into),
+            direction: self.direction,
             tag_overrides: self.tag_overrides,
             notes: self.notes,
             yes: self.yes,
-            write_pid: self.write_pid.map(Into::into),
-            // `drive()`'s doc comment requires `Json` for every HTTP-started run: `execute`'s
-            // interactive write-back prompt (`maybe_write_back`) only skips reading stdin
-            // when `output == OutputFormat::Json`, and this background task has no stdin to
-            // read from at all.
-            output: OutputFormat::Json,
+            write_pid: self.write_pid,
         })
     }
 }
@@ -276,14 +264,14 @@ where
         )));
     }
 
-    let args = request.into_tune_args()?;
+    let request = request.into_tune_request()?;
 
-    // `prepare()`'s own doc comment: its failures (bad template name, `--write-pid` without
-    // `--yes`, an unreachable driver) are "exactly the kind of problem an HTTP client
+    // `prepare()`'s own doc comment: its failures (bad template name, `write_pid` without
+    // `yes`, an unreachable driver) are "exactly the kind of problem an HTTP client
     // expects a synchronous error response for" -- so they map to `400`, not the generic
     // `500` a bare `?`/`Internal` conversion would give.
     let app_config = state.config_snapshot()?;
-    let prepared = prepare(&state.pool, args, &app_config)
+    let prepared = prepare(&state.pool, request, &app_config)
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let run_id = prepared.run_id();
@@ -514,7 +502,7 @@ const D_TAG_PRESENT: &str = "require_writable_run already checked derivative_con
 
 /// Connects an [`OpcDaDriver`] using `run`'s own recorded `opc_server`/`bridge_host` --
 /// never re-resolved from this process's own config/flags, for exactly the reason
-/// `bhtune-cli`'s `commands::history::resolve_revert_connection` documents: a value
+/// `bhtune_runtime::history::resolve_revert_connection` enforces: a value
 /// re-resolved at write/revert time could silently point at a different gateway than the
 /// run itself actually used. [`require_writable_run`] must already have confirmed both
 /// fields are present.
@@ -534,11 +522,11 @@ async fn connect_to_runs_recorded_driver(
             ))
         })?;
     let report =
-        bhtune_cli::gateway::require_live_gateway_compatible(bridge_host, Some(opc_server))
+        bhtune_runtime::gateway::require_live_gateway_compatible(bridge_host, Some(opc_server))
             .await
             .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     if run.gateway_compatibility_json.is_none() {
-        let snapshot = bhtune_cli::gateway::compatibility_json(&report);
+        let snapshot = bhtune_runtime::gateway::compatibility_json(&report);
         TuneRunRow::record_gateway_compatibility(pool, run.id, &snapshot).await?;
     }
     Ok(driver)
@@ -676,11 +664,62 @@ where
     after_release(state).await;
     result?;
 
-    build_run_detail(&state.pool, run_id).await?.ok_or_else(|| {
+    refreshed_run_detail(&state.pool, run_id).await
+}
+
+async fn refreshed_run_detail(
+    pool: &SqlitePool,
+    run_id: i64,
+) -> Result<RunDetailResponse, ApiError> {
+    build_run_detail(pool, run_id).await?.ok_or_else(|| {
         ApiError::Internal(anyhow::anyhow!(
             "run {run_id} vanished while its write/revert was being processed"
         ))
     })
+}
+
+fn map_revert_error(error: bhtune_runtime::history::RevertRunError) -> ApiError {
+    match error {
+        bhtune_runtime::history::RevertRunError::Invalid(error)
+        | bhtune_runtime::history::RevertRunError::Connection(error)
+        | bhtune_runtime::history::RevertRunError::Gateway(error) => {
+            ApiError::BadRequest(error.to_string())
+        }
+        bhtune_runtime::history::RevertRunError::Persistence(error) => ApiError::Internal(error),
+    }
+}
+
+async fn reserve_and_revert(
+    state: &AppState,
+    run_id: i64,
+    allow_uncertain_quality: bool,
+) -> Result<RunDetailResponse, ApiError> {
+    state
+        .active_run
+        .reserve(run_id)
+        .await
+        .map_err(|RunAlreadyActive { run_id: existing }| {
+            ApiError::Conflict(format!(
+                "run {existing} or another PID write/revert is active; try again once it finishes"
+            ))
+        })?;
+
+    let result = bhtune_runtime::history::revert_run(
+        &state.pool,
+        bhtune_runtime::history::RevertRequest {
+            run_id,
+            bridge_host: None,
+            server: None,
+            confirmed: true,
+        },
+        allow_uncertain_quality,
+    )
+    .await;
+
+    state.active_run.release(run_id).await;
+    result.map_err(map_revert_error)?;
+
+    refreshed_run_detail(&state.pool, run_id).await
 }
 
 /// Write one of a run's calculated candidate PID parameter sets back to the live loop.
@@ -794,48 +833,11 @@ pub(crate) async fn revert_run(
     State(state): State<AppState>,
     Path(run_id): Path<i64>,
 ) -> Result<Json<RunDetailResponse>, ApiError> {
-    let run = TuneRunRow::get(&state.pool, run_id)
+    TuneRunRow::get(&state.pool, run_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("no run with id {run_id}")))?;
-    require_writable_run(&run)?;
     let allow_uncertain_quality = state.config_snapshot()?.allow_uncertain_quality;
-
-    let writes = TuneWriteRow::list_for_run(&state.pool, run_id).await?;
-    let last_write = writes
-        .iter()
-        .rev()
-        .find(|w| w.kind == WriteKind::Write)
-        .ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "run {run_id} has no recorded PID write-back to revert"
-            ))
-        })?;
-    let response_level = last_write.response_level;
-    let target = last_write.previous.ok_or_else(|| {
-        ApiError::BadRequest(format!(
-            "run {run_id}'s {response_level:?} PID write-back never recorded pre-write values; \
-             nothing to revert to"
-        ))
-    })?;
-
-    // `require_writable_run` already confirmed all three tags are `Some`.
-    let p_tag = require_present(run.tags.proportional_constant.clone(), P_TAG_PRESENT)?;
-    let i_tag = require_present(run.tags.integral_constant.clone(), I_TAG_PRESENT)?;
-    let d_tag = require_present(run.tags.derivative_constant.clone(), D_TAG_PRESENT)?;
-
-    let detail = reserve_connect_and_write(
-        &state,
-        run_id,
-        &run,
-        &p_tag,
-        &i_tag,
-        &d_tag,
-        response_level,
-        target,
-        WriteKind::Revert,
-        allow_uncertain_quality,
-    )
-    .await?;
+    let detail = reserve_and_revert(&state, run_id, allow_uncertain_quality).await?;
     Ok(Json(detail))
 }
 
@@ -857,7 +859,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use bhtune_core::LoopConfig;
-    use bhtune_db::models::{Pagination, TuneRunFilter};
+    use bhtune_db::models::{Pagination, TuneRunFilter, TuneWriteRow};
     use tokio::sync::oneshot;
     use tower::ServiceExt;
 
@@ -967,7 +969,7 @@ mod tests {
     async fn wait_until_inactive_observes_an_active_registration_before_release() {
         let state = crate::test_support::in_memory_state().await;
         let run_id = 42;
-        let (_ctrl_c, cancel) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, cancel) = bhtune_runtime::cancel::CtrlC::manual();
         let (finish_tx, finish_rx) = oneshot::channel();
         state
             .active_run
@@ -1326,7 +1328,7 @@ mod tests {
 
         let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
         let args = parsed
-            .into_tune_args()
+            .into_tune_request()
             .expect("legacy fields must not affect request parsing");
         assert_eq!(args.template, "Yokogawa CentumVP");
         assert_eq!(args.relay_amp, 10.0);
@@ -1365,7 +1367,7 @@ mod tests {
     async fn a_json_number_that_overflows_f32_to_infinity_is_rejected() {
         // `1e40` is well-formed JSON (an ordinary, if large, decimal literal) but silently
         // saturates to `f32::INFINITY` on conversion -- serde_json never errors on this, so
-        // this proves `into_tune_args`'s manual finiteness check is a real gap being closed,
+        // this proves `into_tune_request`'s manual finiteness check is a real gap being closed,
         // not redundant with what axum's `Json` extractor already rejects.
         let app = crate::build_router(crate::test_support::in_memory_state().await);
         let mut request = fast_simulator_request_json();
@@ -2486,5 +2488,50 @@ mod tests {
         let app = crate::build_router(crate::test_support::in_memory_state().await);
         let response = post_empty(app, "/api/runs/999999/revert").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn revert_run_reservation_conflict_is_reported_before_runtime_work() {
+        let state = crate::test_support::in_memory_state().await;
+        state.active_run.reserve(424242).await.unwrap();
+
+        let result = reserve_and_revert(&state, 7, true).await;
+        assert!(matches!(
+            result,
+            Err(ApiError::Conflict(message)) if message.contains("424242")
+        ));
+
+        state.active_run.release(424242).await;
+    }
+
+    #[tokio::test]
+    async fn revert_error_mapping_preserves_http_error_categories() {
+        use bhtune_runtime::history::RevertRunError;
+
+        assert!(matches!(
+            map_revert_error(RevertRunError::Invalid(anyhow::anyhow!("invalid"))),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_revert_error(RevertRunError::Connection(anyhow::anyhow!("connection"))),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_revert_error(RevertRunError::Gateway(anyhow::anyhow!("gateway"))),
+            ApiError::BadRequest(_)
+        ));
+        assert!(matches!(
+            map_revert_error(RevertRunError::Persistence(anyhow::anyhow!("database"))),
+            ApiError::Internal(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn refreshed_run_detail_reports_a_run_removed_after_a_live_operation() {
+        let state = crate::test_support::in_memory_state().await;
+        assert!(matches!(
+            refreshed_run_detail(&state.pool, 999999).await,
+            Err(ApiError::Internal(_))
+        ));
     }
 }

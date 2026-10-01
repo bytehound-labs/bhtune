@@ -6,24 +6,14 @@
 //!
 //! - [`args`] — the `clap` derive `Cli`/`Command` definitions and the wrapper enums adapting
 //!   `bhtune-core`'s domain enums to `clap::ValueEnum` (required by Rust's orphan rule).
-//! - [`config`] — `CLI > env > TOML config file > platform default` precedence for the
-//!   database path, opcda-bridge gateway address, default OPC server, and the user-supplied
-//!   template catalog path (`template-user-catalog`).
-//! - [`db`] — opens the database and seeds the built-in and (if configured) user-catalog
-//!   DCS/PLC templates on every startup, and runs the `history-retention` sweep if a policy
-//!   is configured.
-//! - [`retention`] — turns `history-retention`'s "N days" policy into a cutoff and a
-//!   logged deletion sweep, shared by [`db::open`]'s startup call, `bhtune-server`'s
-//!   periodic timer, and `bhtune history prune`.
-//! - [`driver`] — constructs the selected `Driver` implementation.
-//! - `timing` — supplies live or fixed-step timestamps to the clock-free MRFT engine.
+//! - [`config`], [`db`], [`driver`], [`logging`], and [`retention`] — re-exports of
+//!   `bhtune-runtime` services used by CLI command handlers. Configuration precedence,
+//!   database bootstrap/seeding, driver construction, logging, and retention behavior are
+//!   shared with the HTTP adapter rather than implemented here.
 //! - [`commands`] — one module per subcommand family: `tune`/`simulate`, `template`,
 //!   `history`, `export`, `opc`.
-//! - [`output`] — the `--output table|json` format shared by `history list`/`history show`
-//!   and `tune`/`simulate`'s final summary, plus error formatting.
-//! - [`logging`] — `tracing`/`tracing-subscriber` structured logging (`cli-logging`),
-//!   initialized once in [`run`], never touching stdout so it can never interleave with
-//!   `--output json`'s single-object contract.
+//! - [`output`] — CLI-specific `--output table|json` formatting and error presentation;
+//!   shared sample export serialization is provided by `bhtune-runtime`.
 //!
 //! `main.rs` stays a one-line delegator to [`run`]; [`run_with_cli`] is the actual entry
 //! point, kept separate so tests can exercise it against an already-parsed [`args::Cli`]
@@ -55,18 +45,11 @@
 )]
 
 pub mod args;
-pub mod cancel;
 pub mod commands;
-pub mod config;
-pub mod db;
-pub mod driver;
-pub mod gateway;
-pub mod logging;
 pub mod output;
-pub mod retention;
+pub use bhtune_runtime::{cancel, config, db, driver, gateway, logging, retention};
 #[cfg(test)]
 mod test_support;
-mod timing;
 
 use std::process::ExitCode;
 
@@ -186,16 +169,18 @@ fn load_startup_config(
 }
 
 /// Test-facing entry point: exercises [`run_with_cli_and_ctrl_c`] against an already-parsed
-/// [`args::Cli`] with a [`cancel::CtrlC::never`] handle, so the large existing test suite
-/// built around this function never installs a real process-wide signal handler -- see
-/// `cancel`'s module doc comment for why that matters beyond just this crate's own tests.
+/// [`args::Cli`] with a manually-created, untriggered cancellation handle, so the large
+/// existing test suite built around this function never installs a real process-wide signal
+/// handler -- see `cancel`'s module doc comment for why that matters beyond just this crate's
+/// own tests.
 /// Real process startup ([`run`]) calls [`run_with_cli_and_ctrl_c`] directly with a real,
 /// installed [`cancel::CtrlC`] instead of going through this wrapper. `#[cfg(test)]`-gated
-/// (rather than merely unused outside tests) because it depends on [`cancel::CtrlC::never`],
-/// itself only defined for test builds -- see that function's own doc comment.
+/// (rather than merely unused outside tests) because it is an injection seam for the crate's
+/// tests and callers should use [`run`] for process startup.
 #[cfg(test)]
 pub(crate) async fn run_with_cli(cli: Cli) -> ExitCode {
-    run_with_cli_and_ctrl_c(cli, cancel::CtrlC::never()).await
+    let (ctrl_c, _handle) = cancel::CtrlC::manual();
+    run_with_cli_and_ctrl_c(cli, ctrl_c).await
 }
 
 /// Loads the config file, resolves the database path, dispatches to the requested
@@ -305,6 +290,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bhtune.db");
         (dir, path)
+    }
+
+    #[cfg(test)]
+    mod config_example_tests {
+        use crate::config::{
+            BhtuneConfig, DemoPolicy, ServerMode, resolve_demo_policy_from_config,
+        };
+
+        #[test]
+        fn example_config_declares_the_approved_demo_contract() {
+            let config: BhtuneConfig =
+                toml::from_str(include_str!("../bhtune.example.toml")).unwrap();
+            assert_eq!(config.server_mode, Some(ServerMode::Full));
+            assert_eq!(
+                resolve_demo_policy_from_config(&config).unwrap(),
+                DemoPolicy::default()
+            );
+        }
     }
 
     #[tokio::test]

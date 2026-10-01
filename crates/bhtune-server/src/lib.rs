@@ -55,7 +55,7 @@ pub use state::AppState;
 pub fn build_router(state: AppState) -> axum::Router {
     let mode = state.mode;
     let policy = state.demo_policy;
-    let router = if mode == bhtune_cli::config::ServerMode::Demo {
+    let router = if mode == bhtune_runtime::config::ServerMode::Demo {
         axum::Router::new()
             .merge(routes::health::router())
             .merge(routes::capabilities::router())

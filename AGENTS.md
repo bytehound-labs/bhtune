@@ -14,17 +14,18 @@ v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only repl
 
 ## Crate map
 
-| Path                  | Responsibility                                                                                                                                                                          |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bhtune-core`         | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                               |
-| `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                 |
-| `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                |
-| `bhtune-cli`          | `bhtune` binary and the shared config, logging, and `prepare()`/`drive()` orchestration.                                                                                                |
-| `bhtune-server`       | Axum API and the embedded React SPA. It reuses the CLI tune path instead of a second implementation.                                                                                    |
-| `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not. |
-| `frontend/`           | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                            |
-| `website/`            | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`.                                                                                               |
-| `fuzz/`               | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member.                                                                                                       |
+| Path                  | Responsibility                                                                                                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bhtune-core`         | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                                                                                  |
+| `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                    |
+| `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                   |
+| `bhtune-runtime`      | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
+| `bhtune-cli`          | `bhtune` clap adapter, terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                                                                 |
+| `bhtune-server`       | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                      |
+| `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                    |
+| `frontend/`           | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                                                                               |
+| `website/`            | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`.                                                                                                                                                  |
+| `fuzz/`               | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member.                                                                                                                                                          |
 
 The server package and `[[bin]]` are both named `bhtune-server`, so tests must use `env!("CARGO_BIN_EXE_bhtune-server")`. The CLI binary is `bhtune` (`CARGO_BIN_EXE_bhtune`).
 
@@ -37,6 +38,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - OPC DA quality is an exact `Good` or `Uncertain` match. Every other quality string is `Bad`. OPC DA `TagValue.timestamp` is always `None`.
 - Browse uses gateway-owned sessions, opaque node keys, and page tokens. Never split `.`, `!`, or `/` to infer hierarchy. Indexed search is optional. Simulator and replay browse/search return `Unsupported`.
 - `opcda-bridge` stays a crates.io dependency local to `bhtune-driver`. Published and packaged builds must not use a git dependency or a path override.
+- `bhtune-runtime` owns application services shared by the CLI and server. Keep direct `clap`, HTTP-framework, and OpenAPI dependencies and types in their respective adapters; transport crates may appear transitively through the OPC DA gRPC client.
 - SQLite is plain and unencrypted. Flatten stable filterable fields. Keep nested evolving values in `json_valid` JSON. `tune_results` and `tune_writes` stay separate tables.
 - Enum columns reuse serde snake_case. Matching `CHECK` constraints use the same literals.
 - Startup re-upserts `builtin` and `catalog` templates and never overwrites a row with a different `origin`. `user` rows are never auto-edited.
@@ -59,7 +61,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - MSRV is Rust 1.94 (`rust-version` in the root `Cargo.toml`). Edition is 2024.
 - Lint policy is `[workspace.lints]` and the "Lint policy" section in [`CONTRIBUTING.md`](CONTRIBUTING.md). Do not weaken a lint, add `NOSONAR`, or accept a finding only to clear a dashboard.
 - Do not add an unused path dependency to reserve a crate graph. Promote a dependency to `[workspace.dependencies]` when a second crate needs it.
-- `bhtune-server` may call `bhtune-cli` for config, database bootstrap, logging, and tune orchestration. Do not fork that logic.
+- `bhtune-cli` and `bhtune-server` are peer adapters over `bhtune-runtime`; neither adapter may become the other adapter's application-service dependency.
 - Local browser testing binds `bhtune-server` to `0.0.0.0:8787` with an isolated temporary database, never the user's normal database. Rebuild and restart after a source or frontend change. Do not test a stale copied binary. Demo access off loopback requires the exact configured HTTPS origin.
 - Export affected rows before a destructive database change.
 - A non-interactive `gh` call does not source the zsh token wrapper. This repository uses the personal identity. Never print a token.

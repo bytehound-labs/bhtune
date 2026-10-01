@@ -152,7 +152,8 @@ than inventing a new pattern.
 
 - **Resolution order: `--templates` > `BHTUNE_TEMPLATES` > `templates` config key > platform
   default.** `config::load_user_templates(cli_templates, config, xdg_config_home, home,
-appdata, is_windows)` in `crates/bhtune-cli/src/config.rs` mirrors `load_config`'s own
+appdata, is_windows)` in `crates/bhtune-runtime/src/config/catalog.rs` mirrors
+  `load_config`'s own
   split between an _explicit_ path (CLI flag, already folded in by clap's `env =
 "BHTUNE_TEMPLATES"`, or the config-file key) and the _auto-discovered default_ path — but
   it is a 4-tier chain, one tier deeper than `load_config`'s own 2-tier bootstrapping case,

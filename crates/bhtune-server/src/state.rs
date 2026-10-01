@@ -6,7 +6,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 
 use crate::active_run::ActiveRun;
-use bhtune_cli::config::{DemoPolicy, ServerMode};
+use bhtune_runtime::config::{DemoPolicy, ServerMode};
 use tokio::sync::Mutex;
 use tokio::sync::{OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
@@ -280,7 +280,7 @@ pub struct AppState {
     pub active_run: ActiveRun,
     /// The live, revisioned TOML configuration. Route handlers take a fresh snapshot for
     /// every operation so a configuration-page save is visible without restarting the server.
-    pub config_store: Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
+    pub config_store: Arc<RwLock<bhtune_runtime::config::LoadedConfigStore>>,
     pub allowed_origin: Option<String>,
     pub trusted_proxy: Option<String>,
     pub mode: ServerMode,
@@ -289,7 +289,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn config_snapshot(&self) -> anyhow::Result<bhtune_cli::config::BhtuneConfig> {
+    pub fn config_snapshot(&self) -> anyhow::Result<bhtune_runtime::config::BhtuneConfig> {
         self.config_store
             .read()
             .map(|store| store.config.clone())
@@ -298,7 +298,7 @@ impl AppState {
 
     pub fn for_mode(
         pool: SqlitePool,
-        config_store: Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
+        config_store: Arc<RwLock<bhtune_runtime::config::LoadedConfigStore>>,
         mode: ServerMode,
         demo_policy: DemoPolicy,
     ) -> Self {
@@ -307,7 +307,7 @@ impl AppState {
 
     pub fn for_mode_with_network_config(
         pool: SqlitePool,
-        config_store: Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
+        config_store: Arc<RwLock<bhtune_runtime::config::LoadedConfigStore>>,
         mode: ServerMode,
         demo_policy: DemoPolicy,
         allowed_origin: Option<String>,

@@ -177,17 +177,14 @@ dependencies = [
  "bhtune-core",
  "bhtune-db",
  "bhtune-driver",
+ "bhtune-runtime",
  "chrono",
  "clap",
- "csv",
  "serde",
  "serde_json",
  "tokio",
  "toml",
- "toml_edit",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -209,6 +206,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -233,8 +231,30 @@ dependencies = [
  "bhtune-cli",
  "bhtune-core",
  "bhtune-driver",
+ "bhtune-runtime",
  "libfuzzer-sys",
  "opcda-bridge",
+]
+
+[[package]]
+name = "bhtune-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bhtune-core",
+ "bhtune-db",
+ "bhtune-driver",
+ "chrono",
+ "csv",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1250,9 +1270,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opcda-bridge"
-version = "0.4.5"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba5887893b9a42744a0a79fa09c8a9c876374c0fbc8cd9ce3898442df96b34c2"
+checksum = "b3b83e5f927fb24c1d67b3fdb3f99e8cb145987ee84bea4c3ad60f0404cc8158"
 dependencies = [
  "opcda-bridge-proto",
  "serde",
@@ -1263,9 +1283,9 @@ dependencies = [
 
 [[package]]
 name = "opcda-bridge-proto"
-version = "0.4.5"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28af995bbbf320d5afc1a14d1352bd2f3862b00cf73f5c2ec7850f536b18334a"
+checksum = "afd7b2f5e77b409ebfc19ffc195ac4de76b80fadafadce8a2a1a6b3f64230a7e"
 dependencies = [
  "prost",
  "toml",

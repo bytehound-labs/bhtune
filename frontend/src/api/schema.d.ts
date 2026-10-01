@@ -1544,7 +1544,7 @@ export interface components {
       /**
        * @description The resolved OPC DA server ProgID this run actually used, or `None` for a
        *     simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
-       *     trusts over any `--server` flag -- see `bhtune-cli::commands::history`.
+       *     trusts over any `--server` flag -- see `bhtune_runtime::history::revert_run`.
        */
       opc_server?: string | null;
       original_request?: null | components["schemas"]["StartRunRequest"];
@@ -1574,13 +1574,11 @@ export interface components {
     };
     /**
      * @description Format for `GET /api/runs/{id}/export` -- deliberately a local, HTTP-facing enum rather
-     *     than reusing `bhtune_cli::args::ExportFormat` directly: that type is `clap`-oriented
-     *     (`ValueEnum`) and has no `Deserialize`/`ToSchema`, matching this module's own
-     *     DTO-decoupling convention (see the module doc comment). Converted to
-     *     `bhtune_cli::args::ExportFormat` at the one call site that needs it ([`export_run`]), so
-     *     the actual CSV/JSON serialization (`bhtune_cli::commands::export::samples_to_bytes`) is
-     *     implemented exactly once and the CLI's `bhtune export` and this route can never disagree
-     *     about what a run's export looks like.
+     *     than reusing the runtime's internal
+     *     [`bhtune_runtime::export::SampleExportFormat`] directly, matching this module's
+     *     DTO-decoupling convention (see the module doc comment). Converted at the call site so
+     *     the shared runtime owns CSV/JSON serialization while this type remains specific to the
+     *     HTTP query and its OpenAPI schema.
      * @enum {string}
      */
     RunExportFormat: "csv" | "json";
@@ -1663,8 +1661,8 @@ export interface components {
       trusted_proxy_configured: boolean;
     };
     /**
-     * @description Runtime server exposure mode. Full mode preserves the normal live-plant API; Demo mode
-     *     is an explicitly restricted, simulator-only surface intended for public demonstrations.
+     * @description Runtime server exposure mode. Full mode preserves the normal live-plant API; Demo mode is
+     *     an explicitly restricted, simulator-only surface intended for public demonstrations.
      * @enum {string}
      */
     ServerMode: "full" | "demo";
@@ -1682,9 +1680,8 @@ export interface components {
      *     a run's stored `request_json` straight into a `StartRunRequest` rather than duplicating
      *     its ~30 fields into a second struct, giving a "what you `GET` is exactly what you'd `POST`
      *     to repeat it" symmetry in both the Rust types and the generated OpenAPI schema. This is
-     *     safe precisely because `request_json` is *already* built to this exact shape --
-     *     `bhtune-cli`'s `RequestSnapshot` doc comment describes the two as kept in sync by
-     *     convention.
+     *     safe precisely because `request_json` is *already* built to this exact shape -- the
+     *     runtime's `RequestSnapshot` serializes the same transport-neutral request fields.
      */
     StartRunRequest: {
       /**
@@ -1787,7 +1784,7 @@ export interface components {
        */
       sim_tau?: number;
       tag_overrides?: null | components["schemas"]["TagOverrides"];
-      /** @description PV tag prefix; ignored for `driver: "simulator"`. See [`TuneArgs::tagname`]. */
+      /** @description PV tag prefix; ignored for `driver: "simulator"`. */
       tagname: string;
       /** @description DCS/PLC template name (see `GET /api/templates`). */
       template: string;

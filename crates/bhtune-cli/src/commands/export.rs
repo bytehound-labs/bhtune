@@ -8,40 +8,8 @@ use std::io::Write;
 
 use bhtune_db::SqlitePool;
 use bhtune_db::models::TuneSampleRow;
-use serde::Serialize;
 
 use crate::args::{ExportArgs, ExportFormat};
-
-#[derive(Serialize)]
-pub struct SampleRecord {
-    tick: i64,
-    time: chrono::DateTime<chrono::Utc>,
-    pv: f32,
-    pv_quality: bhtune_db::models::SampleQuality,
-    hysteresis: f32,
-    mv_value_current: f32,
-    mv_sign_next_step: i8,
-    counter_all_switches: u32,
-    cycles_completed: i32,
-    cycles_remaining: i32,
-}
-
-impl From<&TuneSampleRow> for SampleRecord {
-    fn from(row: &TuneSampleRow) -> Self {
-        SampleRecord {
-            tick: row.tick_index,
-            time: row.sample.time,
-            pv: row.sample.pv,
-            pv_quality: row.pv_quality,
-            hysteresis: row.state.hysteresis,
-            mv_value_current: row.state.mv_value_current,
-            mv_sign_next_step: row.state.mv_sign_next_step,
-            counter_all_switches: row.state.counter_all_switches,
-            cycles_completed: row.state.cycles_completed,
-            cycles_remaining: row.state.cycles_remaining,
-        }
-    }
-}
 
 /// Serializes a run's recorded samples to CSV or JSON bytes -- the one place this mapping is
 /// implemented, shared by this module's own `run()` (writing to a file or stdout) and
@@ -51,17 +19,11 @@ pub fn samples_to_bytes(
     samples: &[TuneSampleRow],
     format: ExportFormat,
 ) -> anyhow::Result<Vec<u8>> {
-    let records: Vec<SampleRecord> = samples.iter().map(SampleRecord::from).collect();
-    match format {
-        ExportFormat::Csv => {
-            let mut writer = csv::Writer::from_writer(Vec::new());
-            for record in &records {
-                writer.serialize(record)?;
-            }
-            Ok(writer.into_inner()?)
-        }
-        ExportFormat::Json => Ok(serde_json::to_vec_pretty(&records)?),
-    }
+    let format = match format {
+        ExportFormat::Csv => bhtune_runtime::export::SampleExportFormat::Csv,
+        ExportFormat::Json => bhtune_runtime::export::SampleExportFormat::Json,
+    };
+    bhtune_runtime::export::samples_to_bytes(samples, format)
 }
 
 pub async fn run(pool: &SqlitePool, args: ExportArgs) -> anyhow::Result<()> {

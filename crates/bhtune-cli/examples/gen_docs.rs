@@ -115,7 +115,7 @@ fn generate_completions(root: &Path) {
 }
 
 fn generate_config_schema(root: &Path) {
-    let config_schema = schemars::schema_for!(bhtune_cli::config::BhtuneConfig);
+    let config_schema = schemars::schema_for!(bhtune_runtime::config::BhtuneConfig);
     let template_schema = schemars::schema_for!(bhtune_core::template::DcsTemplate);
 
     let config_json = serde_json::to_string_pretty(&config_schema)
@@ -131,8 +131,8 @@ fn generate_config_schema(root: &Path) {
         explanation of the template fields; this page is the exhaustive machine-checked \
         contract both formats must satisfy.\n\n\
         ## `bhtune.toml`\n\n\
-        JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in \
-        `bhtune-cli`). Every field is optional -- see `AGENTS.md`'s `cli-config` notes for \
+        JSON Schema for bhtune's TOML config file (`bhtune_runtime::config::BhtuneConfig`). \
+        Every field is optional -- see `AGENTS.md`'s `cli-config` notes for \
         the full `CLI flag > env var > TOML config file > built-in default` precedence each \
         one resolves through.\n\n\
         ```json\n\

@@ -10,13 +10,10 @@ the [design notes index](README.md) for provenance.
   `GET`/`DELETE /api/templates/{name}`, and `GET /api/runs` (filtered, paginated list)/
   `GET /api/runs/{id}` (full run detail: config, initial readings, samples, results, writes)
   into one `axum::Router<AppState>`, directly testable via `tower::ServiceExt::oneshot` with
-  no bound socket. `main.rs` is a thin bootstrap shell calling straight into
-  `bhtune_cli::{config, db, logging}` — the exact same config-precedence, database-open/
-  migrate/seed, and tracing setup the CLI uses, so the two adapters can never silently
-  disagree about where the database lives or how logging is configured (see the
-  `bhtune-server` → `bhtune-cli` dependency note above `[dependencies]` in
-  `crates/bhtune-server/Cargo.toml` for why this is a deliberate, named, temporary coupling
-  rather than the intended peer relationship). Every JSON-facing DTO in `routes/*.rs` is its
+  no bound socket. `main.rs` is a thin bootstrap shell using `bhtune-runtime`'s shared
+  configuration, database, and logging services. The CLI uses those same runtime services,
+  so both adapters share configuration precedence, database bootstrap, and tracing setup
+  without depending on one another. Every JSON-facing DTO in `routes/*.rs` is its
   own hand-written projection of the corresponding `bhtune-db` row type (never a `Serialize`
   impl on the row type itself), mirroring `bhtune-cli`'s own `--output json` shapes
   field-for-field so the CLI and the HTTP API describe the same run the same way. Shuts down
@@ -145,10 +142,10 @@ string` is the one shared helper every hook (`templates.ts`, `runs.ts`) uses to 
 remaining GUI screen needs a way to actually start a tune, and until now `bhtune-server`'s API
 was read-only plus template CRUD-minus-update.
 
-**Reuses `bhtune-cli`'s orchestration; does not reimplement it.** `start_run` calls
-`bhtune_cli::commands::tune::prepare()` inline (template lookup, tag derivation, a real
-driver connect attempt, the `tune_runs` insert) and, once that succeeds, `tokio::spawn`s
-`bhtune_cli::commands::tune::drive()` (the polling/tuning phase itself) as a background task
+**Reuses `bhtune-runtime`'s orchestration; does not reimplement it.** `start_run` calls the
+runtime's `prepare()` service inline (template lookup, tag derivation, a real driver connect
+attempt, the `tune_runs` insert) and, once that succeeds, `tokio::spawn`s its `drive()` service
+(the polling/tuning phase itself) as a background task
 tracked by a new `crate::active_run::ActiveRun` (an `Arc<Mutex<BTreeMap<i64, ActiveTask>>>`
 plus an exclusive post-hoc write/revert reservation, shared via `AppState`). `POST /api/runs`
 returns `201 Created` with the same
@@ -160,17 +157,15 @@ an already-finished or unknown run is not an error (`204`/`404` respectively, ma
 CLI's own idempotent-cancel precedent). Tune tasks may run concurrently; PID write/revert
 operations reserve the registry exclusively so they cannot overlap a tune or another write.
 
-**`StartRunRequest` mirrors `TuneArgs` field-for-field**, with `#[serde(default = "...")]`
-helpers reproducing the CLI's own clap defaults exactly (`sim_gain`/`sim_tau`/
-`sim_dead_time`/`poll_interval_ms`/etc.), so a client that only cares about a few fields gets
-the same behavior `bhtune tune`'s bare flags would. `into_tune_args()` is where a real,
-previously-invisible gap gets closed: every value clap's `value_parser`s would normally
-validate (finite floats, positive integers) arrives here with **no** such validation, because
-constructing a `TuneArgs` directly in Rust code bypasses clap entirely. `require_finite`/
-`require_finite_if_some`/`require_positive` close that gap explicitly, each producing a `400`
-naming the offending field. Fields already covered by `LoopConfig::validate()` inside
-`prepare()` itself (`relay_amp`, `cycles_count` after defaulting, `mrft_delay`) are
-deliberately _not_ re-checked here, to avoid two divergent copies of the same rule.
+**`StartRunRequest` maps to the transport-neutral `TuneRequest`**, with
+`#[serde(default = "...")]` helpers reproducing the CLI's clap defaults exactly
+(`sim_gain`/`sim_tau`/`sim_dead_time`/`poll_interval_ms`/etc.), so a client that only cares
+about a few fields gets the same behavior as `bhtune tune`'s bare flags. The HTTP adapter's
+`into_tune_request()` explicitly checks finite floats and positive integers because JSON
+requests do not pass through clap's `value_parser`s. Those checks return a `400` naming the
+offending field. The runtime's `LoopConfig::validate()` remains authoritative for shared
+domain rules (`relay_amp`, `cycles_count` after defaulting, and `mrft_delay`), avoiding
+divergent copies of those checks.
 
 **Exclusive-operation conflict detection.** `start_run` performs an optimistic pre-check for
 an exclusive PID write/revert reservation to avoid a wasted `prepare()` call (a real driver
@@ -179,51 +174,21 @@ reservation check under the same mutex, so a reservation beginning between the p
 task registration fails cleanly: the inserted row is marked `failed` with a reason that no
 tune task was started. Independent tune starts do not conflict and are both registered.
 
-**The `Send` fix in `bhtune-cli` this required.** Spawning `drive()` as a `tokio::spawn`
-background task requires its future to be `Send + 'static`. The first compile attempt failed:
-`drive()` calls `execute()`, which constructed `std::io::stdin().lock()` (a `StdinLock`,
-`!Send` because it wraps a `std::sync::MutexGuard`) inline as an argument to an internal
-`.await`ed call inside the `RestoreAttempt::Confirmed` write-back branch. Because
-`async fn` desugars to one monolithic generated future type per function, _any_ `!Send` local
-live across _any_ `.await` point — even in a branch never taken at runtime — makes the whole
-generated future `!Send`, and `execute()` was a single non-generic function, so its one
-compiled future type was permanently unsendable regardless of which runtime branch actually
-touched the reader. This was harmless for the CLI's own use (`run_with_ctrl_c`'s future is
-only ever `.await`ed directly inside `#[tokio::main]`, never spawned) but fatal for
-`bhtune-server`. The fix: made `execute()` **generic over the reader type**
-(`async fn execute<R: std::io::BufRead>(..., reader: &mut R)`), with **no explicit `Send`
-bound on `R`** — Rust's monomorphization then produces a _separate_ concrete future type per
-instantiation, each independently checked. `run_with_ctrl_c()` instantiates it with
-`&mut std::io::stdin().lock()` (`!Send`, fine — never spawned); `drive()` instantiates it with
-`&mut std::io::empty()` (`std::io::Empty` is `Send + Sync + Clone + Copy` and behaves as
-immediate EOF, exactly the right semantic for "no human present to answer an interactive
-write-back prompt" — `maybe_write_back`'s existing EOF/blank-input-skips-write-back logic
-already handles it gracefully). A `spawn_local`/`LocalSet` architecture change was considered
-and rejected as disproportionate — it would force the entire axum server onto a
-single-threaded runtime flavor to accommodate one `!Send` value in one rarely-hit branch.
-**This is a reusable pattern, not a one-off:** any future function that is sometimes spawned
-and sometimes not, and that holds a genuinely-optional `!Send` resource only on one branch,
-should reach for "make the resource type generic" before reaching for `spawn_local`.
+**Runtime execution keeps adapter interaction at the boundary.** Server run tasks call the
+runtime without an interactive write-back handler, so a background `drive()` future remains
+`Send` and cannot read from HTTP or terminal state. The CLI supplies its own write-back
+handler for prompts and progress output; validation, cancellation, writes, verification,
+rollback, and persistence remain in the runtime.
 
-**Test coverage, including a genuinely reliable concurrency test.**
-`cargo llvm-cov -p bhtune-server` reports 99.35%→99.59% line coverage on `routes/runs.rs`
-(97.77% region, 100% function) after 14 tests (up from the initial 10), with only two lines
-left uncovered — both defensive `panic!` message-format arguments on assertions that never
-fail in a passing suite (`wait_for_outcome`'s 10-second-timeout guard, and the race test's own
-`else` branch), matching this project's existing accepted-gap precedent
-(`core-tuning-math`/`driver-simulator`'s "passing-assert's message-format argument"). Of the
-four new tests, the most interesting is
-`a_genuine_race_between_two_starts_marks_the_losing_row_failed`: it calls the `start_run`
+**Tests exercise concurrent starts through the real preparation boundary.**
+`a_genuine_race_between_two_starts_marks_the_losing_row_failed` calls the `start_run`
 handler function _directly_ (bypassing the router/tower/hyper stack entirely — `State(state)`
 and `Json(request)` are plain public tuple-struct constructors, not just `FromRequest`
 extractors) and races two invocations with `tokio::join!`. This reliably lands in the deep
-"authoritative race lost" branch — verified empirically across 45+ repeated runs with zero
-failures — because `#[tokio::test]` defaults to a single-threaded runtime, where
-`tokio::join!` polls both futures on the same task and genuinely interleaves at each
-`prepare()` `.await` point (real, if in-memory, SQLite I/O), giving both requests a fair
-chance to pass the optimistic pre-check before either reaches the authoritative check. This
-is a deterministic, non-flaky test, not the "accept the gap" fallback that was the working
-assumption before it was attempted.
+"authoritative race lost" branch because `#[tokio::test]` polls both futures on the same task;
+they interleave at each `prepare()` await point (including in-memory SQLite I/O), giving both
+requests a chance to pass the optimistic pre-check before either reaches the authoritative
+check.
 
 ## Preparation failure finalization
 
@@ -251,7 +216,7 @@ gained `opc_server`/`bridge_host` (flat, nullable columns — `NULL`/`NULL` for 
 added to the same in-place `0001` migration `rename-driver` had just edited.
 `TuneRunRow::record_connection` populates all three via a follow-up `UPDATE` right after `start()`,
 matching `record_initial_readings`/`record_allow_uncertain_quality`'s existing precedent, and
-`bhtune-cli`'s `prepare()` calls it immediately, before any driver I/O. This closes a real latent
+runtime `prepare()` calls it immediately, before any driver I/O. This closes a real latent
 safety bug in `bhtune history revert`, which used to re-resolve the OPC server/bridge host from
 `--server`/`--bridge-host`/config _at revert time_ — silently able to write a run's old PID
 constants into a different plant's controller than the one it actually tuned.
@@ -274,12 +239,11 @@ which need a stored, trustworthy connection/request to act on.
 let PID constants be written to a live loop _after_ a run finishes, rather than only via the CLI's
 pre-run `--write-pid` flow — an engineer can compare Sluggish/Moderate/Aggressive on the run detail
 screen and act on whichever one looks right. Neither endpoint reimplements the write path:
-`read_previous_pid_values`/`write_and_verify_pid_value` (already shared between the in-run write and
-`bhtune history revert`) are promoted from `pub(crate)` to `pub`, and a new shared orchestrating
-function, `write_pid_values`, wraps pre-read → write-and-verify-each-constant →
-roll-back-on-partial-failure → audit-row-insert exactly once, called by both the CLI's existing
-write-back path and these two new HTTP handlers — the same reuse pattern `server-start-tune-api`
-established for `prepare()`/`drive()`. `require_writable_run` enforces run eligibility in a fixed
+`bhtune-runtime::tune::write_pid_values` wraps pre-read → write-and-verify-each-constant →
+roll-back-on-partial-failure → audit-row-insert exactly once, and is used by both the CLI's
+in-run write-back and the HTTP write/revert handlers. The lower-level read/write helpers remain
+private to the runtime crate. This is the same runtime service boundary used for
+`prepare()`/`drive()`. `require_writable_run` enforces run eligibility in a fixed
 order (still-running → wrong driver → missing PID constant tags → no recorded connection) before
 either handler does anything else, and `revert_run` additionally requires the most recent
 `write`-kind row to have recorded pre-write values (a write whose own pre-read failed records
@@ -307,8 +271,9 @@ The filterable/sortable run list, full run detail, and the PV/MV trend chart (in
 presentation-only initial-reading and terminal restored-MV boundary points plus a 12-poll-interval
 left-anchored startup horizon) were already in place from `frontend-screens`/`frontend-live-stream`;
 the remaining piece — export and delete actions on the run detail screen — is now shipped too. `GET
-/api/runs/{id}/export?format=csv|json` (`export_run`, reusing `bhtune-cli`'s own `samples_to_bytes`,
-so the HTTP and CLI export paths can never disagree on the CSV/JSON shape) and `DELETE
+/api/runs/{id}/export?format=csv|json` (`export_run`, reusing
+`bhtune-runtime::export::samples_to_bytes`, so the HTTP and CLI export paths can never disagree
+on the CSV/JSON shape) and `DELETE
 /api/runs/{id}` (`delete_run`, cascading through `tune_samples`/ `tune_results`/`tune_writes` via
 the schema's existing `ON DELETE CASCADE`) are both new `bhtune-server` routes; the frontend adds
 Export CSV/Export JSON download links (plain `<a download>` tags, deliberately not a fetch-then-blob

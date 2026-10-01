@@ -1,6 +1,6 @@
 #![no_main]
 
-use bhtune_cli::config::parse_config_contents;
+use bhtune_runtime::config::parse_config_contents;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

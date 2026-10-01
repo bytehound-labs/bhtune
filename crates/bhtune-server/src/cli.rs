@@ -47,7 +47,7 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<ServiceCommand>,
 
-    /// Path to a TOML config file (default: platform-specific, see `bhtune_cli::config`).
+    /// Path to a TOML config file (default: platform-specific, see `bhtune_runtime::config`).
     /// Baked into the registered launch command by `install` -- see this module's doc
     /// comment.
     #[arg(long, global = true, value_name = "PATH")]

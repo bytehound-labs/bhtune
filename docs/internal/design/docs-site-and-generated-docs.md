@@ -45,7 +45,7 @@ name` needs an owned `String` converted `impl Into<clap::builder::Str>`, which o
 - **`completions/bhtune.bash`, `completions/_bhtune` (zsh), `completions/bhtune.fish`** — via
   `clap_complete::generate`, one file per shell using each shell's own conventional completion
   file name.
-- **`docs/reference/config.md`** — JSON Schema for both `bhtune.toml` (`bhtune_cli::config::
+- **`docs/reference/config.md`** — JSON Schema for both `bhtune.toml` (`bhtune_runtime::config::
 BhtuneConfig`/`LogConfig`) and one DCS/PLC template catalog entry (`bhtune_core::template::
 DcsTemplate`, the same type `template import`/the embedded and user catalogs all parse),
   rendered as two labeled fenced JSON code blocks (`schemars::schema_for!` produces a schema
@@ -61,8 +61,9 @@ decisions" above), not a plain dev-dependency: an optional regular `[dependencie
 `#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]` alongside the existing
 `#[cfg_attr(feature = "utoipa", ...)]` on `DcsTemplate` and the four `pid_config` enums it
 embeds (`ProportionalType`/`IntegralType`/`DerivativeType`/`TimeUnit`), and a `schemars`
-feature forwarding from `bhtune-cli` to `bhtune-core/schemars`. `BhtuneConfig`/`LogConfig`
-(in `bhtune-cli` itself) get the same `cfg_attr` treatment directly. `clap-markdown`/
+feature forwarding from `bhtune-cli` to `bhtune-core/schemars` and
+`bhtune-runtime/schemars`. `BhtuneConfig`/`LogConfig` are owned by `bhtune-runtime` and get
+the same `cfg_attr` treatment there. `clap-markdown`/
 `clap_mangen`/`clap_complete`, by contrast, are used only by `gen_docs.rs` itself, never by
 library-target code, so they stay plain `[dev-dependencies]` with no feature-gating —
 mirroring exactly why `cargo add --dev` is right for those three and wrong for `schemars`

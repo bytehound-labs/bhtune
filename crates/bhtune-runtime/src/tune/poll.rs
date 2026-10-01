@@ -13,7 +13,7 @@ use bhtune_driver::Driver;
 use chrono::{DateTime, Utc};
 use tokio::time::Instant;
 
-use crate::args::TuneArgs;
+use super::request::TuneRequest;
 use crate::cancel::CtrlC;
 use crate::timing::{PollTimingAccumulator, RunTimeAnchor, TickTimeSource};
 
@@ -27,7 +27,8 @@ use super::actuation::{
 use super::config::EffectiveTiming;
 #[cfg(test)]
 use super::config::test_effective_timing;
-use super::prepare::{AbortReason, MutationGuard};
+use super::outcome::AbortReason;
+use super::prepare::MutationGuard;
 use super::quality::{
     check_quality, read_numeric_from_batch, read_poll_batch, sample_quality_from_driver,
     write_value,
@@ -116,7 +117,7 @@ pub(super) async fn insert_tune_sample_with_timing(
 pub(super) async fn run_polling_loop_with_timing(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     tags: &LoopTags,
     driver: &dyn Driver,
@@ -578,7 +579,7 @@ pub(super) async fn run_polling_loop_with_timing(
 pub(super) async fn run_polling_loop(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     tags: &LoopTags,
     driver: &dyn Driver,
     engine: &mut MrftEngine,

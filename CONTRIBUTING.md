@@ -32,6 +32,21 @@ recognized automatically on every later pull request.
   check passes. If a check reports that the branch is behind `main`, update the branch before
   merging; do not bypass the protection rule with a direct push.
 
+## Workspace architecture
+
+- `bhtune-runtime` owns the application services shared by the CLI and server: configuration,
+  database bootstrap, logging, retention, driver setup, tune execution and safety, history
+  write/revert operations, and shared exports.
+- `bhtune-cli` adapts `clap` commands and terminal interaction to the runtime. CLI prompts,
+  exit codes, output formatting, and generated command references remain adapter concerns.
+- `bhtune-server` adapts HTTP requests and responses to the runtime. Axum routes, HTTP DTOs,
+  OpenAPI schemas, and SPA serving remain server concerns; the server does not depend on the
+  CLI.
+- Keep the runtime's source and direct dependencies independent of `clap`, HTTP frameworks,
+  and OpenAPI libraries. The OPC DA gRPC client may bring transport crates transitively; do not
+  use those crates in runtime APIs. Convert transport-specific inputs and outputs at the adapter
+  boundary instead of duplicating application behavior.
+
 ## Commit messages
 
 [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <description>`.

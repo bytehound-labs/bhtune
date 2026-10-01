@@ -4,7 +4,7 @@ Generated from the real `BhtuneConfig`/`DcsTemplate` Rust types (`schemars`) -- 
 
 ## `bhtune.toml`
 
-JSON Schema for bhtune's TOML config file (`crate::config::BhtuneConfig` in `bhtune-cli`). Every field is optional -- see `AGENTS.md`'s `cli-config` notes for the full `CLI flag > env var > TOML config file > built-in default` precedence each one resolves through.
+JSON Schema for bhtune's TOML config file (`bhtune_runtime::config::BhtuneConfig`). Every field is optional -- see `AGENTS.md`'s `cli-config` notes for the full `CLI flag > env var > TOML config file > built-in default` precedence each one resolves through.
 
 ```json
 {

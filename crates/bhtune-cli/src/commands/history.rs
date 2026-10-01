@@ -1,15 +1,13 @@
 //! `bhtune history list/show/revert`.
 
+use crate::args::HistoryCommand;
+use crate::output::OutputFormat;
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
     MvActuationKind, MvActuationStatus, Pagination, SampleQuality, SamplingAdequacy, TimingSummary,
-    TuneDriver, TuneMvActuationRow, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow,
-    TuneWriteRow, WriteKind,
+    TuneMvActuationRow, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
+    WriteKind,
 };
-use bhtune_driver::OpcDaDriver;
-
-use crate::args::HistoryCommand;
-use crate::output::OutputFormat;
 
 pub async fn run(
     pool: &SqlitePool,
@@ -782,63 +780,24 @@ struct RevertedTargetJson {
 /// flag is still accepted, but purely as a cross-check against the recorded value -- a
 /// contradicting flag is a hard error, never a silent override, and there is no fallback to
 /// config when a flag is omitted (unlike every other command's connection resolution).
+#[cfg(test)]
 fn resolve_revert_connection(
     run: &TuneRunRow,
     bridge_host_flag: Option<&str>,
     server_flag: Option<&str>,
 ) -> anyhow::Result<(String, String)> {
-    let stored_server = run.opc_server.as_deref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "run {}'s recorded OPC server is missing; refusing to guess which server to \
-             revert against",
-            run.id
-        )
-    })?;
-    let stored_bridge_host = run.bridge_host.as_deref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "run {}'s recorded bridge host is missing; refusing to guess which gateway to \
-             revert against",
-            run.id
-        )
-    })?;
-
-    if let Some(server_flag) = server_flag
-        && server_flag != stored_server
-    {
-        anyhow::bail!(
-            "--server {server_flag:?} contradicts run {}'s recorded OPC server \
-             {stored_server:?}; refusing to revert against a different server than the run \
-             actually used -- omit --server to use the recorded value",
-            run.id
-        );
-    }
-    if let Some(bridge_host_flag) = bridge_host_flag
-        && bridge_host_flag != stored_bridge_host
-    {
-        anyhow::bail!(
-            "--bridge-host {bridge_host_flag:?} contradicts run {}'s recorded bridge host \
-             {stored_bridge_host:?}; refusing to revert through a different gateway than the \
-             run actually used -- omit --bridge-host to use the recorded value",
-            run.id
-        );
-    }
-
-    Ok((stored_bridge_host.to_string(), stored_server.to_string()))
+    bhtune_runtime::history::resolve_revert_connection(run, bridge_host_flag, server_flag)
 }
 
-/// `bhtune history revert <run-id>`: writes a run's recorded pre-write-back PID values back
-/// to the live loop, undoing whichever [`WriteKind::Write`] write-back that run last
-/// recorded (`safety-writeback-rollback`, finding 6's revert companion command). Reuses
-/// `commands::tune`'s own pre-read/write-and-verify machinery
-/// ([`crate::commands::tune::read_previous_pid_values`]/
-/// [`crate::commands::tune::write_and_verify_pid_value`]), so a revert is audited exactly
-/// like an original write -- a new [`TuneWriteRow`] with `kind = WriteKind::Revert` -- the
-/// one difference being that a revert never attempts a nested rollback of itself if it
-/// fails partway through (see [`WriteKind`]'s doc comment for why).
+/// `bhtune history revert <run-id>`: adapts the confirmation and output behavior for the
+/// shared runtime's audited revert operation. The runtime owns eligibility checks,
+/// connection provenance, pre-read/write/verify, and audit persistence, including the rule
+/// that a revert never attempts a nested rollback of itself.
 ///
 /// The OPC DA connection is never re-resolved from `--server`/`--bridge-host`/config the way
 /// every other command resolves it -- see [`resolve_revert_connection`] for why that would
-/// be a live-plant safety bug, not just an inconsistency.
+/// be a live-plant safety bug, not just an inconsistency. The runtime performs this
+/// cross-check before it connects or writes.
 ///
 /// Every rejection that happens *before* anything is attempted (no such run, wrong driver,
 /// no write-back recorded, its pre-read failed so there is nothing to revert to, missing
@@ -859,74 +818,36 @@ async fn revert(
     output: OutputFormat,
     config: &crate::config::BhtuneConfig,
 ) -> anyhow::Result<()> {
-    let allow_uncertain_quality = config.allow_uncertain_quality;
-    let run = TuneRunRow::get(pool, run_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no run with id {run_id}"))?;
-
-    if run.driver != TuneDriver::Opcda {
-        anyhow::bail!(
-            "run {run_id} used the {:?} driver, which has no live loop to revert a write \
-             against",
-            run.driver
-        );
-    }
-
-    let writes = TuneWriteRow::list_for_run(pool, run_id).await?;
-    let last_write = writes
-        .iter()
-        .rev()
-        .find(|w| w.kind == WriteKind::Write)
-        .ok_or_else(|| anyhow::anyhow!("run {run_id} has no recorded PID write-back to revert"))?;
-    let response_level = last_write.response_level;
-    let target = last_write.previous.ok_or_else(|| {
-        anyhow::anyhow!(
-            "run {run_id}'s {response_level:?} PID write-back never recorded pre-write \
-             values (its pre-read failed at the time); nothing to revert to"
-        )
-    })?;
-
-    if !yes {
-        anyhow::bail!("reverting writes PID constants back to a live loop; pass --yes to confirm");
-    }
-
-    let (Some(p_tag), Some(i_tag), Some(d_tag)) = (
-        &run.tags.proportional_constant,
-        &run.tags.integral_constant,
-        &run.tags.derivative_constant,
-    ) else {
-        anyhow::bail!("run {run_id}'s snapshotted tags have no PID constant tags configured");
-    };
-
-    let (bridge_host, server) =
-        resolve_revert_connection(&run, bridge_host.as_deref(), server.as_deref())?;
-    let driver = OpcDaDriver::connect(&bridge_host, &server).await?;
-    crate::gateway::require_live_gateway_compatible(&bridge_host, Some(&server)).await?;
-
-    if is_table_output(output) {
-        println!(
-            "Reverting run {run_id}'s {response_level:?} PID write-back on tag '{}' to \
-             P={:.4} I={:.4} D={:.4}...",
-            run.loop_name, target.proportional, target.integral, target.derivative
-        );
-    }
-
-    let outcome = crate::commands::tune::write_pid_values(
+    let result = bhtune_runtime::history::revert_run_with_progress(
         pool,
-        run_id,
-        &driver,
-        p_tag,
-        i_tag,
-        d_tag,
-        response_level,
-        target,
-        WriteKind::Revert,
-        allow_uncertain_quality,
+        bhtune_runtime::history::RevertRequest {
+            run_id,
+            bridge_host,
+            server,
+            confirmed: yes,
+        },
+        config.allow_uncertain_quality,
+        |progress| {
+            if is_table_output(output) {
+                println!(
+                    "Reverting run {}'s {:?} PID write-back on tag '{}' to \
+                     P={:.4} I={:.4} D={:.4}...",
+                    progress.run_id,
+                    progress.response_level,
+                    progress.loop_name,
+                    progress.target.proportional,
+                    progress.target.integral,
+                    progress.target.derivative
+                );
+            }
+        },
     )
     .await?;
+    let response_level = result.response_level;
+    let target = result.target;
 
-    match outcome {
-        crate::commands::tune::PidWriteOutcome::Written => {
+    match result.outcome {
+        bhtune_runtime::tune::PidWriteOutcome::Written => {
             tracing::info!(run_id, ?response_level, "PID revert succeeded");
             match output {
                 OutputFormat::Table => {
@@ -951,7 +872,7 @@ async fn revert(
             }
             Ok(())
         }
-        crate::commands::tune::PidWriteOutcome::Failed { detail } => {
+        bhtune_runtime::tune::PidWriteOutcome::Failed { detail } => {
             tracing::error!(run_id, ?response_level, error_message = %detail, "PID revert failed partway through; the loop may hold a mismatched set of PID constants -- see `history show` for the recorded partial state");
             anyhow::bail!(
                 "revert failed partway through: {detail} (the loop may now hold a mismatched \

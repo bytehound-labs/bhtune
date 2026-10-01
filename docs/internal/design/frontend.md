@@ -363,7 +363,7 @@ different DCS server than the run actually used. `ui-simulator-greyout`,
 fields, adding display labels for every raw enum surfaced in the UI, and making `/runs/new` the
 default landing route with a "Tune" nav item first. `api-post-run-write`/`ui-post-run-write` add
 `POST /api/runs/{id}/write`/ `revert` and matching Write/Revert buttons on the run detail page,
-reusing the CLI's existing pre-read/verify/rollback/audit path under a new `ActiveRun::reserve`
+reusing the runtime's existing pre-read/verify/rollback/audit path under a new `ActiveRun::reserve`
 exclusive-reservation lock. The follow-on PID action UX promotes calculated results above the trend
 once they exist and routes Write/Revert through one styled, pending-safe review centered viewport
 popup that is rendered through one shared body-level `Modal` component for PID review, OPC server

@@ -22,18 +22,17 @@ use tokio::sync::watch;
 /// needs to react to it (`execute`, `run_polling_loop`, `attempt_restore`) rather than each
 /// calling `tokio::signal::ctrl_c()` itself.
 ///
-/// [`CtrlC::install`] must be called exactly once, as early as possible, in the real binary's
-/// startup ([`crate::run`]) -- never from a function unit tests exercise. `run_with_cli`'s
-/// and `commands::tune::run`'s test-facing entry points instead default to [`CtrlC::never`]
-/// internally, so the many unit tests that exercise those functions never install a real
-/// process-wide signal handler. That matters beyond just those tests: once *anything* in a
-/// process calls `tokio::signal::ctrl_c()`, the OS's default "terminate on SIGINT" behavior
-/// is gone for the rest of that process, so if any unit test installed a real handler, a
-/// developer's own Ctrl+C meant to abort a hung `cargo test` run could silently disappear
-/// into an idle listener nothing is polling.
+/// The CLI calls [`CtrlC::install`] exactly once, as early as possible in process startup;
+/// runtime tests instead pass [`CtrlC::never`] and the server passes a manually-triggered
+/// handle for each HTTP run. Tests never install a real process-wide signal handler. That
+/// matters beyond this crate's tests: once *anything* in a process calls
+/// `tokio::signal::ctrl_c()`, the OS's default "terminate on SIGINT" behavior is gone for the
+/// rest of that process, so if any unit test installed a real handler, a developer's own
+/// Ctrl+C meant to abort a hung `cargo test` run could silently disappear into an idle
+/// listener nothing is polling.
 ///
 /// `pub` (rather than `pub(crate)`) so `bhtune-server` can name the type as it threads a
-/// [`CtrlC::manual`] handle through `commands::tune::drive` for an HTTP-triggered run -- see
+/// [`CtrlC::manual`] handle through [`crate::tune::drive_report`] for an HTTP-triggered run -- see
 /// that constructor's doc comment. [`CtrlC::signalled`] itself deliberately stays
 /// `pub(crate)`: only code inside this crate (`execute`/`run_polling_loop`/`attempt_restore`)
 /// ever needs to *observe* a cancellation, an external caller only ever needs to *trigger*
@@ -72,7 +71,7 @@ impl CtrlC {
     /// Spawns the one long-lived task that listens for Ctrl+C for the rest of the process's
     /// life, incrementing a counter on every delivery -- see the struct doc comment for why
     /// this must be called exactly once, and only from real process startup.
-    pub(crate) fn install() -> CtrlC {
+    pub fn install() -> CtrlC {
         // Fire-and-forget: nothing ever awaits or aborts this task, so its `JoinHandle` is
         // simply never bound (an explicit `let _ = ...` would trip clippy's
         // `let_underscore_future`, which can't tell this apart from a future that was meant

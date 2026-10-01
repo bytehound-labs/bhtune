@@ -22,7 +22,7 @@ Path to a user\-supplied DCS/PLC template catalog, auto\-loaded on every startup
 Delete tune runs (and their samples/results/write\-back audit rows) older than this many days, automatically, on every startup (default: unset \-\- retain forever). CLI > `BHTUNE_RETENTION_DAYS` env var > `retention_days` in the config file > (no default) \-\- see `crate::config::resolve_retention_days`. `bhtune history prune` applies the same policy on demand, with a `\-\-dry\-run` preview, instead of waiting for the next startup
 .TP
 \fB\-\-log\-level\fR \fI<LOG_LEVEL>\fR
-Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default: info). Diagnostic detail only \-\- never printed to stdout, so it can never interleave with `\-\-output json`\*(Aqs single\-object contract; see `crate::logging`
+Log level / directive spec, e.g. "info" or "bhtune_cli=debug,bhtune_runtime=debug,sqlx=warn" (default: info). Diagnostic detail only \-\- never printed to stdout, so it can never interleave with `\-\-output json`\*(Aqs single\-object contract; see `crate::logging`
 .TP
 \fB\-\-log\-dir\fR \fI<PATH>\fR
 Directory to write log files to (default: a platform\-standard data directory, see `crate::config::default_log_dir_from`)

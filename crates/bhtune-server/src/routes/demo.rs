@@ -12,8 +12,12 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};
-use bhtune_cli::commands::tune::{drive, prepare_owned};
-use bhtune_cli::config::{
+use bhtune_core::{ControllerDirection, template::built_in_templates};
+use bhtune_db::models::{
+    DemoSessionRow, Pagination, TemplateOrigin, TuneDriver, TuneMvActuationRow, TuneOutcome,
+    TuneResultRow, TuneRunRow, TuneSampleRow, TuneWriteRow,
+};
+use bhtune_runtime::config::{
     DEMO_COOKIE_NAME, DEMO_CYCLES_COUNT_DEFAULT, DEMO_CYCLES_COUNT_MAX, DEMO_CYCLES_COUNT_MIN,
     DEMO_CYCLES_SKIP_DEFAULT, DEMO_CYCLES_SKIP_MAX, DEMO_CYCLES_SKIP_MIN,
     DEMO_NOISE_PROTECTION_SECS_DEFAULT, DEMO_NOISE_PROTECTION_SECS_MAX,
@@ -26,11 +30,7 @@ use bhtune_cli::config::{
     DEMO_SIM_TAU_DEFAULT, DEMO_SIM_TAU_MAX, DEMO_SIM_TAU_MIN, DEMO_TAG_NAME, DemoPolicy,
     ServerMode,
 };
-use bhtune_core::{ControllerDirection, template::built_in_templates};
-use bhtune_db::models::{
-    DemoSessionRow, Pagination, TemplateOrigin, TuneDriver, TuneMvActuationRow, TuneOutcome,
-    TuneResultRow, TuneRunRow, TuneSampleRow, TuneWriteRow,
-};
+use bhtune_runtime::tune::{drive, prepare_owned};
 use chrono::{Duration, Utc};
 use rand::random;
 use serde::Serialize;
@@ -853,7 +853,7 @@ pub(crate) async fn export_run(
         )));
     }
     let format = query.format.unwrap_or(RunExportFormat::Csv);
-    let bytes = bhtune_cli::commands::export::samples_to_bytes(&samples, format.into())?;
+    let bytes = bhtune_runtime::export::samples_to_bytes(&samples, format.into())?;
     let (content_type, extension) = match format {
         RunExportFormat::Csv => ("text/csv", "csv"),
         RunExportFormat::Json => ("application/json", "json"),
@@ -1015,7 +1015,7 @@ pub(crate) async fn start_run(
                 ));
             }
 
-            let args = request.into_tune_args()?;
+            let args = request.into_tune_request()?;
             let mut config = state.config_snapshot()?;
             config.tuning.mrft_delay_secs = Some(0);
             config.tuning.poll_interval_ms = Some(state.demo_policy.poll_interval_ms);
@@ -1038,7 +1038,7 @@ pub(crate) async fn start_run(
     };
     let run_id = prepared.run_id();
 
-    let (mut ctrl_c, cancel_handle) = bhtune_cli::cancel::CtrlC::manual();
+    let (mut ctrl_c, cancel_handle) = bhtune_runtime::cancel::CtrlC::manual();
     let pool = state.pool.clone();
     let state_for_task = state.clone();
     let task = async move {
@@ -1107,9 +1107,9 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::extract::ConnectInfo;
     use axum::http::Request;
-    use bhtune_cli::config::DEMO_TEMPLATE_NAME;
     use bhtune_core::{ControllerType, LoopConfig, LoopTags, ProcessType, Tick};
     use bhtune_db::models::{DcsTemplateRow, SampleQuality, TemplateOrigin};
+    use bhtune_runtime::config::DEMO_TEMPLATE_NAME;
     use tower::ServiceExt;
 
     const DEMO_ORIGIN: &str = "https://demo.test";
@@ -2392,7 +2392,7 @@ mod tests {
         let token = raw_token("ab");
         let now = Utc::now();
         let (_, running) = seed_owned_run(&state, &token, now).await;
-        let (_ctrl_c, cancel_handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, cancel_handle) = bhtune_runtime::cancel::CtrlC::manual();
         let (finish, finished) = tokio::sync::oneshot::channel::<()>();
         state
             .active_run
