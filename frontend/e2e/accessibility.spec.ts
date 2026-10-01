@@ -58,6 +58,8 @@ test("shared confirmation dialogs trap and restore focus in both themes", async 
   await expect(close).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(confirm).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
 
   await cancel.click();
   await expect(dialog).not.toBeVisible();

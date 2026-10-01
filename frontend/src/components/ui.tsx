@@ -881,12 +881,10 @@ export function Modal({
       if (event.shiftKey && activeIndex <= 0) {
         event.preventDefault();
         last?.focus();
-      } else if (!event.shiftKey && activeIndex === -1) {
-        event.preventDefault();
-        first.focus();
       } else if (
         !event.shiftKey &&
-        activeIndex === currentFocusableElements.length - 1
+        (activeIndex === -1 ||
+          activeIndex === currentFocusableElements.length - 1)
       ) {
         event.preventDefault();
         first.focus();
