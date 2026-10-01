@@ -129,13 +129,17 @@ rationale for code that still exists (not a changelog of the review itself):
     `mrft_delay_secs > MRFT_DELAY_SECS_MAX` (3,600s, matching the built-in
     `[tuning].timeout_secs`),
     alongside the existing relay-amplitude check.
-  - `bhtune-cli::args` — `finite_f32`/`positive_u32`/`positive_u64` clap `value_parser`
-    functions applied to every numeric flag on `TuneArgs`/`SimulateArgs` that reaches the
-    engine (relay amp, cycles count, the PV/MV range bounds, the simulator's process
-    parameters, poll interval, timeout). Rejects `NaN`/infinite/zero/negative input with a
-    clear message before any I/O. Deliberately _not_ applied to `mrft_delay`, `cycles_skip`,
-    `noise_protection_secs`, or `sim_seed` — each is either bounded only at the model level
-    or has no invalid range at the CLI layer (`0` is a legitimate RNG seed).
+  - `bhtune-runtime::tune::ValidatedTuneRequest` — common finite-float checks for required
+    numeric inputs and optional PV/MV bounds, a positive check for a supplied cycle count,
+    and tag-override validation. Both `TuneArgs` and `StartRunRequest` convert through this
+    type before `prepare()` can connect to a driver or write a run row. Simulator defaults
+    also come from runtime constants used by both adapters.
+  - `bhtune-cli::args` — `finite_f32` and `positive_u32` clap `value_parser` functions call
+    the same runtime numeric validators so command-line input still gets an early, clear
+    parse error. They cover relay amplitude, cycle count, PV/MV range bounds, and simulator
+    process parameters. Deliberately _not_ applied to `mrft_delay`, `cycles_skip`,
+    `noise_protection_secs`, or `sim_seed` — each is either validated at the model/config
+    level or has no invalid range at the CLI layer (`0` is a legitimate RNG seed).
   - `bhtune-runtime::tune::validate_initial_state` — a checkpoint between
     `read_initial_values` and `transition_to_manual` (the single choke point before any
     mutation of the live loop) that validates the resolved `InitialState` uniformly,

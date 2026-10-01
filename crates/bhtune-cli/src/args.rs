@@ -9,6 +9,11 @@
 use std::path::PathBuf;
 
 use bhtune_core::TagOverrides;
+use bhtune_runtime::tune::{
+    DEFAULT_SIM_DEAD_TIME, DEFAULT_SIM_GAIN, DEFAULT_SIM_INITIAL_VALUE, DEFAULT_SIM_NOISE,
+    DEFAULT_SIM_SEED, DEFAULT_SIM_TAU, DriverKind, TuneRequest, TuneRequestValidationError,
+    ValidatedTuneRequest, validate_finite_f32, validate_positive_u32,
+};
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// `value_parser` for every `f32` CLI flag that can reach `bhtune-core` unvalidated. A
@@ -20,11 +25,8 @@ fn finite_f32(s: &str) -> Result<f32, String> {
     let value: f32 = s
         .parse()
         .map_err(|_| format!("'{s}' is not a valid number"))?;
-    if !value.is_finite() {
-        return Err(format!(
-            "'{s}' must be a finite number (not NaN or infinite)"
-        ));
-    }
+    validate_finite_f32("value", value)
+        .map_err(|_| format!("'{s}' must be a finite number (not NaN or infinite)"))?;
     Ok(value)
 }
 
@@ -36,9 +38,7 @@ fn positive_u32(s: &str) -> Result<u32, String> {
     let value: u32 = s
         .parse()
         .map_err(|_| format!("'{s}' is not a valid non-negative integer"))?;
-    if value == 0 {
-        return Err("must be at least 1".to_string());
-    }
+    validate_positive_u32("value", value).map_err(|_| "must be at least 1".to_string())?;
     Ok(value)
 }
 
@@ -387,25 +387,25 @@ pub struct TuneArgs {
     pub server: Option<String>,
 
     /// Simulator process gain (`--driver simulator` only).
-    #[arg(long, default_value_t = 1.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_GAIN, value_parser = finite_f32)]
     pub sim_gain: f32,
     /// Simulator process time constant, in seconds (`--driver simulator` only).
-    #[arg(long, default_value_t = 2.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_TAU, value_parser = finite_f32)]
     pub sim_tau: f32,
     /// Simulator dead time, in seconds (`--driver simulator` only).
-    #[arg(long, default_value_t = 5.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_DEAD_TIME, value_parser = finite_f32)]
     pub sim_dead_time: f32,
     /// Simulator measurement noise amplitude (`--driver simulator` only).
-    #[arg(long, default_value_t = 0.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_NOISE, value_parser = finite_f32)]
     pub sim_noise: f32,
     /// Simulator RNG seed, for reproducible noise (`--driver simulator` only).
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = DEFAULT_SIM_SEED)]
     pub sim_seed: u64,
     /// Simulator initial PV (`--driver simulator` only).
-    #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_INITIAL_VALUE, value_parser = finite_f32)]
     pub sim_initial_pv: f32,
     /// Simulator initial MV (`--driver simulator` only).
-    #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_INITIAL_VALUE, value_parser = finite_f32)]
     pub sim_initial_mv: f32,
 
     /// Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle
@@ -477,6 +477,46 @@ pub struct TuneArgs {
     pub output: crate::output::OutputFormat,
 }
 
+impl TryFrom<TuneArgs> for ValidatedTuneRequest {
+    type Error = TuneRequestValidationError;
+
+    fn try_from(args: TuneArgs) -> Result<Self, Self::Error> {
+        let request = TuneRequest {
+            tagname: args.tagname,
+            template: args.template,
+            process_type: args.process_type.into(),
+            controller_type: args.controller_type.into(),
+            relay_amp: args.relay_amp,
+            cycles_skip: args.cycles_skip,
+            cycles_count: args.cycles_count,
+            noise_protection_secs: args.noise_protection_secs,
+            driver: match args.driver {
+                DriverKindArg::Opcda => DriverKind::Opcda,
+                DriverKindArg::Simulator => DriverKind::Simulator,
+            },
+            bridge_host: args.bridge_host,
+            server: args.server,
+            sim_gain: args.sim_gain,
+            sim_tau: args.sim_tau,
+            sim_dead_time: args.sim_dead_time,
+            sim_noise: args.sim_noise,
+            sim_seed: args.sim_seed,
+            sim_initial_pv: args.sim_initial_pv,
+            sim_initial_mv: args.sim_initial_mv,
+            pv_range_high: args.pv_range_high,
+            pv_range_low: args.pv_range_low,
+            mv_range_high: args.mv_range_high,
+            mv_range_low: args.mv_range_low,
+            direction: args.direction.map(Into::into),
+            tag_overrides: args.tag_overrides,
+            notes: args.notes,
+            yes: args.yes,
+            write_pid: args.write_pid.map(Into::into),
+        };
+        ValidatedTuneRequest::try_from(request)
+    }
+}
+
 /// `bhtune simulate`: every field defaulted for a true zero-configuration demo run.
 #[derive(Parser, Debug, Clone)]
 pub struct SimulateArgs {
@@ -505,19 +545,19 @@ pub struct SimulateArgs {
     #[arg(skip)]
     pub mrft_delay: u32,
 
-    #[arg(long, default_value_t = 1.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_GAIN, value_parser = finite_f32)]
     pub sim_gain: f32,
-    #[arg(long, default_value_t = 2.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_TAU, value_parser = finite_f32)]
     pub sim_tau: f32,
-    #[arg(long, default_value_t = 5.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_DEAD_TIME, value_parser = finite_f32)]
     pub sim_dead_time: f32,
-    #[arg(long, default_value_t = 0.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_NOISE, value_parser = finite_f32)]
     pub sim_noise: f32,
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = DEFAULT_SIM_SEED)]
     pub sim_seed: u64,
-    #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_INITIAL_VALUE, value_parser = finite_f32)]
     pub sim_initial_pv: f32,
-    #[arg(long, default_value_t = 50.0, value_parser = finite_f32)]
+    #[arg(long, default_value_t = DEFAULT_SIM_INITIAL_VALUE, value_parser = finite_f32)]
     pub sim_initial_mv: f32,
 
     #[cfg(test)]
@@ -1067,6 +1107,7 @@ mod tests {
             positive_u32("not-a-number").unwrap_err(),
             "'not-a-number' is not a valid non-negative integer"
         );
+        assert_eq!(positive_u32("0").unwrap_err(), "must be at least 1");
     }
 
     #[test]

@@ -1,19 +1,29 @@
 use bhtune_core::{ControllerDirection, ControllerType, ProcessType, ResponseLevel, TagOverrides};
 use bhtune_db::models::TuneDriver;
+use bhtune_runtime::tune::{
+    DEFAULT_SIM_DEAD_TIME, DEFAULT_SIM_GAIN, DEFAULT_SIM_INITIAL_VALUE, DEFAULT_SIM_NOISE,
+    DEFAULT_SIM_SEED, DEFAULT_SIM_TAU,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 fn default_sim_gain() -> f32 {
-    1.0
+    DEFAULT_SIM_GAIN
 }
 fn default_sim_tau() -> f32 {
-    2.0
+    DEFAULT_SIM_TAU
 }
 fn default_sim_dead_time() -> f32 {
-    5.0
+    DEFAULT_SIM_DEAD_TIME
+}
+fn default_sim_noise() -> f32 {
+    DEFAULT_SIM_NOISE
+}
+fn default_sim_seed() -> u64 {
+    DEFAULT_SIM_SEED
 }
 fn default_sim_initial_value() -> f32 {
-    50.0
+    DEFAULT_SIM_INITIAL_VALUE
 }
 
 /// The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values
@@ -31,7 +41,7 @@ fn default_sim_initial_value() -> f32 {
 /// to repeat it" symmetry in both the Rust types and the generated OpenAPI schema. This is
 /// safe precisely because `request_json` is *already* built to this exact shape -- the
 /// runtime's `RequestSnapshot` serializes the same transport-neutral request fields.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct StartRunRequest {
     /// PV tag prefix; ignored for `driver: "simulator"`.
     pub tagname: String,
@@ -68,10 +78,10 @@ pub struct StartRunRequest {
     #[serde(default = "default_sim_dead_time")]
     pub sim_dead_time: f32,
     /// Simulator measurement noise amplitude (`driver: "simulator"` only).
-    #[serde(default)]
+    #[serde(default = "default_sim_noise")]
     pub sim_noise: f32,
     /// Simulator RNG seed, for reproducible noise (`driver: "simulator"` only).
-    #[serde(default)]
+    #[serde(default = "default_sim_seed")]
     pub sim_seed: u64,
     /// Simulator initial PV (`driver: "simulator"` only).
     #[serde(default = "default_sim_initial_value")]

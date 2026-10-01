@@ -1,12 +1,11 @@
 //! `POST /api/runs` (start a new tune run) and `POST /api/runs/{id}/cancel` (request its
 //! cancellation) -- the write side of the run-history API `routes::history` reads from.
 //!
-//! Converts the HTTP request into the shared runtime's transport-neutral [`TuneRequest`],
-//! then uses the same preparation and drive path as the CLI. Template lookup, tag
-//! derivation, driver connection, quality checks, restore-on-abort, and write-back rollback
-//! therefore have one implementation; only request validation and reporting stay in this
-//! adapter. `crate::active_run` tracks every in-flight run so each can be cancelled
-//! independently.
+//! Converts the HTTP request into the runtime's validated tune request, then uses the same
+//! preparation and drive path as the CLI. Template lookup, tag derivation, common input
+//! validation, driver connection, quality checks, restore-on-abort, and write-back rollback
+//! therefore have one implementation; transport errors and reporting stay in this adapter.
+//! `crate::active_run` tracks every in-flight run so each can be cancelled independently.
 
 use crate::active_run::RunAlreadyActive;
 use crate::error::{ApiError, ErrorBody, require_present};
@@ -24,8 +23,7 @@ use bhtune_db::models::{
 use bhtune_driver::OpcDaDriver;
 use bhtune_runtime::cancel::CtrlC;
 use bhtune_runtime::tune::{
-    DriverKind, PidWriteOutcome, TuneRequest, drive, pid_parameters_for_result, prepare,
-    write_pid_values,
+    DriverKind, PidWriteOutcome, drive, pid_parameters_for_result, prepare, write_pid_values,
 };
 use chrono::Utc;
 

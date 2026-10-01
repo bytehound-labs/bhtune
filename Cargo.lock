@@ -305,6 +305,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "axum",
+ "bhtune-cli",
  "bhtune-core",
  "bhtune-db",
  "bhtune-driver",

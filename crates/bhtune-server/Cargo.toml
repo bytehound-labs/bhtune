@@ -113,6 +113,8 @@ clap.workspace = true
 windows-service = "0.8"
 
 [dev-dependencies]
+# Request-parity tests exercise the real CLI parser and conversion without production coupling.
+bhtune-cli = { path = "../bhtune-cli" }
 tempfile = "3"
 # Test-only: `routes/history.rs`'s fuller fixture inserts a raw `loops` row directly via SQL
 # so a seeded run can carry a real `loop_id` for the `GET /api/runs?loop_id=` filter test --
