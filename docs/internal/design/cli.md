@@ -11,6 +11,14 @@ configuration, database bootstrap, driver setup, and tune orchestration. Data co
 the same SQLite database through `bhtune_runtime::db::open`, which also seeds the four
 built-in templates, and share one dispatcher in `lib.rs::run_with_cli`.
 
+- **`bhtune check`** — validates a tune request without calling `prepare()` or opening the
+  database through the mutating startup path. It uses an optional read-only SQLite pool for
+  persisted user templates, falls back to built-in and configured catalog templates when no
+  database exists, wraps the selected driver in `ReadOnlyDriver`, and reads the complete
+  derived tag set in one bounded batch. The runtime reports configuration, template/tag,
+  gateway, ProgID, capability, quality/value, mode, initial-state, and write-back-readiness
+  results. When a template defines a mode-attribute program value, the preflight checks it
+  without changing it. A read-only check cannot verify controller write permission.
 - **`bhtune tune`** — runs a full MRFT test against a named template: converts `TuneArgs` to
   the runtime's `ValidatedTuneRequest`, then calls runtime `prepare()` and `drive()` services.
   Simulator defaults and common finite/positive checks are runtime-owned and shared with HTTP
@@ -68,8 +76,10 @@ presentation, and process exit codes; see "Automation" and "Logging" for those a
 contracts.
 
 **Testing approach.** Runtime tests characterize tune preparation, execution, restore,
-write-back, cancellation, and the simulator path with `MockDriver` and `SimulatorDriver`
-fixtures. OPC DA driver and CLI passthrough tests use the shared unpublished
+write-back, cancellation, and the simulator path with `MockDriver` and `SimulatorDriver`.
+Read-only preflight tests use the shared mock gRPC bridge; the read-only wrapper has a focused
+test proving an attempted write cannot reach its underlying driver. OPC DA driver and CLI
+passthrough tests use the shared unpublished
 `bhtune-test-support` mock gRPC `Bridge` service; neither needs a real gateway or OPC DA server.
 CLI tests separately cover argument parsing, command dispatch, terminal output, and process
 exit behavior.
@@ -103,11 +113,17 @@ rather than either skipped silently or chased at disproportionate risk.
 
 ## Automation (`cli-automation`)
 
-`bhtune tune`/`bhtune simulate` support fully non-interactive operation for scheduled/scripted
-use (`cron`, Windows Task Scheduler, CI), and `bhtune history list`/`show`/`revert`/`prune`
-support machine-readable output for the same callers:
+`bhtune check` supports read-only preflight for scheduled/scripted use (`cron`, Windows Task
+Scheduler, CI). `bhtune tune`/`bhtune simulate` support fully non-interactive operation, and
+`bhtune history list`/`show`/`revert`/`prune` support machine-readable output for the same
+callers:
 
-- **`--yes`** — required before `--write-pid` is honored at all; see below.
+- **`bhtune check`** — accepts the tune inputs without starting a run. Its `--write-pid`
+  flag requests a read-only readiness assessment only and does not require `--yes`. Warnings
+  do not fail by default; `--strict` makes them fail. Where configured, mode-attribute
+  readiness is checked against the template's program value. The command never starts the
+  tune or writes to the database or controller.
+- **`--yes`** — required before `--write-pid` is honored by `tune`/`simulate`; see below.
 - **`--write-pid <aggressive|moderate|sluggish>`** — writes that response level's calculated
   PID constants back to the DCS without the interactive stdin confirmation prompt
   `maybe_write_back` otherwise uses. Requires `--yes`; `run()` rejects the combination with a
@@ -116,7 +132,8 @@ support machine-readable output for the same callers:
   named response level has no recorded calculated result (defensive; not reachable through
   normal CLI validation), the write-back is reported as failed rather than attempted, exactly
   as an invalid interactive selection already was.
-- **`--output <table|json>`** — on `tune`/`simulate`, the final summary line; on
+- **`--output <table|json>`** — on `check`, the full preflight report; on
+  `tune`/`simulate`, the final summary line; on
   `history list`/`show`, the whole listing/detail; on `history revert`, the pre-attempt
   status line and the final outcome (a `RevertJson` object); on `history prune`, the
   deleted-or-would-delete count and cutoff (a `PruneJson` object, via the same shared
@@ -141,7 +158,9 @@ support machine-readable output for the same callers:
   confirmed within `[tuning].restore_timeout_secs`, or was cut short by a second Ctrl+C — see
   `safety-cancellation` above; kept distinct from `EXIT_ABORTED` since "aborted and restored"
   and "aborted, restore abandoned — go check the loop by hand" are very different outcomes
-  for a scheduler to alert on). `tune_outcome_exit_code` maps `commands::tune::TuneOutcome`
+  for a scheduler to alert on), and `EXIT_CHECK_FAILED = 8` (a preflight check failed or
+  `--strict` rejected a warning). A preflight setup error uses `EXIT_FAILURE = 1`.
+  `tune_outcome_exit_code` maps `commands::tune::TuneOutcome`
   (`Completed`/`Aborted`/`TimedOut`/`WriteBackFailed`/`PoorQuality`/`RestoreIncomplete`,
   returned by `run()` on the `Ok` path) to the process's actual
   `ExitCode`; `fail()` handles the `Err` path and always prints the error in the format

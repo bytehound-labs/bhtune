@@ -36,7 +36,7 @@ _bhtune() {
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:bhtune-command-$line[1]:"
         case $line[1] in
-            (tune)
+            (check)
 _arguments "${_arguments_options[@]}" : \
 '-t+[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--driver simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
 '--tagname=[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--driver simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
@@ -47,7 +47,7 @@ _arguments "${_arguments_options[@]}" : \
 '--cycles-skip=[Relay cycles to skip before counting begins (default\: looked up per \`--process-type\`)]:CYCLES_SKIP:_default' \
 '--cycles-count=[Relay cycles to count once the skip period ends (default\: looked up per \`--process-type\`)]:CYCLES_COUNT:_default' \
 '--noise-protection-secs=[Seconds a switch must persist before it'\''s accepted (default\: looked up per \`--process-type\`)]:NOISE_PROTECTION_SECS:_default' \
-'--driver=[Which driver drives this tune]:DRIVER:((opcda\:"A real OPC DA server, reached through an opcda-bridge gateway"
+'--driver=[Which driver backs this tune or preflight check]:DRIVER:((opcda\:"A real OPC DA server, reached through an opcda-bridge gateway"
 simulator\:"The in-process FOPDT simulator — no external dependency at all"))' \
 '--bridge-host=[opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md'\''s OPC DA integration notes. Only meaningful with \`--driver opcda\` (default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via the \`BHTUNE_BRIDGE_HOST\` env var or the config file'\''s \`bridge_host\` key)]:BRIDGE_HOST:_default' \
 '--server=[OPC DA server ProgID (legacy\: \`-s\`/\`--opcServerID\`). Required with \`--driver opcda\`]:SERVER:_default' \
@@ -63,9 +63,9 @@ simulator\:"The in-process FOPDT simulator — no external dependency at all"))'
 '--mv-range-high=[Fixed MV range high, overriding a live tag read]:MV_RANGE_HIGH:_default' \
 '--mv-range-low=[Fixed MV range low, overriding a live tag read]:MV_RANGE_LOW:_default' \
 '--direction=[Fixed controller direction, overriding a live tag read]:DIRECTION:(direct reverse)' \
-'--notes=[Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes]:NOTES:_default' \
-'--write-pid=[Non-interactively write this response level'\''s calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires \`--yes\`]:WRITE_PID:(aggressive moderate sluggish)' \
-'--output=[How to print this run'\''s final outcome line]:OUTPUT:((table\:"Human-readable text (default)"
+'--notes=[Operator notes to attach to a tune run. Ignored by \`check\`, which does not create a run]:NOTES:_default' \
+'--write-pid=[For \`tune\`, write this response level'\''s calculated PID parameters back to the DCS without prompting; requires \`--yes\`. For \`check\`, assess read-only write-back readiness only; no \`--yes\` is required and no write occurs]:WRITE_PID:(aggressive moderate sluggish)' \
+'--output=[How to print this command'\''s result]:OUTPUT:((table\:"Human-readable text (default)"
 json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
 '--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
 '--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
@@ -75,7 +75,52 @@ json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled
 '--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
 '--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
 '--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
-'--yes[Confirm an unattended PID write-back. Required alongside \`--write-pid\` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without \`--write-pid\`]' \
+'--yes[Confirm an unattended PID write-back. Required alongside \`--write-pid\` for \`tune\` and \`simulate\`; \`check\` only assesses readiness and does not require this flag. Has no effect without \`--write-pid\`]' \
+'--strict[Treat warnings as failed checks]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(tune)
+_arguments "${_arguments_options[@]}" : \
+'-t+[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--driver simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
+'--tagname=[PV tag prefix; the rest of the tag set is derived from it using \`--template\`'\''s suffix convention. Ignored for \`--driver simulator\`, which uses two fixed internal tag names instead]:TAGNAME:_default' \
+'--template=[DCS/PLC template name (see \`bhtune template list\`)]:TEMPLATE:_default' \
+'--process-type=[]:PROCESS_TYPE:(flow pressure-line pressure-vessel level temperature-mixing temperature-heat-exchange)' \
+'--controller-type=[]:CONTROLLER_TYPE:(p pi pid)' \
+'--relay-amp=[Relay amplitude, as a percentage of the MV range]:RELAY_AMP:_default' \
+'--cycles-skip=[Relay cycles to skip before counting begins (default\: looked up per \`--process-type\`)]:CYCLES_SKIP:_default' \
+'--cycles-count=[Relay cycles to count once the skip period ends (default\: looked up per \`--process-type\`)]:CYCLES_COUNT:_default' \
+'--noise-protection-secs=[Seconds a switch must persist before it'\''s accepted (default\: looked up per \`--process-type\`)]:NOISE_PROTECTION_SECS:_default' \
+'--driver=[Which driver backs this tune or preflight check]:DRIVER:((opcda\:"A real OPC DA server, reached through an opcda-bridge gateway"
+simulator\:"The in-process FOPDT simulator — no external dependency at all"))' \
+'--bridge-host=[opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md'\''s OPC DA integration notes. Only meaningful with \`--driver opcda\` (default\: \`crate\:\:config\:\:DEFAULT_BRIDGE_HOST\`, overridable via the \`BHTUNE_BRIDGE_HOST\` env var or the config file'\''s \`bridge_host\` key)]:BRIDGE_HOST:_default' \
+'--server=[OPC DA server ProgID (legacy\: \`-s\`/\`--opcServerID\`). Required with \`--driver opcda\`]:SERVER:_default' \
+'--sim-gain=[Simulator process gain (\`--driver simulator\` only)]:SIM_GAIN:_default' \
+'--sim-tau=[Simulator process time constant, in seconds (\`--driver simulator\` only)]:SIM_TAU:_default' \
+'--sim-dead-time=[Simulator dead time, in seconds (\`--driver simulator\` only)]:SIM_DEAD_TIME:_default' \
+'--sim-noise=[Simulator measurement noise amplitude (\`--driver simulator\` only)]:SIM_NOISE:_default' \
+'--sim-seed=[Simulator RNG seed, for reproducible noise (\`--driver simulator\` only)]:SIM_SEED:_default' \
+'--sim-initial-pv=[Simulator initial PV (\`--driver simulator\` only)]:SIM_INITIAL_PV:_default' \
+'--sim-initial-mv=[Simulator initial MV (\`--driver simulator\` only)]:SIM_INITIAL_MV:_default' \
+'--pv-range-high=[Fixed PV range high, overriding a live tag read (legacy\: the PV range "toggle tag/value" button). Required (defaults to 100.0) for \`--driver simulator\`, which has no range tags at all]:PV_RANGE_HIGH:_default' \
+'--pv-range-low=[Fixed PV range low, overriding a live tag read]:PV_RANGE_LOW:_default' \
+'--mv-range-high=[Fixed MV range high, overriding a live tag read]:MV_RANGE_HIGH:_default' \
+'--mv-range-low=[Fixed MV range low, overriding a live tag read]:MV_RANGE_LOW:_default' \
+'--direction=[Fixed controller direction, overriding a live tag read]:DIRECTION:(direct reverse)' \
+'--notes=[Operator notes to attach to a tune run. Ignored by \`check\`, which does not create a run]:NOTES:_default' \
+'--write-pid=[For \`tune\`, write this response level'\''s calculated PID parameters back to the DCS without prompting; requires \`--yes\`. For \`check\`, assess read-only write-back readiness only; no \`--yes\` is required and no write occurs]:WRITE_PID:(aggressive moderate sluggish)' \
+'--output=[How to print this command'\''s result]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--retention-days=[Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default\: unset -- retain forever). CLI > \`BHTUNE_RETENTION_DAYS\` env var > \`retention_days\` in the config file > (no default) -- see \`crate\:\:config\:\:resolve_retention_days\`. \`bhtune history prune\` applies the same policy on demand, with a \`--dry-run\` preview, instead of waiting for the next startup]:RETENTION_DAYS:_default' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,bhtune_runtime=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'--yes[Confirm an unattended PID write-back. Required alongside \`--write-pid\` for \`tune\` and \`simulate\`; \`check\` only assesses readiness and does not require this flag. Has no effect without \`--write-pid\`]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -811,7 +856,11 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:bhtune-help-command-$line[1]:"
         case $line[1] in
-            (tune)
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tune)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -983,6 +1032,7 @@ esac
 (( $+functions[_bhtune_commands] )) ||
 _bhtune_commands() {
     local commands; commands=(
+'check:Validate tune inputs and live readings without starting a tune or writing to the loop' \
 'tune:Run an MRFT tune against a real OPC DA loop or the in-process simulator' \
 'simulate:Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator' \
 'template:Inspect and manage DCS/PLC templates' \
@@ -993,6 +1043,11 @@ _bhtune_commands() {
     )
     _describe -t commands 'bhtune commands' commands "$@"
 }
+(( $+functions[_bhtune__subcmd__check_commands] )) ||
+_bhtune__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune check commands' commands "$@"
+}
 (( $+functions[_bhtune__subcmd__export_commands] )) ||
 _bhtune__subcmd__export_commands() {
     local commands; commands=()
@@ -1001,6 +1056,7 @@ _bhtune__subcmd__export_commands() {
 (( $+functions[_bhtune__subcmd__help_commands] )) ||
 _bhtune__subcmd__help_commands() {
     local commands; commands=(
+'check:Validate tune inputs and live readings without starting a tune or writing to the loop' \
 'tune:Run an MRFT tune against a real OPC DA loop or the in-process simulator' \
 'simulate:Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator' \
 'template:Inspect and manage DCS/PLC templates' \
@@ -1010,6 +1066,11 @@ _bhtune__subcmd__help_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'bhtune help commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__check_commands] )) ||
+_bhtune__subcmd__help__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help check commands' commands "$@"
 }
 (( $+functions[_bhtune__subcmd__help__subcmd__export_commands] )) ||
 _bhtune__subcmd__help__subcmd__export_commands() {

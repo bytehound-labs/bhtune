@@ -40,6 +40,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - `opcda-bridge` stays a crates.io dependency local to `bhtune-driver`. Published and packaged builds must not use a git dependency or a path override.
 - `bhtune-runtime` owns application services shared by the CLI and server. Keep direct `clap`, HTTP-framework, and OpenAPI dependencies and types in their respective adapters; transport crates may appear transitively through the OPC DA gRPC client.
 - CLI `TuneArgs` and HTTP `StartRunRequest` convert to runtime-owned `ValidatedTuneRequest` before preparation. Keep shared simulator defaults and common finite/positive/tag-override checks in the runtime; Demo-specific restrictions remain an additional server policy.
+- `bhtune check` is a strictly read-only preflight: dispatch it before `db::open`, query persisted templates only through `db::open_read_only`, and wrap the selected driver in `ReadOnlyDriver`. It must not create history, start a tune, write tags, restore a loop, or refresh a namespace. A passing write-back-readiness result proves only that P/I/D tags are configured and readable and any template-specific prerequisites are met; it cannot prove write permission.
 - SQLite is plain and unencrypted. Flatten stable filterable fields. Keep nested evolving values in `json_valid` JSON. `tune_results` and `tune_writes` stay separate tables.
 - Enum columns reuse serde snake_case. Matching `CHECK` constraints use the same literals.
 - Startup re-upserts `builtin` and `catalog` templates and never overwrites a row with a different `origin`. `user` rows are never auto-edited.
@@ -122,9 +123,9 @@ Global `[tuning]` timeouts are resolved before any driver connection or live mut
 
 ## Automation (`cli-automation`)
 
-`tune` and `simulate` accept `--yes`, `--write-pid <aggressive|moderate|sluggish>`, and `--output table|json`. `--write-pid` requires `--yes` and is rejected before any I/O when `--yes` is absent. `simulate` accepts the write flags but skips write-back: the simulator has no PID constant tags.
+`tune` and `simulate` accept `--yes`, `--write-pid <aggressive|moderate|sluggish>`, and `--output table|json`. `--write-pid` requires `--yes` and is rejected before any I/O when `--yes` is absent. `simulate` accepts the write flags but skips write-back: the simulator has no PID constant tags. `check` accepts the tune inputs, `--output table|json`, `--strict`, and `--write-pid` for readiness assessment only; it never writes and does not require `--yes`.
 
-JSON mode prints nothing but the final object on stdout. Prompts go to stderr. JSON mode without `--write-pid` does not read stdin.
+JSON mode prints nothing but the final object on stdout. Prompts go to stderr. JSON mode without `--write-pid` does not read stdin. `check` exits with `0` when checks pass, `1` when it cannot run, and `8` when a check fails or strict mode rejects a warning.
 
 | Code | Name                      | Meaning                                                                                |
 | ---- | ------------------------- | -------------------------------------------------------------------------------------- |
@@ -136,6 +137,7 @@ JSON mode prints nothing but the final object on stdout. Prompts go to stderr. J
 | 5    | `EXIT_POOR_QUALITY`       | A tuning-critical read was `Bad`, or `Uncertain` while the quality policy rejected it. |
 | 6    | `EXIT_RESTORE_INCOMPLETE` | Restore was not confirmed, including a second Ctrl+C during restore.                   |
 | 7    | `EXIT_ACTUATION_FAILED`   | MV actuation failed and restore was confirmed.                                         |
+| 8    | `EXIT_CHECK_FAILED`       | A preflight check failed, or `--strict` rejected a warning.                            |
 
 `tune_runs.outcome` stores only `Completed`, `Aborted`, or `Failed`. A write-back failure does not rewrite an already completed row. Exit 6 outranks exit 7 when restore is incomplete.
 

@@ -58,3 +58,4 @@ bhtune-test-support = { path = "../bhtune-test-support", features = [
   "mock-driver",
 ] }
 tokio = { version = "1", features = ["test-util"] }
+tonic.workspace = true

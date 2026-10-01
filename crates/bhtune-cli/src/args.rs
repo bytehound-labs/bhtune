@@ -14,7 +14,7 @@ use bhtune_runtime::tune::{
     DEFAULT_SIM_SEED, DEFAULT_SIM_TAU, DriverKind, TuneRequest, TuneRequestValidationError,
     ValidatedTuneRequest, validate_finite_f32, validate_positive_u32,
 };
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// `value_parser` for every `f32` CLI flag that can reach `bhtune-core` unvalidated. A
 /// driver tag read is checked for finiteness by the runtime, but a CLI flag value bypasses
@@ -101,6 +101,8 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
+    /// Validate tune inputs and live readings without starting a tune or writing to the loop.
+    Check(CheckArgs),
     /// Run an MRFT tune against a real OPC DA loop or the in-process simulator.
     Tune(TuneArgs),
     /// Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator.
@@ -137,6 +139,7 @@ impl Command {
     /// actually asked for -- see `lib.rs::run_with_cli`.
     pub(crate) fn output_format(&self) -> crate::output::OutputFormat {
         match self {
+            Command::Check(args) => args.tune.output,
             Command::Tune(args) => args.output,
             Command::Simulate(args) => args.output,
             Command::History { command } => command.output_format(),
@@ -328,8 +331,8 @@ impl From<bhtune_core::ResponseLevel> for ResponseLevelArg {
     }
 }
 
-/// Flags shared by `tune` and (a defaulted subset of) `simulate`.
-#[derive(Parser, Debug, Clone)]
+/// Flags shared by `tune`, `check`, and (a defaulted subset of) `simulate`.
+#[derive(Args, Debug, Clone)]
 pub struct TuneArgs {
     /// PV tag prefix; the rest of the tag set is derived from it using `--template`'s
     /// suffix convention. Ignored for `--driver simulator`, which uses two fixed internal
@@ -371,7 +374,7 @@ pub struct TuneArgs {
     #[arg(skip)]
     pub mrft_delay: u32,
 
-    /// Which driver drives this tune.
+    /// Which driver backs this tune or preflight check.
     #[arg(long, value_enum)]
     pub driver: DriverKindArg,
 
@@ -443,20 +446,19 @@ pub struct TuneArgs {
     #[arg(skip)]
     pub timeout_secs: u64,
 
-    /// Operator notes to attach to this run. Notes can be edited or cleared from the web GUI
-    /// while the run is active or after it finishes.
+    /// Operator notes to attach to a tune run. Ignored by `check`, which does not create a run.
     #[arg(long)]
     pub notes: Option<String>,
 
-    /// Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command
-    /// refuses to start otherwise -- since writing to a live loop with no human present must
-    /// be an explicit, deliberate choice. Has no effect without `--write-pid`.
+    /// Confirm an unattended PID write-back. Required alongside `--write-pid` for `tune` and
+    /// `simulate`; `check` only assesses readiness and does not require this flag. Has no
+    /// effect without `--write-pid`.
     #[arg(long)]
     pub yes: bool,
 
-    /// Non-interactively write this response level's calculated PID parameters back to the
-    /// DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune
-    /// able to actually update a loop with no one watching. Requires `--yes`.
+    /// For `tune`, write this response level's calculated PID parameters back to the DCS
+    /// without prompting; requires `--yes`. For `check`, assess read-only write-back readiness
+    /// only; no `--yes` is required and no write occurs.
     #[arg(long, value_enum)]
     pub write_pid: Option<ResponseLevelArg>,
 
@@ -472,9 +474,20 @@ pub struct TuneArgs {
     #[arg(skip)]
     pub restore_timeout_secs: u64,
 
-    /// How to print this run's final outcome line.
+    /// How to print this command's result.
     #[arg(long, value_enum, default_value = "table")]
     pub output: crate::output::OutputFormat,
+}
+
+/// Inputs shared by `bhtune tune` and the read-only `bhtune check` command.
+#[derive(Args, Debug, Clone)]
+pub struct CheckArgs {
+    #[command(flatten)]
+    pub tune: TuneArgs,
+
+    /// Treat warnings as failed checks.
+    #[arg(long)]
+    pub strict: bool,
 }
 
 impl TryFrom<TuneArgs> for ValidatedTuneRequest {
@@ -1091,6 +1104,41 @@ mod tests {
 
         let history = Cli::parse_from(["bhtune", "history", "list", "--output", "json"]).command;
         assert_eq!(history.output_format(), crate::output::OutputFormat::Json);
+    }
+
+    #[test]
+    fn check_command_accepts_tune_inputs_strict_and_readiness_only_writeback() {
+        let cli = Cli::parse_from([
+            "bhtune",
+            "check",
+            "--tagname",
+            "Unit1.LIC101.PV",
+            "--template",
+            "Yokogawa CentumVP",
+            "--process-type",
+            "flow",
+            "--controller-type",
+            "pi",
+            "--relay-amp",
+            "10",
+            "--driver",
+            "opcda",
+            "--server",
+            "Matrikon.OPC.Simulation.1",
+            "--write-pid",
+            "moderate",
+            "--strict",
+            "--output",
+            "json",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Command::Check(args)
+                if args.strict
+                    && args.tune.write_pid == Some(ResponseLevelArg::Moderate)
+                    && !args.tune.yes
+                    && args.tune.output == crate::output::OutputFormat::Json
+        ));
     }
 
     #[test]

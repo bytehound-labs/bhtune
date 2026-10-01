@@ -16,6 +16,9 @@ _bhtune() {
             ",$1")
                 cmd="bhtune"
                 ;;
+            bhtune,check)
+                cmd="bhtune__subcmd__check"
+                ;;
             bhtune,export)
                 cmd="bhtune__subcmd__export"
                 ;;
@@ -36,6 +39,9 @@ _bhtune() {
                 ;;
             bhtune,tune)
                 cmd="bhtune__subcmd__tune"
+                ;;
+            bhtune__subcmd__help,check)
+                cmd="bhtune__subcmd__help__subcmd__check"
                 ;;
             bhtune__subcmd__help,export)
                 cmd="bhtune__subcmd__help__subcmd__export"
@@ -290,12 +296,166 @@ _bhtune() {
 
     case "${cmd}" in
         bhtune)
-            opts="-h -V --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help --version tune simulate template history export opc help"
+            opts="-h -V --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help --version check tune simulate template history export opc help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --config)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --db)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --templates)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --retention-days)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-format)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-rotation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bhtune__subcmd__check)
+            opts="-t -h --tagname --template --process-type --controller-type --relay-amp --cycles-skip --cycles-count --noise-protection-secs --driver --bridge-host --server --sim-gain --sim-tau --sim-dead-time --sim-noise --sim-seed --sim-initial-pv --sim-initial-mv --pv-range-high --pv-range-low --mv-range-high --mv-range-low --direction --notes --yes --write-pid --output --strict --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --tagname)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -t)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --template)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --process-type)
+                    COMPREPLY=($(compgen -W "flow pressure-line pressure-vessel level temperature-mixing temperature-heat-exchange" -- "${cur}"))
+                    return 0
+                    ;;
+                --controller-type)
+                    COMPREPLY=($(compgen -W "p pi pid" -- "${cur}"))
+                    return 0
+                    ;;
+                --relay-amp)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cycles-skip)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --cycles-count)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --noise-protection-secs)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --driver)
+                    COMPREPLY=($(compgen -W "opcda simulator" -- "${cur}"))
+                    return 0
+                    ;;
+                --bridge-host)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --server)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --sim-gain)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --sim-tau)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --sim-dead-time)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --sim-noise)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --sim-seed)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --sim-initial-pv)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --sim-initial-mv)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --pv-range-high)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --pv-range-low)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --mv-range-high)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --mv-range-low)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --direction)
+                    COMPREPLY=($(compgen -W "direct reverse" -- "${cur}"))
+                    return 0
+                    ;;
+                --notes)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --write-pid)
+                    COMPREPLY=($(compgen -W "aggressive moderate sluggish" -- "${cur}"))
+                    return 0
+                    ;;
+                --output)
+                    COMPREPLY=($(compgen -W "table json" -- "${cur}"))
+                    return 0
+                    ;;
                 --config)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
@@ -390,8 +550,22 @@ _bhtune() {
             return 0
             ;;
         bhtune__subcmd__help)
-            opts="tune simulate template history export opc help"
+            opts="check tune simulate template history export opc help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bhtune__subcmd__help__subcmd__check)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

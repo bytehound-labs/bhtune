@@ -156,6 +156,26 @@ non-finite/out-of-range input immediately with a clear message; anything read fr
 the loop is ever switched to manual. An effective relay step below the minimum that can be
 distinguished safely at `f32` precision is rejected at this same pre-mutation boundary.
 
+## Read-only tune preflight
+
+`bhtune check` accepts the same tune inputs as `bhtune tune` and checks them before an MRFT is
+started. For OPC DA it performs bounded gateway discovery and reads every derived tag once,
+including PID constant tags. It reports values and OPC quality, validates template mode values,
+and checks the initial PV/MV state and requested write-back readiness.
+
+The command does not create or update run history, run a tune, change controller values, or
+probe write permissions. It uses a read-only database connection when saved templates are
+needed and a driver wrapper that rejects writes. When a template defines a mode-attribute
+program value, the check reads that value as another write-back prerequisite but never changes
+it. A passing write-back check confirms only that the P/I/D tags are configured and readable
+as numeric values and any template-specific prerequisites are met; it cannot prove a future
+write will be accepted or that an accepted MV write will move the plant. Follow the live-plant
+procedures below before running a tune.
+
+`--output json` emits the full report. Exit code `0` means the checks passed, `1` means the
+preflight could not run, and `8` means a check failed or `--strict` treated a warning as a
+failure. Without `--strict`, warnings are reported but do not prevent a successful exit.
+
 ## Invalid calculated results
 
 Every response-level result is checked before it is stored as usable tuning data. A non-positive

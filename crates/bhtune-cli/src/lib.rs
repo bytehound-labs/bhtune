@@ -10,8 +10,8 @@
 //!   `bhtune-runtime` services used by CLI command handlers. Configuration precedence,
 //!   database bootstrap/seeding, driver construction, logging, and retention behavior are
 //!   shared with the HTTP adapter rather than implemented here.
-//! - [`commands`] — one module per subcommand family: `tune`/`simulate`, `template`,
-//!   `history`, `export`, `opc`.
+//! - [`commands`] — one module per subcommand family: `check`, `tune`/`simulate`,
+//!   `template`, `history`, `export`, `opc`.
 //! - [`output`] — CLI-specific `--output table|json` formatting and error presentation;
 //!   shared sample export serialization is provided by `bhtune-runtime`.
 //!
@@ -57,6 +57,18 @@ use clap::Parser;
 
 use args::{Cli, Command};
 use output::OutputFormat;
+
+enum DatabaseCommand {
+    Tune(Box<args::TuneArgs>),
+    Simulate(args::SimulateArgs),
+    Template(args::TemplateCommand),
+    History(args::HistoryCommand),
+    Export(args::ExportArgs),
+    Opc {
+        output: OutputFormat,
+        command: args::OpcCommand,
+    },
+}
 
 /// Process exited normally, and if this was `tune`/`simulate`, any PID write-back either
 /// succeeded or was cleanly skipped. Equal to [`ExitCode::SUCCESS`].
@@ -110,6 +122,9 @@ pub const EXIT_RESTORE_INCOMPLETE: u8 = 6;
 /// The ordinary restore path still ran; [`EXIT_RESTORE_INCOMPLETE`] takes precedence if that
 /// restore could not itself be confirmed.
 pub const EXIT_ACTUATION_FAILED: u8 = 7;
+/// A `check` preflight completed, but one or more checks failed or `--strict` rejected a
+/// warning. The command never starts a tune.
+pub const EXIT_CHECK_FAILED: u8 = 8;
 
 /// Parses real CLI arguments, initializes structured logging, and runs, returning a process
 /// exit code.
@@ -221,16 +236,38 @@ async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCod
     };
     let retention_days = config::resolve_retention_days(cli.retention_days, &config);
 
+    let command = match cli.command {
+        Command::Check(args) => {
+            let database = match db::open_read_only(&db_path).await {
+                Ok(database) => database,
+                Err(error) => return fail(&error, output_format),
+            };
+            let result =
+                commands::check::run(args, &config, database.as_ref(), user_templates.as_deref())
+                    .await;
+            return match result {
+                Ok(code) => code,
+                Err(error) => fail(&error, output_format),
+            };
+        }
+        Command::Tune(args) => DatabaseCommand::Tune(Box::new(args)),
+        Command::Simulate(args) => DatabaseCommand::Simulate(args),
+        Command::Template { command } => DatabaseCommand::Template(command),
+        Command::History { command } => DatabaseCommand::History(command),
+        Command::Export(args) => DatabaseCommand::Export(args),
+        Command::Opc { output, command } => DatabaseCommand::Opc { output, command },
+    };
+
     match db::open(&db_path, user_templates, retention_days).await {
         Err(e) => fail(&e, output_format),
         Ok(pool) => {
-            let result: anyhow::Result<ExitCode> = match cli.command {
-                Command::Tune(args) => {
-                    commands::tune::run_with_ctrl_c(&pool, args, &config, &mut ctrl_c)
+            let result: anyhow::Result<ExitCode> = match command {
+                DatabaseCommand::Tune(args) => {
+                    commands::tune::run_with_ctrl_c(&pool, *args, &config, &mut ctrl_c)
                         .await
                         .map(tune_outcome_exit_code)
                 }
-                Command::Simulate(args) => commands::tune::run_with_ctrl_c(
+                DatabaseCommand::Simulate(args) => commands::tune::run_with_ctrl_c(
                     &pool,
                     args.into_tune_args(),
                     &config,
@@ -238,16 +275,18 @@ async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCod
                 )
                 .await
                 .map(tune_outcome_exit_code),
-                Command::Template { command } => commands::template::run(&pool, command)
+                DatabaseCommand::Template(command) => commands::template::run(&pool, command)
                     .await
                     .map(|()| ExitCode::SUCCESS),
-                Command::History { command } => commands::history::run(&pool, command, &config)
+                DatabaseCommand::History(command) => {
+                    commands::history::run(&pool, command, &config)
+                        .await
+                        .map(|()| ExitCode::SUCCESS)
+                }
+                DatabaseCommand::Export(args) => commands::export::run(&pool, args)
                     .await
                     .map(|()| ExitCode::SUCCESS),
-                Command::Export(args) => commands::export::run(&pool, args)
-                    .await
-                    .map(|()| ExitCode::SUCCESS),
-                Command::Opc { output, command } => {
+                DatabaseCommand::Opc { output, command } => {
                     commands::opc::run_with_output(command, &config, output)
                         .await
                         .map(|()| ExitCode::SUCCESS)
@@ -284,6 +323,7 @@ fn fail(err: &anyhow::Error, format: OutputFormat) -> ExitCode {
 mod tests {
     use super::*;
     use crate::args::{Command, ControllerTypeArg, DriverKindArg, ProcessTypeArg, TuneArgs};
+    use clap::Parser;
     use std::path::PathBuf;
 
     fn temp_db_path() -> (tempfile::TempDir, PathBuf) {
@@ -389,6 +429,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_does_not_create_or_bootstrap_a_missing_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("missing.db");
+        let cli = Cli {
+            db: Some(db.clone()),
+            config: None,
+            templates: None,
+            retention_days: None,
+            log_level: None,
+            log_dir: None,
+            log_format: None,
+            log_rotation: None,
+            command: Command::Check(crate::args::CheckArgs {
+                tune: TuneArgs {
+                    tagname: "Sim.Loop1.PV".to_string(),
+                    template: "Yokogawa CentumVP".to_string(),
+                    process_type: ProcessTypeArg::Flow,
+                    controller_type: ControllerTypeArg::Pi,
+                    relay_amp: 10.0,
+                    cycles_skip: None,
+                    cycles_count: Some(2),
+                    noise_protection_secs: Some(0),
+                    mrft_delay: 0,
+                    driver: DriverKindArg::Simulator,
+                    bridge_host: None,
+                    server: None,
+                    sim_gain: 1.0,
+                    sim_tau: 0.01,
+                    sim_dead_time: 0.025,
+                    sim_noise: 0.0,
+                    sim_seed: 0,
+                    sim_initial_pv: 50.0,
+                    sim_initial_mv: 50.0,
+                    pv_range_high: Some(100.0),
+                    pv_range_low: Some(0.0),
+                    mv_range_high: Some(100.0),
+                    mv_range_low: Some(0.0),
+                    direction: Some(crate::args::DirectionArg::Reverse),
+                    tag_overrides: None,
+                    poll_interval_ms: 5,
+                    timeout_secs: 5,
+                    notes: None,
+                    yes: false,
+                    write_pid: None,
+                    op_timeout_secs: 30,
+                    restore_timeout_secs: 30,
+                    output: OutputFormat::Json,
+                },
+                strict: false,
+            }),
+        };
+
+        assert_eq!(run_with_cli(cli).await, ExitCode::SUCCESS);
+        assert!(!db.exists());
+    }
+
+    #[tokio::test]
+    async fn check_returns_exit_failure_when_opc_server_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("missing.db");
+        let config = dir.path().join("bhtune.toml");
+        std::fs::write(&config, "").unwrap();
+        let cli = Cli::try_parse_from([
+            "bhtune".to_string(),
+            "--db".to_string(),
+            db.display().to_string(),
+            "--config".to_string(),
+            config.display().to_string(),
+            "check".to_string(),
+            "--driver".to_string(),
+            "opcda".to_string(),
+            "--tagname".to_string(),
+            "Area1.LIC101.PV".to_string(),
+            "--template".to_string(),
+            "Yokogawa CentumVP".to_string(),
+            "--process-type".to_string(),
+            "flow".to_string(),
+            "--controller-type".to_string(),
+            "pi".to_string(),
+            "--relay-amp".to_string(),
+            "5".to_string(),
+            "--output".to_string(),
+            "json".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(run_with_cli(cli).await, ExitCode::from(EXIT_FAILURE));
+        assert!(!db.exists());
+    }
+
+    #[tokio::test]
+    async fn check_returns_exit_failure_when_read_only_database_open_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path();
+        let config = dir.path().join("bhtune.toml");
+        std::fs::write(&config, "").unwrap();
+        let cli = Cli::try_parse_from([
+            "bhtune".to_string(),
+            "--db".to_string(),
+            db.display().to_string(),
+            "--config".to_string(),
+            config.display().to_string(),
+            "check".to_string(),
+            "--driver".to_string(),
+            "simulator".to_string(),
+            "--tagname".to_string(),
+            "Sim.Loop1.PV".to_string(),
+            "--template".to_string(),
+            "Yokogawa CentumVP".to_string(),
+            "--process-type".to_string(),
+            "flow".to_string(),
+            "--controller-type".to_string(),
+            "pi".to_string(),
+            "--relay-amp".to_string(),
+            "5".to_string(),
+            "--output".to_string(),
+            "json".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(run_with_cli(cli).await, ExitCode::from(EXIT_FAILURE));
+        assert!(db.is_dir());
+    }
+
+    #[tokio::test]
     async fn run_with_cli_command_error_is_exit_failure() {
         let (_dir, db) = temp_db_path();
         let cli = Cli {
@@ -485,6 +650,12 @@ mod tests {
             tune_outcome_exit_code(commands::tune::TuneOutcome::RestoreIncomplete),
             ExitCode::from(EXIT_RESTORE_INCOMPLETE)
         );
+    }
+
+    #[test]
+    fn check_failure_uses_exit_code_eight() {
+        assert_eq!(EXIT_CHECK_FAILED, 8);
+        assert_eq!(ExitCode::from(EXIT_CHECK_FAILED), ExitCode::from(8));
     }
 
     /// Every `SimulateArgs` field explicitly set to a fast-converging demo run (mirroring

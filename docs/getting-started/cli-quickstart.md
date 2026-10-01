@@ -156,6 +156,31 @@ bhtune tune ... --write-pid moderate --yes
 `--yes` is mandatory alongside `--write-pid` for any non-interactive write — see
 [Safety](../guides/safety.md#pid-write-back).
 
+## Check a live loop without starting a tune
+
+Use `bhtune check` with the same tune inputs to verify configuration, template-derived tags,
+gateway compatibility, server registration, and the values and qualities returned by the live
+tags before starting an MRFT:
+
+```sh
+bhtune check \
+  --driver opcda --server Matrikon.OPC.Simulation.1 --bridge-host gateway.plant.local:7600 \
+  --tagname FIC101 --template "Yokogawa CentumVP" \
+  --process-type flow --controller-type pi --relay-amp 5
+```
+
+`check` only performs bounded discovery and read operations. It does not create or update
+database history, change controller values, or start a tune. Add `--output json` for a
+machine-readable report or `--strict` to treat warnings as failures. `--write-pid moderate`
+asks the preflight to check whether the template provides readable numeric P/I/D tags; it does
+not write constants and does not prove that the controller will permit a later write. If the
+template defines a mode-attribute program value, `check` also reads that prerequisite and
+reports whether it is satisfied; it never changes the attribute. No `--yes` confirmation is
+needed for `check`.
+
+Exit code `0` means all checks passed, `1` means the preflight could not run, and `8` means
+one or more checks failed or `--strict` rejected a warning.
+
 ## Scripting and automation
 
 `--output json` emits exactly one parseable JSON value on stdout on every path (success,

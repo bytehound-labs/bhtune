@@ -44,6 +44,7 @@
 pub mod driver;
 pub mod error;
 pub mod opcda;
+pub mod readonly;
 pub mod replay;
 pub mod simulator;
 pub mod types;
@@ -57,6 +58,7 @@ pub use opcda::{
     OpcDaGatewayFeatureSupport, OpcDaGatewayInfo, OpcDaProtocolRange, check_gateway_compatibility,
     close_opcda_browse_session, get_opcda_gateway_info, list_opcda_servers,
 };
+pub use readonly::ReadOnlyDriver;
 pub use replay::{RecordedWrite, ReplayDriver, ReplaySample, ReplayTraceExhausted};
 pub use simulator::{FopdtConfig, FopdtProcess, SimulatorDriver, VirtualPid, VirtualPidConfig};
 pub use types::{

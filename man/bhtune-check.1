@@ -1,12 +1,12 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH bhtune-tune 1  "bhtune-tune "
+.TH bhtune-check 1  "bhtune-check "
 .SH NAME
-bhtune\-tune \- Run an MRFT tune against a real OPC DA loop or the in\-process simulator
+bhtune\-check \- Validate tune inputs and live readings without starting a tune or writing to the loop
 .SH SYNOPSIS
-\fBbhtune\-tune\fR [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-pv\-range\-high\fR] [\fB\-\-pv\-range\-low\fR] [\fB\-\-mv\-range\-high\fR] [\fB\-\-mv\-range\-low\fR] [\fB\-\-direction\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-t\fR|\fB\-\-tagname\fR> <\fB\-\-template\fR> <\fB\-\-process\-type\fR> <\fB\-\-controller\-type\fR> <\fB\-\-relay\-amp\fR> <\fB\-\-driver\fR>
+\fBbhtune\-check\fR [\fB\-\-cycles\-skip\fR] [\fB\-\-cycles\-count\fR] [\fB\-\-noise\-protection\-secs\fR] [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-sim\-gain\fR] [\fB\-\-sim\-tau\fR] [\fB\-\-sim\-dead\-time\fR] [\fB\-\-sim\-noise\fR] [\fB\-\-sim\-seed\fR] [\fB\-\-sim\-initial\-pv\fR] [\fB\-\-sim\-initial\-mv\fR] [\fB\-\-pv\-range\-high\fR] [\fB\-\-pv\-range\-low\fR] [\fB\-\-mv\-range\-high\fR] [\fB\-\-mv\-range\-low\fR] [\fB\-\-direction\fR] [\fB\-\-notes\fR] [\fB\-\-yes\fR] [\fB\-\-write\-pid\fR] [\fB\-\-output\fR] [\fB\-\-strict\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-t\fR|\fB\-\-tagname\fR> <\fB\-\-template\fR> <\fB\-\-process\-type\fR> <\fB\-\-controller\-type\fR> <\fB\-\-relay\-amp\fR> <\fB\-\-driver\fR>
 .SH DESCRIPTION
-Run an MRFT tune against a real OPC DA loop or the in\-process simulator
+Validate tune inputs and live readings without starting a tune or writing to the loop
 .SH OPTIONS
 .TP
 \fB\-t\fR, \fB\-\-tagname\fR \fI<TAGNAME>\fR
@@ -157,6 +157,9 @@ table: Human\-readable text (default)
 .IP \(bu 2
 json: Pretty\-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
 .RE
+.TP
+\fB\-\-strict\fR
+Treat warnings as failed checks
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
