@@ -24,5 +24,6 @@ changelog_include = [
   "bhtune-core",
   "bhtune-driver",
   "bhtune-db",
+  "bhtune-runtime",
   "bhtune-server",
 ]

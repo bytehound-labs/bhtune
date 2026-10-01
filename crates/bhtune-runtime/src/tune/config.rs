@@ -3,8 +3,8 @@
 use bhtune_core::{ControllerType, DcsTemplate, LoopConfig, LoopTags, ProcessType, TagOrValue};
 use bhtune_db::models::EffectiveTuning;
 
-use crate::args::{DriverKindArg, TuneArgs};
 use crate::driver::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
+use crate::tune::{DriverKind, TuneRequest};
 
 /// Concrete timing policy frozen during [`prepare`] and carried unchanged through the
 /// complete tune lifecycle.
@@ -39,7 +39,7 @@ impl From<EffectiveTiming> for EffectiveTuning {
     }
 }
 #[cfg(test)]
-pub(super) fn test_effective_timing(args: &TuneArgs) -> EffectiveTiming {
+pub(super) fn test_effective_timing(args: &TuneRequest) -> EffectiveTiming {
     EffectiveTiming {
         mrft_delay_secs: args.mrft_delay,
         poll_interval_ms: args.poll_interval_ms,
@@ -54,13 +54,13 @@ pub(super) fn test_effective_timing(args: &TuneArgs) -> EffectiveTiming {
 /// confirmation window so the authoritative restore can be read back before the operation is
 /// declared successful.
 pub fn validate_restore_timeout_secs(
-    driver: DriverKindArg,
+    driver: DriverKind,
     restore_timeout_secs: u64,
 ) -> anyhow::Result<()> {
     if restore_timeout_secs == 0 {
         anyhow::bail!("[tuning].restore_timeout_secs must be greater than zero");
     }
-    if driver == DriverKindArg::Opcda
+    if driver == DriverKind::Opcda
         && restore_timeout_secs < crate::config::MIN_OPC_RESTORE_TIMEOUT_SECS
     {
         anyhow::bail!(
@@ -71,11 +71,11 @@ pub fn validate_restore_timeout_secs(
     Ok(())
 }
 pub(super) fn build_loop_config_with_timing(
-    args: &TuneArgs,
+    args: &TuneRequest,
     timing: EffectiveTiming,
 ) -> anyhow::Result<LoopConfig> {
-    let process_type: ProcessType = args.process_type.into();
-    let controller_type: ControllerType = args.controller_type.into();
+    let process_type: ProcessType = args.process_type;
+    let controller_type: ControllerType = args.controller_type;
 
     if !controller_type.is_allowed_for(process_type) {
         anyhow::bail!(
@@ -106,18 +106,21 @@ pub(super) fn build_loop_config_with_timing(
     Ok(config)
 }
 #[cfg(test)]
-pub(super) fn build_loop_config(args: &TuneArgs) -> anyhow::Result<LoopConfig> {
+pub(super) fn build_loop_config(args: &TuneRequest) -> anyhow::Result<LoopConfig> {
     build_loop_config_with_timing(args, test_effective_timing(args))
 }
 /// Builds the loop's full tag set. For `--driver opcda`, derives from `--tagname` and the
 /// template, then layers any explicit `--pv-range-*`/`--mv-range-*`/`--direction` overrides
 /// on top. For `--driver simulator`, `SimulatorDriver`'s fixed two-tag contract means the
-/// range/direction overrides are mandatory (normally supplied by
-/// `SimulateArgs::into_tune_args`); a direct `bhtune tune --driver simulator` invocation
+/// range/direction overrides are mandatory (normally supplied by the `bhtune simulate`
+/// adapter); a direct `bhtune tune --driver simulator` invocation
 /// missing any of them is a clear usage error rather than a confusing runtime failure.
-pub(super) fn build_loop_tags(args: &TuneArgs, template: &DcsTemplate) -> anyhow::Result<LoopTags> {
+pub(super) fn build_loop_tags(
+    args: &TuneRequest,
+    template: &DcsTemplate,
+) -> anyhow::Result<LoopTags> {
     match args.driver {
-        DriverKindArg::Opcda => {
+        DriverKind::Opcda => {
             let mut tags = LoopTags::derive_from_pv_tag(&args.tagname, template);
             if let Some(overrides) = &args.tag_overrides {
                 overrides.apply_to(&mut tags);
@@ -137,11 +140,11 @@ pub(super) fn build_loop_tags(args: &TuneArgs, template: &DcsTemplate) -> anyhow
                 tags.lower_mv_range = TagOrValue::Value(v);
             }
             if let Some(d) = args.direction {
-                tags.controller_direction = TagOrValue::Value(d.into());
+                tags.controller_direction = TagOrValue::Value(d);
             }
             Ok(tags)
         }
-        DriverKindArg::Simulator => {
+        DriverKind::Simulator => {
             let pv_range_high = args.pv_range_high.ok_or_else(|| {
                 anyhow::anyhow!(
                     "--pv-range-high is required with --driver simulator (or use `bhtune simulate`)"
@@ -178,7 +181,7 @@ pub(super) fn build_loop_tags(args: &TuneArgs, template: &DcsTemplate) -> anyhow
                 lower_pv_range: TagOrValue::Value(pv_range_low),
                 upper_mv_range: TagOrValue::Value(mv_range_high),
                 lower_mv_range: TagOrValue::Value(mv_range_low),
-                controller_direction: TagOrValue::Value(direction.into()),
+                controller_direction: TagOrValue::Value(direction),
                 proportional_constant: None,
                 integral_constant: None,
                 derivative_constant: None,

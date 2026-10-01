@@ -87,8 +87,8 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    of sync. Legacy: Step Test's dynamic CSV log wrote the header `Time,PV,SV,MV,P,I,D` but the
    data rows as `Time,PV,MV,SV,P,I,D` — the MV and SV columns transposed. Not yet applicable to
    bhtune (Step Test is a deferred phase, per the plan's locked decisions), but recorded here so
-   the eventual port doesn't repeat it; `bhtune-cli`'s existing `export.rs` (CSV/JSON of one run's
-   samples) already follows the single-source-of-truth pattern this item calls for.
+   the eventual port doesn't repeat it; `bhtune-runtime`'s sample export serializer already
+   follows the single-source-of-truth pattern this item calls for.
 6. **`[fixed, no flag needed]` PID unit labels (Kp vs. PB; Ti vs. Ri vs. Ki; Td vs. Kd) must
    refresh on every relevant state
    change** — process-type change, template switch, and app startup — not only from a single
@@ -123,8 +123,8 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    happened to start". Legacy: `TuningConstantsExport()` wrote to a hardcoded developer path
    (`C:\Dropbox\Auto-Tuner Proj\...`); `LogLoopLocking()` wrote to the current working directory
    rather than the log directory. Fixed: `bhtune-cli`'s `export`/`history export` commands take an
-   explicit `--output <path>` (or write structured data to stdout for piping), and logging
-   (`cli-logging`) resolves its directory through the normal config precedence, defaulting to a
+   explicit `--output <path>` (or write structured data to stdout for piping), and shared
+   logging resolves its directory through the normal config precedence, defaulting to a
    documented platform-standard data directory — never an implicit/hardcoded path.
 10. **`[fixed, no flag needed]` Test/demo mode must be a first-class, explicit driver choice**
     (e.g. `--driver

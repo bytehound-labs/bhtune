@@ -42,14 +42,11 @@ pub fn resolve_retention_days(cli_days: Option<u32>, config: &BhtuneConfig) -> O
     cli_days.or(config.retention_days)
 }
 
-/// Resolve `bhtune-server`'s bind address with `CLI flag > env var > config file > default`
-/// precedence, matching [`resolve_bridge_host`]'s shape exactly. `bhtune-server` has no
-/// `clap` dependency (see AGENTS.md's "Deferred setup"), so unlike `resolve_bridge_host` the
-/// env var isn't folded in by a derive attribute upstream -- callers pass
-/// `std::env::var("BHTUNE_BIND").ok()` (or a real CLI flag, if one is ever added) directly as
-/// `cli_bind`.
-pub fn resolve_bind_addr(cli_bind: Option<String>, config: &BhtuneConfig) -> String {
-    cli_bind
+/// Resolve `bhtune-server`'s bind address with `BHTUNE_BIND > config file > default`
+/// precedence. The server adapter reads the environment and passes it here, keeping
+/// process-environment access outside this resolver.
+pub fn resolve_bind_addr(bind_override: Option<String>, config: &BhtuneConfig) -> String {
+    bind_override
         .or_else(|| config.bind.clone())
         .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string())
 }
@@ -140,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_bind_addr_cli_wins() {
+    fn resolve_bind_addr_override_wins() {
         let config = BhtuneConfig {
             bind: Some("0.0.0.0:9999".into()),
             ..Default::default()

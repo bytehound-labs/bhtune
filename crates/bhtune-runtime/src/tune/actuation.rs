@@ -13,7 +13,7 @@ use bhtune_driver::{Driver, TagValue};
 use chrono::{DateTime, Utc};
 use tokio::time::Instant;
 
-use crate::args::{DriverKindArg, TuneArgs};
+use super::request::{DriverKind, TuneRequest};
 use crate::cancel::CtrlC;
 use crate::timing::PollTimingAccumulator;
 
@@ -21,8 +21,9 @@ use super::RequireInvariant;
 use super::config::EffectiveTiming;
 #[cfg(test)]
 use super::config::test_effective_timing;
+use super::outcome::AbortReason;
 use super::poll::{TickOperation, bounded_driver_call};
-use super::prepare::{AbortReason, InitialState};
+use super::prepare::InitialState;
 use super::quality::{
     check_quality, read_numeric_from_batch, read_numeric_sample, sample_quality_from_driver,
 };
@@ -61,8 +62,8 @@ pub(super) struct MvActuationTracker {
     pub(super) mv_span: f32,
 }
 impl MvActuationTracker {
-    pub(super) fn for_run(args: &TuneArgs, initial: &InitialState) -> Option<Self> {
-        (args.driver == DriverKindArg::Opcda).then_some(Self {
+    pub(super) fn for_run(args: &TuneRequest, initial: &InitialState) -> Option<Self> {
+        (args.driver == DriverKind::Opcda).then_some(Self {
             next_sequence: 0,
             previous_commanded_mv: initial.mv_ini,
             confirmed_mv: None,
@@ -281,11 +282,11 @@ pub(super) fn mv_actuation_uncapped_tolerance(target: f32, previous: f32, mv_spa
     precision_floor + span_tolerance
 }
 pub(super) fn validate_relay_actuation_step(
-    args: &TuneArgs,
+    args: &TuneRequest,
     config: LoopConfig,
     initial: &InitialState,
 ) -> anyhow::Result<()> {
-    if args.driver != DriverKindArg::Opcda {
+    if args.driver != DriverKind::Opcda {
         return Ok(());
     }
     let relay_step = clamp_relay_amplitude(
@@ -501,7 +502,7 @@ pub(super) fn mv_verification_read_limit(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn verify_pending_mv_actuation_with_timing(
     pool: &SqlitePool,
-    _args: &TuneArgs,
+    _args: &TuneRequest,
     effective_timing: EffectiveTiming,
     tag: &str,
     driver: &dyn Driver,
@@ -608,7 +609,7 @@ pub(super) async fn verify_pending_mv_actuation_with_timing(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn verify_pending_mv_actuation_with(
     pool: &SqlitePool,
-    args: &TuneArgs,
+    args: &TuneRequest,
     tag: &str,
     driver: &dyn Driver,
     ctrl_c: &mut CtrlC,
@@ -1050,7 +1051,7 @@ pub(super) async fn finalize_pending_mv_verification(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn verify_pending_mv_actuation(
     pool: &SqlitePool,
-    args: &TuneArgs,
+    args: &TuneRequest,
     tag: &str,
     driver: &dyn Driver,
     ctrl_c: &mut CtrlC,

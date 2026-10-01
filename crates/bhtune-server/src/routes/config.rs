@@ -3,7 +3,7 @@
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
-use bhtune_cli::config::{
+use bhtune_runtime::config::{
     ConfigPolicyUpdate, ConfigStoreError, LoadedConfigStore, TuningConfig, TuningConfigSource,
     resolve_retention_days, resolve_tuning_config, validate_tuning_config,
 };
@@ -255,7 +255,7 @@ pub(crate) async fn put_config(
     let effective_tuning = resolve_tuning_config(&tuning);
     validate_tuning_config(&effective_tuning, false)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let saved = bhtune_cli::config::save_config_store(
+    let saved = bhtune_runtime::config::save_config_store(
         &store,
         &request.revision,
         &ConfigPolicyUpdate {
@@ -293,7 +293,7 @@ mod tests {
     async fn state_for(path: &std::path::Path) -> AppState {
         let mut state = crate::test_support::in_memory_state().await;
         let loaded =
-            bhtune_cli::config::load_config_store_from(Some(path), None, None, None, false)
+            bhtune_runtime::config::load_config_store_from(Some(path), None, None, None, false)
                 .unwrap();
         state.config_store = Arc::new(RwLock::new(loaded));
         state
@@ -632,7 +632,7 @@ mod tests {
     async fn put_creates_an_auto_discovered_missing_config_file() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("bhtune").join("bhtune.toml");
-        let loaded = bhtune_cli::config::load_config_store_from(
+        let loaded = bhtune_runtime::config::load_config_store_from(
             None,
             Some(dir.path().to_str().unwrap()),
             None,
@@ -708,15 +708,15 @@ mod tests {
             path: None,
             missing_is_allowed: true,
             original_raw: None,
-            config: bhtune_cli::config::BhtuneConfig {
+            config: bhtune_runtime::config::BhtuneConfig {
                 retention_days: Some(30),
                 ..Default::default()
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
             toml_tuning: Default::default(),
-            tuning_sources: bhtune_cli::config::tuning_config_sources(
-                &bhtune_cli::config::TuningConfig::default(),
+            tuning_sources: bhtune_runtime::config::tuning_config_sources(
+                &bhtune_runtime::config::TuningConfig::default(),
             ),
         };
 

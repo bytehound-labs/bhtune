@@ -1,8 +1,8 @@
-//! Constructs the selected [`bhtune_driver::Driver`] implementation from a [`TuneArgs`].
+//! Constructs the selected [`bhtune_driver::Driver`] implementation from a [`TuneRequest`].
 
 use bhtune_driver::{Driver, FopdtConfig, OpcDaDriver, SimulatorDriver};
 
-use crate::args::{DriverKindArg, TuneArgs};
+use crate::tune::{DriverKind, TuneRequest};
 
 /// The two tag names [`SimulatorDriver`] is configured with — fixed rather than derived
 /// from `--tagname`/a template, since the simulator has no DCS suffix convention at all (see
@@ -14,16 +14,16 @@ pub const SIMULATOR_MV_TAG: &str = "Sim.MV";
 /// the caller must build its [`bhtune_core::LoopTags`] using [`SIMULATOR_PV_TAG`]/
 /// [`SIMULATOR_MV_TAG`] instead of deriving from a template.
 pub async fn build_with_poll_interval(
-    args: &TuneArgs,
+    args: &TuneRequest,
     poll_interval_ms: u64,
 ) -> anyhow::Result<Box<dyn Driver>> {
     match args.driver {
-        DriverKindArg::Opcda => {
+        DriverKind::Opcda => {
             let server = args
                 .server
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("--server is required with --driver opcda"))?;
-            // By the time `build` runs, `commands::tune::run` has already resolved
+            // By the time `build` runs, `tune::prepare` has already resolved
             // `args.bridge_host` through `crate::config::resolve_bridge_host` (CLI > env >
             // config file > default), so this `unwrap_or` is a defensive fallback for
             // direct/test callers that bypass that resolution step, not the primary
@@ -36,7 +36,7 @@ pub async fn build_with_poll_interval(
             let driver = OpcDaDriver::connect(bridge_host, server).await?;
             Ok(Box::new(driver))
         }
-        DriverKindArg::Simulator => {
+        DriverKind::Simulator => {
             tracing::info!(
                 gain = args.sim_gain,
                 tau = args.sim_tau,
@@ -64,28 +64,32 @@ pub async fn build_with_poll_interval(
 }
 
 #[cfg(test)]
-pub async fn build(args: &TuneArgs) -> anyhow::Result<Box<dyn Driver>> {
-    build_with_poll_interval(args, args.poll_interval_ms).await
+pub async fn build(args: &TuneRequest) -> anyhow::Result<Box<dyn Driver>> {
+    build_with_poll_interval(args, 800).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::args::DirectionArg;
+    use bhtune_core::{ControllerDirection, ControllerType, ProcessType};
     use bhtune_driver::TagWrite;
 
-    fn sim_args() -> TuneArgs {
-        TuneArgs {
+    fn sim_args() -> TuneRequest {
+        TuneRequest {
             tagname: "ignored".to_string(),
             template: "Yokogawa CentumVP".to_string(),
-            process_type: crate::args::ProcessTypeArg::Flow,
-            controller_type: crate::args::ControllerTypeArg::Pi,
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
             relay_amp: 10.0,
             cycles_skip: None,
             cycles_count: None,
             noise_protection_secs: None,
             mrft_delay: 0,
-            driver: DriverKindArg::Simulator,
+            poll_interval_ms: 800,
+            timeout_secs: 3600,
+            op_timeout_secs: 30,
+            restore_timeout_secs: 30,
+            driver: DriverKind::Simulator,
             bridge_host: None,
             server: None,
             sim_gain: 1.0,
@@ -99,16 +103,11 @@ mod tests {
             pv_range_low: Some(0.0),
             mv_range_high: Some(100.0),
             mv_range_low: Some(0.0),
-            direction: Some(DirectionArg::Reverse),
+            direction: Some(ControllerDirection::Reverse),
             tag_overrides: None,
-            poll_interval_ms: 800,
-            timeout_secs: 3600,
             notes: None,
             yes: false,
             write_pid: None,
-            op_timeout_secs: 30,
-            restore_timeout_secs: 30,
-            output: crate::output::OutputFormat::Table,
         }
     }
 
@@ -126,9 +125,7 @@ mod tests {
         args.sim_dead_time = 0.0;
         args.sim_initial_pv = 0.0;
         args.sim_initial_mv = 0.0;
-        args.poll_interval_ms = 800;
-
-        let driver = build(&args).await.unwrap();
+        let driver = build_with_poll_interval(&args, 800).await.unwrap();
         let outcome = driver
             .write(&SIMULATOR_MV_TAG.to_string(), TagWrite::Float(100.0))
             .await
@@ -147,7 +144,7 @@ mod tests {
     #[tokio::test]
     async fn opcda_driver_requires_a_server_flag() {
         let mut args = sim_args();
-        args.driver = DriverKindArg::Opcda;
+        args.driver = DriverKind::Opcda;
         args.bridge_host = Some("127.0.0.1:1".to_string());
         args.server = None;
         let result = build(&args).await;
@@ -157,12 +154,12 @@ mod tests {
 
     #[tokio::test]
     async fn opcda_driver_falls_back_to_the_default_bridge_host_when_unset() {
-        // `build()` is normally only reached after `commands::tune::run` has already
+        // `build()` is normally only reached after `tune::prepare` has already
         // resolved `bridge_host` via `crate::config::resolve_bridge_host`, so a `None` here
         // only happens for a direct/test caller -- confirms the fallback constant is used
         // rather than e.g. an empty host string.
         let mut args = sim_args();
-        args.driver = DriverKindArg::Opcda;
+        args.driver = DriverKind::Opcda;
         args.bridge_host = None;
         args.server = Some("MockServer".to_string());
         let err = build(&args).await.err().unwrap();
@@ -190,7 +187,7 @@ mod tests {
         .await;
 
         let mut args = sim_args();
-        args.driver = DriverKindArg::Opcda;
+        args.driver = DriverKind::Opcda;
         args.bridge_host = Some(host);
         args.server = Some("MockServer".to_string());
 

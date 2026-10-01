@@ -9,7 +9,7 @@ use bhtune_driver::Driver;
 use chrono::Utc;
 use tokio::time::Instant;
 
-use crate::args::{DriverKindArg, TuneArgs};
+use super::request::{DriverKind, TuneRequest};
 use crate::cancel::CtrlC;
 use crate::timing::PollTimingAccumulator;
 
@@ -25,10 +25,11 @@ use super::actuation::{
 use super::config::EffectiveTiming;
 #[cfg(test)]
 use super::config::test_effective_timing;
+use super::outcome::AbortReason;
 use super::poll::{
     CompletedPoll, TickOperation, bounded_driver_call, insert_tune_sample_with_timing,
 };
-use super::prepare::{AbortReason, InitialState, MutationGuard};
+use super::prepare::{InitialState, MutationGuard};
 use super::quality::{
     check_quality, read_numeric_from_batch, read_numeric_sample, read_poll_batch,
     sample_quality_from_driver, write_raw, write_value,
@@ -254,7 +255,7 @@ pub(super) enum RestoreHandoffOutcome {
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn try_confirm_final_snapback_handoff_with_timing(
     pool: &SqlitePool,
-    _args: &TuneArgs,
+    _args: &TuneRequest,
     effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tag: &str,
@@ -390,7 +391,7 @@ pub(super) async fn try_confirm_final_snapback_handoff_with_timing(
 pub(super) async fn restore_mv_with_verification_with_timing(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tag: &str,
@@ -591,7 +592,7 @@ pub(super) async fn restore_mv_with_verification_with_timing(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn try_confirm_final_snapback_handoff(
     pool: &SqlitePool,
-    args: &TuneArgs,
+    args: &TuneRequest,
     driver: &dyn Driver,
     tag: &str,
     initial_mv: f32,
@@ -619,7 +620,7 @@ pub(super) async fn try_confirm_final_snapback_handoff(
 pub(super) async fn restore_mv_with_verification(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     driver: &dyn Driver,
     tag: &str,
     initial_mv: f32,
@@ -663,7 +664,7 @@ pub(super) async fn restore_mv_with_verification(
 pub(super) async fn attempt_restore_with_actuation_with_timing(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     driver: &dyn Driver,
     tags: &LoopTags,
@@ -822,13 +823,13 @@ pub(super) enum RestoreModePolicy {
     KeepManual,
 }
 pub(super) fn should_settle_before_auto_release(
-    args: &TuneArgs,
+    args: &TuneRequest,
     tags: &LoopTags,
     template: &DcsTemplate,
     initial: &InitialState,
     guard: &MutationGuard,
 ) -> bool {
-    matches!(args.driver, DriverKindArg::Opcda)
+    matches!(args.driver, DriverKind::Opcda)
         && tags.controller_mode.is_some()
         && template.revert_mode
         && guard.mode_written
@@ -996,7 +997,7 @@ pub(super) async fn restore_after_mv_with_deadline(
 pub(super) async fn attempt_restore_with_actuation(
     pool: &SqlitePool,
     run_id: i64,
-    args: &TuneArgs,
+    args: &TuneRequest,
     driver: &dyn Driver,
     tags: &LoopTags,
     template: &DcsTemplate,
@@ -1095,7 +1096,7 @@ pub(super) async fn restore_best_effort_then_propagate_with_timing(
     template: &DcsTemplate,
     initial: &InitialState,
     guard: &MutationGuard,
-    args: &TuneArgs,
+    args: &TuneRequest,
     effective_timing: EffectiveTiming,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
@@ -1147,7 +1148,7 @@ pub(super) async fn restore_best_effort_then_propagate(
     template: &DcsTemplate,
     initial: &InitialState,
     guard: &MutationGuard,
-    args: &TuneArgs,
+    args: &TuneRequest,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     mv_actuations: &mut Option<MvActuationTracker>,

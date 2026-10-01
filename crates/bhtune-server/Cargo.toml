@@ -21,26 +21,11 @@ path = "src/lib.rs"
 # for why the dependency is optional there but always-on here.
 bhtune-core = { workspace = true, features = ["utoipa"] }
 bhtune-db = { workspace = true, features = ["utoipa"] }
-# Reuses the CLI's config precedence (`bhtune.toml`/env var/default resolution -- including
-# the `bind` address this crate alone consumes, see `crate::config::resolve_bind_addr`),
-# database open/migrate/seed bootstrap, and tracing setup verbatim, rather than duplicating
-# or re-deriving any of it. This is a deliberate, and deliberately named, temporary coupling
-# -- see "Key architectural decisions" in AGENTS.md: `bhtune-cli` and `bhtune-server` are
-# meant to be peer adapters over `bhtune-core`/`bhtune-db`/`bhtune-driver`, not one
-# depending on the other, but extracting the shared pieces (`config.rs`/`db.rs`/`logging.rs`,
-# none of which touch `clap`) into their own crate is a refactor with no payoff until a
-# second reason to do it shows up. Revisit if this coupling ever becomes awkward (e.g. the
-# two crates' config needs diverge, or `bhtune-cli`'s `clap`/`csv` dependencies become a real
-# concern in this binary's footprint).
-bhtune-cli.workspace = true
-# `routes::runs`'s `write_run`/`revert_run` (`api-post-run-write`) connect an `OpcDaDriver`
-# directly, the same way `bhtune-cli`'s own `commands::history::revert` does, rather than
-# going through `bhtune_cli::driver::build` (which is shaped around a full `TuneArgs`, not a
-# post-hoc write against a run's already-recorded connection). This is the first direct
-# `bhtune-server` -> `bhtune-driver` edge, matching the "peer adapters over
-# bhtune-core/bhtune-db/bhtune-driver" architecture described above -- the temporary
-# `bhtune-cli` coupling is for config/db/logging reuse, not because `bhtune-driver` itself is
-# off limits.
+# Configuration, database bootstrap, logging, tune orchestration, and live-history write
+# operations are owned by the shared runtime. This crate remains an HTTP/OpenAPI adapter and
+# depends on the runtime rather than the CLI.
+bhtune-runtime.workspace = true
+# OPC browsing and reads are adapter-level HTTP operations over the shared driver crate.
 bhtune-driver.workspace = true
 anyhow = "1"
 rand = "0.10"
@@ -107,12 +92,10 @@ utoipa = { workspace = true, features = ["chrono"] }
 # no separate static-file build step, no JS toolchain, and (unlike Swagger UI) no bundled
 # `swagger-ui-*.zip` binary blob to keep in sync with a released version.
 utoipa-scalar = { version = "0.3", features = ["axum"] }
-tracing = "0.1"
-# Only used to name `WorkerGuard`'s type directly (`run.rs`'s `BoundServer::log_guard` field)
-# -- `bhtune_cli::logging::init_tracing`'s actual return value already comes from this same
-# dependency in `bhtune-cli`'s own `Cargo.toml` (same version pinned there), so this doesn't
-# add a second copy of the crate to the build graph.
-tracing-appender = "0.2"
+tracing.workspace = true
+# Names `WorkerGuard` in `run.rs`'s `BoundServer::log_guard` field; its value is created by the
+# runtime's logging initializer.
+tracing-appender.workspace = true
 # `cli.rs`'s `Cli`/`ServiceCommand` (`server-windows-service`): a `--config` flag plus the
 # `install`/`uninstall`/`start`/`stop`/`status` subcommands that manage the platform service.
 # Second consumer of the workspace pin (`bhtune-cli` is the first) -- see that entry's

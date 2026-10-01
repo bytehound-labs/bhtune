@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use bhtune_cli::{config, db, logging};
+use bhtune_runtime::{config, db, logging};
 
 #[cfg(unix)]
 use anyhow::Context;
@@ -56,8 +56,8 @@ pub struct BoundServer {
 
 /// Runs every step of `bhtune-server`'s startup through binding its listening socket:
 /// resolve config (an explicit `config_path` if given, otherwise the platform's
-/// auto-discovered path -- mirroring `bhtune-cli` calling `load_config(None)` whenever
-/// `--config` itself wasn't passed), init logging, open/migrate/seed the database, spawn the
+/// auto-discovered path through the shared runtime resolver), init logging,
+/// open/migrate/seed the database, spawn the
 /// periodic retention sweeper, and bind the configured address.
 ///
 /// Does not start serving -- see [`serve`].
@@ -271,7 +271,7 @@ pub fn shutdown_signal() -> anyhow::Result<impl std::future::Future<Output = ()>
 /// cover the rest.
 fn spawn_retention_sweeper(
     pool: bhtune_db::SqlitePool,
-    config_store: Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
+    config_store: Arc<RwLock<bhtune_runtime::config::LoadedConfigStore>>,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(RETENTION_SWEEP_INTERVAL);
@@ -317,7 +317,7 @@ async fn demo_cleanup_tick(state: &AppState) {
 
 async fn retention_tick_live(
     pool: &bhtune_db::SqlitePool,
-    config_store: &Arc<RwLock<bhtune_cli::config::LoadedConfigStore>>,
+    config_store: &Arc<RwLock<bhtune_runtime::config::LoadedConfigStore>>,
 ) {
     let config = match config_store.read() {
         Ok(store) => store.config.clone(),
@@ -329,7 +329,7 @@ async fn retention_tick_live(
     let env_days = std::env::var("BHTUNE_RETENTION_DAYS")
         .ok()
         .and_then(|value| value.parse().ok());
-    let Some(days) = bhtune_cli::config::resolve_retention_days(env_days, &config) else {
+    let Some(days) = bhtune_runtime::config::resolve_retention_days(env_days, &config) else {
         return;
     };
     retention_tick(pool, days).await;
@@ -343,7 +343,7 @@ async fn retention_tick_live(
 /// skipping one sweep and retrying at the next interval.
 async fn retention_tick(pool: &bhtune_db::SqlitePool, days: u32) {
     let now = chrono::Utc::now();
-    if let Err(e) = bhtune_cli::retention::sweep_retention(pool, days, now).await {
+    if let Err(e) = bhtune_runtime::retention::sweep_retention(pool, days, now).await {
         tracing::warn!(error = %e, "periodic retention sweep failed; will retry next interval");
     }
 }
@@ -559,19 +559,19 @@ mod tests {
     async fn retention_tick_live_runs_when_retention_is_configured() {
         let pool = connect_in_memory().await.unwrap();
         let old_run_id = insert_old_run(&pool).await;
-        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+        let store = Arc::new(RwLock::new(bhtune_runtime::config::LoadedConfigStore {
             path: None,
             missing_is_allowed: true,
             original_raw: None,
-            config: bhtune_cli::config::BhtuneConfig {
+            config: bhtune_runtime::config::BhtuneConfig {
                 retention_days: Some(30),
                 ..Default::default()
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
             toml_tuning: Default::default(),
-            tuning_sources: bhtune_cli::config::tuning_config_sources(
-                &bhtune_cli::config::TuningConfig::default(),
+            tuning_sources: bhtune_runtime::config::tuning_config_sources(
+                &bhtune_runtime::config::TuningConfig::default(),
             ),
         }));
 
@@ -588,7 +588,7 @@ mod tests {
     #[tokio::test]
     async fn retention_tick_live_skips_when_retention_is_disabled() {
         let pool = connect_in_memory().await.unwrap();
-        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+        let store = Arc::new(RwLock::new(bhtune_runtime::config::LoadedConfigStore {
             path: None,
             missing_is_allowed: true,
             original_raw: None,
@@ -596,8 +596,8 @@ mod tests {
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
             toml_tuning: Default::default(),
-            tuning_sources: bhtune_cli::config::tuning_config_sources(
-                &bhtune_cli::config::TuningConfig::default(),
+            tuning_sources: bhtune_runtime::config::tuning_config_sources(
+                &bhtune_runtime::config::TuningConfig::default(),
             ),
         }));
 
@@ -607,7 +607,7 @@ mod tests {
     #[tokio::test]
     async fn retention_tick_live_skips_when_config_store_lock_is_poisoned() {
         let pool = connect_in_memory().await.unwrap();
-        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+        let store = Arc::new(RwLock::new(bhtune_runtime::config::LoadedConfigStore {
             path: None,
             missing_is_allowed: true,
             original_raw: None,
@@ -615,8 +615,8 @@ mod tests {
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
             toml_tuning: Default::default(),
-            tuning_sources: bhtune_cli::config::tuning_config_sources(
-                &bhtune_cli::config::TuningConfig::default(),
+            tuning_sources: bhtune_runtime::config::tuning_config_sources(
+                &bhtune_runtime::config::TuningConfig::default(),
             ),
         }));
         let poisoned = Arc::clone(&store);
@@ -634,19 +634,19 @@ mod tests {
     async fn retention_tick_live_logs_and_returns_when_sweep_fails() {
         let pool = connect_in_memory().await.unwrap();
         pool.close().await;
-        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+        let store = Arc::new(RwLock::new(bhtune_runtime::config::LoadedConfigStore {
             path: None,
             missing_is_allowed: true,
             original_raw: None,
-            config: bhtune_cli::config::BhtuneConfig {
+            config: bhtune_runtime::config::BhtuneConfig {
                 retention_days: Some(30),
                 ..Default::default()
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
             toml_tuning: Default::default(),
-            tuning_sources: bhtune_cli::config::tuning_config_sources(
-                &bhtune_cli::config::TuningConfig::default(),
+            tuning_sources: bhtune_runtime::config::tuning_config_sources(
+                &bhtune_runtime::config::TuningConfig::default(),
             ),
         }));
 
@@ -670,7 +670,7 @@ mod tests {
         spawn_demo_cleanup(state);
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(
-            bhtune_cli::config::DEMO_CLEANUP_INTERVAL_SECS,
+            bhtune_runtime::config::DEMO_CLEANUP_INTERVAL_SECS,
         ))
         .await;
         tokio::time::resume();
@@ -683,19 +683,19 @@ mod tests {
         let pool = connect_in_memory().await.unwrap();
         let old_run_id = insert_old_run(&pool).await;
         tokio::time::pause();
-        let store = Arc::new(RwLock::new(bhtune_cli::config::LoadedConfigStore {
+        let store = Arc::new(RwLock::new(bhtune_runtime::config::LoadedConfigStore {
             path: None,
             missing_is_allowed: true,
             original_raw: None,
-            config: bhtune_cli::config::BhtuneConfig {
+            config: bhtune_runtime::config::BhtuneConfig {
                 retention_days: Some(30),
                 ..Default::default()
             },
             revision: "revision".to_string(),
             toml_allow_uncertain_quality: None,
             toml_tuning: Default::default(),
-            tuning_sources: bhtune_cli::config::tuning_config_sources(
-                &bhtune_cli::config::TuningConfig::default(),
+            tuning_sources: bhtune_runtime::config::tuning_config_sources(
+                &bhtune_runtime::config::TuningConfig::default(),
             ),
         }));
 

@@ -453,7 +453,7 @@ pub struct RunDetailResponse {
     pub effective_tuning: Option<bhtune_db::models::EffectiveTuning>,
     /// The resolved OPC DA server ProgID this run actually used, or `None` for a
     /// simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
-    /// trusts over any `--server` flag -- see `bhtune-cli::commands::history`.
+    /// trusts over any `--server` flag -- see `bhtune_runtime::history::revert_run`.
     pub opc_server: Option<String>,
     /// The resolved bridge host this run actually used, matching `opc_server` above.
     pub bridge_host: Option<String>,
@@ -548,7 +548,7 @@ pub(crate) async fn build_run_detail(
         restore_detail: run.restore_detail,
         original_request: parse_stored_request(run.id, &run.request_json),
         gateway_compatibility: run.gateway_compatibility_json.as_deref().and_then(|json| {
-            bhtune_cli::gateway::parse_stored_compatibility(json)
+            bhtune_runtime::gateway::parse_stored_compatibility(json)
                 .map(crate::routes::opc::GatewayCompatibilityResponse::from)
         }),
     }))
@@ -580,13 +580,11 @@ pub(crate) async fn show_run(
 }
 
 /// Format for `GET /api/runs/{id}/export` -- deliberately a local, HTTP-facing enum rather
-/// than reusing `bhtune_cli::args::ExportFormat` directly: that type is `clap`-oriented
-/// (`ValueEnum`) and has no `Deserialize`/`ToSchema`, matching this module's own
-/// DTO-decoupling convention (see the module doc comment). Converted to
-/// `bhtune_cli::args::ExportFormat` at the one call site that needs it ([`export_run`]), so
-/// the actual CSV/JSON serialization (`bhtune_cli::commands::export::samples_to_bytes`) is
-/// implemented exactly once and the CLI's `bhtune export` and this route can never disagree
-/// about what a run's export looks like.
+/// than reusing the runtime's internal
+/// [`bhtune_runtime::export::SampleExportFormat`] directly, matching this module's
+/// DTO-decoupling convention (see the module doc comment). Converted at the call site so
+/// the shared runtime owns CSV/JSON serialization while this type remains specific to the
+/// HTTP query and its OpenAPI schema.
 #[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RunExportFormat {
@@ -594,11 +592,11 @@ pub enum RunExportFormat {
     Json,
 }
 
-impl From<RunExportFormat> for bhtune_cli::args::ExportFormat {
+impl From<RunExportFormat> for bhtune_runtime::export::SampleExportFormat {
     fn from(format: RunExportFormat) -> Self {
         match format {
-            RunExportFormat::Csv => bhtune_cli::args::ExportFormat::Csv,
-            RunExportFormat::Json => bhtune_cli::args::ExportFormat::Json,
+            RunExportFormat::Csv => bhtune_runtime::export::SampleExportFormat::Csv,
+            RunExportFormat::Json => bhtune_runtime::export::SampleExportFormat::Json,
         }
     }
 }
@@ -640,7 +638,7 @@ pub(crate) async fn export_run(
             "run {run_id} has no recorded samples (unknown run id, or it never started)"
         )));
     }
-    let bytes = bhtune_cli::commands::export::samples_to_bytes(&samples, format.into())?;
+    let bytes = bhtune_runtime::export::samples_to_bytes(&samples, format.into())?;
     let (content_type, extension) = match format {
         RunExportFormat::Csv => ("text/csv", "csv"),
         RunExportFormat::Json => ("application/json", "json"),
@@ -1805,7 +1803,7 @@ mod tests {
         TuneRunRow::complete(&state.pool, run_id, Utc::now())
             .await
             .unwrap();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         state
             .active_run
             .start(run_id, handle, std::future::pending())

@@ -1,6 +1,7 @@
 use axum::http::{HeaderMap, header};
 use axum::{Json, Router, extract::State};
-use bhtune_cli::config::{
+use bhtune_core::{ControllerDirection, ControllerType, ProcessType, built_in_templates};
+use bhtune_runtime::config::{
     DEMO_COOKIE_NAME, DEMO_CYCLES_COUNT_DEFAULT, DEMO_CYCLES_COUNT_MAX, DEMO_CYCLES_COUNT_MIN,
     DEMO_CYCLES_SKIP_DEFAULT, DEMO_CYCLES_SKIP_MAX, DEMO_CYCLES_SKIP_MIN,
     DEMO_NOISE_PROTECTION_SECS_DEFAULT, DEMO_NOISE_PROTECTION_SECS_MAX,
@@ -11,14 +12,116 @@ use bhtune_cli::config::{
     DEMO_SIM_DEAD_TIME_MIN, DEMO_SIM_GAIN_DEFAULT, DEMO_SIM_GAIN_MAX, DEMO_SIM_GAIN_MIN,
     DEMO_SIM_INITIAL_VALUE_DEFAULT, DEMO_SIM_NOISE_DEFAULT, DEMO_SIM_NOISE_MAX_PV_SPAN_FRACTION,
     DEMO_SIM_SEED_DEFAULT, DEMO_SIM_SEED_MAX, DEMO_SIM_TAU_DEFAULT, DEMO_SIM_TAU_MAX,
-    DEMO_SIM_TAU_MIN, DEMO_TAG_NAME, DEMO_TEMPLATE_NAME, DemoPolicy, ServerMode,
+    DEMO_SIM_TAU_MIN, DEMO_TAG_NAME, DEMO_TEMPLATE_NAME, DemoPolicy as RuntimeDemoPolicy,
+    ServerMode as RuntimeServerMode,
 };
-use bhtune_core::{ControllerDirection, ControllerType, ProcessType, built_in_templates};
 use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::state::AppState;
+
+/// Runtime server exposure mode. Full mode preserves the normal live-plant API; Demo mode is
+/// an explicitly restricted, simulator-only surface intended for public demonstrations.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ServerMode {
+    #[default]
+    Full,
+    Demo,
+}
+
+impl From<RuntimeServerMode> for ServerMode {
+    fn from(mode: RuntimeServerMode) -> Self {
+        match mode {
+            RuntimeServerMode::Full => Self::Full,
+            RuntimeServerMode::Demo => Self::Demo,
+        }
+    }
+}
+
+/// Limits applied to the public simulator-only demo surface.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema, PartialEq, Eq)]
+pub struct DemoPolicy {
+    /// Anonymous visitor-session lifetime.
+    #[schema(minimum = 86_400, maximum = 86_400)]
+    pub session_ttl_secs: u64,
+    /// Simulator polling interval.
+    #[schema(minimum = 200, maximum = 200)]
+    pub poll_interval_ms: u64,
+    /// Whole-run timeout.
+    #[schema(minimum = 30, maximum = 30)]
+    pub run_timeout_secs: u64,
+    /// Active Demo tune limit across all visitors.
+    #[schema(minimum = 8, maximum = 8)]
+    pub max_active_runs_global: u32,
+    /// Active Demo tune limit for one visitor.
+    #[schema(minimum = 1, maximum = 1)]
+    pub max_active_runs_per_visitor: u32,
+    /// Accepted starts for one session token in the quota window.
+    #[schema(minimum = 6, maximum = 6)]
+    pub accepted_starts_per_token: u32,
+    /// Accepted starts for one client IP in the quota window.
+    #[schema(minimum = 6, maximum = 6)]
+    pub accepted_starts_per_client_ip: u32,
+    /// Window shared by both accepted-start quotas.
+    #[schema(minimum = 600, maximum = 600)]
+    pub accepted_start_window_secs: u64,
+    /// Completed runs retained for one visitor.
+    #[schema(minimum = 10, maximum = 10)]
+    pub retained_runs_per_visitor: u32,
+    /// Maximum total demo runs accepted for one visitor.
+    pub max_runs_per_session: u32,
+    /// Current Demo-owned `tune_runs` row limit across all visitors.
+    #[schema(minimum = 5_000, maximum = 5_000)]
+    pub max_tune_run_rows_global: u32,
+    /// Maximum JSON request-body size.
+    #[schema(minimum = 32_768, maximum = 32_768)]
+    pub max_json_body_bytes: u64,
+    /// Simultaneous SSE streams for one visitor.
+    #[schema(minimum = 2, maximum = 2)]
+    pub max_sse_per_visitor: u32,
+    /// Simultaneous Demo SSE streams across all visitors.
+    #[schema(minimum = 32, maximum = 32)]
+    pub max_sse_global: u32,
+    /// Absolute lifetime of one Demo SSE stream.
+    #[schema(minimum = 45, maximum = 45)]
+    pub sse_lifetime_secs: u64,
+    /// Concurrent ordinary, non-streaming Demo API requests.
+    #[schema(minimum = 64, maximum = 64)]
+    pub ordinary_request_concurrency: u32,
+    /// Timeout for an ordinary, non-streaming Demo API request.
+    #[schema(minimum = 10, maximum = 10)]
+    pub ordinary_request_timeout_secs: u64,
+    /// Interval between Demo cleanup passes.
+    #[schema(minimum = 300, maximum = 300)]
+    pub cleanup_interval_secs: u64,
+}
+
+impl From<RuntimeDemoPolicy> for DemoPolicy {
+    fn from(policy: RuntimeDemoPolicy) -> Self {
+        Self {
+            session_ttl_secs: policy.session_ttl_secs,
+            poll_interval_ms: policy.poll_interval_ms,
+            run_timeout_secs: policy.run_timeout_secs,
+            max_active_runs_global: policy.max_active_runs_global,
+            max_active_runs_per_visitor: policy.max_active_runs_per_visitor,
+            accepted_starts_per_token: policy.accepted_starts_per_token,
+            accepted_starts_per_client_ip: policy.accepted_starts_per_client_ip,
+            accepted_start_window_secs: policy.accepted_start_window_secs,
+            retained_runs_per_visitor: policy.retained_runs_per_visitor,
+            max_runs_per_session: policy.max_runs_per_session,
+            max_tune_run_rows_global: policy.max_tune_run_rows_global,
+            max_json_body_bytes: policy.max_json_body_bytes,
+            max_sse_per_visitor: policy.max_sse_per_visitor,
+            max_sse_global: policy.max_sse_global,
+            sse_lifetime_secs: policy.sse_lifetime_secs,
+            ordinary_request_concurrency: policy.ordinary_request_concurrency,
+            ordinary_request_timeout_secs: policy.ordinary_request_timeout_secs,
+            cleanup_interval_secs: policy.cleanup_interval_secs,
+        }
+    }
+}
 
 #[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
 pub struct CapabilityActions {
@@ -38,8 +141,8 @@ pub struct CapabilityActions {
 }
 
 impl CapabilityActions {
-    fn for_mode(mode: ServerMode) -> Self {
-        let demo = mode == ServerMode::Demo;
+    fn for_mode(mode: RuntimeServerMode) -> Self {
+        let demo = mode == RuntimeServerMode::Demo;
         Self {
             start_simulator_tune: true,
             start_opcda_tune: !demo,
@@ -159,8 +262,8 @@ pub struct DemoQuotas {
     pub ordinary_request_timeout_secs: u64,
 }
 
-impl From<DemoPolicy> for DemoQuotas {
-    fn from(policy: DemoPolicy) -> Self {
+impl From<RuntimeDemoPolicy> for DemoQuotas {
+    fn from(policy: RuntimeDemoPolicy) -> Self {
         Self {
             max_active_runs_global: policy.max_active_runs_global,
             max_active_runs_per_visitor: policy.max_active_runs_per_visitor,
@@ -331,7 +434,7 @@ pub(crate) async fn capabilities(
     State(state): State<AppState>,
     request_headers: HeaderMap,
 ) -> Result<(HeaderMap, Json<CapabilitiesResponse>), ApiError> {
-    let demo = state.mode == ServerMode::Demo;
+    let demo = state.mode == RuntimeServerMode::Demo;
     let _request_permit = if demo {
         Some(crate::routes::demo::ordinary_request_permit(&state)?)
     } else {
@@ -348,7 +451,7 @@ pub(crate) async fn capabilities(
     Ok((
         response_headers,
         Json(CapabilitiesResponse {
-            mode: state.mode,
+            mode: state.mode.into(),
             drivers: if demo {
                 vec!["simulator".to_owned()]
             } else {
@@ -356,7 +459,7 @@ pub(crate) async fn capabilities(
             },
             actions,
             demo,
-            demo_policy: demo.then_some(state.demo_policy),
+            demo_policy: demo.then(|| state.demo_policy.into()),
             simulator: demo.then(demo_simulator),
             restrictions: demo.then_some(DemoRestrictions {
                 simulator_only: true,
@@ -403,7 +506,7 @@ mod tests {
     #[tokio::test]
     async fn demo_capabilities_publish_the_authoritative_contract() {
         let mut state = crate::test_support::in_memory_state().await;
-        state.mode = ServerMode::Demo;
+        state.mode = RuntimeServerMode::Demo;
         state.allowed_origin = Some("https://demo.test".to_owned());
         state.trusted_proxy = Some("127.0.0.1".to_owned());
 
@@ -413,7 +516,10 @@ mod tests {
 
         assert!(response.demo);
         assert_eq!(response.drivers, ["simulator"]);
-        assert_eq!(response.demo_policy, Some(DemoPolicy::default()));
+        assert_eq!(
+            response.demo_policy,
+            Some(RuntimeDemoPolicy::default().into())
+        );
         assert!(response.actions.start_simulator_tune);
         assert!(!response.actions.start_opcda_tune);
         assert!(!response.actions.write_pid);
@@ -498,7 +604,7 @@ mod tests {
         );
         assert_eq!(
             response.quotas.as_ref().unwrap().retained_runs_per_visitor,
-            DemoPolicy::default().retained_runs_per_visitor
+            RuntimeDemoPolicy::default().retained_runs_per_visitor
         );
         let cookie = headers[header::SET_COOKIE].to_str().unwrap();
         assert!(cookie.starts_with("__Host-bhtune_demo_session="));
@@ -535,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn demo_capabilities_preserve_an_existing_valid_cookie() {
         let mut state = crate::test_support::in_memory_state().await;
-        state.mode = ServerMode::Demo;
+        state.mode = RuntimeServerMode::Demo;
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
@@ -552,7 +658,7 @@ mod tests {
     #[tokio::test]
     async fn demo_capabilities_replace_a_malformed_cookie() {
         let mut state = crate::test_support::in_memory_state().await;
-        state.mode = ServerMode::Demo;
+        state.mode = RuntimeServerMode::Demo;
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,

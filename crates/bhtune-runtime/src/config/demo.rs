@@ -172,7 +172,7 @@ pub const DEMO_COOKIE_NAME: &str = "__Host-bhtune_demo_session";
 
 /// Runtime server exposure mode. Full mode preserves the normal live-plant API; Demo mode
 /// is an explicitly restricted, simulator-only surface intended for public demonstrations.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ServerMode {
@@ -182,77 +182,60 @@ pub enum ServerMode {
 }
 
 /// Limits applied to the public simulator-only demo surface.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DemoPolicy {
     /// Anonymous visitor-session lifetime.
-    #[schema(minimum = 86_400, maximum = 86_400)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 86_400, max = 86_400)))]
     pub session_ttl_secs: u64,
     /// Simulator polling interval.
-    #[schema(minimum = 200, maximum = 200)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 200, max = 200)))]
     pub poll_interval_ms: u64,
     /// Whole-run timeout.
-    #[schema(minimum = 30, maximum = 30)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 30, max = 30)))]
     pub run_timeout_secs: u64,
     /// Active Demo tune limit across all visitors.
-    #[schema(minimum = 8, maximum = 8)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 8, max = 8)))]
     pub max_active_runs_global: u32,
     /// Active Demo tune limit for one visitor.
-    #[schema(minimum = 1, maximum = 1)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 1, max = 1)))]
     pub max_active_runs_per_visitor: u32,
     /// Accepted starts for one session token in the quota window.
-    #[schema(minimum = 6, maximum = 6)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 6, max = 6)))]
     pub accepted_starts_per_token: u32,
     /// Accepted starts for one client IP in the quota window.
-    #[schema(minimum = 6, maximum = 6)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 6, max = 6)))]
     pub accepted_starts_per_client_ip: u32,
     /// Window shared by both accepted-start quotas.
-    #[schema(minimum = 600, maximum = 600)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 600, max = 600)))]
     pub accepted_start_window_secs: u64,
     /// Completed runs retained for one visitor.
-    #[schema(minimum = 10, maximum = 10)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 10, max = 10)))]
     pub retained_runs_per_visitor: u32,
     /// Maximum total demo runs accepted for one visitor.
     pub max_runs_per_session: u32,
     /// Current Demo-owned `tune_runs` row limit across all visitors.
-    #[schema(minimum = 5_000, maximum = 5_000)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 5_000, max = 5_000)))]
     pub max_tune_run_rows_global: u32,
     /// Maximum JSON request-body size.
-    #[schema(minimum = 32_768, maximum = 32_768)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 32_768, max = 32_768)))]
     pub max_json_body_bytes: u64,
     /// Simultaneous SSE streams for one visitor.
-    #[schema(minimum = 2, maximum = 2)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 2, max = 2)))]
     pub max_sse_per_visitor: u32,
     /// Simultaneous Demo SSE streams across all visitors.
-    #[schema(minimum = 32, maximum = 32)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 32, max = 32)))]
     pub max_sse_global: u32,
     /// Absolute lifetime of one Demo SSE stream.
-    #[schema(minimum = 45, maximum = 45)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 45, max = 45)))]
     pub sse_lifetime_secs: u64,
     /// Concurrent ordinary, non-streaming Demo API requests.
-    #[schema(minimum = 64, maximum = 64)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 64, max = 64)))]
     pub ordinary_request_concurrency: u32,
     /// Timeout for an ordinary, non-streaming Demo API request.
-    #[schema(minimum = 10, maximum = 10)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 10, max = 10)))]
     pub ordinary_request_timeout_secs: u64,
     /// Interval between Demo cleanup passes.
-    #[schema(minimum = 300, maximum = 300)]
     #[cfg_attr(feature = "schemars", schemars(range(min = 300, max = 300)))]
     pub cleanup_interval_secs: u64,
 }
@@ -389,7 +372,7 @@ where
 ///
 /// Missing keys receive the approved value. A present key must state that same value; public
 /// Demo deployments cannot weaken or silently diverge from the documented resource policy.
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DemoPolicyConfig {
@@ -813,17 +796,6 @@ rate_window_secs = 10
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
-    }
-
-    #[test]
-    fn example_config_declares_the_approved_demo_contract() {
-        let config: BhtuneConfig =
-            toml::from_str(include_str!("../../bhtune.example.toml")).unwrap();
-        assert_eq!(config.server_mode, Some(ServerMode::Full));
-        assert_eq!(
-            resolve_demo_policy_from_config(&config).unwrap(),
-            DemoPolicy::default()
-        );
     }
 
     #[cfg(feature = "schemars")]

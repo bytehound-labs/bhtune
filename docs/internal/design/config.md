@@ -5,10 +5,12 @@ the [design notes index](README.md) for provenance.
 
 ## Config precedence (`cli-config`)
 
-`crates/bhtune-cli/src/config.rs` resolves every global setting with `CLI flag > env var >
-TOML config file > built-in default` precedence, deliberately mirroring
+`crates/bhtune-runtime/src/config` resolves shared settings with `CLI flag > env var > TOML
+config file > built-in default` precedence, deliberately mirroring
 `opcda-bridge-client`'s own `config.rs` so both projects' configuration surfaces stay
-recognizable to the same user. `bhtune --config <path>` loads an explicit TOML file (a
+recognizable to the same user. The CLI passes parsed flags to the runtime; the server uses
+the same configuration model and resolver without a CLI dependency. `bhtune --config <path>`
+loads an explicit TOML file (a
 missing explicit path is a hard error); omitting `--config` auto-discovers one from a
 platform-standard location, where a missing file silently resolves to all-defaults rather
 than erroring (it may simply not have been created yet). A file that exists but fails to
@@ -41,7 +43,8 @@ function itself only has two tiers left to arbitrate: the (already env-merged) C
 versus the config file. `resolve_server` errors if
 neither the CLI nor the config file supplies a value — there's no sensible default OPC
 server to fall back to — and is applied only for the `Opcda` driver inside
-`commands::tune::run` (never for `simulate`, which has no OPC server concept at all; a
+runtime tune preparation (never for simulator runs, which have no OPC server concept at
+all; a
 config-file `server` key is simply not consulted for a simulator run rather than causing an
 unrelated error).
 

@@ -17,6 +17,7 @@ WORKSPACE_MEMBERS = (
     "bhtune-driver",
     "bhtune-db",
     "bhtune-cli",
+    "bhtune-runtime",
     "bhtune-server",
     "bhtune-test-support",
 )

@@ -5,15 +5,18 @@ the [design notes index](README.md) for provenance.
 
 ## CLI reference (`cli-commands`)
 
-`bhtune-cli` (binary name `bhtune`) is a thin `clap`-derive orchestration layer over
-`bhtune-core`/`bhtune-db`/`bhtune-driver` — every subcommand opens the same SQLite database
-(`crate::db::open`, which also seeds the four built-in templates) and shares one dispatcher in
-`lib.rs::run_with_cli`.
+`bhtune-cli` (binary name `bhtune`) is the `clap` adapter over `bhtune-runtime`. It owns
+command parsing, terminal prompts, exit codes, and command output; the runtime owns shared
+configuration, database bootstrap, driver setup, and tune orchestration. Data commands use
+the same SQLite database through `bhtune_runtime::db::open`, which also seeds the four
+built-in templates, and share one dispatcher in `lib.rs::run_with_cli`.
 
 - **`bhtune tune`** — runs a full MRFT test against a named template: resolves the template,
-  derives the tag set (`build_loop_tags`, in `commands/tune.rs`), selects a driver
-  (`crate::driver::build`, `--driver opcda|simulator`), transitions the loop to Manual, polls
-  at the global `[tuning].poll_interval_ms` driving a real `MrftEngine`, persists every tick
+  converts `TuneArgs` to the runtime's `TuneRequest`, then calls runtime `prepare()` and
+  `drive()` services. The runtime resolves the template and tag set (`build_loop_tags`),
+  selects a driver (`bhtune_runtime::driver::build`, `--driver opcda|simulator`), transitions
+  the loop to Manual, polls at the global `[tuning].poll_interval_ms` while driving a real
+  `MrftEngine`, persists every tick
   (`TuneSampleRow::insert`) and the final per-response-level results
   (`TuneResultRow::insert`), restores the loop's original mode, and optionally writes back one
   response level's PID constants with a stdin confirmation prompt (`maybe_write_back`) —
@@ -26,8 +29,8 @@ the [design notes index](README.md) for provenance.
 - **`bhtune simulate`** — a zero-configuration wrapper around `tune` that forces
   `--driver simulator` against a synthetic FOPDT process (`SIMULATOR_PV_TAG`/
   `SIMULATOR_MV_TAG`), for a demo/smoke-test run with no real DCS/PLC needed.
-  `SimulateArgs::into_tune_args` converts to the same `TuneArgs` `tune` uses, so the two share
-  every code path below template resolution.
+  `SimulateArgs::into_tune_args` converts to the same `TuneArgs` `tune` uses, then the CLI
+  adapter maps both to the runtime request type so they share the same execution path.
 - **`bhtune template list|show|import|export|delete`** — inspect and manage `dcs_templates`
   rows (built-in, catalog, and user-imported) via `DcsTemplateRow`. `import` accepts either a
   single JSON template or a multi-template TOML catalog (auto-detected by content, not file
@@ -58,38 +61,20 @@ TemplateInUse`) and a note that a `Builtin`/`Catalog`-origin template will simpl
   continuation pages. `search` reports progressive matches and completion/truncation metadata
   while keeping machine-readable JSON on stdout.
 
-**What `cli-commands` deliberately does not cover** — each shipped as its own later phase,
-not an oversight: `tracing`-based structured logging shipped separately as `cli-logging` —
-see "Logging" below. Non-interactive automation flags (`--yes`/`--write-pid`/`--output json`)
-and distinguished exit codes shipped separately as `cli-automation` — see "Automation" below.
-Global `[tuning]` configuration and unattended-run safety validation shipped separately as
-`cli-config`/`cli-safety` — see "Config precedence" and "Safety" below. Platform-standard
-config file/data-directory precedence shipped separately as `cli-config` — see "Config
-precedence" below.
+The CLI adapter delegates configuration, logging, database setup, tune execution, and live
+plant safety checks to `bhtune-runtime`. It owns only command-specific parsing, prompts,
+presentation, and process exit codes; see "Automation" and "Logging" for those adapter
+contracts.
 
-**Testing approach.** `commands/tune.rs`'s tests use a `MockDriver` (an in-memory
-`Driver` impl with canned/erroring responses) for setup-and-validation-error paths, a real
-`SimulatorDriver` for full happy-path runs (including the `[tuning].mrft_delay_secs` padding
-test, whose fixed simulator timestamps advance once per real interval tick, so its configured padding still
-costs corresponding real test time unless the whole Tokio/SQLite test environment is made
-pausable; that test overrides the generic fast-fixture timeout to 30 seconds so a loaded Windows
-runner cannot abort its intentional two seconds of padding), and a shared test-only mock gRPC
-`Bridge` service (`crate::test_support`, used by
-`driver.rs`, `tune.rs`, and `commands/opc.rs`) to prove the OPC DA path — connect, initial
-reads, a mid-poll failure, and the `opc` passthrough commands — actually works end-to-end
-without a real gateway or OPC DA server. A single canned mock read response satisfies every
-setup read regardless of which tag was requested (see `OpcDaDriver::read`'s positional, not
-tag-matched, mapping), which is what makes it possible to calibrate exactly which call number
-a mock failure should start on. `test_support::MockBridgeService` supports configurable
-streaming `browse` responses (a spawned per-request forwarder over an `mpsc` channel, mirroring
-`opcda-bridge`'s own real streaming shape) so `commands/opc.rs` doesn't need — and no longer
-has — its own separate mock implementation. `test_support::start_mock_server` returns a
-`MockServerHandle` alongside the listening address; calling `.shutdown().await` signals the
-server via a oneshot channel and awaits its task, so a mock server's lifetime is explicit and
-bounded rather than only ever abandoned at test-process exit.
+**Testing approach.** Runtime tests characterize tune preparation, execution, restore,
+write-back, cancellation, and the simulator path with `MockDriver` and `SimulatorDriver`
+fixtures. OPC DA driver and CLI passthrough tests use the shared unpublished
+`bhtune-test-support` mock gRPC `Bridge` service; neither needs a real gateway or OPC DA server.
+CLI tests separately cover argument parsing, command dispatch, terminal output, and process
+exit behavior.
 
-`run_polling_loop`'s `tokio::signal::ctrl_c()` select arm (and the `Aborted`-outcome branches
-downstream of it in `run`/`execute`) is covered by `tests/ctrlc_abort.rs`, a black-box
+`run_polling_loop`'s cancellation path (and the `Aborted`-outcome branches in runtime tune
+execution) is covered by `tests/ctrlc_abort.rs`, a black-box
 integration test that spawns the real compiled `bhtune` binary as a child OS process (via
 `Command::new(env!("CARGO_BIN_EXE_bhtune"))`, only available to `tests/*.rs` integration
 targets, not `#[cfg(test)]` unit tests) and sends it a genuine `SIGINT` mid-poll — sidestepping
@@ -187,10 +172,10 @@ own unit tests can't reach through a real `run_polling_loop` execution.
 ## History retention and pruning
 
 Age-based deletion of `tune_runs` (and their cascaded samples/results/write-back audit rows) older
-than a configurable number of days, off by default (retain forever). `resolve_retention_days`
-(`bhtune-cli`'s `config.rs`) resolves the policy through the usual `CLI --retention-days >
+than a configurable number of days, off by default (retain forever). Runtime
+`resolve_retention_days` resolves the policy through the usual `CLI --retention-days >
 BHTUNE_RETENTION_DAYS env > retention_days in bhtune.toml > (no default)` precedence, and a new
-shared `crate::retention` module (`cutoff_for`, `sweep_retention`) is the single place that turns "N
+shared `bhtune_runtime::retention` module (`cutoff_for`, `sweep_retention`) is the single place that turns "N
 days" into an actual delete — used identically by `db::open`'s startup sweep (both binaries),
 `bhtune-server`'s periodic 24-hour ticker while it keeps running, and `history prune`'s
 real-deletion path, so a preview and an actual sweep can never disagree about which runs are in

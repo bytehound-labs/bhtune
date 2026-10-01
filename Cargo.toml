@@ -5,6 +5,7 @@ members = [
   "crates/bhtune-driver",
   "crates/bhtune-db",
   "crates/bhtune-cli",
+  "crates/bhtune-runtime",
   "crates/bhtune-server",
   "crates/bhtune-test-support",
 ]
@@ -30,8 +31,8 @@ homepage = "https://github.com/bytehound-labs/bhtune"
 # package any crate whose normal or build path dependency has no version requirement
 # ("all dependencies must have a version requirement specified when packaging"), which
 # would otherwise make every crate depending on another workspace member unpublishable.
-# `bhtune-server` has no entry here since nothing in the workspace depends on the server
-# crate.
+# `bhtune-runtime` is shared by the CLI and server adapters. The server has no entry here
+# since nothing in the workspace depends on the server crate.
 # `bhtune-test-support` is intentionally absent. It is unpublished (`publish = false`) and
 # only a dev-dependency. A versioned path dev-dependency is rewritten to a crates.io
 # requirement during `cargo package` and then cannot be resolved. Each consumer declares
@@ -40,7 +41,7 @@ homepage = "https://github.com/bytehound-labs/bhtune"
 bhtune-core = { path = "crates/bhtune-core", version = "0.1.0" }
 bhtune-driver = { path = "crates/bhtune-driver", version = "0.1.0" }
 bhtune-db = { path = "crates/bhtune-db", version = "0.1.0" }
-bhtune-cli = { path = "crates/bhtune-cli", version = "0.1.0" }
+bhtune-runtime = { path = "crates/bhtune-runtime", version = "0.1.0" }
 # Deliberately does NOT enable the "clock"/"now" features: bhtune-core must never be able
 # to call `Utc::now()`, since the MRFT engine's determinism guarantee (see AGENTS.md) is
 # that all timestamps come in as `Tick` data, never read from the wall clock internally.
@@ -57,9 +58,8 @@ chrono = { version = "0.4", default-features = false, features = [
 # need to propagate/print errors, never match on them.
 thiserror = "2"
 # `bhtune-core` parses the embedded DCS/PLC template catalog
-# (`crates/bhtune-core/templates/builtin.toml`, `template-catalog`) and `bhtune-cli` parses
-# `bhtune.toml`/the user template catalog (`cli-config`/`template-user-catalog`) -- promoted
-# here once bhtune-core became a second consumer. Same major version `opcda-bridge` uses.
+# (`crates/bhtune-core/templates/builtin.toml`) and `bhtune-runtime` parses configuration
+# and the user template catalog. Same major version `opcda-bridge` uses.
 toml = "1"
 # `bhtune-cli` has used this from the start; `bhtune-server` became a second consumer with
 # `server-windows-service` (its `install`/`uninstall`/`start`/`stop`/`status` subcommands and
@@ -76,6 +76,12 @@ clap = { version = "4", features = ["derive"] }
 # `#[utoipa::path]` derives, already the crate default) plus `chrono` (for `DateTime<Utc>`
 # fields); `bhtune-server`'s own `Cargo.toml` adds `chrono` on top of this workspace entry.
 utoipa = { version = "5", default-features = false, features = ["macros"] }
+# `bhtune-runtime` initializes the shared file/stderr logging stack, while the CLI, runtime,
+# and server emit structured events through `tracing`; keep those adapters on one workspace pin.
+tracing = "0.1"
+# The runtime owns the non-blocking log writer and the server holds its `WorkerGuard` until
+# shutdown, so both crates use the same appender version.
+tracing-appender = "0.2"
 # Property tests exercise the same parser boundaries that the standalone libFuzzer targets
 # under `fuzz/` cover continuously in dedicated fuzzing jobs.
 proptest = "1"

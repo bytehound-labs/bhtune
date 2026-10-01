@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bhtune_cli::cancel::CtrlCHandle;
+use bhtune_runtime::cancel::CtrlCHandle;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
@@ -198,7 +198,7 @@ mod tests {
     #[tokio::test]
     async fn start_registers_runs_and_releases_a_completed_task() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         let ran = Arc::new(AtomicBool::new(false));
         let ran_clone = ran.clone();
         let (finish_tx, finish_rx) = oneshot::channel();
@@ -220,13 +220,13 @@ mod tests {
     #[tokio::test]
     async fn start_allows_multiple_runs_while_they_are_active() {
         let active = ActiveRun::default();
-        let (_ctrl_c_1, handle_1) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c_1, handle_1) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle_1, std::future::pending())
             .await
             .unwrap();
 
-        let (_ctrl_c_2, handle_2) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c_2, handle_2) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(2, handle_2, std::future::pending())
             .await
@@ -237,7 +237,7 @@ mod tests {
     #[tokio::test]
     async fn release_frees_the_slot_for_the_matching_run_id() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, std::future::pending())
             .await
@@ -249,8 +249,8 @@ mod tests {
     #[tokio::test]
     async fn releasing_one_run_keeps_other_runs_registered() {
         let active = ActiveRun::default();
-        let (_ctrl_c_1, handle_1) = bhtune_cli::cancel::CtrlC::manual();
-        let (_ctrl_c_2, handle_2) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c_1, handle_1) = bhtune_runtime::cancel::CtrlC::manual();
+        let (_ctrl_c_2, handle_2) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle_1, std::future::pending())
             .await
@@ -268,7 +268,7 @@ mod tests {
     #[tokio::test]
     async fn release_is_a_no_op_for_a_non_matching_run_id() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, std::future::pending())
             .await
@@ -287,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn reserve_refuses_while_a_spawned_task_is_active() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, std::future::pending())
             .await
@@ -300,7 +300,7 @@ mod tests {
     async fn start_refuses_while_a_reservation_is_active() {
         let active = ActiveRun::default();
         active.reserve(1).await.unwrap();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         let err = active
             .start(2, handle, std::future::pending())
             .await
@@ -322,7 +322,7 @@ mod tests {
         active.reserve(1).await.unwrap();
         let dropped = Arc::new(AtomicBool::new(false));
         let probe = DropProbe(dropped.clone());
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         let mut task = std::future::poll_fn(move |_| {
             let _ = &probe;
             Poll::Pending
@@ -342,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_and_wait_logs_an_unexpected_registration_task_failure() {
         let active = ActiveRun::default();
-        let (_ctrl_c, cancel) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, cancel) = bhtune_runtime::cancel::CtrlC::manual();
         let handle = tokio::spawn(async {
             panic!("simulated registration task failure");
         });
@@ -361,13 +361,13 @@ mod tests {
     #[tokio::test]
     async fn start_refuses_a_duplicate_run_id_while_the_task_is_active() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, std::future::pending())
             .await
             .unwrap();
 
-        let (_ctrl_c_duplicate, duplicate_handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c_duplicate, duplicate_handle) = bhtune_runtime::cancel::CtrlC::manual();
         let err = active
             .start(1, duplicate_handle, std::future::pending())
             .await
@@ -422,15 +422,14 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_returns_true_for_the_matching_run_id() {
-        // `CtrlC::signalled` (the observing half) is deliberately `pub(crate)` to
-        // `bhtune-cli` -- see its doc comment -- so this module's own tests can't directly
-        // observe that `trigger()` fired the paired `CtrlC`. That propagation is already
-        // covered by `bhtune-cli::cancel`'s own test suite; what belongs here is only
+        // `CtrlC::signalled` (the observing half) is runtime-private, so this module's tests
+        // can't directly observe that `trigger()` fired the paired `CtrlC`. That propagation
+        // is covered by `bhtune-runtime::cancel`'s test suite; what belongs here is only
         // `ActiveRun::cancel`'s own dispatch logic (right id -> `true`), and the full
         // end-to-end proof that cancellation actually reaches and stops a running tune
         // lives in `routes::runs`'s route-level tests.
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, std::future::pending())
             .await
@@ -441,7 +440,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_returns_false_for_a_non_matching_run_id() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, std::future::pending())
             .await
@@ -470,14 +469,14 @@ mod tests {
     #[tokio::test]
     async fn cancel_and_wait_waits_for_the_spawned_task_to_actually_finish() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         let finished = Arc::new(AtomicBool::new(false));
         let finished_clone = finished.clone();
         // A task that takes a little while to actually stop (simulating an in-flight
         // restore completing) rather than resolving the instant it's spawned -- proves
         // `cancel_and_wait` really awaits the `JoinHandle` to completion, rather than
         // returning as soon as `trigger()` is called. (Whether `trigger()` itself reaches a
-        // real `CtrlC`'s `signalled()` is already covered by `bhtune-cli::cancel`'s own
+        // real `CtrlC`'s `signalled()` is already covered by `bhtune-runtime::cancel`'s own
         // tests; `CtrlC::signalled` is deliberately `pub(crate)` there and unobservable from
         // this crate -- see its doc comment.)
         active
@@ -509,7 +508,7 @@ mod tests {
         let finished = Arc::new(AtomicUsize::new(0));
 
         for run_id in [1, 2] {
-            let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+            let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
             let finished_clone = finished.clone();
             active
                 .start(run_id, handle, async move {
@@ -533,7 +532,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_and_wait_abandons_a_task_that_does_not_finish_within_the_timeout() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         // A task that ignores cancellation entirely (simulating a stuck restore) -- proves
         // `cancel_and_wait` still returns rather than blocking forever.
         active
@@ -552,7 +551,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_and_wait_logs_and_consumes_a_panicking_task() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, async {
                 panic!("simulated task failure");
@@ -567,7 +566,7 @@ mod tests {
     #[tokio::test]
     async fn a_panicking_task_releases_its_registration_without_shutdown() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, async {
                 panic!("simulated task failure");
@@ -583,7 +582,7 @@ mod tests {
     #[tokio::test]
     async fn a_task_that_reaches_its_own_timeout_releases_its_registration() {
         let active = ActiveRun::default();
-        let (_ctrl_c, handle) = bhtune_cli::cancel::CtrlC::manual();
+        let (_ctrl_c, handle) = bhtune_runtime::cancel::CtrlC::manual();
         active
             .start(1, handle, async {
                 assert!(

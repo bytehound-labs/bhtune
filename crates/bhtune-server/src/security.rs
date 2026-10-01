@@ -5,7 +5,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use bhtune_cli::config::ServerMode;
+use bhtune_runtime::config::ServerMode;
 use std::str::FromStr;
 
 // React's tag tree and uPlot set layout values through element `style` attributes. Keep

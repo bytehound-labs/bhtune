@@ -18,7 +18,6 @@ use axum::extract::{Path, Query, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use bhtune_cli::commands::tune::sample_quality_from_driver;
 use bhtune_db::models::SampleQuality;
 use bhtune_driver::{
     BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource, Driver,
@@ -28,6 +27,7 @@ use bhtune_driver::{
     SearchIndexStatus, SearchMatch, SearchMatchMode, SearchRequest, check_gateway_compatibility,
     list_opcda_servers,
 };
+use bhtune_runtime::tune::sample_quality_from_driver;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
@@ -38,9 +38,9 @@ use crate::state::AppState;
 /// Bounds every OPC DA call this module makes. `opcda_bridge::Client::connect` has no
 /// connect timeout of its own (plain `tonic`, no `connect_timeout` configured), so a
 /// firewalled or black-holed gateway host would otherwise hang a request for however long
-/// the OS's own TCP-connect timeout is -- potentially minutes. 30s matches
-/// `bhtune-cli`'s `default_op_or_restore_timeout_secs()` (also 30) for consistency with the
-/// rest of the codebase, rather than inventing a new number. Each connect/browse/read call
+/// the OS's own TCP-connect timeout is -- potentially minutes. 30s matches the runtime's
+/// built-in operation and restore timeout defaults in `config::tuning`, rather than
+/// inventing a new number. Each connect/browse/read call
 /// gets its own separate budget via [`with_timeout`], not one combined timeout spanning
 /// connect *and* the operation together.
 const OPC_QUERY_TIMEOUT_SECS: u64 = 30;
@@ -266,7 +266,7 @@ pub(crate) async fn servers(
     Query(query): Query<OpcServersQuery>,
 ) -> Result<Json<OpcServersResponse>, ApiError> {
     let config = state.config_snapshot()?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
+    let bridge_host = bhtune_runtime::config::resolve_bridge_host(query.bridge_host, &config);
     let servers = with_timeout("list OPC DA servers", list_opcda_servers(&bridge_host)).await?;
     let gateway_compatibility = Some(
         inspect_gateway_compatibility(&bridge_host, None)
@@ -341,8 +341,8 @@ pub(crate) async fn capabilities(
     Query(query): Query<OpcServerQuery>,
 ) -> Result<Json<OpcCapabilitiesResponse>, ApiError> {
     let config = state.config_snapshot()?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
+    let bridge_host = bhtune_runtime::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_runtime::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
@@ -501,8 +501,8 @@ async fn connect_search_index_driver(
     opc_server: Option<String>,
 ) -> Result<OpcDaDriver, ApiError> {
     let config = state.config_snapshot()?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(bridge_host, &config);
-    let opc_server = bhtune_cli::config::resolve_server(opc_server, &config)
+    let bridge_host = bhtune_runtime::config::resolve_bridge_host(bridge_host, &config);
+    let opc_server = bhtune_runtime::config::resolve_server(opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
@@ -849,8 +849,8 @@ pub(crate) async fn browse(
     Query(query): Query<OpcBrowseQuery>,
 ) -> Result<Json<OpcBrowseResponse>, ApiError> {
     let config = state.config_snapshot()?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
+    let bridge_host = bhtune_runtime::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_runtime::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let page_size = validate_positive(query.page_size, "page_size")?;
     let driver = with_timeout(
@@ -913,8 +913,8 @@ pub(crate) async fn close_browse_session(
         ));
     }
     let config = state.config_snapshot()?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
+    let bridge_host = bhtune_runtime::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_runtime::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
@@ -1038,8 +1038,8 @@ pub(crate) async fn search(
     let match_mode = parse_search_match_mode(&query.match_mode)?;
     let max_results = validate_positive(query.max_results, "max_results")?;
     let config = state.config_snapshot()?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
+    let bridge_host = bhtune_runtime::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_runtime::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),
@@ -1151,8 +1151,8 @@ pub(crate) async fn read(
         .filter(|t| !t.trim().is_empty())
         .ok_or_else(|| ApiError::BadRequest("a tag is required".to_string()))?;
     let config = state.config_snapshot()?;
-    let bridge_host = bhtune_cli::config::resolve_bridge_host(query.bridge_host, &config);
-    let opc_server = bhtune_cli::config::resolve_server(query.opc_server, &config)
+    let bridge_host = bhtune_runtime::config::resolve_bridge_host(query.bridge_host, &config);
+    let opc_server = bhtune_runtime::config::resolve_server(query.opc_server, &config)
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let driver = with_timeout(
         &format!("connect to OPC server '{opc_server}' via bridge '{bridge_host}'"),

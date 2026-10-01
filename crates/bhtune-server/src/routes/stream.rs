@@ -11,10 +11,10 @@
 //! the full rationale.
 //!
 //! Implemented as an internal poll of `tune_samples`/`tune_runs`, **not** a broadcast channel
-//! threaded through `bhtune-cli::commands::tune`'s already-heavily-tested tick loop --
-//! deliberately, so this endpoint adds zero risk to the shared CLI/server tune-execution code
-//! path (`run_polling_loop` keeps its existing, already-proven signature and test suite
-//! untouched). At this project's documented data volumes (a pathological 2-hour run is
+//! threaded through `bhtune-runtime`'s already-tested tick loop -- deliberately, so this
+//! endpoint adds zero risk to the shared CLI/server tune-execution code path
+//! (`run_polling_loop` keeps its existing, already-proven signature and test suite untouched).
+//! At this project's documented data volumes (a pathological 2-hour run is
 //! ~9,000 samples -- see AGENTS.md's "History explorer" notes) polling the database every
 //! [`POLL_INTERVAL`] is negligible cost, not a premature optimization to avoid.
 

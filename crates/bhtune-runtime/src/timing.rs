@@ -15,7 +15,7 @@ use bhtune_db::models::{
 use chrono::{DateTime, Utc};
 use tokio::time::Instant;
 
-use crate::args::DriverKindArg;
+use crate::tune::DriverKind;
 
 /// Six samples per measured period is an advisory minimum for interpreting extrema.
 pub(crate) const MIN_SAMPLES_PER_PERIOD: f64 = 6.0;
@@ -252,13 +252,13 @@ fn classify_sampling_adequacy(samples_per_period: Option<f64>) -> SamplingAdequa
 
 impl TickTimeSource {
     pub(crate) fn for_driver(
-        driver: DriverKindArg,
+        driver: DriverKind,
         anchor: RunTimeAnchor,
         poll_interval_ms: u64,
     ) -> anyhow::Result<Self> {
         match driver {
-            DriverKindArg::Opcda => Ok(Self::LiveMonotonic { anchor }),
-            DriverKindArg::Simulator => {
+            DriverKind::Opcda => Ok(Self::LiveMonotonic { anchor }),
+            DriverKind::Simulator => {
                 let poll_interval = Duration::from_millis(poll_interval_ms.max(1));
                 let step = chrono::Duration::from_std(poll_interval).map_err(|_| {
                     anyhow::anyhow!(
@@ -319,7 +319,7 @@ mod tests {
     fn simulator_first_tick_is_one_process_step_after_start() {
         let start = DateTime::UNIX_EPOCH;
         let mut source =
-            TickTimeSource::for_driver(DriverKindArg::Simulator, anchor_at(start), 5).unwrap();
+            TickTimeSource::for_driver(DriverKind::Simulator, anchor_at(start), 5).unwrap();
 
         assert_eq!(
             source.next_timestamp().unwrap(),
@@ -331,7 +331,7 @@ mod tests {
     fn simulator_ticks_advance_by_the_exact_poll_interval() {
         let start = DateTime::UNIX_EPOCH;
         let mut source =
-            TickTimeSource::for_driver(DriverKindArg::Simulator, anchor_at(start), 50).unwrap();
+            TickTimeSource::for_driver(DriverKind::Simulator, anchor_at(start), 50).unwrap();
 
         let first = source.next_timestamp().unwrap();
         let second = source.next_timestamp().unwrap();
@@ -345,7 +345,7 @@ mod tests {
     fn simulator_matches_the_poll_loop_minimum_interval() {
         let start = DateTime::UNIX_EPOCH;
         let mut source =
-            TickTimeSource::for_driver(DriverKindArg::Simulator, anchor_at(start), 0).unwrap();
+            TickTimeSource::for_driver(DriverKind::Simulator, anchor_at(start), 0).unwrap();
 
         assert_eq!(
             source.next_timestamp().unwrap(),
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn simulator_rejects_an_unrepresentable_poll_interval() {
         let error = TickTimeSource::for_driver(
-            DriverKindArg::Simulator,
+            DriverKind::Simulator,
             anchor_at(DateTime::UNIX_EPOCH),
             u64::MAX,
         )
@@ -381,7 +381,7 @@ mod tests {
     fn live_timestamp_projects_monotonic_elapsed_onto_the_utc_anchor() {
         let monotonic = Instant::now();
         let anchor = RunTimeAnchor::from_parts(DateTime::UNIX_EPOCH, monotonic);
-        let mut source = TickTimeSource::for_driver(DriverKindArg::Opcda, anchor, 800).unwrap();
+        let mut source = TickTimeSource::for_driver(DriverKind::Opcda, anchor, 800).unwrap();
 
         assert_eq!(
             source
@@ -395,7 +395,7 @@ mod tests {
     fn live_timestamp_preserves_a_real_delayed_poll_gap() {
         let monotonic = Instant::now();
         let anchor = RunTimeAnchor::from_parts(DateTime::UNIX_EPOCH, monotonic);
-        let mut source = TickTimeSource::for_driver(DriverKindArg::Opcda, anchor, 800).unwrap();
+        let mut source = TickTimeSource::for_driver(DriverKind::Opcda, anchor, 800).unwrap();
 
         let first = source
             .next_timestamp_at(monotonic + Duration::from_millis(800))
@@ -411,7 +411,7 @@ mod tests {
     fn live_timestamp_rejects_an_instant_before_the_anchor() {
         let monotonic = Instant::now();
         let anchor = RunTimeAnchor::from_parts(DateTime::UNIX_EPOCH, monotonic);
-        let mut source = TickTimeSource::for_driver(DriverKindArg::Opcda, anchor, 800).unwrap();
+        let mut source = TickTimeSource::for_driver(DriverKind::Opcda, anchor, 800).unwrap();
 
         let error = source
             .next_timestamp_at(monotonic - Duration::from_millis(1))

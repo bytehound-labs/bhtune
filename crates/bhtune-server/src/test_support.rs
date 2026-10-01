@@ -22,11 +22,11 @@ pub(crate) async fn in_memory_state() -> AppState {
         .await
         .expect("seeding the built-in templates into a fresh in-memory db should never fail");
     let mut config_store =
-        bhtune_cli::config::load_config_store_from(None, None, None, None, false)
+        bhtune_runtime::config::load_config_store_from(None, None, None, None, false)
             .expect("default test config store should load");
     // Keep route tests fast now that HTTP requests correctly inherit global timing settings
     // instead of carrying obsolete per-run timing fields.
-    config_store.config.tuning = bhtune_cli::config::TuningConfig {
+    config_store.config.tuning = bhtune_runtime::config::TuningConfig {
         mrft_delay_secs: Some(0),
         poll_interval_ms: Some(5),
         timeout_secs: Some(5),
@@ -35,12 +35,12 @@ pub(crate) async fn in_memory_state() -> AppState {
     };
     config_store.toml_tuning = config_store.config.tuning;
     config_store.tuning_sources =
-        bhtune_cli::config::tuning_config_sources(&config_store.toml_tuning);
+        bhtune_runtime::config::tuning_config_sources(&config_store.toml_tuning);
     AppState::for_mode(
         pool,
         Arc::new(RwLock::new(config_store)),
-        bhtune_cli::config::ServerMode::Full,
-        bhtune_cli::config::DemoPolicy::default(),
+        bhtune_runtime::config::ServerMode::Full,
+        bhtune_runtime::config::DemoPolicy::default(),
     )
 }
 

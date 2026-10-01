@@ -12,8 +12,8 @@ use bhtune_core::TagOverrides;
 use clap::{Parser, Subcommand, ValueEnum};
 
 /// `value_parser` for every `f32` CLI flag that can reach `bhtune-core` unvalidated. A
-/// driver tag read is checked for finiteness in `commands::tune::read_f32`, but a CLI flag
-/// value bypasses that check entirely (see `build_loop_tags`'s `TagOrValue::Value` path) --
+/// driver tag read is checked for finiteness by the runtime, but a CLI flag value bypasses
+/// that check entirely (see the runtime tag builder's `TagOrValue::Value` path) --
 /// without this, `--relay-amp nan` or `--sim-gain inf` would flow straight into the tuning
 /// math. See AGENTS.md's "Live-plant safety hardening" section.
 fn finite_f32(s: &str) -> Result<f32, String> {
@@ -74,9 +74,10 @@ pub struct Cli {
     #[arg(long, global = true, env = "BHTUNE_RETENTION_DAYS", value_parser = positive_u32)]
     pub retention_days: Option<u32>,
 
-    /// Log level / directive spec, e.g. "info" or "bhtune_cli=debug,sqlx=warn" (default:
-    /// info). Diagnostic detail only -- never printed to stdout, so it can never interleave
-    /// with `--output json`'s single-object contract; see `crate::logging`.
+    /// Log level / directive spec, e.g. "info" or
+    /// "bhtune_cli=debug,bhtune_runtime=debug,sqlx=warn" (default: info). Diagnostic detail
+    /// only -- never printed to stdout, so it can never interleave with `--output json`'s
+    /// single-object contract; see `crate::logging`.
     #[arg(long, global = true, env = "RUST_LOG")]
     pub log_level: Option<String>,
 

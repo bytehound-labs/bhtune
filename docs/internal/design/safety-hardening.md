@@ -111,7 +111,7 @@ rationale for code that still exists (not a changelog of the review itself):
   live tune.
 - **No externally supplied number reaches the engine unvalidated** — done
   (`bhtune-core::range`, `LoopConfig::validate`, `bhtune-cli::args` value parsers,
-  `commands::tune::validate_initial_state`). Previously `--cycles-count 0` reached
+  `bhtune-runtime::tune::validate_initial_state`). Previously `--cycles-count 0` reached
   `tuning_math::measure_oscillation`'s internal `assert!` and panicked _after_ the loop had
   already been switched to manual and stroked through a full relay test, with no restore on
   the panic path; ranges read from the driver or passed as flags were never checked for
@@ -136,7 +136,7 @@ rationale for code that still exists (not a changelog of the review itself):
     clear message before any I/O. Deliberately _not_ applied to `mrft_delay`, `cycles_skip`,
     `noise_protection_secs`, or `sim_seed` — each is either bounded only at the model level
     or has no invalid range at the CLI layer (`0` is a legitimate RNG seed).
-  - `commands::tune::validate_initial_state` — a new checkpoint between
+  - `bhtune-runtime::tune::validate_initial_state` — a checkpoint between
     `read_initial_values` and `transition_to_manual` (the single choke point before any
     mutation of the live loop) that validates the resolved `InitialState` uniformly,
     regardless of whether each value came from a CLI flag or a driver tag: constructs
@@ -170,7 +170,7 @@ show` (not `list`, to keep the list view narrow) prints the snapshotted template
   origin alongside the run's other identity fields, from `RunDetailJson`/the plain-text
   table.
 - **OPC quality now enforced on every tuning-critical read** — done
-  (`commands::tune::check_quality`, `bhtune_db::models::SampleQuality`). Previously
+  (`bhtune-runtime::tune::check_quality`, `bhtune_db::models::SampleQuality`). Previously
   `bhtune_driver::Quality`/`is_trustworthy()` existed but nothing in the tune path ever
   called it — a tag reporting `Uncertain` (a stale held-last-value during a comms hiccup) or
   outright `Bad` quality flowed into the MRFT engine and a PID write-back exactly like a
@@ -203,8 +203,8 @@ show` (not `list`, to keep the list view narrow) prints the snapshotted template
   abort, and `--output json` carries nullable `poor_quality_tag`/`poor_quality` fields
   alongside the existing `timeout_secs`.
 
-- **Ctrl+C and the global `[tuning]` timeouts now reach an in-flight driver call, and the restore itself
-  is bounded** — done (`bhtune-cli::cancel`, `commands::tune::{bounded_driver_call,
+- **Ctrl+C and the global `[tuning]` timeouts reach an in-flight driver call, and the restore
+  itself is bounded** (`bhtune-runtime::cancel`, `bhtune-runtime::tune::{bounded_driver_call,
 attempt_restore}`). Previously the signal listener and the timeout sleep were both
   reconstructed fresh on every polling-loop iteration, inline in a `tokio::select!` — so for
   the entire duration of a tick's body (the PV read, the relay MV write, the sample insert)
@@ -215,9 +215,9 @@ attempt_restore}`). Previously the signal listener and the timeout sleep were bo
   hung driver read made the loop uninterruptible outright — exactly the scenario the global
   timeout settings are intended to prevent, and the very claim ("fires even mid-hung-read")
   that this fix makes true rather than aspirational. Closed in three parts:
-  - `bhtune_cli::cancel::CtrlC` — one process-wide Ctrl+C listener, installed exactly once at
-    real startup (`CtrlC::install`, called only from `crate::run`, never from a function unit
-    tests exercise) and threaded explicitly through `execute`/`run_polling_loop`/
+  - `bhtune_runtime::cancel::CtrlC` — one process-wide Ctrl+C listener, installed exactly once at
+    CLI startup (`CtrlC::install`, never from a function unit tests exercise) and threaded
+    explicitly through `execute`/`run_polling_loop`/
     `attempt_restore` as `&mut CtrlC` rather than each calling `tokio::signal::ctrl_c()`
     itself. Built on `tokio::sync::watch` (not `tokio_util::sync::CancellationToken`, which
     would add a dependency) specifically for its per-clone "have I observed this value yet"
@@ -225,8 +225,9 @@ attempt_restore}`). Previously the signal listener and the timeout sleep were bo
     point before that call — including before the handle's first call at all — and a
     _second_ signal is a second, distinguishable resolution on the same handle, which is
     exactly the "first Ctrl+C aborts, second forces a hard stop" distinction below needs.
-    `CtrlC::never()`/`CtrlC::test_pair()` back the test-only `run`/direct-call entry points,
-    so the many unit tests never install a real process-wide signal handler (which would
+    `CtrlC::never()`/`CtrlC::test_pair()` back runtime's direct-call tests; the CLI uses an
+    installed handle and the server uses a manually-triggered handle. Unit tests never install
+    a real process-wide signal handler (which would
     otherwise risk swallowing a developer's own Ctrl+C to a hung `cargo test`).
   - `bounded_driver_call`/`TickOperation` — races one driver call (the tick's PV read, or
     its MV write) against `ctrl_c.signalled()` and a fresh `[tuning].op_timeout_secs` sleep
@@ -275,7 +276,7 @@ CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is 
   confirmation window and that the remaining restore steps are allowed to finish.
 
 - **Every exit path now funnels through one best-effort, all-steps-attempted restore** — done
-  (`commands::tune::{MutationGuard, RestoreReport, RestoreStepOutcome, restore, execute}`,
+  (`bhtune-runtime::tune::{MutationGuard, RestoreReport, RestoreStepOutcome, restore, execute}`,
   `bhtune_db::models::{RestoreStatus, TuneRunRow::record_restore_status}`). Previously
   `execute()` could transition a loop to manual and then return without ever calling
   `restore()` at all — any `?` between the transition and the polling loop (the
@@ -338,7 +339,7 @@ CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is 
   end and records `Incomplete`.
 
 - **PID write-back now pre-reads, verifies against tolerance, and rolls back a partial
-  write** — done, core rewrite (`commands::tune::{read_previous_pid_values,
+  write** — done, core rewrite (`bhtune-runtime::tune::{read_previous_pid_values,
 pid_value_within_tolerance, write_and_verify_pid_value, rollback_pid_writes,
 maybe_write_back}`, `bhtune_db::models::{NewTuneWrite, RollbackState}`). Previously the
   three constants were written in sequence with no pre-read at all: if P succeeded and I was
@@ -449,7 +450,7 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
     overriding it. `--bridge-host` deliberately has no `BHTUNE_BRIDGE_HOST` env fallback the
     way every other command's `--bridge-host` does, precisely so an unrelated ambient env var
     can never itself trigger a false "contradicts the recorded one" error.
-  - **Reuses `commands::tune`'s own pre-read/write-and-verify helpers directly**
+  - **Reuses `bhtune-runtime::tune`'s own pre-read/write-and-verify helpers directly**
     (`read_previous_pid_values`, `write_and_verify_pid_value`, promoted from private to
     `pub(crate)` for this purpose) rather than re-implementing them, so a revert's pre-read,
     tolerance check, and per-constant failure semantics are identical to the original
@@ -549,7 +550,7 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
   existence gate) while stale sidecar files exist anyway at the paths it would use.
 
 - **`--output json` now emits exactly one parseable JSON value on stdout on every `tune`
-  path** — done (`commands::tune::maybe_write_back`, `RunOutcome::Completed`'s new
+  path** — done (`bhtune-runtime::tune::maybe_write_back`, `TuneOutcome::Completed`'s new
   `write_back_detail` field). Previously `maybe_write_back` `println!`ed its interactive
   listing/prompt and every status/result line unconditionally, regardless of `--output` —
   confirmed by hand: a completed simulator run (which never has PID constant tags

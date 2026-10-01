@@ -11,9 +11,7 @@ use bhtune_db::models::{
 use bhtune_driver::Driver;
 use chrono::Utc;
 
-use crate::output::OutputFormat;
-
-use super::prepare::WriteBackOutcome;
+use super::outcome::WriteBackOutcome;
 use super::quality::{read_f32, write_value};
 
 /// Reads the existing Proportional/Integral/Derivative values before any write is attempted
@@ -122,6 +120,36 @@ pub enum PidWriteOutcome {
     /// full detail; this is only ever a summary of it.
     Failed { detail: String },
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WriteBackSelection {
+    Selected(ResponseLevel),
+    Skipped(String),
+    Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteBackSkipReason {
+    NoPidTags,
+    NoResults,
+}
+
+/// Optional adapter hook for response-level selection and progress reporting.
+///
+/// The runtime performs all result validation, writes, readback confirmation, rollback, and
+/// audit persistence. An adapter may provide an interactive selector; non-interactive
+/// callers can omit the handler or select a response level on the request.
+pub trait WriteBackHandler: Send {
+    fn select_response_level(&mut self, results: &[TuneResultRow]) -> WriteBackSelection;
+
+    fn write_back_selected(&mut self, _response_level: ResponseLevel, _requested: bool) {}
+
+    fn write_back_skipped(&mut self, _reason: WriteBackSkipReason) {}
+
+    fn write_back_failed(&mut self, _detail: &str) {}
+
+    fn write_back_finished(&mut self, _response_level: ResponseLevel, _outcome: &PidWriteOutcome) {}
+}
 /// Pre-reads the existing Proportional/Integral/Derivative values, writes and verifies
 /// `target` (Proportional then Integral then Derivative, stopping at the first failure),
 /// rolls back to the pre-read values on partial failure (only for `kind =
@@ -132,12 +160,12 @@ pub enum PidWriteOutcome {
 ///
 /// The one implementation of "pre-read, write, verify, roll back, audit" in the whole
 /// workspace, shared by three callers: [`maybe_write_back`]'s in-run write-back,
-/// `commands::history::revert`, and `bhtune-server`'s post-hoc `POST /api/runs/{id}/write`/
+/// [`crate::history::revert_run`], and `bhtune-server`'s post-hoc `POST /api/runs/{id}/write`/
 /// `.../revert` (`api-post-run-write`) -- `pub` (not `pub(crate)`) specifically so that
 /// third, different-crate caller can reach it. `bhtune-server` calls only this function, not
 /// the lower-level [`read_previous_pid_values`]/[`write_and_verify_pid_value`] helpers this
-/// builds on -- those stay `pub(crate)`, since nothing outside `bhtune-cli` needs the
-/// individual pre-read/write-single-value steps, only the complete audited sequence.
+/// builds on -- those stay `pub(crate)`, since adapters need only the complete audited
+/// sequence.
 ///
 /// `target` is the caller-selected P/I/D values to write: freshly calculated parameters for a
 /// [`WriteKind::Write`], or a past write's recorded `previous` values for a
@@ -276,14 +304,6 @@ pub async fn write_pid_values(
         }
     }
 }
-/// Represents the selected calculated PID parameters and any reason they were not written.
-///
-/// The write-back operation itself is documented on [`maybe_write_back`].
-pub(super) enum WriteBackSelection<'a> {
-    Selected(&'a TuneResultRow),
-    Skipped(String),
-    Failed(String),
-}
 /// Converts a persisted result into the exact PID values that may be written to a controller.
 ///
 /// This is the single validity gate shared by the CLI and HTTP write paths. A result must be
@@ -339,167 +359,9 @@ pub fn pid_parameters_for_result(result: &TuneResultRow) -> anyhow::Result<PidPa
         derivative,
     })
 }
-pub(super) fn result_write_back_error(result: &TuneResultRow) -> Option<String> {
-    pid_parameters_for_result(result)
-        .err()
-        .map(|error| error.to_string())
-}
-pub(super) fn select_named_write_back_result<'a>(
-    results: &'a [TuneResultRow],
-    level: ResponseLevel,
-    output: OutputFormat,
-) -> WriteBackSelection<'a> {
-    match results.iter().find(|r| r.response_level == level) {
-        Some(result) => {
-            if let Some(detail) = result_write_back_error(result) {
-                if prints_table_output(output) {
-                    println!(
-                        "Calculated {level:?} result is invalid; skipping write-back: {detail}"
-                    );
-                }
-                return WriteBackSelection::Failed(detail);
-            }
-            if prints_table_output(output) {
-                println!(
-                    "Non-interactively writing {level:?} PID parameters back to the DCS (--write-pid)."
-                );
-            }
-            WriteBackSelection::Selected(result)
-        }
-        None => {
-            let detail = format!("no calculated result recorded for response level {level:?}");
-            if prints_table_output(output) {
-                println!(
-                    "No calculated result recorded for response level {level:?}; skipping write-back."
-                );
-            }
-            WriteBackSelection::Failed(detail)
-        }
-    }
-}
-pub(super) fn select_interactive_write_back_result<'a>(
-    results: &'a [TuneResultRow],
-    reader: &mut impl std::io::BufRead,
-) -> WriteBackSelection<'a> {
-    eprintln!("\nCalculated PID parameters:");
-    for (i, result) in results.iter().enumerate() {
-        match pid_parameters_for_result(result) {
-            Ok(pid) => eprintln!(
-                "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
-                i + 1,
-                result.response_level,
-                pid.proportional,
-                pid.integral,
-                pid.derivative
-            ),
-            Err(error) => eprintln!(
-                "  {}. {:?}: INVALID ({error})",
-                i + 1,
-                result.response_level
-            ),
-        }
-    }
-    eprintln!(
-        "Write which response level's PID parameters back to the DCS? [1-{}, or Enter/n to skip]:",
-        results.len()
-    );
-
-    let mut input = String::new();
-    let bytes_read = reader.read_line(&mut input).unwrap_or(0);
-    let input = input.trim();
-    if bytes_read == 0 || input.is_empty() || input.eq_ignore_ascii_case("n") {
-        eprintln!("Skipping PID write-back.");
-        return WriteBackSelection::Skipped(
-            "skipped interactively (no selection made)".to_string(),
-        );
-    }
-
-    match input.parse::<usize>() {
-        Ok(n) if n >= 1 && n <= results.len() => {
-            let result = &results[n - 1];
-            match result_write_back_error(result) {
-                Some(detail) => {
-                    eprintln!("Selected result is invalid; skipping PID write-back: {detail}");
-                    WriteBackSelection::Failed(detail)
-                }
-                None => WriteBackSelection::Selected(result),
-            }
-        }
-        _ => {
-            eprintln!("Invalid selection; skipping PID write-back.");
-            WriteBackSelection::Skipped("invalid response level selection".to_string())
-        }
-    }
-}
-pub(super) fn select_write_back_result<'a>(
-    results: &'a [TuneResultRow],
-    write_pid: Option<ResponseLevel>,
-    output: OutputFormat,
-    reader: &mut impl std::io::BufRead,
-) -> WriteBackSelection<'a> {
-    match write_pid {
-        Some(level) => select_named_write_back_result(results, level, output),
-        None if skips_interactive_prompt(write_pid, output) => WriteBackSelection::Skipped(
-            "--output json was set without --write-pid; skipped the interactive \
-             write-back prompt since there is no human present to answer it"
-                .to_string(),
-        ),
-        None => select_interactive_write_back_result(results, reader),
-    }
-}
-pub(super) fn finish_write_back(
-    output: OutputFormat,
-    response_level: ResponseLevel,
-    outcome: PidWriteOutcome,
-) -> (WriteBackOutcome, Option<String>) {
-    match outcome {
-        PidWriteOutcome::Written => {
-            if prints_table_output(output) {
-                println!("Wrote and confirmed {response_level:?} PID parameters.");
-            }
-            (WriteBackOutcome::Written { response_level }, None)
-        }
-        PidWriteOutcome::Failed { detail } => {
-            if prints_table_output(output) {
-                println!("PID write-back failed: {detail}");
-            }
-            (WriteBackOutcome::Failed, Some(detail))
-        }
-    }
-}
-/// Writes back the calculated PID parameters for one response level -- chosen either
-/// interactively (prompting on `reader`) or non-interactively via `write_pid`
-/// (`--write-pid`; the caller has already validated `--yes` was also given before the tune
-/// even started). Skips with an informational message (rather than prompting/writing)
-/// whenever any of the three PID constant tags is unconfigured — true for the simulator
-/// driver, and also a sane guard for any real template missing one — or when no results
-/// were recorded at all. `reader` is injected (rather than reading `std::io::stdin()`
-/// directly) so tests can supply a fixed `Cursor` in place of the process's real stdin; it
-/// is never read from at all when `write_pid` is `Some`, or when `output` is
-/// [`OutputFormat::Json`] (see below).
-///
-/// Pre-reads the existing constants, writes and verifies Proportional then Integral then
-/// Derivative in sequence (stopping at the first failure), and rolls back whatever was
-/// already confirmed if a later constant fails -- `safety-writeback-rollback` (finding 6).
-/// Every attempt, including a pre-read failure or a transport error mid-write, produces
-/// exactly one [`TuneWriteRow`] audit row.
-///
-/// `output` makes this function format-aware (`safety-json-contract`, finding 8):
-///
-/// - Under [`OutputFormat::Table`], status/result lines print with `println!` exactly as
-///   before, and the interactive listing/menu print with `eprintln!` -- a prompt has no
-///   business on stdout in *any* format, since a caller piping stdout elsewhere shouldn't
-///   see it interleaved with the tune's actual result.
-/// - Under [`OutputFormat::Json`], none of those `println!`s fire at all. The reason for
-///   every `Skipped`/`Failed` outcome is instead returned as the second element of the
-///   tuple -- a human-readable detail string -- so `print_summary`'s JSON branch can fold
-///   it into the one JSON object this whole run must still emit on stdout. Without this,
-///   the interactive prompt or a plain status line would print ahead of that object and
-///   break `--output json` for every scripted/scheduled caller trying to parse stdout.
-/// - When `output` is `Json` and `write_pid` is `None` (no response level was named
-///   non-interactively), the interactive prompt is skipped entirely -- `reader` (real
-///   stdin outside tests) is never touched, since there is no human present to answer it
-///   and a scripted caller could otherwise hang waiting on input that will never arrive.
+/// Writes the requested PID result, or asks an optional adapter handler to select one.
+/// Without a handler, an unrequested write is skipped; the runtime never reads stdin or
+/// writes to stdout.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn maybe_write_back(
     pool: &SqlitePool,
@@ -509,44 +371,80 @@ pub(super) async fn maybe_write_back(
     driver: &dyn Driver,
     config: LoopConfig,
     write_pid: Option<ResponseLevel>,
-    output: OutputFormat,
     allow_uncertain: bool,
-    reader: &mut impl std::io::BufRead,
+    mut handler: Option<&mut dyn WriteBackHandler>,
 ) -> anyhow::Result<(WriteBackOutcome, Option<String>)> {
     let (Some(p_tag), Some(i_tag), Some(d_tag)) = (
         &tags.proportional_constant,
         &tags.integral_constant,
         &tags.derivative_constant,
     ) else {
-        let detail = "no PID constant tags configured for this run's driver/template";
-        if prints_table_output(output) {
-            println!(
-                "No PID constant tags configured for this run's driver/template; skipping write-back."
-            );
+        if let Some(handler) = handler.as_deref_mut() {
+            handler.write_back_skipped(WriteBackSkipReason::NoPidTags);
         }
-        return Ok((WriteBackOutcome::Skipped, Some(detail.to_string())));
+        return Ok((
+            WriteBackOutcome::Skipped,
+            Some("no PID constant tags configured for this run's driver/template".to_string()),
+        ));
     };
 
     let results = TuneResultRow::list_for_run(pool, run_id).await?;
     if results.is_empty() {
+        if let Some(handler) = handler.as_deref_mut() {
+            handler.write_back_skipped(WriteBackSkipReason::NoResults);
+        }
         return Ok((
             WriteBackOutcome::Skipped,
             Some("no calculated results were recorded for this run".to_string()),
         ));
     }
 
-    let selected = match select_write_back_result(&results, write_pid, output, reader) {
-        WriteBackSelection::Selected(result) => result,
+    let selection = match write_pid {
+        Some(level) => WriteBackSelection::Selected(level),
+        None => match handler.as_deref_mut() {
+            Some(handler) => handler.select_response_level(&results),
+            None => WriteBackSelection::Skipped(
+                "no response level was selected by the caller".to_string(),
+            ),
+        },
+    };
+    let response_level = match selection {
+        WriteBackSelection::Selected(level) => level,
         WriteBackSelection::Skipped(detail) => {
             return Ok((WriteBackOutcome::Skipped, Some(detail)));
         }
         WriteBackSelection::Failed(detail) => {
+            if let Some(handler) = handler.as_deref_mut() {
+                handler.write_back_failed(&detail);
+            }
             return Ok((WriteBackOutcome::Failed, Some(detail)));
         }
     };
 
-    let pid = pid_parameters_for_result(selected)?;
+    let Some(selected) = results
+        .iter()
+        .find(|result| result.response_level == response_level)
+    else {
+        let detail = format!("no calculated result recorded for response level {response_level:?}");
+        if let Some(handler) = handler.as_deref_mut() {
+            handler.write_back_failed(&detail);
+        }
+        return Ok((WriteBackOutcome::Failed, Some(detail)));
+    };
+    let pid = match pid_parameters_for_result(selected) {
+        Ok(pid) => pid,
+        Err(error) => {
+            let detail = error.to_string();
+            if let Some(handler) = handler.as_deref_mut() {
+                handler.write_back_failed(&detail);
+            }
+            return Ok((WriteBackOutcome::Failed, Some(detail)));
+        }
+    };
     let response_level = pid.response_level;
+    if let Some(handler) = handler.as_deref_mut() {
+        handler.write_back_selected(response_level, write_pid.is_some());
+    }
     let written = opc_write_values(pid, config.controller_type, template.integral_type);
     let target = WriteReadback {
         proportional: written.proportional,
@@ -568,14 +466,329 @@ pub(super) async fn maybe_write_back(
     )
     .await?;
 
-    Ok(finish_write_back(output, response_level, outcome))
+    if let Some(handler) = handler {
+        handler.write_back_finished(response_level, &outcome);
+    }
+
+    let report = match outcome {
+        PidWriteOutcome::Written => (WriteBackOutcome::Written { response_level }, None),
+        PidWriteOutcome::Failed { detail } => (WriteBackOutcome::Failed, Some(detail)),
+    };
+    Ok(report)
 }
-pub(super) fn prints_table_output(output: OutputFormat) -> bool {
-    matches!(output, OutputFormat::Table)
-}
-pub(super) fn skips_interactive_prompt(
-    write_pid: Option<ResponseLevel>,
-    output: OutputFormat,
-) -> bool {
-    write_pid.is_none() && matches!(output, OutputFormat::Json)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use bhtune_core::{
+        ControllerType, LoopConfig, LoopTags, ProcessType, TuningResultInvalidReason,
+        TuningResultStatus,
+    };
+    use bhtune_db::models::{TemplateOrigin, TuneDriver, TuneRunRow};
+    use bhtune_driver::{
+        BrowsePage, BrowsePageRequest, Driver, DriverError, DriverResult, TagId, TagValue,
+        TagWrite, WriteOutcome,
+    };
+    use chrono::Utc;
+
+    struct FailingDriver;
+
+    #[async_trait]
+    impl Driver for FailingDriver {
+        async fn read(&self, _tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
+            Err(DriverError::Unsupported { operation: "test" })
+        }
+
+        async fn write(&self, _tag: &TagId, _value: TagWrite) -> DriverResult<WriteOutcome> {
+            Err(DriverError::Unsupported { operation: "test" })
+        }
+
+        async fn browse(&self, _request: BrowsePageRequest) -> DriverResult<BrowsePage> {
+            Err(DriverError::Unsupported { operation: "test" })
+        }
+    }
+
+    struct RecordingHandler {
+        selection: WriteBackSelection,
+        events: Vec<String>,
+    }
+
+    impl RecordingHandler {
+        fn new(selection: WriteBackSelection) -> Self {
+            Self {
+                selection,
+                events: Vec::new(),
+            }
+        }
+    }
+
+    impl WriteBackHandler for RecordingHandler {
+        fn select_response_level(&mut self, _results: &[TuneResultRow]) -> WriteBackSelection {
+            self.events.push("select".to_string());
+            self.selection.clone()
+        }
+
+        fn write_back_selected(&mut self, level: ResponseLevel, requested: bool) {
+            self.events.push(format!("selected:{level:?}:{requested}"));
+        }
+
+        fn write_back_skipped(&mut self, reason: WriteBackSkipReason) {
+            self.events.push(format!("skipped:{reason:?}"));
+        }
+
+        fn write_back_failed(&mut self, detail: &str) {
+            self.events.push(format!("failed:{detail}"));
+        }
+
+        fn write_back_finished(&mut self, level: ResponseLevel, outcome: &PidWriteOutcome) {
+            self.events.push(format!("finished:{level:?}:{outcome:?}"));
+        }
+    }
+
+    struct DefaultHandler;
+
+    impl WriteBackHandler for DefaultHandler {
+        fn select_response_level(&mut self, _results: &[TuneResultRow]) -> WriteBackSelection {
+            WriteBackSelection::Skipped("no selection".to_string())
+        }
+    }
+
+    async fn fixture() -> (SqlitePool, i64, DcsTemplate, LoopTags, LoopConfig) {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        bhtune_db::seed_builtin_templates(&pool, Utc::now())
+            .await
+            .unwrap();
+        let template = bhtune_core::built_in_templates().remove(0);
+        let tags = bhtune_core::LoopTags::derive_from_pv_tag("Unit1.LIC101.PV", &template);
+        let config = LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 10.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 3,
+            mrft_delay_secs: 0,
+        };
+        let run = TuneRunRow::start(
+            &pool,
+            None,
+            "Unit1.LIC101.PV",
+            TuneDriver::Opcda,
+            config,
+            TemplateOrigin::Builtin,
+            &template,
+            &tags,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        (pool, run.id, template, tags, config)
+    }
+
+    fn result_row(run_id: i64, response_level: ResponseLevel) -> TuneResultRow {
+        TuneResultRow {
+            id: 0,
+            run_id,
+            response_level,
+            kp: Some(2.0),
+            ti_minutes: Some(4.0),
+            td_minutes: Some(0.5),
+            proportional: Some(2.0),
+            integral: Some(4.0),
+            derivative: Some(0.5),
+            status: TuningResultStatus::Valid,
+            invalid_reason: None,
+        }
+    }
+
+    #[test]
+    fn optional_handler_defaults_are_no_ops() {
+        let mut handler = DefaultHandler;
+        assert!(matches!(
+            handler.select_response_level(&[]),
+            WriteBackSelection::Skipped(reason) if reason == "no selection"
+        ));
+        handler.write_back_selected(ResponseLevel::Moderate, true);
+        handler.write_back_skipped(WriteBackSkipReason::NoPidTags);
+        handler.write_back_failed("ignored");
+        handler.write_back_finished(ResponseLevel::Moderate, &PidWriteOutcome::Written);
+    }
+
+    #[tokio::test]
+    async fn failing_driver_reports_unsupported_write_and_browse() {
+        let driver = FailingDriver;
+        assert!(matches!(
+            driver.write(&"tag".to_string(), TagWrite::Float(1.0)).await,
+            Err(DriverError::Unsupported { operation: "test" })
+        ));
+        assert!(matches!(
+            driver.browse(BrowsePageRequest::root(1)).await,
+            Err(DriverError::Unsupported { operation: "test" })
+        ));
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_reports_skips_and_selection_failures() {
+        let (pool, run_id, template, tags, config) = fixture().await;
+        let driver = FailingDriver;
+
+        let mut no_tags = tags.clone();
+        no_tags.proportional_constant = None;
+        let mut handler = RecordingHandler::new(WriteBackSelection::Skipped("unused".into()));
+        let result = maybe_write_back(
+            &pool,
+            run_id,
+            &no_tags,
+            &template,
+            &driver,
+            config,
+            None,
+            true,
+            Some(&mut handler),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, WriteBackOutcome::Skipped);
+        assert_eq!(handler.events, ["skipped:NoPidTags"]);
+
+        let mut handler = RecordingHandler::new(WriteBackSelection::Skipped("unused".into()));
+        let result = maybe_write_back(
+            &pool,
+            run_id + 1,
+            &tags,
+            &template,
+            &driver,
+            config,
+            None,
+            true,
+            Some(&mut handler),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, WriteBackOutcome::Skipped);
+        assert_eq!(handler.events, ["skipped:NoResults"]);
+
+        TuneResultRow::insert(&pool, &result_row(run_id, ResponseLevel::Moderate))
+            .await
+            .unwrap();
+
+        let mut handler =
+            RecordingHandler::new(WriteBackSelection::Failed("selection failed".to_string()));
+        let result = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &driver,
+            config,
+            None,
+            true,
+            Some(&mut handler),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, WriteBackOutcome::Failed);
+        assert_eq!(handler.events, ["select", "failed:selection failed"]);
+
+        let mut handler =
+            RecordingHandler::new(WriteBackSelection::Skipped("operator skipped".to_string()));
+        let result = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &driver,
+            config,
+            None,
+            true,
+            Some(&mut handler),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, WriteBackOutcome::Skipped);
+        assert_eq!(handler.events, ["select"]);
+    }
+
+    #[tokio::test]
+    async fn maybe_write_back_reports_missing_invalid_and_live_write_results() {
+        let (pool, run_id, template, tags, config) = fixture().await;
+        let driver = FailingDriver;
+        TuneResultRow::insert(&pool, &result_row(run_id, ResponseLevel::Moderate))
+            .await
+            .unwrap();
+        TuneResultRow::insert(
+            &pool,
+            &TuneResultRow {
+                status: TuningResultStatus::Invalid,
+                invalid_reason: Some(TuningResultInvalidReason::NonPositivePvAmplitude),
+                kp: None,
+                ti_minutes: None,
+                td_minutes: None,
+                proportional: None,
+                integral: None,
+                derivative: None,
+                ..result_row(run_id, ResponseLevel::Aggressive)
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut handler =
+            RecordingHandler::new(WriteBackSelection::Selected(ResponseLevel::Moderate));
+        let result = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &driver,
+            config,
+            Some(ResponseLevel::Sluggish),
+            true,
+            Some(&mut handler),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, WriteBackOutcome::Failed);
+        assert!(handler.events[0].starts_with("failed:no calculated result"));
+
+        let mut handler =
+            RecordingHandler::new(WriteBackSelection::Selected(ResponseLevel::Aggressive));
+        let result = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &driver,
+            config,
+            None,
+            true,
+            Some(&mut handler),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, WriteBackOutcome::Failed);
+        assert_eq!(handler.events.len(), 2);
+        assert_eq!(handler.events[0], "select");
+        assert!(handler.events[1].starts_with("failed:"));
+
+        let mut handler = RecordingHandler::new(WriteBackSelection::Skipped("unused".into()));
+        let result = maybe_write_back(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &driver,
+            config,
+            Some(ResponseLevel::Moderate),
+            true,
+            Some(&mut handler),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, WriteBackOutcome::Failed);
+        assert_eq!(handler.events.len(), 2);
+        assert_eq!(handler.events[0], "selected:Moderate:true");
+        assert!(handler.events[1].starts_with("finished:Moderate:Failed"));
+    }
 }

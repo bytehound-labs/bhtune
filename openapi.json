@@ -4502,7 +4502,7 @@
               "string",
               "null"
             ],
-            "description": "The resolved OPC DA server ProgID this run actually used, or `None` for a\nsimulator/replay run (`db-run-request-snapshot`). This is what `history revert`\ntrusts over any `--server` flag -- see `bhtune-cli::commands::history`."
+            "description": "The resolved OPC DA server ProgID this run actually used, or `None` for a\nsimulator/replay run (`db-run-request-snapshot`). This is what `history revert`\ntrusts over any `--server` flag -- see `bhtune_runtime::history::revert_run`."
           },
           "original_request": {
             "oneOf": [
@@ -4595,7 +4595,7 @@
       },
       "RunExportFormat": {
         "type": "string",
-        "description": "Format for `GET /api/runs/{id}/export` -- deliberately a local, HTTP-facing enum rather\nthan reusing `bhtune_cli::args::ExportFormat` directly: that type is `clap`-oriented\n(`ValueEnum`) and has no `Deserialize`/`ToSchema`, matching this module's own\nDTO-decoupling convention (see the module doc comment). Converted to\n`bhtune_cli::args::ExportFormat` at the one call site that needs it ([`export_run`]), so\nthe actual CSV/JSON serialization (`bhtune_cli::commands::export::samples_to_bytes`) is\nimplemented exactly once and the CLI's `bhtune export` and this route can never disagree\nabout what a run's export looks like.",
+        "description": "Format for `GET /api/runs/{id}/export` -- deliberately a local, HTTP-facing enum rather\nthan reusing the runtime's internal\n[`bhtune_runtime::export::SampleExportFormat`] directly, matching this module's\nDTO-decoupling convention (see the module doc comment). Converted at the call site so\nthe shared runtime owns CSV/JSON serialization while this type remains specific to the\nHTTP query and its OpenAPI schema.",
         "enum": [
           "csv",
           "json"
@@ -4766,7 +4766,7 @@
       },
       "ServerMode": {
         "type": "string",
-        "description": "Runtime server exposure mode. Full mode preserves the normal live-plant API; Demo mode\nis an explicitly restricted, simulator-only surface intended for public demonstrations.",
+        "description": "Runtime server exposure mode. Full mode preserves the normal live-plant API; Demo mode is\nan explicitly restricted, simulator-only surface intended for public demonstrations.",
         "enum": [
           "full",
           "demo"
@@ -4774,7 +4774,7 @@
       },
       "StartRunRequest": {
         "type": "object",
-        "description": "The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values\nare intentionally absent: they are resolved from the global `[tuning]` configuration by\n`prepare()`, just as they are for a CLI invocation. Every field that has a CLI default\n(`--sim-gain`, etc.) repeats that exact default here via `#[serde(default = \"...\")]`, so an\nHTTP caller that omits a field gets identical behavior to a CLI invocation that omits the\nmatching flag. `Option<T>` fields need no `#[serde(default)]` of their own -- serde already\ntreats a missing key as `None` for an `Option` field.\n\nAlso derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s\nresponse (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses\na run's stored `request_json` straight into a `StartRunRequest` rather than duplicating\nits ~30 fields into a second struct, giving a \"what you `GET` is exactly what you'd `POST`\nto repeat it\" symmetry in both the Rust types and the generated OpenAPI schema. This is\nsafe precisely because `request_json` is *already* built to this exact shape --\n`bhtune-cli`'s `RequestSnapshot` doc comment describes the two as kept in sync by\nconvention.",
+        "description": "The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values\nare intentionally absent: they are resolved from the global `[tuning]` configuration by\n`prepare()`, just as they are for a CLI invocation. Every field that has a CLI default\n(`--sim-gain`, etc.) repeats that exact default here via `#[serde(default = \"...\")]`, so an\nHTTP caller that omits a field gets identical behavior to a CLI invocation that omits the\nmatching flag. `Option<T>` fields need no `#[serde(default)]` of their own -- serde already\ntreats a missing key as `None` for an `Option` field.\n\nAlso derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s\nresponse (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses\na run's stored `request_json` straight into a `StartRunRequest` rather than duplicating\nits ~30 fields into a second struct, giving a \"what you `GET` is exactly what you'd `POST`\nto repeat it\" symmetry in both the Rust types and the generated OpenAPI schema. This is\nsafe precisely because `request_json` is *already* built to this exact shape -- the\nruntime's `RequestSnapshot` serializes the same transport-neutral request fields.",
         "required": [
           "tagname",
           "template",
@@ -4939,7 +4939,7 @@
           },
           "tagname": {
             "type": "string",
-            "description": "PV tag prefix; ignored for `driver: \"simulator\"`. See [`TuneArgs::tagname`]."
+            "description": "PV tag prefix; ignored for `driver: \"simulator\"`."
           },
           "template": {
             "type": "string",

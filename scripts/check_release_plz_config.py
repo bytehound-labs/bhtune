@@ -21,6 +21,7 @@ WORKSPACE_PACKAGES = {
     "bhtune-driver",
     "bhtune-db",
     "bhtune-cli",
+    "bhtune-runtime",
     "bhtune-server",
 }
 ANCHOR_PACKAGE = "bhtune-cli"
@@ -124,7 +125,7 @@ def _validate_anchor(package_map: dict[str, dict], workspace: dict) -> None:
     included = anchor.get("changelog_include")
     if set(included or ()) != WORKSPACE_PACKAGES - {"bhtune-cli"}:
         raise ReleasePlzConfigError(
-            f"{ANCHOR_CONTEXT}.changelog_include must contain the other four product crates"
+            f"{ANCHOR_CONTEXT}.changelog_include must contain every other product crate"
         )
 
 

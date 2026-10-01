@@ -1,4 +1,4 @@
-//! Structured logging (`cli-logging`), matching `opcda-bridge-gateway`'s own `tracing`
+//! Shared structured application logging, matching `opcda-bridge-gateway`'s own `tracing`
 //! stack and `log.*` configuration conventions (level/directory/format/rotation, resolved
 //! with the same `CLI flag > env var > config file > default` precedence as every other
 //! bhtune setting) -- see `crate::config::LogConfig`/`resolve_log_settings`.
@@ -11,9 +11,8 @@
 //! go to the rotating file always, and to **stderr** (never stdout) when a console is
 //! attached -- stderr can never corrupt stdout's contract, so mirroring there is free.
 //!
-//! This is diagnostic/operational logging only: the CLI's actual product output (the tune
-//! summary, `history`/`export` listings) stays exactly what it already was, plain `println!`
-//! calls in `commands::*` -- unaffected by, and independent of, whatever this module does.
+//! This is diagnostic/operational logging only: CLI summaries and `history`/`export` output
+//! stay in the adapter's command code and are unaffected by this module.
 
 use std::path::{Path, PathBuf};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -52,9 +51,9 @@ pub fn parse_rotation(value: Option<&str>) -> Rotation {
 }
 
 /// Build an `EnvFilter` from an explicit level/directive spec (e.g. `"debug"` or
-/// `"bhtune_cli=debug,sqlx=warn"`), falling back to `info` if `level` is absent or fails to
-/// parse. Logging misconfiguration should degrade gracefully rather than stop a tune from
-/// running.
+/// `"bhtune_cli=debug,bhtune_runtime=debug,sqlx=warn"`), falling back to `info` if `level` is
+/// absent or fails to parse. Logging misconfiguration should degrade gracefully rather than
+/// stop a tune from running.
 pub fn build_env_filter(level: Option<&str>) -> EnvFilter {
     level
         .and_then(|spec| EnvFilter::try_new(spec).ok())
@@ -103,10 +102,9 @@ pub fn resolve_log_settings(
 ///
 /// Returns the `WorkerGuard`, which the caller **must** hold for the process lifetime --
 /// dropping it early silently truncates buffered log lines that haven't yet been flushed to
-/// disk on exit. Best-effort: setup failing (e.g. an unwritable log directory) is
-/// intentionally not fatal to the CLI's actual job (running a tune and printing its result),
-/// so callers other than this module's own tests should ignore the returned `Err` rather
-/// than propagate it -- see `lib.rs::run`.
+/// disk on exit. A logging setup failure (e.g. an unwritable log directory) is not fatal to
+/// the CLI's command or the server's primary service, so their startup paths treat the
+/// returned `Err` as best-effort rather than propagating it.
 pub fn init_tracing(settings: &LogSettings) -> anyhow::Result<WorkerGuard> {
     use std::io::IsTerminal;
     init_tracing_with_stderr(settings, std::io::stderr().is_terminal())
