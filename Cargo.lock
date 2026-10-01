@@ -293,6 +293,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "tonic",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

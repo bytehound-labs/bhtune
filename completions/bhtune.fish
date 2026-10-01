@@ -34,6 +34,7 @@ complete -c bhtune -n "__fish_bhtune_needs_command" -l log-format -d 'Log file f
 complete -c bhtune -n "__fish_bhtune_needs_command" -l log-rotation -d 'Log file rotation: "hourly", "daily", or "never" (default: daily)' -r
 complete -c bhtune -n "__fish_bhtune_needs_command" -s h -l help -d 'Print help'
 complete -c bhtune -n "__fish_bhtune_needs_command" -s V -l version -d 'Print version'
+complete -c bhtune -n "__fish_bhtune_needs_command" -f -a "check" -d 'Validate tune inputs and live readings without starting a tune or writing to the loop'
 complete -c bhtune -n "__fish_bhtune_needs_command" -f -a "tune" -d 'Run an MRFT tune against a real OPC DA loop or the in-process simulator'
 complete -c bhtune -n "__fish_bhtune_needs_command" -f -a "simulate" -d 'Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator'
 complete -c bhtune -n "__fish_bhtune_needs_command" -f -a "template" -d 'Inspect and manage DCS/PLC templates'
@@ -41,6 +42,55 @@ complete -c bhtune -n "__fish_bhtune_needs_command" -f -a "history" -d 'Inspect 
 complete -c bhtune -n "__fish_bhtune_needs_command" -f -a "export" -d 'Export one run\'s recorded samples as CSV or JSON'
 complete -c bhtune -n "__fish_bhtune_needs_command" -f -a "opc" -d 'Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely'
 complete -c bhtune -n "__fish_bhtune_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -s t -l tagname -d 'PV tag prefix; the rest of the tag set is derived from it using `--template`\'s suffix convention. Ignored for `--driver simulator`, which uses two fixed internal tag names instead' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l template -d 'DCS/PLC template name (see `bhtune template list`)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l process-type -r -f -a "flow\t''
+pressure-line\t''
+pressure-vessel\t''
+level\t''
+temperature-mixing\t''
+temperature-heat-exchange\t''"
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l controller-type -r -f -a "p\t''
+pi\t''
+pid\t''"
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l relay-amp -d 'Relay amplitude, as a percentage of the MV range' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l cycles-skip -d 'Relay cycles to skip before counting begins (default: looked up per `--process-type`)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l cycles-count -d 'Relay cycles to count once the skip period ends (default: looked up per `--process-type`)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l noise-protection-secs -d 'Seconds a switch must persist before it\'s accepted (default: looked up per `--process-type`)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l driver -d 'Which driver backs this tune or preflight check' -r -f -a "opcda\t'A real OPC DA server, reached through an opcda-bridge gateway'
+simulator\t'The in-process FOPDT simulator — no external dependency at all'"
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l bridge-host -d 'opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md\'s OPC DA integration notes. Only meaningful with `--driver opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file\'s `bridge_host` key)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l server -d 'OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--driver opcda`' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l sim-gain -d 'Simulator process gain (`--driver simulator` only)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l sim-tau -d 'Simulator process time constant, in seconds (`--driver simulator` only)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l sim-dead-time -d 'Simulator dead time, in seconds (`--driver simulator` only)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l sim-noise -d 'Simulator measurement noise amplitude (`--driver simulator` only)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l sim-seed -d 'Simulator RNG seed, for reproducible noise (`--driver simulator` only)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l sim-initial-pv -d 'Simulator initial PV (`--driver simulator` only)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l sim-initial-mv -d 'Simulator initial MV (`--driver simulator` only)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l pv-range-high -d 'Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle tag/value" button). Required (defaults to 100.0) for `--driver simulator`, which has no range tags at all' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l pv-range-low -d 'Fixed PV range low, overriding a live tag read' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l mv-range-high -d 'Fixed MV range high, overriding a live tag read' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l mv-range-low -d 'Fixed MV range low, overriding a live tag read' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l direction -d 'Fixed controller direction, overriding a live tag read' -r -f -a "direct\t''
+reverse\t''"
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l notes -d 'Operator notes to attach to a tune run. Ignored by `check`, which does not create a run' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l write-pid -d 'For `tune`, write this response level\'s calculated PID parameters back to the DCS without prompting; requires `--yes`. For `check`, assess read-only write-back readiness only; no `--yes` is required and no write occurs' -r -f -a "aggressive\t''
+moderate\t''
+sluggish\t''"
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l output -d 'How to print this command\'s result' -r -f -a "table\t'Human-readable text (default)'
+json\t'Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped'"
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l config -d 'Path to a TOML config file (default: platform-specific, see `crate::config`)' -r -F
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l db -d 'Path to the SQLite database file (default: a platform-standard data directory, see `crate::config::default_db_path_from`). CLI > `BHTUNE_DB` env var > `db` in the config file > platform default -- see `crate::config::resolve_db_path`' -r -F
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l templates -d 'Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default: platform-specific, next to the config file -- see `crate::config::templates_path_from`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > `BHTUNE_TEMPLATES` env var > `templates` in the config file > platform default -- see `crate::config::load_user_templates`' -r -F
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l retention-days -d 'Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default: unset -- retain forever). CLI > `BHTUNE_RETENTION_DAYS` env var > `retention_days` in the config file > (no default) -- see `crate::config::resolve_retention_days`. `bhtune history prune` applies the same policy on demand, with a `--dry-run` preview, instead of waiting for the next startup' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l log-level -d 'Log level / directive spec, e.g. "info" or "bhtune_cli=debug,bhtune_runtime=debug,sqlx=warn" (default: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with `--output json`\'s single-object contract; see `crate::logging`' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l log-dir -d 'Directory to write log files to (default: a platform-standard data directory, see `crate::config::default_log_dir_from`)' -r -F
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l log-format -d 'Log file format: "pretty" or "json" (default: pretty)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l log-rotation -d 'Log file rotation: "hourly", "daily", or "never" (default: daily)' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l yes -d 'Confirm an unattended PID write-back. Required alongside `--write-pid` for `tune` and `simulate`; `check` only assesses readiness and does not require this flag. Has no effect without `--write-pid`'
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -l strict -d 'Treat warnings as failed checks'
+complete -c bhtune -n "__fish_bhtune_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -s t -l tagname -d 'PV tag prefix; the rest of the tag set is derived from it using `--template`\'s suffix convention. Ignored for `--driver simulator`, which uses two fixed internal tag names instead' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l template -d 'DCS/PLC template name (see `bhtune template list`)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l process-type -r -f -a "flow\t''
@@ -56,7 +106,7 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l relay-amp -d 'Rel
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l cycles-skip -d 'Relay cycles to skip before counting begins (default: looked up per `--process-type`)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l cycles-count -d 'Relay cycles to count once the skip period ends (default: looked up per `--process-type`)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l noise-protection-secs -d 'Seconds a switch must persist before it\'s accepted (default: looked up per `--process-type`)' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l driver -d 'Which driver drives this tune' -r -f -a "opcda\t'A real OPC DA server, reached through an opcda-bridge gateway'
+complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l driver -d 'Which driver backs this tune or preflight check' -r -f -a "opcda\t'A real OPC DA server, reached through an opcda-bridge gateway'
 simulator\t'The in-process FOPDT simulator — no external dependency at all'"
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l bridge-host -d 'opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md\'s OPC DA integration notes. Only meaningful with `--driver opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file\'s `bridge_host` key)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l server -d 'OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--driver opcda`' -r
@@ -73,11 +123,11 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l mv-range-high -d 
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l mv-range-low -d 'Fixed MV range low, overriding a live tag read' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l direction -d 'Fixed controller direction, overriding a live tag read' -r -f -a "direct\t''
 reverse\t''"
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l notes -d 'Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l write-pid -d 'Non-interactively write this response level\'s calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires `--yes`' -r -f -a "aggressive\t''
+complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l notes -d 'Operator notes to attach to a tune run. Ignored by `check`, which does not create a run' -r
+complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l write-pid -d 'For `tune`, write this response level\'s calculated PID parameters back to the DCS without prompting; requires `--yes`. For `check`, assess read-only write-back readiness only; no `--yes` is required and no write occurs' -r -f -a "aggressive\t''
 moderate\t''
 sluggish\t''"
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l output -d 'How to print this run\'s final outcome line' -r -f -a "table\t'Human-readable text (default)'
+complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l output -d 'How to print this command\'s result' -r -f -a "table\t'Human-readable text (default)'
 json\t'Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped'"
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l config -d 'Path to a TOML config file (default: platform-specific, see `crate::config`)' -r -F
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l db -d 'Path to the SQLite database file (default: a platform-standard data directory, see `crate::config::default_db_path_from`). CLI > `BHTUNE_DB` env var > `db` in the config file > platform default -- see `crate::config::resolve_db_path`' -r -F
@@ -87,7 +137,7 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l log-level -d 'Log
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l log-dir -d 'Directory to write log files to (default: a platform-standard data directory, see `crate::config::default_log_dir_from`)' -r -F
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l log-format -d 'Log file format: "pretty" or "json" (default: pretty)' -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l log-rotation -d 'Log file rotation: "hourly", "daily", or "never" (default: daily)' -r
-complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l yes -d 'Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without `--write-pid`'
+complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -l yes -d 'Confirm an unattended PID write-back. Required alongside `--write-pid` for `tune` and `simulate`; `check` only assesses readiness and does not require this flag. Has no effect without `--write-pid`'
 complete -c bhtune -n "__fish_bhtune_using_subcommand tune" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -s t -l tagname -r
 complete -c bhtune -n "__fish_bhtune_using_subcommand simulate" -l template -r
@@ -428,13 +478,14 @@ complete -c bhtune -n "__fish_bhtune_using_subcommand opc; and __fish_seen_subco
 complete -c bhtune -n "__fish_bhtune_using_subcommand opc; and __fish_seen_subcommand_from help" -f -a "search" -d 'Search the OPC DA namespace without downloading the whole tree'
 complete -c bhtune -n "__fish_bhtune_using_subcommand opc; and __fish_seen_subcommand_from help" -f -a "search-index" -d 'Query and manage the gateway\'s persistent namespace search index'
 complete -c bhtune -n "__fish_bhtune_using_subcommand opc; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from tune simulate template history export opc help" -f -a "tune" -d 'Run an MRFT tune against a real OPC DA loop or the in-process simulator'
-complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from tune simulate template history export opc help" -f -a "simulate" -d 'Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator'
-complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from tune simulate template history export opc help" -f -a "template" -d 'Inspect and manage DCS/PLC templates'
-complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from tune simulate template history export opc help" -f -a "history" -d 'Inspect past tune runs'
-complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from tune simulate template history export opc help" -f -a "export" -d 'Export one run\'s recorded samples as CSV or JSON'
-complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from tune simulate template history export opc help" -f -a "opc" -d 'Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely'
-complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from tune simulate template history export opc help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from check tune simulate template history export opc help" -f -a "check" -d 'Validate tune inputs and live readings without starting a tune or writing to the loop'
+complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from check tune simulate template history export opc help" -f -a "tune" -d 'Run an MRFT tune against a real OPC DA loop or the in-process simulator'
+complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from check tune simulate template history export opc help" -f -a "simulate" -d 'Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator'
+complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from check tune simulate template history export opc help" -f -a "template" -d 'Inspect and manage DCS/PLC templates'
+complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from check tune simulate template history export opc help" -f -a "history" -d 'Inspect past tune runs'
+complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from check tune simulate template history export opc help" -f -a "export" -d 'Export one run\'s recorded samples as CSV or JSON'
+complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from check tune simulate template history export opc help" -f -a "opc" -d 'Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely'
+complete -c bhtune -n "__fish_bhtune_using_subcommand help; and not __fish_seen_subcommand_from check tune simulate template history export opc help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c bhtune -n "__fish_bhtune_using_subcommand help; and __fish_seen_subcommand_from template" -f -a "list" -d 'List every template (built-in and user-imported)'
 complete -c bhtune -n "__fish_bhtune_using_subcommand help; and __fish_seen_subcommand_from template" -f -a "show" -d 'Show one template\'s full detail as JSON'
 complete -c bhtune -n "__fish_bhtune_using_subcommand help; and __fish_seen_subcommand_from template" -f -a "import" -d 'Import a template from a file. Accepts either a single template as JSON (see `template export`\'s default output shape) or a multi-template TOML catalog (the same `[[template]]` array-of-tables shape as the embedded/user catalog, see `template export --format toml`) -- the format is auto-detected from the file\'s content, not its extension. A JSON single-template import is rejected outright if a template with that name already exists; a TOML catalog import instead skips (and reports) any template whose name already exists, so re-importing an updated community catalog only adds what\'s new'

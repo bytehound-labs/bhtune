@@ -40,6 +40,25 @@ pub async fn connect(path: &Path) -> DbResult<SqlitePool> {
     Ok(pool)
 }
 
+/// Opens an existing SQLite database without creating it or applying migrations.
+///
+/// This is for commands that need a snapshot of persisted settings but must not mutate the
+/// database as a side effect. Callers must not use the returned pool for writes; SQLite opens
+/// it in read-only mode and rejects them.
+pub async fn connect_read_only(path: &Path) -> DbResult<SqlitePool> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .busy_timeout(BUSY_TIMEOUT)
+        .foreign_keys(true);
+
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(DbError::Connect)
+}
+
 /// Opens a private, in-process database for tests: same pragmas and migrations as
 /// [`connect`], but nothing touches disk.
 ///
@@ -123,6 +142,38 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(migration_count, 2);
+    }
+
+    #[tokio::test]
+    async fn connect_read_only_does_not_create_a_missing_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.db");
+
+        assert!(connect_read_only(&path).await.is_err());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn connect_read_only_queries_existing_database_and_rejects_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.db");
+        let pool = connect(&path).await.unwrap();
+        drop(pool);
+
+        let pool = connect_read_only(&path).await.unwrap();
+        let migration_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(migration_count, 2);
+
+        assert!(
+            sqlx::query("DELETE FROM tune_runs")
+                .execute(&pool)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

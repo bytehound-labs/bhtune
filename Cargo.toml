@@ -68,6 +68,9 @@ toml = "1"
 # handful of flags have no env-var-flag equivalents (matching `utoipa`'s `chrono`-on-top
 # pattern below).
 clap = { version = "4", features = ["derive"] }
+# The runtime and server mock-bridge tests construct gRPC status errors from the same
+# `opcda-bridge` protocol stack.
+tonic = "0.14"
 # `bhtune-core` and `bhtune-db` derive `utoipa::ToSchema` behind an optional `utoipa`
 # feature each (see their `Cargo.toml` comments), and `bhtune-server` derives the rest plus
 # emits the OpenAPI document itself (`openapi-contract`) -- three consumers, pinned once so

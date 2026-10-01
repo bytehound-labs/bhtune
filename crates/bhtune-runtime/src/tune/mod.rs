@@ -3,6 +3,10 @@
 //! [`bhtune_core::MrftEngine`], persisting every tick and the final calculated results, then
 //! restoring the loop and optionally writing back the chosen PID constants.
 //!
+//! The separate `bhtune check` preflight validates the same request inputs and reads
+//! controller state without preparing or persisting a run. It uses a read-only database
+//! connection and `ReadOnlyDriver` so it cannot mutate the database or controller.
+//!
 //! Mirrors the legacy `MRFTstart`/`ReadInitialOPCvalues`/`ChangeControllerModeToMan`/
 //! `ResetOPC` sequence from `OPCClass.cs`. The mode-transition and write-back steps
 //! automatically no-op for the simulator driver, since its [`bhtune_core::LoopTags`] has no
@@ -15,6 +19,7 @@ mod actuation;
 mod config;
 mod outcome;
 mod poll;
+mod preflight;
 mod prepare;
 mod quality;
 mod request;
@@ -29,6 +34,9 @@ pub use actuation::MV_ACTUATION_CONFIRMATION_SECS;
 pub use config::validate_restore_timeout_secs;
 pub use outcome::{
     AbortReason, RunOutcome, TuneOutcome, TuneRunReport, WriteBackOutcome, tune_outcome_for_run,
+};
+pub use preflight::{
+    PreflightCheck, PreflightCheckStatus, PreflightReport, PreflightTagRead, preflight,
 };
 pub use prepare::{PreparedTune, drive, drive_report, prepare, prepare_owned};
 pub use quality::sample_quality_from_driver;

@@ -1,5 +1,6 @@
-//! Opens the CLI's database, seeds the built-in and user-catalog DCS/PLC templates, and runs
-//! the `history-retention` sweep -- all on every startup.
+//! Opens the CLI's database for mutating commands, seeds the built-in and user-catalog
+//! DCS/PLC templates, and runs the `history-retention` sweep. Read-only commands such as
+//! `bhtune check` use a separate connection that skips bootstrap and retention.
 
 use std::path::Path;
 
@@ -54,6 +55,15 @@ pub async fn open(
     Ok(pool)
 }
 
+/// Opens an existing database for inspection without creating directories, applying
+/// migrations, seeding templates, or running retention.
+pub async fn open_read_only(path: &Path) -> anyhow::Result<Option<SqlitePool>> {
+    if !tokio::fs::try_exists(path).await? {
+        return Ok(None);
+    }
+    Ok(Some(bhtune_db::connect_read_only(path).await?))
+}
+
 /// Creates `path`'s parent directory tree if it doesn't already exist. A no-op (not an
 /// error) for a bare filename with no directory component at all -- `Path::parent()` returns
 /// `Some("")` in that case, and `std::fs::create_dir_all("")` is a documented no-op success,
@@ -88,6 +98,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(templates.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn open_read_only_does_not_create_a_missing_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.db");
+
+        assert!(open_read_only(&path).await.unwrap().is_none());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn open_read_only_opens_an_existing_database_without_seeding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("existing.db");
+        bhtune_db::connect(&path).await.unwrap().close().await;
+
+        let pool = open_read_only(&path).await.unwrap().unwrap();
+        assert!(DcsTemplateRow::list(&pool).await.unwrap().is_empty());
+        pool.close().await;
     }
 
     #[tokio::test]

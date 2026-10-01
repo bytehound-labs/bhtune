@@ -5,6 +5,7 @@ This document contains the help content for the `bhtune` command-line program.
 **Command Overview:**
 
 * [`bhtune`↴](#bhtune)
+* [`bhtune check`↴](#bhtune-check)
 * [`bhtune tune`↴](#bhtune-tune)
 * [`bhtune simulate`↴](#bhtune-simulate)
 * [`bhtune template`↴](#bhtune-template)
@@ -41,6 +42,7 @@ Headless MRFT auto-tuner
 
 ###### **Subcommands:**
 
+* `check` — Validate tune inputs and live readings without starting a tune or writing to the loop
 * `tune` — Run an MRFT tune against a real OPC DA loop or the in-process simulator
 * `simulate` — Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator
 * `template` — Inspect and manage DCS/PLC templates
@@ -61,11 +63,11 @@ Headless MRFT auto-tuner
 
 
 
-## `bhtune tune`
+## `bhtune check`
 
-Run an MRFT tune against a real OPC DA loop or the in-process simulator
+Validate tune inputs and live readings without starting a tune or writing to the loop
 
-**Usage:** `bhtune tune [OPTIONS] --tagname <TAGNAME> --template <TEMPLATE> --process-type <PROCESS_TYPE> --controller-type <CONTROLLER_TYPE> --relay-amp <RELAY_AMP> --driver <DRIVER>`
+**Usage:** `bhtune check [OPTIONS] --tagname <TAGNAME> --template <TEMPLATE> --process-type <PROCESS_TYPE> --controller-type <CONTROLLER_TYPE> --relay-amp <RELAY_AMP> --driver <DRIVER>`
 
 ###### **Options:**
 
@@ -83,7 +85,7 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
 * `--cycles-skip <CYCLES_SKIP>` — Relay cycles to skip before counting begins (default: looked up per `--process-type`)
 * `--cycles-count <CYCLES_COUNT>` — Relay cycles to count once the skip period ends (default: looked up per `--process-type`)
 * `--noise-protection-secs <NOISE_PROTECTION_SECS>` — Seconds a switch must persist before it's accepted (default: looked up per `--process-type`)
-* `--driver <DRIVER>` — Which driver drives this tune
+* `--driver <DRIVER>` — Which driver backs this tune or preflight check
 
   Possible values:
   - `opcda`:
@@ -122,13 +124,94 @@ Run an MRFT tune against a real OPC DA loop or the in-process simulator
 
   Possible values: `direct`, `reverse`
 
-* `--notes <NOTES>` — Operator notes to attach to this run. Notes can be edited or cleared from the web GUI while the run is active or after it finishes
-* `--yes` — Confirm an unattended PID write-back. Required alongside `--write-pid` -- the command refuses to start otherwise -- since writing to a live loop with no human present must be an explicit, deliberate choice. Has no effect without `--write-pid`
-* `--write-pid <WRITE_PID>` — Non-interactively write this response level's calculated PID parameters back to the DCS instead of prompting on stdin -- the flag that makes a scheduled/scripted tune able to actually update a loop with no one watching. Requires `--yes`
+* `--notes <NOTES>` — Operator notes to attach to a tune run. Ignored by `check`, which does not create a run
+* `--yes` — Confirm an unattended PID write-back. Required alongside `--write-pid` for `tune` and `simulate`; `check` only assesses readiness and does not require this flag. Has no effect without `--write-pid`
+* `--write-pid <WRITE_PID>` — For `tune`, write this response level's calculated PID parameters back to the DCS without prompting; requires `--yes`. For `check`, assess read-only write-back readiness only; no `--yes` is required and no write occurs
 
   Possible values: `aggressive`, `moderate`, `sluggish`
 
-* `--output <OUTPUT>` — How to print this run's final outcome line
+* `--output <OUTPUT>` — How to print this command's result
+
+  Default value: `table`
+
+  Possible values:
+  - `table`:
+    Human-readable text (default)
+  - `json`:
+    Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+
+* `--strict` — Treat warnings as failed checks
+
+
+
+## `bhtune tune`
+
+Run an MRFT tune against a real OPC DA loop or the in-process simulator
+
+**Usage:** `bhtune tune [OPTIONS] --tagname <TAGNAME> --template <TEMPLATE> --process-type <PROCESS_TYPE> --controller-type <CONTROLLER_TYPE> --relay-amp <RELAY_AMP> --driver <DRIVER>`
+
+###### **Options:**
+
+* `-t`, `--tagname <TAGNAME>` — PV tag prefix; the rest of the tag set is derived from it using `--template`'s suffix convention. Ignored for `--driver simulator`, which uses two fixed internal tag names instead
+* `--template <TEMPLATE>` — DCS/PLC template name (see `bhtune template list`)
+* `--process-type <PROCESS_TYPE>`
+
+  Possible values: `flow`, `pressure-line`, `pressure-vessel`, `level`, `temperature-mixing`, `temperature-heat-exchange`
+
+* `--controller-type <CONTROLLER_TYPE>`
+
+  Possible values: `p`, `pi`, `pid`
+
+* `--relay-amp <RELAY_AMP>` — Relay amplitude, as a percentage of the MV range
+* `--cycles-skip <CYCLES_SKIP>` — Relay cycles to skip before counting begins (default: looked up per `--process-type`)
+* `--cycles-count <CYCLES_COUNT>` — Relay cycles to count once the skip period ends (default: looked up per `--process-type`)
+* `--noise-protection-secs <NOISE_PROTECTION_SECS>` — Seconds a switch must persist before it's accepted (default: looked up per `--process-type`)
+* `--driver <DRIVER>` — Which driver backs this tune or preflight check
+
+  Possible values:
+  - `opcda`:
+    A real OPC DA server, reached through an opcda-bridge gateway
+  - `simulator`:
+    The in-process FOPDT simulator — no external dependency at all
+
+* `--bridge-host <BRIDGE_HOST>` — opcda-bridge gateway address. bhtune connects to the bridge gateway rather than a DCOM host directly — see AGENTS.md's OPC DA integration notes. Only meaningful with `--driver opcda` (default: `crate::config::DEFAULT_BRIDGE_HOST`, overridable via the `BHTUNE_BRIDGE_HOST` env var or the config file's `bridge_host` key)
+* `--server <SERVER>` — OPC DA server ProgID (legacy: `-s`/`--opcServerID`). Required with `--driver opcda`
+* `--sim-gain <SIM_GAIN>` — Simulator process gain (`--driver simulator` only)
+
+  Default value: `1`
+* `--sim-tau <SIM_TAU>` — Simulator process time constant, in seconds (`--driver simulator` only)
+
+  Default value: `2`
+* `--sim-dead-time <SIM_DEAD_TIME>` — Simulator dead time, in seconds (`--driver simulator` only)
+
+  Default value: `5`
+* `--sim-noise <SIM_NOISE>` — Simulator measurement noise amplitude (`--driver simulator` only)
+
+  Default value: `0`
+* `--sim-seed <SIM_SEED>` — Simulator RNG seed, for reproducible noise (`--driver simulator` only)
+
+  Default value: `0`
+* `--sim-initial-pv <SIM_INITIAL_PV>` — Simulator initial PV (`--driver simulator` only)
+
+  Default value: `50`
+* `--sim-initial-mv <SIM_INITIAL_MV>` — Simulator initial MV (`--driver simulator` only)
+
+  Default value: `50`
+* `--pv-range-high <PV_RANGE_HIGH>` — Fixed PV range high, overriding a live tag read (legacy: the PV range "toggle tag/value" button). Required (defaults to 100.0) for `--driver simulator`, which has no range tags at all
+* `--pv-range-low <PV_RANGE_LOW>` — Fixed PV range low, overriding a live tag read
+* `--mv-range-high <MV_RANGE_HIGH>` — Fixed MV range high, overriding a live tag read
+* `--mv-range-low <MV_RANGE_LOW>` — Fixed MV range low, overriding a live tag read
+* `--direction <DIRECTION>` — Fixed controller direction, overriding a live tag read
+
+  Possible values: `direct`, `reverse`
+
+* `--notes <NOTES>` — Operator notes to attach to a tune run. Ignored by `check`, which does not create a run
+* `--yes` — Confirm an unattended PID write-back. Required alongside `--write-pid` for `tune` and `simulate`; `check` only assesses readiness and does not require this flag. Has no effect without `--write-pid`
+* `--write-pid <WRITE_PID>` — For `tune`, write this response level's calculated PID parameters back to the DCS without prompting; requires `--yes`. For `check`, assess read-only write-back readiness only; no `--yes` is required and no write occurs
+
+  Possible values: `aggressive`, `moderate`, `sluggish`
+
+* `--output <OUTPUT>` — How to print this command's result
 
   Default value: `table`
 
