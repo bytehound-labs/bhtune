@@ -263,62 +263,14 @@ pub async fn preflight(
     if args.driver == DriverKind::Opcda {
         let server = crate::config::resolve_server(args.server.take(), app_config)?;
         args.server = Some(server.clone());
-        let op_timeout_secs = effective_timing.op_timeout_secs;
-
-        let gateway_info = within_timeout(op_timeout_secs, "gateway info", async {
-            Ok(get_opcda_gateway_info(&bridge_host).await?)
-        })
-        .await;
-        match &gateway_info {
-            Ok(info) => report.push_check(
-                "Gateway info",
-                PreflightCheckStatus::Pass,
-                gateway_info_detail(info),
-            ),
-            Err(error) => report.push_check(
-                "Gateway info",
-                PreflightCheckStatus::Warn,
-                format!("gateway-wide metadata is unavailable: {error:#}"),
-            ),
-        }
-
-        let compatibility = within_timeout(op_timeout_secs, "gateway compatibility", async {
-            Ok(check_gateway_compatibility(&bridge_host, Some(&server)).await?)
-        })
-        .await?;
-        report.push_check(
-            "Gateway compatibility",
-            compatibility_status(&compatibility),
-            compatibility_detail(&compatibility),
-        );
-
-        let servers = within_timeout(op_timeout_secs, "OPC DA server discovery", async {
-            Ok(list_opcda_servers(&bridge_host).await?)
-        })
-        .await?;
-        let server_found = servers
-            .iter()
-            .any(|registered| registered.eq_ignore_ascii_case(&server));
-        report.push_check(
-            "OPC DA ProgID",
-            if server_found {
-                PreflightCheckStatus::Pass
-            } else {
-                PreflightCheckStatus::Fail
-            },
-            if server_found {
-                format!("'{server}' is registered on the gateway")
-            } else if servers.is_empty() {
-                format!("'{server}' is not registered; the gateway reported no servers")
-            } else {
-                format!(
-                    "'{server}' is not registered; available servers: {}",
-                    servers.join(", ")
-                )
-            },
-        );
-
-        if !server_found || compatibility.is_incompatible() {
+        if !check_gateway_readiness(
+            &bridge_host,
+            &server,
+            effective_timing.op_timeout_secs,
+            &mut report,
+        )
+        .await?
+        {
             return Ok(report);
         }
     } else {
@@ -501,6 +453,68 @@ pub async fn preflight(
     );
 
     Ok(report)
+}
+
+async fn check_gateway_readiness(
+    bridge_host: &str,
+    server: &str,
+    op_timeout_secs: u64,
+    report: &mut PreflightReport,
+) -> anyhow::Result<bool> {
+    let gateway_info = within_timeout(op_timeout_secs, "gateway info", async {
+        Ok(get_opcda_gateway_info(bridge_host).await?)
+    })
+    .await;
+    match &gateway_info {
+        Ok(info) => report.push_check(
+            "Gateway info",
+            PreflightCheckStatus::Pass,
+            gateway_info_detail(info),
+        ),
+        Err(error) => report.push_check(
+            "Gateway info",
+            PreflightCheckStatus::Warn,
+            format!("gateway-wide metadata is unavailable: {error:#}"),
+        ),
+    }
+
+    let compatibility = within_timeout(op_timeout_secs, "gateway compatibility", async {
+        Ok(check_gateway_compatibility(bridge_host, Some(server)).await?)
+    })
+    .await?;
+    report.push_check(
+        "Gateway compatibility",
+        compatibility_status(&compatibility),
+        compatibility_detail(&compatibility),
+    );
+
+    let servers = within_timeout(op_timeout_secs, "OPC DA server discovery", async {
+        Ok(list_opcda_servers(bridge_host).await?)
+    })
+    .await?;
+    let server_found = servers
+        .iter()
+        .any(|registered| registered.eq_ignore_ascii_case(server));
+    report.push_check(
+        "OPC DA ProgID",
+        if server_found {
+            PreflightCheckStatus::Pass
+        } else {
+            PreflightCheckStatus::Fail
+        },
+        if server_found {
+            format!("'{server}' is registered on the gateway")
+        } else if servers.is_empty() {
+            format!("'{server}' is not registered; the gateway reported no servers")
+        } else {
+            format!(
+                "'{server}' is not registered; available servers: {}",
+                servers.join(", ")
+            )
+        },
+    );
+
+    Ok(server_found && !compatibility.is_incompatible())
 }
 
 async fn resolve_template(
