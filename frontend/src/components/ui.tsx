@@ -866,12 +866,6 @@ export function Modal({
       if (event.key !== "Tab") return;
 
       const currentFocusableElements = focusableElements(dialog);
-      if (currentFocusableElements.length === 0) {
-        event.preventDefault();
-        dialog.focus({ preventScroll: true });
-        return;
-      }
-
       const first = currentFocusableElements[0];
       if (!first) {
         event.preventDefault();

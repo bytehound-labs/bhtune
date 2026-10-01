@@ -32,8 +32,9 @@ source-build instructions and current distribution status.
 
 The browser UI associates form labels, hints, and validation errors with their controls.
 Dialogs keep keyboard focus inside until they close, and the OPC tag tree supports keyboard
-navigation. Run status changes are announced politely, and PV/MV charts include a text
-summary of the plotted data. See the [Web UI guide](docs/guides/web-ui/overview.md).
+navigation. Run status changes are announced politely, and PV/MV charts expose their plot as
+a figure with a text summary of the time span and observed ranges. See the
+[Web UI guide](docs/guides/web-ui/overview.md).
 
 ## Safety
 

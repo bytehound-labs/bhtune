@@ -146,13 +146,8 @@ export function TrendChart({
   }, [points]);
 
   return (
-    <figure>
-      <div
-        ref={containerRef}
-        role="img"
-        aria-label="Process-variable and manipulated-variable trend chart"
-        aria-describedby={descriptionId}
-      />
+    <figure aria-describedby={descriptionId}>
+      <div ref={containerRef} />
       <figcaption id={descriptionId} className="mt-2 text-xs text-slate-400">
         {describeTrend(points)}
       </figcaption>

@@ -101,6 +101,384 @@ function tuningSource(
   return sourceLabel(config.source.tuning[key]);
 }
 
+function nullableConfigNumber(value: number | ""): number | null {
+  if (value === "") return null;
+  return value;
+}
+
+function retentionRequestValue(
+  form: ConfigForm,
+): ConfigForm["retentionDays"] | null {
+  if (form.retentionMode === "forever") return null;
+  return form.retentionDays;
+}
+
+function tuningRequestValue(form: ConfigForm) {
+  if (form.resetTuning) {
+    return {
+      mrft_delay_secs: null,
+      poll_interval_ms: null,
+      timeout_secs: null,
+      op_timeout_secs: null,
+      restore_timeout_secs: null,
+    };
+  }
+
+  return {
+    mrft_delay_secs: nullableConfigNumber(form.tuning.mrftDelaySecs),
+    poll_interval_ms: nullableConfigNumber(form.tuning.pollIntervalMs),
+    timeout_secs: nullableConfigNumber(form.tuning.timeoutSecs),
+    op_timeout_secs: nullableConfigNumber(form.tuning.opTimeoutSecs),
+    restore_timeout_secs: nullableConfigNumber(form.tuning.restoreTimeoutSecs),
+  };
+}
+
+function configRequestFromForm(form: ConfigForm) {
+  return {
+    allow_uncertain_quality: form.allowUncertainQuality,
+    retention_days: retentionRequestValue(form),
+    tuning: tuningRequestValue(form),
+  };
+}
+
+function validateConfigForm(form: ConfigForm): ConfigValidationError | null {
+  if (
+    form.retentionMode === "days" &&
+    (typeof form.retentionDays !== "number" ||
+      !Number.isInteger(form.retentionDays) ||
+      form.retentionDays < 1)
+  ) {
+    return {
+      field: "retentionDays",
+      message: "Enter a positive whole number of retention days.",
+    };
+  }
+
+  const tuningValues = form.tuning;
+  const invalidTuningField = (
+    [
+      ["mrftDelaySecs", tuningValues.mrftDelaySecs, 0, 3600],
+      ["pollIntervalMs", tuningValues.pollIntervalMs, 1, null],
+      ["timeoutSecs", tuningValues.timeoutSecs, 1, null],
+      ["opTimeoutSecs", tuningValues.opTimeoutSecs, 1, null],
+      ["restoreTimeoutSecs", tuningValues.restoreTimeoutSecs, 1, null],
+    ] as const
+  ).find(
+    ([, value, minimum, maximum]) =>
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < minimum ||
+      (maximum !== null && value > maximum),
+  );
+  if (invalidTuningField) {
+    return {
+      field: invalidTuningField[0],
+      message:
+        "Enter valid whole-number values for all tune timing and safety settings.",
+    };
+  }
+  return null;
+}
+
+function ConfigStatusMessages({
+  isDirty,
+  saveMessage,
+  saveError,
+  isConflict,
+  onReload,
+}: {
+  readonly isDirty: boolean;
+  readonly saveMessage: string | null;
+  readonly saveError: unknown;
+  readonly isConflict: boolean;
+  readonly onReload: () => void;
+}) {
+  return (
+    <>
+      {isDirty && (
+        <div className="rounded-md border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-300">
+          You have unsaved changes.
+        </div>
+      )}
+      {saveMessage && (
+        <div className="rounded-md border border-emerald-800 bg-emerald-950/50 px-4 py-3 text-sm text-emerald-300">
+          {saveMessage}
+        </div>
+      )}
+      {saveError && !isConflict && (
+        <ErrorBanner message={apiErrorMessage(saveError)} />
+      )}
+      {isConflict && (
+        <div className="rounded-md border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-300">
+          The configuration changed elsewhere. Reload the latest values before
+          saving again.
+          <div className="mt-3">
+            <Button onClick={onReload}>Reload configuration</Button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ConfigRetentionSettings({
+  form,
+  validationError,
+  onUpdate,
+  onRetentionModeChange,
+}: {
+  readonly form: ConfigForm;
+  readonly validationError: ConfigValidationError | null;
+  readonly onUpdate: (key: "retentionDays", value: number | "") => void;
+  readonly onRetentionModeChange: (mode: RetentionMode) => void;
+}) {
+  return (
+    <FormSection
+      title="History retention"
+      documentationId="config.history-retention"
+    >
+      <fieldset className="min-w-0">
+        <legend className="text-xs uppercase tracking-wide text-slate-500">
+          Retain completed runs
+        </legend>
+        <div className="mt-2 space-y-2 text-sm text-slate-200">
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="retention"
+              checked={form.retentionMode === "forever"}
+              onChange={() => onRetentionModeChange("forever")}
+            />{" "}
+            Retain forever
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="retention"
+              checked={form.retentionMode === "days"}
+              onChange={() => onRetentionModeChange("days")}
+            />{" "}
+            Delete older runs automatically
+          </label>
+        </div>
+      </fieldset>
+      <NumberField
+        label="Retention days"
+        value={form.retentionDays}
+        onChange={(value) => onUpdate("retentionDays", value)}
+        min={1}
+        step={1}
+        disabled={form.retentionMode === "forever"}
+        required={form.retentionMode === "days"}
+        hint={
+          form.retentionMode === "forever"
+            ? "No automatic deletion."
+            : "Must be a positive whole number. The server applies retention during maintenance sweeps."
+        }
+        error={
+          validationError?.field === "retentionDays"
+            ? validationError.message
+            : undefined
+        }
+      />
+    </FormSection>
+  );
+}
+
+function ConfigTuningSettings({
+  form,
+  config,
+  validationError,
+  onUpdate,
+  onReset,
+}: {
+  readonly form: ConfigForm;
+  readonly config: GlobalConfigResponse;
+  readonly validationError: ConfigValidationError | null;
+  readonly onUpdate: (
+    key: keyof ConfigForm["tuning"],
+    value: number | "",
+  ) => void;
+  readonly onReset: () => void;
+}) {
+  const tuning = form.tuning;
+  return (
+    <FormSection
+      title="Tune timing and safety"
+      documentationId="config.tune-timing-safety"
+    >
+      <p className="text-sm text-slate-400">
+        These settings apply to future tunes. Changes do not alter runs that are
+        already prepared or in progress.
+      </p>
+      <NumberField
+        label="MRFT delay"
+        value={tuning.mrftDelaySecs}
+        onChange={(value) => onUpdate("mrftDelaySecs", value)}
+        min={0}
+        max={3600}
+        step={1}
+        required
+        hint={`Effective: ${config.effective.tuning.mrft_delay_secs} s (${tuningSource(config, "mrft_delay_secs")}).`}
+        error={
+          validationError?.field === "mrftDelaySecs"
+            ? validationError.message
+            : undefined
+        }
+      />
+      <NumberField
+        label="Poll interval"
+        value={tuning.pollIntervalMs}
+        onChange={(value) => onUpdate("pollIntervalMs", value)}
+        min={1}
+        step={1}
+        required
+        hint={`Effective: ${config.effective.tuning.poll_interval_ms} ms (${tuningSource(config, "poll_interval_ms")}).`}
+        error={
+          validationError?.field === "pollIntervalMs"
+            ? validationError.message
+            : undefined
+        }
+      />
+      <NumberField
+        label="Whole-run timeout"
+        value={tuning.timeoutSecs}
+        onChange={(value) => onUpdate("timeoutSecs", value)}
+        min={1}
+        step={1}
+        required
+        hint={`Effective: ${config.effective.tuning.timeout_secs} s (${tuningSource(config, "timeout_secs")}).`}
+        error={
+          validationError?.field === "timeoutSecs"
+            ? validationError.message
+            : undefined
+        }
+      />
+      <NumberField
+        label="Driver-operation timeout"
+        value={tuning.opTimeoutSecs}
+        onChange={(value) => onUpdate("opTimeoutSecs", value)}
+        min={1}
+        step={1}
+        required
+        hint={`Effective: ${config.effective.tuning.op_timeout_secs} s (${tuningSource(config, "op_timeout_secs")}).`}
+        error={
+          validationError?.field === "opTimeoutSecs"
+            ? validationError.message
+            : undefined
+        }
+      />
+      <NumberField
+        label="Restore timeout"
+        value={tuning.restoreTimeoutSecs}
+        onChange={(value) => onUpdate("restoreTimeoutSecs", value)}
+        min={1}
+        step={1}
+        required
+        hint={`Effective: ${config.effective.tuning.restore_timeout_secs} s (${tuningSource(config, "restore_timeout_secs")}). OPC DA tunes require at least 4 s.`}
+        error={
+          validationError?.field === "restoreTimeoutSecs"
+            ? validationError.message
+            : undefined
+        }
+      />
+      <div className="flex flex-wrap items-center gap-3">
+        <Button onClick={onReset}>Reset tuning to built-in defaults</Button>
+        {form.resetTuning && (
+          <span className="text-sm text-slate-400">
+            Saving will remove all five [tuning] overrides.
+          </span>
+        )}
+      </div>
+    </FormSection>
+  );
+}
+
+function ConfigSaveActions({
+  isDirty,
+  savePending,
+  onDiscard,
+}: {
+  readonly isDirty: boolean;
+  readonly savePending: boolean;
+  readonly onDiscard: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <Button
+        type="submit"
+        variant="primary"
+        disabled={!isDirty || savePending}
+      >
+        {savePending ? "Saving…" : "Save configuration"}
+      </Button>
+      {isDirty && <Button onClick={onDiscard}>Discard changes</Button>}
+    </div>
+  );
+}
+
+function ConfigGuidance({ config }: { readonly config: GlobalConfigResponse }) {
+  return (
+    <div className="mt-8 space-y-4">
+      <section data-doc-section="config.guidance">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
+          Configuration guidance
+        </h2>
+        <Card>
+          <dl className="space-y-3 text-sm">
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-slate-500">
+                Configuration file
+              </dt>
+              <dd className="mt-1 break-all font-mono text-slate-200">
+                {config.config_path}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-slate-500">
+                Effective source
+              </dt>
+              <dd className="mt-1 text-slate-300">
+                Allow Uncertain:{" "}
+                {sourceLabel(config.source.allow_uncertain_quality)}; retention:{" "}
+                {sourceLabel(config.source.retention_days)}
+              </dd>
+            </div>
+            {config.backup_path && (
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">
+                  Previous configuration backup
+                </dt>
+                <dd className="mt-1 break-all font-mono text-slate-200">
+                  {config.backup_path}
+                </dd>
+              </div>
+            )}
+          </dl>
+          <div className="mt-4 space-y-2 text-sm text-slate-400">
+            <p>
+              Saving writes the global settings to this configuration file.
+              Command-line and environment overrides may take precedence over
+              file values.
+            </p>
+            <p>
+              Effective policy: Uncertain quality is{" "}
+              {config.effective.allow_uncertain_quality
+                ? "accepted"
+                : "rejected"}
+              ; retention is{" "}
+              {config.effective.retention_days === null
+                ? "disabled"
+                : `${config.effective.retention_days} days`}
+              .
+            </p>
+          </div>
+        </Card>
+      </section>
+    </div>
+  );
+}
+
 export function ConfigPage() {
   const config = useConfig();
   const saveConfig = useSaveConfig();
@@ -122,69 +500,47 @@ export function ConfigPage() {
   const isConflict = saveError instanceof ApiError && saveError.status === 409;
   const requestError = config.error;
 
-  const update = <K extends keyof ConfigForm>(key: K, value: ConfigForm[K]) => {
+  const updateForm = (nextForm: ConfigForm) => {
     setSaveMessage(null);
     setValidationError(null);
-    setForm(() => ({ ...displayedForm, [key]: value }));
+    setForm(nextForm);
     if (savedFormKey === null && config.data) {
       setSavedFormKey(formKey(loadedForm));
     }
+  };
+
+  const update = <K extends keyof ConfigForm>(key: K, value: ConfigForm[K]) => {
+    updateForm({ ...displayedForm, [key]: value });
   };
 
   const updateTuning = <K extends keyof ConfigForm["tuning"]>(
     key: K,
     value: ConfigForm["tuning"][K],
   ) => {
-    setSaveMessage(null);
-    setValidationError(null);
-    setForm(() => ({
+    updateForm({
       ...displayedForm,
       tuning: { ...displayedForm.tuning, [key]: value },
       resetTuning: false,
-    }));
-    if (savedFormKey === null && config.data) {
-      setSavedFormKey(formKey(loadedForm));
-    }
+    });
   };
 
+  const updateRetentionMode = (mode: RetentionMode) => {
+    updateForm({
+      ...displayedForm,
+      retentionMode: mode,
+      retentionDays: mode === "forever" ? "" : displayedForm.retentionDays,
+    });
+  };
+
+  const resetTuning = () =>
+    updateForm({
+      ...displayedForm,
+      tuning: defaultTuning,
+      resetTuning: true,
+    });
+
   const request = useMemo(
-    () => ({
-      allow_uncertain_quality: displayedForm.allowUncertainQuality,
-      retention_days:
-        displayedForm.retentionMode === "forever"
-          ? null
-          : displayedForm.retentionDays,
-      tuning: displayedForm.resetTuning
-        ? {
-            mrft_delay_secs: null,
-            poll_interval_ms: null,
-            timeout_secs: null,
-            op_timeout_secs: null,
-            restore_timeout_secs: null,
-          }
-        : {
-            mrft_delay_secs:
-              displayedForm.tuning.mrftDelaySecs === ""
-                ? null
-                : displayedForm.tuning.mrftDelaySecs,
-            poll_interval_ms:
-              displayedForm.tuning.pollIntervalMs === ""
-                ? null
-                : displayedForm.tuning.pollIntervalMs,
-            timeout_secs:
-              displayedForm.tuning.timeoutSecs === ""
-                ? null
-                : displayedForm.tuning.timeoutSecs,
-            op_timeout_secs:
-              displayedForm.tuning.opTimeoutSecs === ""
-                ? null
-                : displayedForm.tuning.opTimeoutSecs,
-            restore_timeout_secs:
-              displayedForm.tuning.restoreTimeoutSecs === ""
-                ? null
-                : displayedForm.tuning.restoreTimeoutSecs,
-          },
-    }),
+    () => configRequestFromForm(displayedForm),
     [displayedForm],
   );
 
@@ -195,42 +551,10 @@ export function ConfigPage() {
     if (!currentConfig) {
       return;
     }
-    if (
-      displayedForm.retentionMode === "days" &&
-      (typeof displayedForm.retentionDays !== "number" ||
-        !Number.isInteger(displayedForm.retentionDays) ||
-        displayedForm.retentionDays < 1)
-    ) {
+    const validation = validateConfigForm(displayedForm);
+    if (validation) {
       setSaveMessage(null);
-      setValidationError({
-        field: "retentionDays",
-        message: "Enter a positive whole number of retention days.",
-      });
-      return;
-    }
-    const tuningValues = displayedForm.tuning;
-    const invalidTuningField = (
-      [
-        ["mrftDelaySecs", tuningValues.mrftDelaySecs, 0, 3600],
-        ["pollIntervalMs", tuningValues.pollIntervalMs, 1, null],
-        ["timeoutSecs", tuningValues.timeoutSecs, 1, null],
-        ["opTimeoutSecs", tuningValues.opTimeoutSecs, 1, null],
-        ["restoreTimeoutSecs", tuningValues.restoreTimeoutSecs, 1, null],
-      ] as const
-    ).find(
-      ([, value, minimum, maximum]) =>
-        typeof value !== "number" ||
-        !Number.isInteger(value) ||
-        value < minimum ||
-        (maximum !== null && value > maximum),
-    );
-    if (invalidTuningField) {
-      setSaveMessage(null);
-      setValidationError({
-        field: invalidTuningField[0],
-        message:
-          "Enter valid whole-number values for all tune timing and safety settings.",
-      });
+      setValidationError(validation);
       return;
     }
 
@@ -266,6 +590,16 @@ export function ConfigPage() {
     }
   };
 
+  const discardChanges = () => {
+    if (!currentConfig) return;
+    const nextForm = formFromResponse(currentConfig);
+    setForm(nextForm);
+    setSavedFormKey(formKey(nextForm));
+    setSaveMessage(null);
+    setValidationError(null);
+    saveConfig.reset();
+  };
+
   if (config.isPending && !config.data) {
     return <LoadingState message="Loading global configuration…" />;
   }
@@ -296,30 +630,13 @@ export function ConfigPage() {
       />
 
       <form onSubmit={save} noValidate className="space-y-6">
-        {isDirty && (
-          <div className="rounded-md border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-300">
-            You have unsaved changes.
-          </div>
-        )}
-        {saveMessage && (
-          <div className="rounded-md border border-emerald-800 bg-emerald-950/50 px-4 py-3 text-sm text-emerald-300">
-            {saveMessage}
-          </div>
-        )}
-        {saveError && !isConflict && (
-          <ErrorBanner message={apiErrorMessage(saveError)} />
-        )}
-        {isConflict && (
-          <div className="rounded-md border border-amber-800 bg-amber-950/50 px-4 py-3 text-sm text-amber-300">
-            The configuration changed elsewhere. Reload the latest values before
-            saving again.
-            <div className="mt-3">
-              <Button onClick={() => void reload()}>
-                Reload configuration
-              </Button>
-            </div>
-          </div>
-        )}
+        <ConfigStatusMessages
+          isDirty={isDirty}
+          saveMessage={saveMessage}
+          saveError={saveError}
+          isConflict={isConflict}
+          onReload={() => void reload()}
+        />
 
         <FormSection
           title="OPC quality policy"
@@ -333,252 +650,29 @@ export function ConfigPage() {
           />
         </FormSection>
 
-        <FormSection
-          title="History retention"
-          documentationId="config.history-retention"
-        >
-          <fieldset className="min-w-0">
-            <legend className="text-xs uppercase tracking-wide text-slate-500">
-              Retain completed runs
-            </legend>
-            <div className="mt-2 space-y-2 text-sm text-slate-200">
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="retention"
-                  checked={displayedForm.retentionMode === "forever"}
-                  onChange={() => {
-                    setSaveMessage(null);
-                    setValidationError(null);
-                    setForm({
-                      ...displayedForm,
-                      retentionMode: "forever",
-                      retentionDays: "",
-                    });
-                    if (savedFormKey === null && config.data) {
-                      setSavedFormKey(formKey(loadedForm));
-                    }
-                  }}
-                />{" "}
-                Retain forever
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="retention"
-                  checked={displayedForm.retentionMode === "days"}
-                  onChange={() => update("retentionMode", "days")}
-                />{" "}
-                Delete older runs automatically
-              </label>
-            </div>
-          </fieldset>
-          <NumberField
-            label="Retention days"
-            value={displayedForm.retentionDays}
-            onChange={(value) => update("retentionDays", value)}
-            min={1}
-            step={1}
-            disabled={displayedForm.retentionMode === "forever"}
-            required={displayedForm.retentionMode === "days"}
-            hint={
-              displayedForm.retentionMode === "forever"
-                ? "No automatic deletion."
-                : "Must be a positive whole number. The server applies retention during maintenance sweeps."
-            }
-            error={
-              validationError?.field === "retentionDays"
-                ? validationError.message
-                : undefined
-            }
-          />
-        </FormSection>
+        <ConfigRetentionSettings
+          form={displayedForm}
+          validationError={validationError}
+          onUpdate={update}
+          onRetentionModeChange={updateRetentionMode}
+        />
 
-        <FormSection
-          title="Tune timing and safety"
-          documentationId="config.tune-timing-safety"
-        >
-          <p className="text-sm text-slate-400">
-            These settings apply to future tunes. Changes do not alter runs that
-            are already prepared or in progress.
-          </p>
-          <NumberField
-            label="MRFT delay"
-            value={displayedForm.tuning.mrftDelaySecs}
-            onChange={(value) => updateTuning("mrftDelaySecs", value)}
-            min={0}
-            max={3600}
-            step={1}
-            required
-            hint={`Effective: ${currentConfig.effective.tuning.mrft_delay_secs} s (${tuningSource(currentConfig, "mrft_delay_secs")}).`}
-            error={
-              validationError?.field === "mrftDelaySecs"
-                ? validationError.message
-                : undefined
-            }
-          />
-          <NumberField
-            label="Poll interval"
-            value={displayedForm.tuning.pollIntervalMs}
-            onChange={(value) => updateTuning("pollIntervalMs", value)}
-            min={1}
-            step={1}
-            required
-            hint={`Effective: ${currentConfig.effective.tuning.poll_interval_ms} ms (${tuningSource(currentConfig, "poll_interval_ms")}).`}
-            error={
-              validationError?.field === "pollIntervalMs"
-                ? validationError.message
-                : undefined
-            }
-          />
-          <NumberField
-            label="Whole-run timeout"
-            value={displayedForm.tuning.timeoutSecs}
-            onChange={(value) => updateTuning("timeoutSecs", value)}
-            min={1}
-            step={1}
-            required
-            hint={`Effective: ${currentConfig.effective.tuning.timeout_secs} s (${tuningSource(currentConfig, "timeout_secs")}).`}
-            error={
-              validationError?.field === "timeoutSecs"
-                ? validationError.message
-                : undefined
-            }
-          />
-          <NumberField
-            label="Driver-operation timeout"
-            value={displayedForm.tuning.opTimeoutSecs}
-            onChange={(value) => updateTuning("opTimeoutSecs", value)}
-            min={1}
-            step={1}
-            required
-            hint={`Effective: ${currentConfig.effective.tuning.op_timeout_secs} s (${tuningSource(currentConfig, "op_timeout_secs")}).`}
-            error={
-              validationError?.field === "opTimeoutSecs"
-                ? validationError.message
-                : undefined
-            }
-          />
-          <NumberField
-            label="Restore timeout"
-            value={displayedForm.tuning.restoreTimeoutSecs}
-            onChange={(value) => updateTuning("restoreTimeoutSecs", value)}
-            min={1}
-            step={1}
-            required
-            hint={`Effective: ${currentConfig.effective.tuning.restore_timeout_secs} s (${tuningSource(currentConfig, "restore_timeout_secs")}). OPC DA tunes require at least 4 s.`}
-            error={
-              validationError?.field === "restoreTimeoutSecs"
-                ? validationError.message
-                : undefined
-            }
-          />
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              onClick={() => {
-                setSaveMessage(null);
-                setValidationError(null);
-                setForm({
-                  ...displayedForm,
-                  tuning: defaultTuning,
-                  resetTuning: true,
-                });
-                if (savedFormKey === null && config.data) {
-                  setSavedFormKey(formKey(loadedForm));
-                }
-              }}
-            >
-              Reset tuning to built-in defaults
-            </Button>
-            {displayedForm.resetTuning && (
-              <span className="text-sm text-slate-400">
-                Saving will remove all five [tuning] overrides.
-              </span>
-            )}
-          </div>
-        </FormSection>
+        <ConfigTuningSettings
+          form={displayedForm}
+          config={currentConfig}
+          validationError={validationError}
+          onUpdate={updateTuning}
+          onReset={resetTuning}
+        />
 
-        <div className="flex items-center gap-3">
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={!isDirty || saveConfig.isPending}
-          >
-            {saveConfig.isPending ? "Saving…" : "Save configuration"}
-          </Button>
-          {isDirty && (
-            <Button
-              onClick={() => {
-                setForm(formFromResponse(currentConfig));
-                setSavedFormKey(formKey(formFromResponse(currentConfig)));
-                setSaveMessage(null);
-                setValidationError(null);
-                saveConfig.reset();
-              }}
-            >
-              Discard changes
-            </Button>
-          )}
-        </div>
+        <ConfigSaveActions
+          isDirty={isDirty}
+          savePending={saveConfig.isPending}
+          onDiscard={discardChanges}
+        />
       </form>
 
-      <div className="mt-8 space-y-4">
-        <section data-doc-section="config.guidance">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">
-            Configuration guidance
-          </h2>
-          <Card>
-            <dl className="space-y-3 text-sm">
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">
-                  Configuration file
-                </dt>
-                <dd className="mt-1 break-all font-mono text-slate-200">
-                  {currentConfig.config_path}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">
-                  Effective source
-                </dt>
-                <dd className="mt-1 text-slate-300">
-                  Allow Uncertain:{" "}
-                  {sourceLabel(currentConfig.source.allow_uncertain_quality)};
-                  retention: {sourceLabel(currentConfig.source.retention_days)}
-                </dd>
-              </div>
-              {currentConfig.backup_path && (
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-500">
-                    Previous configuration backup
-                  </dt>
-                  <dd className="mt-1 break-all font-mono text-slate-200">
-                    {currentConfig.backup_path}
-                  </dd>
-                </div>
-              )}
-            </dl>
-            <div className="mt-4 space-y-2 text-sm text-slate-400">
-              <p>
-                Saving writes the global settings to this configuration file.
-                Command-line and environment overrides may take precedence over
-                file values.
-              </p>
-              <p>
-                Effective policy: Uncertain quality is{" "}
-                {currentConfig.effective.allow_uncertain_quality
-                  ? "accepted"
-                  : "rejected"}
-                ; retention is{" "}
-                {currentConfig.effective.retention_days === null
-                  ? "disabled"
-                  : `${currentConfig.effective.retention_days} days`}
-                .
-              </p>
-            </div>
-          </Card>
-        </section>
-      </div>
+      <ConfigGuidance config={currentConfig} />
     </div>
   );
 }

@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { StartRunRequest } from "../../api/runs";
 import { applyTagNameChange } from "./applyTagNameChange";
 import { draftFromForm, formFromDraft } from "./draftAutosave";
-import { buildRequest, formFromRequest } from "./formRequest";
+import {
+  buildRequest,
+  formFromRequest,
+  validationFieldForError,
+} from "./formRequest";
 import { initialForm, type FormState } from "./newRunFormState";
 import {
   prefillMessage,
@@ -124,6 +128,69 @@ describe("New Run form conversions", () => {
       ...form,
       notes: "",
     });
+  });
+});
+
+describe("New Run validation field mapping", () => {
+  it("maps validation messages to the associated form controls", () => {
+    const form = createOpcForm();
+    const staticMessages = [
+      ["Tag name is required.", "tagname"],
+      ["OPC DA server ProgID is required.", "server"],
+      ["Relay amplitude is required.", "relayAmp"],
+      ["Cycles to skip is required.", "cyclesSkip"],
+      ["Cycles to count is required.", "cyclesCount"],
+      ["Noise protection is required.", "noiseProtectionSecs"],
+      ["Process gain is required.", "simGain"],
+      ["Time constant is required.", "simTau"],
+      ["Dead time is required.", "simDeadTime"],
+      ["RNG seed is required.", "simSeed"],
+      ["Choose a process type.", "processType"],
+      ["Choose a controller type.", "controllerType"],
+      ["Enable Allow automatic PID write.", "yes"],
+      ["Initial PV is required.", "simInitialPv"],
+      ["Initial MV is required.", "simInitialMv"],
+      ["Measurement noise is required.", "simNoise"],
+      ["PV range span is required.", "simPvRangeHigh"],
+      ["MV range span is required.", "simMvRangeHigh"],
+    ] as const;
+    for (const [message, field] of staticMessages) {
+      expect(validationFieldForError(form, message)).toBe(field);
+    }
+
+    expect(validationFieldForError(form, "Choose a template.")).toBe(
+      "template",
+    );
+    expect(
+      validationFieldForError(form, "Choose a template supported by this run."),
+    ).toBe("template");
+
+    const opcMappingMessages = [
+      ["Controller direction is required.", "opcDirection"],
+      ["PV range high is required.", "valueTagOverrides.pvRangeHigh"],
+      ["PV range low is required.", "opcPvRangeLow"],
+      ["MV range high is required.", "opcMvRangeHigh"],
+      ["MV range low is required.", "opcMvRangeLow"],
+    ] as const;
+    for (const [message, field] of opcMappingMessages) {
+      expect(validationFieldForError(form, message)).toBe(field);
+    }
+
+    const simulatorForm = { ...form, driver: "simulator" as const };
+    const simulatorMappingMessages = [
+      ["Controller direction is required.", "simDirection"],
+      ["PV range high is required.", "simPvRangeHigh"],
+      ["PV range low is required.", "simPvRangeLow"],
+      ["MV range high is required.", "simMvRangeHigh"],
+      ["MV range low is required.", "simMvRangeLow"],
+    ] as const;
+    for (const [message, field] of simulatorMappingMessages) {
+      expect(validationFieldForError(simulatorForm, message)).toBe(field);
+    }
+
+    expect(validationFieldForError(form, "Unknown validation message.")).toBe(
+      undefined,
+    );
   });
 });
 

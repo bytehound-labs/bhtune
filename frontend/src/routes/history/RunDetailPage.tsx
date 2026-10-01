@@ -10,6 +10,7 @@ import {
   useRunStream,
   useUpdateRunNotes,
   useWriteRun,
+  type RunDetailResponse,
   type SampleResponse,
 } from "../../api/runs";
 import type { DuplicateRunState } from "../runs/NewRunPage";
@@ -33,6 +34,79 @@ import type { AppCapabilities } from "../../api/capabilities";
 
 const EMPTY_TREND_SAMPLES: readonly SampleResponse[] = [];
 
+function initialNoteState(run: RunDetailResponse | undefined, runId: number) {
+  const currentRun = run?.id === runId ? run : undefined;
+  const initialNotes = currentRun?.notes;
+  return {
+    sourceRunId: currentRun ? runId : null,
+    sourceNotes: initialNotes,
+    notes: initialNotes ?? "",
+    notesDirty: false,
+  };
+}
+
+function describeRunStatus(run: RunDetailResponse | undefined): string {
+  if (!run) return "";
+  const announcement = `Tune ${OUTCOME_LABELS[run.outcome].toLowerCase()}.`;
+  if (run.restore_status !== "incomplete") return announcement;
+  return `${announcement} Loop restoration is incomplete; review the run details before continuing.`;
+}
+
+function canRevertLastWrite(
+  eligible: boolean,
+  lastWrite: RunWrite | undefined,
+): boolean {
+  return Boolean(eligible && lastWrite?.kind === "write" && lastWrite.success);
+}
+
+function pidActionErrorFor(
+  action: PidAction | null,
+  writeError: Error | null,
+  revertError: Error | null,
+): Error | null {
+  if (!action) return null;
+  if (action.kind === "write") return writeError;
+  return revertError;
+}
+
+function duplicateRunTitle(
+  run: RunDetailResponse | undefined,
+  isSuccess: boolean,
+): string | undefined {
+  if (isSuccess && run && !run.original_request) {
+    return "This tune's original settings weren't recorded and can't be duplicated.";
+  }
+  return undefined;
+}
+
+function shouldShowPidActionModal(
+  hasRun: boolean,
+  isDemo: boolean,
+  canWrite: boolean,
+  canRevert: boolean,
+): boolean {
+  if (!hasRun || isDemo) return false;
+  return canWrite && canRevert;
+}
+
+function RunStatusAnnouncement({
+  run,
+}: {
+  readonly run: RunDetailResponse | undefined;
+}) {
+  if (!run) return null;
+  return (
+    <div
+      className="sr-only"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      {describeRunStatus(run)}
+    </div>
+  );
+}
+
 export function RunDetailPage({
   capabilities,
 }: {
@@ -42,15 +116,16 @@ export function RunDetailPage({
   const runId = Number(id);
   const navigate = useNavigate();
   const isDemo = capabilities.mode === "demo";
-  const run = useRun(runId, true, isDemo ? "demo" : "full");
-  const cancelRun = useCancelRun(isDemo ? "demo" : "full");
+  const apiMode = isDemo ? "demo" : "full";
+  const run = useRun(runId, true, apiMode);
+  const cancelRun = useCancelRun(apiMode);
   const updateNotes = useUpdateRunNotes();
   const deleteNotes = useDeleteRunNotes();
-  const deleteRun = useDeleteRun(isDemo ? "demo" : "full");
+  const deleteRun = useDeleteRun(apiMode);
   const writeRun = useWriteRun();
   const revertRun = useRevertRun();
   const isRunning = run.data?.outcome === "running";
-  const hasSamples = run.data ? run.data.samples.length > 0 : false;
+  const hasSamples = (run.data?.samples.length ?? 0) > 0;
   const eligibility = run.data
     ? writeEligibility(run.data)
     : { eligible: false };
@@ -58,15 +133,11 @@ export function RunDetailPage({
   const lastWrite = writes.at(-1);
   // Restore always targets the newest WriteKind::Write row server-side. Only offer it
   // while that row is still newest, so a superseded restore action cannot mislead.
-  const canRevertLastWrite =
-    eligibility.eligible &&
-    lastWrite !== undefined &&
-    lastWrite.kind === "write" &&
-    lastWrite.success;
+  const canRevert = canRevertLastWrite(eligibility.eligible, lastWrite);
   const stream = useRunStream(
     runId,
     isRunning && capabilities.actions.stream_run,
-    isDemo ? "demo" : "full",
+    apiMode,
   );
   const initialReadings = stream.initialReadings ?? run.data?.initial_readings;
   // The live SSE feed replays every sample from tick 0. Once terminal, the REST payload is
@@ -86,15 +157,9 @@ export function RunDetailPage({
       !isRunning && run.data.restore_status !== "incomplete",
     );
   }, [initialReadings, isRunning, run.data, trendSamples]);
-  const [noteState, setNoteState] = useState(() => {
-    const initialNotes = run.data?.id === runId ? run.data.notes : undefined;
-    return {
-      sourceRunId: run.data?.id === runId ? runId : null,
-      sourceNotes: initialNotes,
-      notes: initialNotes ?? "",
-      notesDirty: false,
-    };
-  });
+  const [noteState, setNoteState] = useState(() =>
+    initialNoteState(run.data, runId),
+  );
   const { notes, notesDirty } = noteState;
   const setNotes = (value: string) => {
     setNoteState((previous) => ({ ...previous, notes: value }));
@@ -106,11 +171,11 @@ export function RunDetailPage({
   const [pidActionAlert, setPidActionAlert] = useState<string | null>(null);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const pidActionPending = writeRun.isPending || revertRun.isPending;
-  const pidActionError = (() => {
-    if (!pidAction) return null;
-    if (pidAction.kind === "write") return writeRun.error;
-    return revertRun.error;
-  })();
+  const pidActionError = pidActionErrorFor(
+    pidAction,
+    writeRun.error,
+    revertRun.error,
+  );
 
   if (
     run.data?.id === runId &&
@@ -290,22 +355,16 @@ export function RunDetailPage({
       fallback: "Unable to clear notes.",
     },
   ];
-  const runStatusAnnouncement = run.data
-    ? `Tune ${OUTCOME_LABELS[run.data.outcome].toLowerCase()}.${run.data.restore_status === "incomplete" ? " Loop restoration is incomplete; review the run details before continuing." : ""}`
-    : "";
+  const showPidModal = shouldShowPidActionModal(
+    run.data !== undefined,
+    isDemo,
+    capabilities.actions.write_pid,
+    capabilities.actions.revert_pid,
+  );
 
   return (
     <div>
-      {run.data && (
-        <div
-          className="sr-only"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {runStatusAnnouncement}
-        </div>
-      )}
+      <RunStatusAnnouncement run={run.data} />
       <RunDetailActions
         id={id}
         runId={runId}
@@ -316,11 +375,7 @@ export function RunDetailPage({
         originalRequest={run.data?.original_request}
         cancelPending={cancelRun.isPending}
         deletePending={deleteRun.isPending}
-        duplicateTitle={
-          run.isSuccess && !run.data.original_request
-            ? "This tune's original settings weren't recorded and can't be duplicated."
-            : undefined
-        }
+        duplicateTitle={duplicateRunTitle(run.data, run.isSuccess)}
         onCancel={() => cancelRun.mutate(runId)}
         onDelete={handleDelete}
         onDuplicate={duplicateRun}
@@ -346,7 +401,7 @@ export function RunDetailPage({
           trendPoints={trendPoints}
           trendPollIntervalMs={trendPollIntervalMs}
           eligibility={eligibility}
-          canRevertLastWrite={canRevertLastWrite}
+          canRevertLastWrite={canRevert}
           notes={notes}
           notesDirty={notesDirty}
           savePending={updateNotes.isPending}
@@ -361,19 +416,16 @@ export function RunDetailPage({
           onRevert={requestRevert}
         />
       )}
-      {run.data &&
-        !isDemo &&
-        capabilities.actions.write_pid &&
-        capabilities.actions.revert_pid && (
-          <PidActionModal
-            run={run.data}
-            action={pidAction}
-            pending={pidActionPending}
-            error={pidActionError}
-            onClose={closePidAction}
-            onConfirm={confirmPidAction}
-          />
-        )}
+      {showPidModal && run.data && (
+        <PidActionModal
+          run={run.data}
+          action={pidAction}
+          pending={pidActionPending}
+          error={pidActionError}
+          onClose={closePidAction}
+          onConfirm={confirmPidAction}
+        />
+      )}
       {deleteConfirmationOpen && (
         <ConfirmModal
           title="Delete tune?"

@@ -60,6 +60,41 @@ function valueValidationField(
   return OPC_VALUE_FORM_FIELDS[key];
 }
 
+const STATIC_VALIDATION_FIELD_PREFIXES: readonly (readonly [
+  string,
+  ValidationFieldKey,
+])[] = [
+  ["Tag name is required.", "tagname"],
+  ["OPC DA server ProgID", "server"],
+  ["Relay amplitude", "relayAmp"],
+  ["Cycles to skip", "cyclesSkip"],
+  ["Cycles to count", "cyclesCount"],
+  ["Noise protection", "noiseProtectionSecs"],
+  ["Process gain", "simGain"],
+  ["Time constant", "simTau"],
+  ["Dead time", "simDeadTime"],
+  ["RNG seed", "simSeed"],
+  ["Choose a process type", "processType"],
+  ["Choose a controller type", "controllerType"],
+  ["Enable Allow automatic PID write", "yes"],
+  ["Initial PV", "simInitialPv"],
+  ["Initial MV", "simInitialMv"],
+  ["Measurement noise", "simNoise"],
+  ["PV range span", "simPvRangeHigh"],
+  ["MV range span", "simMvRangeHigh"],
+];
+
+const VALUE_VALIDATION_PREFIXES: readonly (readonly [
+  string,
+  ValueMappingKey,
+])[] = [
+  ["Controller direction", "direction"],
+  ["PV range high", "pvRangeHigh"],
+  ["PV range low", "pvRangeLow"],
+  ["MV range high", "mvRangeHigh"],
+  ["MV range low", "mvRangeLow"],
+];
+
 /** Maps client validation feedback to the form control that can resolve it. */
 export function validationFieldForError(
   form: FormState,
@@ -71,42 +106,16 @@ export function validationFieldForError(
   ) {
     return "template";
   }
-  if (message.startsWith("Tag name is required.")) return "tagname";
-  if (message.startsWith("OPC DA server ProgID")) return "server";
-  if (message.startsWith("Relay amplitude")) return "relayAmp";
-  if (message.startsWith("Cycles to skip")) return "cyclesSkip";
-  if (message.startsWith("Cycles to count")) return "cyclesCount";
-  if (message.startsWith("Noise protection")) return "noiseProtectionSecs";
-  if (message.startsWith("Process gain")) return "simGain";
-  if (message.startsWith("Time constant")) return "simTau";
-  if (message.startsWith("Dead time")) return "simDeadTime";
-  if (message.startsWith("RNG seed")) return "simSeed";
-  if (message.startsWith("Choose a process type")) return "processType";
-  if (message.startsWith("Choose a controller type")) {
-    return "controllerType";
-  }
-  if (message.startsWith("Enable Allow automatic PID write")) return "yes";
-  if (message.startsWith("Initial PV")) return "simInitialPv";
-  if (message.startsWith("Initial MV")) return "simInitialMv";
-  if (message.startsWith("Measurement noise")) return "simNoise";
-  if (message.startsWith("PV range span")) return "simPvRangeHigh";
-  if (message.startsWith("MV range span")) return "simMvRangeHigh";
-  if (message.startsWith("Controller direction")) {
-    return valueValidationField(form, "direction");
-  }
-  if (message.startsWith("PV range high")) {
-    return valueValidationField(form, "pvRangeHigh");
-  }
-  if (message.startsWith("PV range low")) {
-    return valueValidationField(form, "pvRangeLow");
-  }
-  if (message.startsWith("MV range high")) {
-    return valueValidationField(form, "mvRangeHigh");
-  }
-  if (message.startsWith("MV range low")) {
-    return valueValidationField(form, "mvRangeLow");
-  }
-  return undefined;
+
+  const staticField = STATIC_VALIDATION_FIELD_PREFIXES.find(([prefix]) =>
+    message.startsWith(prefix),
+  );
+  if (staticField) return staticField[1];
+
+  const valueMapping = VALUE_VALIDATION_PREFIXES.find(([prefix]) =>
+    message.startsWith(prefix),
+  );
+  return valueMapping ? valueValidationField(form, valueMapping[1]) : undefined;
 }
 
 function inferRequestValueSources(

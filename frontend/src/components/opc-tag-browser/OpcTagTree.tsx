@@ -1,6 +1,7 @@
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactNode,
   RefObject,
 } from "react";
 import type { OpcTagNodeResponse } from "../../api/opc";
@@ -126,6 +127,130 @@ function focusTreeItem(
   item.focus();
 }
 
+type TreeNavigationContext = Readonly<{
+  node: OpcTagNodeResponse;
+  tree: HTMLElement;
+  visibleItems: readonly HTMLElement[];
+  currentIndex: number;
+  parentNodeKey: string | null;
+  isBranch: boolean;
+  isExpanded: boolean;
+  hasItemId: boolean;
+  disabled: boolean;
+  onToggle: (node: OpcTagNodeResponse) => void;
+  onSelect: (node: OpcTagNodeResponse) => void;
+  onActiveNodeChange: (nodeKey: string) => void;
+}>;
+
+type TreeNavigationProps = Omit<
+  TreeNavigationContext,
+  "tree" | "visibleItems" | "currentIndex"
+>;
+
+function focusTreeNode(
+  item: HTMLElement | undefined,
+  onActiveNodeChange: (nodeKey: string) => void,
+): void {
+  if (!item) return;
+  onActiveNodeChange(item.dataset.treeNodeKey ?? "");
+  item.focus();
+}
+
+function focusNextTreeNode(context: TreeNavigationContext): void {
+  if (context.currentIndex < 0) return;
+  focusTreeNode(
+    context.visibleItems[context.currentIndex + 1],
+    context.onActiveNodeChange,
+  );
+}
+
+function focusPreviousTreeNode(context: TreeNavigationContext): void {
+  if (context.currentIndex <= 0) return;
+  focusTreeNode(
+    context.visibleItems[context.currentIndex - 1],
+    context.onActiveNodeChange,
+  );
+}
+
+function focusFirstTreeNode(context: TreeNavigationContext): void {
+  focusTreeNode(context.visibleItems[0], context.onActiveNodeChange);
+}
+
+function focusLastTreeNode(context: TreeNavigationContext): void {
+  focusTreeNode(context.visibleItems.at(-1), context.onActiveNodeChange);
+}
+
+function expandOrFocusChild(context: TreeNavigationContext): void {
+  if (!context.isBranch) return;
+  if (!context.isExpanded) {
+    if (!context.disabled) context.onToggle(context.node);
+    return;
+  }
+
+  const child = context.visibleItems.find(
+    (item) => item.dataset.treeParentNodeKey === context.node.node_key,
+  );
+  focusTreeNode(child, context.onActiveNodeChange);
+}
+
+function collapseOrFocusParent(context: TreeNavigationContext): void {
+  if (context.isBranch && context.isExpanded && !context.disabled) {
+    context.onToggle(context.node);
+    return;
+  }
+  if (context.parentNodeKey) {
+    focusTreeItem(
+      context.tree,
+      context.parentNodeKey,
+      context.onActiveNodeChange,
+    );
+  }
+}
+
+function activateTreeNode(context: TreeNavigationContext): void {
+  if (context.disabled) return;
+  if (context.hasItemId) {
+    context.onSelect(context.node);
+    return;
+  }
+  if (context.isBranch) context.onToggle(context.node);
+}
+
+const treeNavigationActions: Readonly<
+  Record<string, ((context: TreeNavigationContext) => void) | undefined>
+> = {
+  ArrowDown: focusNextTreeNode,
+  ArrowUp: focusPreviousTreeNode,
+  Home: focusFirstTreeNode,
+  End: focusLastTreeNode,
+  ArrowRight: expandOrFocusChild,
+  ArrowLeft: collapseOrFocusParent,
+  Enter: activateTreeNode,
+  " ": activateTreeNode,
+};
+
+function handleTreeItemKeyDown(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+  props: TreeNavigationProps,
+): void {
+  if (event.target !== event.currentTarget) return;
+  const tree = event.currentTarget.closest<HTMLElement>('[role="tree"]');
+  if (!tree) return;
+  const action = treeNavigationActions[event.key];
+  if (!action) return;
+
+  event.preventDefault();
+  const visibleItems = Array.from(
+    tree.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+  );
+  action({
+    ...props,
+    tree,
+    visibleItems,
+    currentIndex: visibleItems.indexOf(event.currentTarget),
+  });
+}
+
 function TreeNodeRow({
   node,
   parentNodeKey,
@@ -178,89 +303,17 @@ function TreeNodeRow({
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.target !== event.currentTarget) return;
-    const tree = event.currentTarget.closest<HTMLElement>('[role="tree"]');
-    if (!tree) return;
-    const visibleItems = Array.from(
-      tree.querySelectorAll<HTMLElement>('[role="treeitem"]'),
-    );
-    const currentIndex = visibleItems.indexOf(event.currentTarget);
-    const parentKey = event.currentTarget.dataset.treeParentNodeKey;
-
-    switch (event.key) {
-      case "ArrowDown":
-        event.preventDefault();
-        if (currentIndex >= 0 && currentIndex < visibleItems.length - 1) {
-          const next = visibleItems[currentIndex + 1];
-          if (next) {
-            onActiveNodeChange(next.dataset.treeNodeKey ?? "");
-            next.focus();
-          }
-        }
-        break;
-      case "ArrowUp":
-        event.preventDefault();
-        if (currentIndex > 0) {
-          const previous = visibleItems[currentIndex - 1];
-          if (previous) {
-            onActiveNodeChange(previous.dataset.treeNodeKey ?? "");
-            previous.focus();
-          }
-        }
-        break;
-      case "Home": {
-        event.preventDefault();
-        const first = visibleItems[0];
-        if (first) {
-          onActiveNodeChange(first.dataset.treeNodeKey ?? "");
-          first.focus();
-        }
-        break;
-      }
-      case "End": {
-        event.preventDefault();
-        const last = visibleItems.at(-1);
-        if (last) {
-          onActiveNodeChange(last.dataset.treeNodeKey ?? "");
-          last.focus();
-        }
-        break;
-      }
-      case "ArrowRight":
-        event.preventDefault();
-        if (!isBranch) break;
-        if (!isExpanded) {
-          if (!disabled) onToggle(node);
-          break;
-        }
-        {
-          const child = visibleItems.find(
-            (item) => item.dataset.treeParentNodeKey === node.node_key,
-          );
-          if (child) {
-            onActiveNodeChange(child.dataset.treeNodeKey ?? "");
-            child.focus();
-          }
-        }
-        break;
-      case "ArrowLeft":
-        event.preventDefault();
-        if (isBranch && isExpanded && !disabled) {
-          onToggle(node);
-        } else if (parentKey) {
-          focusTreeItem(tree, parentKey, onActiveNodeChange);
-        }
-        break;
-      case "Enter":
-      case " ":
-        event.preventDefault();
-        if (disabled) break;
-        if (itemId) onSelect(node);
-        else if (isBranch) onToggle(node);
-        break;
-      default:
-        break;
-    }
+    handleTreeItemKeyDown(event, {
+      node,
+      parentNodeKey,
+      isBranch,
+      isExpanded,
+      hasItemId: Boolean(itemId),
+      disabled,
+      onToggle,
+      onSelect,
+      onActiveNodeChange,
+    });
   }
 
   return (
@@ -320,39 +373,29 @@ function TreeNodeRow({
   );
 }
 
-/** One tree level -- renders one browsed scope and recurses into whichever branch nodes are
- * expanded. Navigation uses only the gateway's opaque `node_key`; `item_id` is kept only for
- * reads/selections. */
-export function OpcTagTree({
-  parentNodeKey,
-  depth,
-  scopeState,
-  expanded,
-  onToggle,
-  onSelect,
-  onConfirm,
-  onLoadMore,
-  onRetry,
-  selectedNode,
-  selectedNodeRef,
-  activeNodeKey,
-  onActiveNodeChange,
-  disabled,
-}: TreeLevelProps) {
-  const state = scopeState[scopeKey(parentNodeKey)];
-  if (!state) return null;
+function activeTreeNodeKey(
+  depth: number,
+  visibleKeys: readonly string[] | undefined,
+  activeNodeKey: string | null,
+  selectedNodeKey: string | null | undefined,
+): string | null {
+  if (depth !== 0 || !visibleKeys) return activeNodeKey;
+  if (activeNodeKey && visibleKeys.includes(activeNodeKey)) {
+    return activeNodeKey;
+  }
+  if (selectedNodeKey && visibleKeys.includes(selectedNodeKey)) {
+    return selectedNodeKey;
+  }
+  return visibleKeys[0] ?? null;
+}
 
-  const visibleKeys =
-    depth === 0 ? visibleTreeNodeKeys(scopeState, expanded) : undefined;
-  const activeKey =
-    depth === 0 && visibleKeys
-      ? activeNodeKey && visibleKeys.includes(activeNodeKey)
-        ? activeNodeKey
-        : selectedNode?.nodeKey && visibleKeys.includes(selectedNode.nodeKey)
-          ? selectedNode.nodeKey
-          : (visibleKeys[0] ?? null)
-      : activeNodeKey;
-
+function emptyTreeLevel(
+  state: ScopeState,
+  depth: number,
+  parentNodeKey: string | null,
+  onRetry: (parentNodeKey: string | null) => void,
+  disabled: boolean,
+): ReactNode | null {
   if (state.status === "loading" && state.nodes.length === 0) {
     return (
       <LoadingStatus
@@ -383,26 +426,112 @@ export function OpcTagTree({
       </div>
     );
   }
+  return null;
+}
 
+function TreeLevelWarning({
+  warning,
+  depth,
+}: {
+  readonly warning: string | null | undefined;
+  readonly depth: number;
+}) {
+  if (!warning) return null;
+  return (
+    <output
+      aria-live="polite"
+      className="block py-1 text-xs text-amber-300"
+      style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
+    >
+      {warning}
+    </output>
+  );
+}
+
+function TreeLevelErrorMessage({
+  state,
+  depth,
+  parentNodeKey,
+  onRetry,
+  disabled,
+}: {
+  readonly state: ScopeState;
+  readonly depth: number;
+  readonly parentNodeKey: string | null;
+  readonly onRetry: (parentNodeKey: string | null) => void;
+  readonly disabled: boolean;
+}) {
+  if (state.status !== "error" || state.nodes.length === 0) return null;
+  return (
+    <TreeLevelError
+      depth={depth}
+      message={state.message}
+      onRetry={onRetry}
+      parentNodeKey={parentNodeKey}
+      disabled={disabled}
+    />
+  );
+}
+
+function TreeLevelLoadMore({
+  state,
+  depth,
+  parentNodeKey,
+  onLoadMore,
+  disabled,
+}: {
+  readonly state: ScopeState;
+  readonly depth: number;
+  readonly parentNodeKey: string | null;
+  readonly onLoadMore: (parentNodeKey: string | null) => void;
+  readonly disabled: boolean;
+}) {
+  if (state.complete || !state.nextPageToken) return null;
+  const loadingMore = state.status === "loading-more";
+  return (
+    <button
+      type="button"
+      disabled={disabled || loadingMore}
+      onClick={() => onLoadMore(parentNodeKey)}
+      className="py-1 text-xs text-blue-300 hover:text-blue-200 disabled:cursor-not-allowed"
+      style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
+    >
+      {loadingMore && <Spinner size="sm" />}
+      {loadingMore ? "Loading more…" : "Load more"}
+    </button>
+  );
+}
+
+function TreeLevelContent({
+  state,
+  parentNodeKey,
+  depth,
+  scopeState,
+  expanded,
+  onToggle,
+  onSelect,
+  onConfirm,
+  onLoadMore,
+  onRetry,
+  selectedNode,
+  selectedNodeRef,
+  activeNodeKey,
+  onActiveNodeChange,
+  disabled,
+}: TreeLevelProps & {
+  readonly state: ScopeState;
+  readonly activeNodeKey: string | null;
+}) {
+  const scopeLoading =
+    state.status === "loading" || state.status === "loading-more";
   return (
     <>
-      {state.warning && (
-        <div
-          role="status"
-          className="py-1 text-xs text-amber-300"
-          style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
-        >
-          {state.warning}
-        </div>
-      )}
+      <TreeLevelWarning warning={state.warning} depth={depth} />
+      {/* WAI-ARIA trees require role="group" for branch children; fieldsets/details are not tree groups. */}
       <div
         role={depth === 0 ? "tree" : "group"}
         aria-label={depth === 0 ? "OPC tag hierarchy" : undefined}
-        aria-busy={
-          state.status === "loading" ||
-          state.status === "loading-more" ||
-          undefined
-        }
+        aria-busy={scopeLoading || undefined}
         aria-disabled={disabled || undefined}
         className="space-y-1"
       >
@@ -423,33 +552,86 @@ export function OpcTagTree({
             onRetry={onRetry}
             selectedNode={selectedNode}
             selectedNodeRef={selectedNodeRef}
-            activeNodeKey={activeKey}
+            activeNodeKey={activeNodeKey}
             onActiveNodeChange={onActiveNodeChange}
             disabled={disabled}
           />
         ))}
       </div>
-      {state.status === "error" && state.nodes.length > 0 && (
-        <TreeLevelError
-          depth={depth}
-          message={state.message}
-          onRetry={onRetry}
-          parentNodeKey={parentNodeKey}
-          disabled={disabled}
-        />
-      )}
-      {!state.complete && state.nextPageToken && (
-        <button
-          type="button"
-          disabled={disabled || state.status === "loading-more"}
-          onClick={() => onLoadMore(parentNodeKey)}
-          className="py-1 text-xs text-blue-300 hover:text-blue-200 disabled:cursor-not-allowed"
-          style={{ paddingLeft: `${depth * INDENT_PX + INDENT_PX}px` }}
-        >
-          {state.status === "loading-more" && <Spinner size="sm" />}
-          {state.status === "loading-more" ? "Loading more…" : "Load more"}
-        </button>
-      )}
+      <TreeLevelErrorMessage
+        state={state}
+        depth={depth}
+        parentNodeKey={parentNodeKey}
+        onRetry={onRetry}
+        disabled={disabled}
+      />
+      <TreeLevelLoadMore
+        state={state}
+        depth={depth}
+        parentNodeKey={parentNodeKey}
+        onLoadMore={onLoadMore}
+        disabled={disabled}
+      />
     </>
+  );
+}
+
+/** One tree level -- renders one browsed scope and recurses into whichever branch nodes are
+ * expanded. Navigation uses only the gateway's opaque `node_key`; `item_id` is kept only for
+ * reads/selections. */
+export function OpcTagTree({
+  parentNodeKey,
+  depth,
+  scopeState,
+  expanded,
+  onToggle,
+  onSelect,
+  onConfirm,
+  onLoadMore,
+  onRetry,
+  selectedNode,
+  selectedNodeRef,
+  activeNodeKey,
+  onActiveNodeChange,
+  disabled,
+}: TreeLevelProps) {
+  const state = scopeState[scopeKey(parentNodeKey)];
+  if (!state) return null;
+
+  const visibleKeys =
+    depth === 0 ? visibleTreeNodeKeys(scopeState, expanded) : undefined;
+  const activeKey = activeTreeNodeKey(
+    depth,
+    visibleKeys,
+    activeNodeKey,
+    selectedNode?.nodeKey,
+  );
+  const emptyLevel = emptyTreeLevel(
+    state,
+    depth,
+    parentNodeKey,
+    onRetry,
+    disabled,
+  );
+  if (emptyLevel) return emptyLevel;
+
+  return (
+    <TreeLevelContent
+      state={state}
+      parentNodeKey={parentNodeKey}
+      depth={depth}
+      scopeState={scopeState}
+      expanded={expanded}
+      onToggle={onToggle}
+      onSelect={onSelect}
+      onConfirm={onConfirm}
+      onLoadMore={onLoadMore}
+      onRetry={onRetry}
+      selectedNode={selectedNode}
+      selectedNodeRef={selectedNodeRef}
+      activeNodeKey={activeKey}
+      onActiveNodeChange={onActiveNodeChange}
+      disabled={disabled}
+    />
   );
 }

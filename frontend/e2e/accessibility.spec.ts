@@ -5,44 +5,29 @@ import {
   setTheme,
 } from "./support/accessibility";
 
-test("New Tune form has no WCAG accessibility violations in either theme", async ({
-  page,
-}) => {
-  await page.goto("/runs/new");
-  await expect(
-    page.getByRole("heading", { name: "New tune", exact: true }),
-  ).toBeVisible();
-  await expectAccessibilityInBothThemes(page);
-});
+const accessibleScreens = [
+  { name: "New Tune form", path: "/runs/new", heading: "New tune" },
+  { name: "History", path: "/runs", heading: "History" },
+  { name: "Templates", path: "/templates", heading: "Templates" },
+  { name: "Configuration", path: "/config", heading: "Configuration" },
+] as const;
 
-test("History has no WCAG accessibility violations in either theme", async ({
+test("key screens have no WCAG accessibility violations in either theme", async ({
   page,
 }) => {
-  await page.goto("/runs");
-  await expect(
-    page.getByRole("heading", { name: "History", exact: true }),
-  ).toBeVisible();
-  await expectAccessibilityInBothThemes(page);
-});
-
-test("Templates has no WCAG accessibility violations in either theme", async ({
-  page,
-}) => {
-  await page.goto("/templates");
-  await expect(
-    page.getByRole("heading", { name: "Templates", exact: true }),
-  ).toBeVisible();
-  await expectAccessibilityInBothThemes(page);
-});
-
-test("Configuration has no WCAG accessibility violations in either theme", async ({
-  page,
-}) => {
-  await page.goto("/config");
-  await expect(
-    page.getByRole("heading", { name: "Configuration", exact: true }),
-  ).toBeVisible();
-  await expectAccessibilityInBothThemes(page);
+  await accessibleScreens.reduce(
+    (checks, screen) =>
+      checks.then(() =>
+        test.step(screen.name, async () => {
+          await page.goto(screen.path);
+          await expect(
+            page.getByRole("heading", { name: screen.heading, exact: true }),
+          ).toBeVisible();
+          await expectAccessibilityInBothThemes(page);
+        }),
+      ),
+    Promise.resolve(),
+  );
 });
 
 test("shared confirmation dialogs trap and restore focus in both themes", async ({

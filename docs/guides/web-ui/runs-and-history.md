@@ -60,9 +60,9 @@ boundary points; exports contain the persisted sample series. Invalid results re
 with a reason and cannot be written as PID constants.
 
 The run-detail page announces outcome changes through a polite screen-reader status region
-without announcing every streamed sample. The PV/MV chart remains interactive and has a
-visible text summary derived from the plotted points, including the time span and observed
-PV/MV ranges; the summary does not add synthetic measurements.
+without announcing every streamed sample. The PV/MV chart is exposed as a figure with an
+interactive plot and a visible text summary derived from the plotted points, including the
+time span and observed PV/MV ranges; the summary does not add synthetic measurements.
 
 {/* web-ui-screenshot: full-run-complete */}
 <figure>

@@ -242,13 +242,9 @@ test.describe("post-tune PID actions", () => {
     await expect(
       page.locator('[role="status"][aria-live="polite"][aria-atomic="true"]'),
     ).toHaveText("Tune completed.");
-    const chart = page.getByRole("img", {
-      name: "Process-variable and manipulated-variable trend chart",
-    });
-    const chartCaption = page
-      .locator("figure")
-      .filter({ has: chart })
-      .locator("figcaption");
+    const chart = page.getByRole("figure");
+    const chartCaption = chart.locator("figcaption");
+    await expect(chart).toHaveCount(1);
     await expect(chart).toHaveAttribute("aria-describedby");
     await expect(chartCaption).toContainText("plotted points from");
     await expect(chartCaption).toContainText("PV ranged from");
