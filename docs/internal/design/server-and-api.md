@@ -13,7 +13,7 @@ the [design notes index](README.md) for provenance.
   no bound socket. `main.rs` is a thin bootstrap shell using `bhtune-runtime`'s shared
   configuration, database, and logging services. The CLI uses those same runtime services,
   so both adapters share configuration precedence, database bootstrap, and tracing setup
-  without depending on one another. Every JSON-facing DTO in `routes/*.rs` is its
+  without depending on one another. Every JSON-facing DTO in `routes/**/*.rs` is its
   own hand-written projection of the corresponding `bhtune-db` row type (never a `Serialize`
   impl on the row type itself), mirroring `bhtune-cli`'s own `--output json` shapes
   field-for-field so the CLI and the HTTP API describe the same run the same way. Shuts down
@@ -26,6 +26,13 @@ the [design notes index](README.md) for provenance.
   is always configured) but the only way a test can bind an ephemeral port (`BHTUNE_BIND=
 127.0.0.1:0`) and still discover which port the OS actually chose from stdout, without
   hardcoding a port that might collide with something else already listening.
+- **Large route resources are split by responsibility.** `routes/demo/`, `routes/runs/`, and
+  `routes/opc/` use `mod.rs` for router wiring and compatibility re-exports, with `handlers.rs`,
+  `dto.rs`, `validation.rs`, `helpers.rs`, and `tests.rs` holding route handlers, transport types,
+  input checks, shared route logic, and focused tests. The `runs` and `opc` modules re-export
+  handlers and utoipa-generated path items for `openapi.rs`; DTO paths such as
+  `routes::runs::StartRunRequest` and `routes::opc::OpcReadResponse` remain stable. The split
+  does not change the HTTP or OpenAPI contract.
 - **Cargo preserves hyphens literally in `CARGO_BIN_EXE_<name>` when a `[[bin]]` name equals
   the package name and contains a hyphen.** For `bhtune-server` (package name and `[[bin]]`
   name both `"bhtune-server"`), the correct lookup in a test is
@@ -40,7 +47,7 @@ the [design notes index](README.md) for provenance.
   workspace will hit the same thing.
 - **One API surface, described by OpenAPI, with no client-side transport abstraction.**
   `openapi-contract` is done on the Rust side: every DTO in `crates/bhtune-server/src/routes/
-*.rs` derives `utoipa::ToSchema` (query structs derive `utoipa::IntoParams` instead), every
+**/*.rs` derives `utoipa::ToSchema` (query structs derive `utoipa::IntoParams` instead), every
   handler carries a `#[utoipa::path(...)]` annotation, and `crates/bhtune-server/src/
 openapi.rs`'s `ApiDoc` (`#[derive(utoipa::OpenApi)]`) aggregates all of it into one OpenAPI
   3.1 document — deliberately one explicit list of `paths(...)`/`components(schemas(...))`
@@ -137,7 +144,7 @@ string` is the one shared helper every hook (`templates.ts`, `runs.ts`) uses to 
 
 ## `server-start-tune-api`: starting and cancelling a tune over HTTP
 
-`crates/bhtune-server/src/routes/runs.rs` adds `POST /api/runs` (start) and
+`crates/bhtune-server/src/routes/runs/handlers.rs` implements `POST /api/runs` (start) and
 `POST /api/runs/{id}/cancel` (cancel), closing the gap `frontend-screens` surfaced: every
 remaining GUI screen needs a way to actually start a tune, and until now `bhtune-server`'s API
 was read-only plus template CRUD-minus-update.
