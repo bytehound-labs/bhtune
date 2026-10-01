@@ -1,4 +1,4 @@
-use super::*;
+use super::{ApiError, SearchIndexControlAction, SearchMatchMode};
 
 pub(super) fn default_index_search_max_results() -> u32 {
     bhtune_driver::DEFAULT_INDEX_SEARCH_MAX_RESULTS

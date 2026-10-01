@@ -1,8 +1,17 @@
+use super::super::helpers::{
+    browse_node_kind_name, degraded_warning, json_search_match, organization_name, source_name,
+};
+use super::super::{
+    GatewayFeatureCompatibilityResponse, GatewayProtocolRangeResponse, OpcBrowseNodeKind,
+};
 use super::*;
 use crate::test_support::mock_bridge::{MockBridgeService, start_mock_server};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use bhtune_driver::BrowseNode;
+use bhtune_driver::{
+    BrowseNode, BrowseNodeKind, BrowseSource, DriverResult, NamespaceOrganization, SearchEvent,
+    SearchMatch,
+};
 use opcda_bridge_proto::bridge::{
     BrowseNode as ProtoBrowseNode, BrowseNodeKind as ProtoBrowseNodeKind, BrowsePage,
     BrowseSource as ProtoBrowseSource, IndexSchedulerDiagnostics as ProtoIndexSchedulerDiagnostics,

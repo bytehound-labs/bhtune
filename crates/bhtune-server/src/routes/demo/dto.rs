@@ -1,4 +1,4 @@
-use super::*;
+use bhtune_db::models::{DemoSessionRow, TuneOutcome};
 use serde::Serialize;
 
 pub(super) struct DemoIdentity {

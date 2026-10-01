@@ -1,11 +1,22 @@
-use super::super::helpers::{cookie_token, token_hash, trusted_proxy};
+use super::super::FORWARDED_CLIENT_IP_HEADER;
+use super::super::helpers::{cookie_token, session_cookie_header, token_hash, trusted_proxy};
 use super::*;
 use axum::body::{Body, to_bytes};
 use axum::extract::ConnectInfo;
 use axum::http::Request;
-use bhtune_core::{ControllerType, LoopConfig, LoopTags, ProcessType, Tick};
+use bhtune_core::{ControllerDirection, ControllerType, LoopConfig, LoopTags, ProcessType, Tick};
 use bhtune_db::models::{DcsTemplateRow, SampleQuality, TemplateOrigin};
-use bhtune_runtime::config::DEMO_TEMPLATE_NAME;
+use bhtune_runtime::config::{
+    DEMO_COOKIE_NAME, DEMO_CYCLES_COUNT_DEFAULT, DEMO_CYCLES_COUNT_MAX, DEMO_CYCLES_COUNT_MIN,
+    DEMO_CYCLES_SKIP_DEFAULT, DEMO_CYCLES_SKIP_MAX, DEMO_CYCLES_SKIP_MIN,
+    DEMO_NOISE_PROTECTION_SECS_DEFAULT, DEMO_NOISE_PROTECTION_SECS_MAX,
+    DEMO_NOISE_PROTECTION_SECS_MIN, DEMO_RANGE_HIGH, DEMO_RANGE_LOW, DEMO_RELAY_AMP_DEFAULT,
+    DEMO_RELAY_AMP_MAX, DEMO_RELAY_AMP_MIN, DEMO_SIM_DEAD_TIME_DEFAULT, DEMO_SIM_GAIN_DEFAULT,
+    DEMO_SIM_GAIN_MAX, DEMO_SIM_GAIN_MIN, DEMO_SIM_INITIAL_VALUE_DEFAULT, DEMO_SIM_NOISE_DEFAULT,
+    DEMO_SIM_SEED_DEFAULT, DEMO_SIM_SEED_MAX, DEMO_SIM_TAU_DEFAULT, DEMO_TAG_NAME,
+    DEMO_TEMPLATE_NAME, DemoPolicy, ServerMode,
+};
+use std::net::SocketAddr;
 use tower::ServiceExt;
 
 const DEMO_ORIGIN: &str = "https://demo.test";
