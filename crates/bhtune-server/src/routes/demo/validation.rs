@@ -15,6 +15,7 @@ use super::{
 
 pub(super) fn validate_demo_request(request: &StartRunRequest) -> Result<(), ApiError> {
     validate_demo_identity(request)?;
+    request.clone().into_validated_tune_request()?;
     validate_demo_scalar_ranges(request)?;
     validate_demo_gain(request)?;
     validate_demo_discrete_fields(request)?;

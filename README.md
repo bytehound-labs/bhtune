@@ -7,8 +7,8 @@ Feedback Tests (MRFT) and calculates PID constants for operator review.
 
 - **Runs on Linux, macOS, and Windows.** BHTune itself has no Windows or COM requirement.
 - **No proprietary dependencies.** The project's dependencies are open-source.
-- **CLI and web GUI.** Both use the same application runtime, tuning engine, and SQLite
-  database.
+- **CLI and web GUI.** Both use the same application runtime, tuning engine, SQLite database,
+  simulator defaults, and common tune-request validation.
 - **Plain SQLite.** Run history and templates are stored in an inspectable database.
 - **OPC DA through [opcda-bridge](https://github.com/bytehound-labs/opcda-bridge).** A separate
   Windows-side gateway handles OPC DA access; BHTune runs on any supported platform.

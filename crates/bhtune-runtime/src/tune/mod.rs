@@ -32,7 +32,11 @@ pub use outcome::{
 };
 pub use prepare::{PreparedTune, drive, drive_report, prepare, prepare_owned};
 pub use quality::sample_quality_from_driver;
-pub use request::{DriverKind, TuneRequest, UnsupportedDriverKind};
+pub use request::{
+    DEFAULT_SIM_DEAD_TIME, DEFAULT_SIM_GAIN, DEFAULT_SIM_INITIAL_VALUE, DEFAULT_SIM_NOISE,
+    DEFAULT_SIM_SEED, DEFAULT_SIM_TAU, DriverKind, TuneRequest, TuneRequestValidationError,
+    UnsupportedDriverKind, ValidatedTuneRequest, validate_finite_f32, validate_positive_u32,
+};
 pub use writeback::{
     PidWriteOutcome, WriteBackHandler, WriteBackSelection, WriteBackSkipReason,
     pid_parameters_for_result, write_pid_values,

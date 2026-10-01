@@ -33,7 +33,7 @@ use super::quality::{
     read_batch_f32, read_batch_raw, read_f32, resolve_direction_from_batch, resolve_f32_from_batch,
     write_raw,
 };
-use super::request::{DriverKind, TuneRequest};
+use super::request::{DriverKind, TuneRequest, ValidatedTuneRequest};
 use super::restore::{
     RestoreAttempt, attempt_restore_with_actuation_with_timing, record_restore_status_best_effort,
     restore_best_effort_then_propagate_with_timing,
@@ -45,7 +45,7 @@ use super::timing::{
 use super::writeback::{WriteBackHandler, maybe_write_back};
 
 /// Everything [`prepare`] resolves before a tune's long-running polling phase can start:
-/// the already-validated/defaulted [`TuneRequest`], the resolved template and derived tags, a
+/// the already-validated [`ValidatedTuneRequest`], the resolved template and derived tags, a
 /// connected driver, the built [`LoopConfig`], the run's start time, and the response level
 /// (if any) to write back at the end -- plus the `tune_runs` row's assigned id.
 ///
@@ -70,13 +70,18 @@ pub struct PreparedTune {
 }
 /// Prepare a simulator tune and bind its history to a demo session before the background
 /// execution is started. Live OPC DA preparation is intentionally rejected by this helper.
-pub async fn prepare_owned(
+pub async fn prepare_owned<R>(
     pool: &SqlitePool,
-    args: TuneRequest,
+    args: R,
     app_config: &crate::config::BhtuneConfig,
     demo_session_id: i64,
-) -> anyhow::Result<PreparedTune> {
-    if args.driver != DriverKind::Simulator {
+) -> anyhow::Result<PreparedTune>
+where
+    R: TryInto<ValidatedTuneRequest>,
+    R::Error: std::error::Error + Send + Sync + 'static,
+{
+    let args = args.try_into()?;
+    if args.as_request().driver != DriverKind::Simulator {
         anyhow::bail!("demo sessions may only start simulator runs");
     }
     prepare_internal(pool, args, app_config, Some(demo_session_id)).await
@@ -136,19 +141,25 @@ pub(super) struct RequestSnapshot<'a> {
 /// `LoopConfig`/`LoopTags` construction, driver connection, and the `tune_runs` insert all
 /// run in exactly the same order against exactly the same inputs. Extracting this into its
 /// own function changes nothing about what runs or when -- only who else can call it.
-pub async fn prepare(
+pub async fn prepare<R>(
     pool: &SqlitePool,
-    args: TuneRequest,
+    args: R,
     app_config: &crate::config::BhtuneConfig,
-) -> anyhow::Result<PreparedTune> {
+) -> anyhow::Result<PreparedTune>
+where
+    R: TryInto<ValidatedTuneRequest>,
+    R::Error: std::error::Error + Send + Sync + 'static,
+{
+    let args = args.try_into()?;
     prepare_internal(pool, args, app_config, None).await
 }
 pub(super) async fn prepare_internal(
     pool: &SqlitePool,
-    mut args: TuneRequest,
+    args: ValidatedTuneRequest,
     app_config: &crate::config::BhtuneConfig,
     demo_session_id: Option<i64>,
 ) -> anyhow::Result<PreparedTune> {
+    let mut args = args.into_request();
     // Fails before any driver/database I/O at all: an unattended write-back must be an
     // explicit, deliberate choice, not something a stray `--write-pid` without `--yes` can
     // trigger by accident.
@@ -163,9 +174,6 @@ pub(super) async fn prepare_internal(
         args.driver == DriverKind::Opcda,
     )?
     .into();
-    if let Some(tag_overrides) = &args.tag_overrides {
-        tag_overrides.validate()?;
-    }
     let allow_uncertain_quality = app_config.allow_uncertain_quality;
 
     let db_driver = args.driver.into();

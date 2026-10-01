@@ -39,6 +39,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - Browse uses gateway-owned sessions, opaque node keys, and page tokens. Never split `.`, `!`, or `/` to infer hierarchy. Indexed search is optional. Simulator and replay browse/search return `Unsupported`.
 - `opcda-bridge` stays a crates.io dependency local to `bhtune-driver`. Published and packaged builds must not use a git dependency or a path override.
 - `bhtune-runtime` owns application services shared by the CLI and server. Keep direct `clap`, HTTP-framework, and OpenAPI dependencies and types in their respective adapters; transport crates may appear transitively through the OPC DA gRPC client.
+- CLI `TuneArgs` and HTTP `StartRunRequest` convert to runtime-owned `ValidatedTuneRequest` before preparation. Keep shared simulator defaults and common finite/positive/tag-override checks in the runtime; Demo-specific restrictions remain an additional server policy.
 - SQLite is plain and unencrypted. Flatten stable filterable fields. Keep nested evolving values in `json_valid` JSON. `tune_results` and `tune_writes` stay separate tables.
 - Enum columns reuse serde snake_case. Matching `CHECK` constraints use the same literals.
 - Startup re-upserts `builtin` and `catalog` templates and never overwrites a row with a different `origin`. `user` rows are never auto-edited.

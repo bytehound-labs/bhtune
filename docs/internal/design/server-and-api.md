@@ -164,15 +164,18 @@ an already-finished or unknown run is not an error (`204`/`404` respectively, ma
 CLI's own idempotent-cancel precedent). Tune tasks may run concurrently; PID write/revert
 operations reserve the registry exclusively so they cannot overlap a tune or another write.
 
-**`StartRunRequest` maps to the transport-neutral `TuneRequest`**, with
-`#[serde(default = "...")]` helpers reproducing the CLI's clap defaults exactly
-(`sim_gain`/`sim_tau`/`sim_dead_time`/`poll_interval_ms`/etc.), so a client that only cares
-about a few fields gets the same behavior as `bhtune tune`'s bare flags. The HTTP adapter's
-`into_tune_request()` explicitly checks finite floats and positive integers because JSON
-requests do not pass through clap's `value_parser`s. Those checks return a `400` naming the
-offending field. The runtime's `LoopConfig::validate()` remains authoritative for shared
-domain rules (`relay_amp`, `cycles_count` after defaulting, and `mrft_delay`), avoiding
-divergent copies of those checks.
+**`StartRunRequest` and CLI `TuneArgs` convert to the runtime's `ValidatedTuneRequest`** before
+preparation. Runtime constants supply the shared simulator defaults; process-dependent cycle
+and noise-protection defaults and operational timing are resolved by the same runtime path.
+The runtime request validator owns common finite-float, optional-range, positive supplied-cycle,
+and tag-override checks. The CLI's clap parsers call the same finite and positive-value helpers
+to preserve early parse errors; the HTTP adapter maps those shared validation errors to `400`
+responses naming the offending field. The runtime's `LoopConfig::validate()` remains authoritative
+for domain rules such as relay-amplitude bounds and defaults applied to omitted cycle counts,
+avoiding divergent copies of those checks.
+
+Demo requests pass common validation before the Demo-only range policy is applied. The narrower
+Demo identity, range, and quota limits do not change the Full-mode tune request contract.
 
 **Exclusive-operation conflict detection.** `start_run` performs an optimistic pre-check for
 an exclusive PID write/revert reservation to avoid a wasted `prepare()` call (a real driver

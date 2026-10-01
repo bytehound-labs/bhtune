@@ -11,9 +11,10 @@ configuration, database bootstrap, driver setup, and tune orchestration. Data co
 the same SQLite database through `bhtune_runtime::db::open`, which also seeds the four
 built-in templates, and share one dispatcher in `lib.rs::run_with_cli`.
 
-- **`bhtune tune`** — runs a full MRFT test against a named template: resolves the template,
-  converts `TuneArgs` to the runtime's `TuneRequest`, then calls runtime `prepare()` and
-  `drive()` services. The runtime resolves the template and tag set (`build_loop_tags`),
+- **`bhtune tune`** — runs a full MRFT test against a named template: converts `TuneArgs` to
+  the runtime's `ValidatedTuneRequest`, then calls runtime `prepare()` and `drive()` services.
+  Simulator defaults and common finite/positive checks are runtime-owned and shared with HTTP
+  start requests. The runtime resolves the template and tag set (`build_loop_tags`),
   selects a driver (`bhtune_runtime::driver::build`, `--driver opcda|simulator`), transitions
   the loop to Manual, polls at the global `[tuning].poll_interval_ms` while driving a real
   `MrftEngine`, persists every tick

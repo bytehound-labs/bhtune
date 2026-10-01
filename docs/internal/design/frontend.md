@@ -66,11 +66,11 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
   parameters, and Write-back-on-completion in a single page, since all of it feeds one
   `POST /api/runs` body anyway; the plan's own stated principle for this phase is
   "equivalent capability plus real validation", not matching the legacy widget-for-widget
-  layout. Every default (`sim_gain`, `poll_interval_ms`, `timeout_secs`, etc.) matches
-  `StartRunRequest`'s server-side `#[serde(default = ...)]` values or `bhtune-cli`'s clap
-  defaults exactly, and `buildRequest()` mirrors the server's own `into_tune_args()`
-  pre-flight checks client-side for fast feedback (the server still re-validates
-  everything regardless). `frontend/src/api/runs.ts` gained `useStartRun`/`useCancelRun`
+  layout. The UI mirrors the simulator defaults defined by runtime constants shared by CLI
+  and HTTP; operational timing comes from the shared runtime configuration. `buildRequest()`
+  mirrors common input checks client-side for fast feedback, while the server converts
+  `StartRunRequest` to the runtime's `ValidatedTuneRequest` before preparation.
+  `frontend/src/api/runs.ts` gained `useStartRun`/`useCancelRun`
   mutations; `useRun` gained `refetchInterval: 1000ms while outcome === "running"` as the
   initial interim substitute before the SSE stream was added
   (`frontend-live-stream`) — `RunDetailPage` now shows a live-progress banner (latest

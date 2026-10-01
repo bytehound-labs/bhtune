@@ -57,7 +57,7 @@ where
         )));
     }
 
-    let request = request.into_tune_request()?;
+    let request = request.into_validated_tune_request()?;
 
     // `prepare()`'s own doc comment: its failures (bad template name, `write_pid` without
     // `yes`, an unreachable driver) are "exactly the kind of problem an HTTP client

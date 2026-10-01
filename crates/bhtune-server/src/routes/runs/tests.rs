@@ -5,8 +5,11 @@ use super::super::helpers::{
 use super::*;
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
+use bhtune_cli::args::{Cli as CliArgs, Command as CliCommand};
 use bhtune_core::{ControllerType, LoopConfig, ProcessType, ResponseLevel};
 use bhtune_db::models::{Pagination, TuneDriver, TuneOutcome, TuneRunFilter, TuneWriteRow};
+use bhtune_runtime::tune::ValidatedTuneRequest;
+use clap::Parser;
 use tokio::sync::oneshot;
 use tower::ServiceExt;
 
@@ -36,6 +39,56 @@ fn fast_simulator_request_json() -> serde_json::Value {
     })
 }
 
+fn minimal_http_start_request() -> serde_json::Value {
+    serde_json::json!({
+        "tagname": "Unit1.LIC101.PV",
+        "template": "Yokogawa CentumVP",
+        "process_type": "flow",
+        "controller_type": "pi",
+        "relay_amp": 10.0,
+        "driver": "simulator",
+    })
+}
+
+fn cli_validated_request(
+    driver: &str,
+    extra_args: &[&str],
+) -> Result<ValidatedTuneRequest, String> {
+    let mut args = vec![
+        "bhtune",
+        "tune",
+        "--tagname",
+        "Unit1.LIC101.PV",
+        "--template",
+        "Yokogawa CentumVP",
+        "--process-type",
+        "flow",
+        "--controller-type",
+        "pi",
+        "--relay-amp",
+        "10",
+        "--driver",
+        driver,
+    ];
+    args.extend_from_slice(extra_args);
+    let cli = CliArgs::try_parse_from(args).map_err(|error| error.to_string())?;
+    let CliCommand::Tune(args) = cli.command else {
+        return Err("expected the tune command".to_owned());
+    };
+    ValidatedTuneRequest::try_from(args).map_err(|error| error.to_string())
+}
+
+fn http_validated_request(value: serde_json::Value) -> Result<ValidatedTuneRequest, String> {
+    let request: StartRunRequest =
+        serde_json::from_value(value).map_err(|error| error.to_string())?;
+    request
+        .into_validated_tune_request()
+        .map_err(|error| match error {
+            ApiError::BadRequest(message) => message,
+            other => format!("{other:?}"),
+        })
+}
+
 async fn post_json(
     app: axum::Router,
     path: &str,
@@ -54,6 +107,132 @@ async fn post_json(
 async fn body_json(response: axum::http::Response<Body>) -> serde_json::Value {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+#[test]
+fn cli_and_http_start_requests_share_simulator_defaults() {
+    let cli = cli_validated_request("simulator", &[]).unwrap();
+    let http = http_validated_request(minimal_http_start_request()).unwrap();
+    assert_eq!(cli.as_request(), http.as_request());
+
+    let request = cli.as_request();
+    assert_eq!(request.sim_gain, 1.0);
+    assert_eq!(request.sim_tau, 2.0);
+    assert_eq!(request.sim_dead_time, 5.0);
+    assert_eq!(request.sim_noise, 0.0);
+    assert_eq!(request.sim_seed, 0);
+    assert_eq!(request.sim_initial_pv, 50.0);
+    assert_eq!(request.sim_initial_mv, 50.0);
+    assert_eq!(request.cycles_skip, None);
+    assert_eq!(request.cycles_count, None);
+    assert_eq!(request.noise_protection_secs, None);
+}
+
+#[test]
+fn equivalent_cli_and_http_inputs_produce_the_same_validated_request() {
+    let cli = cli_validated_request(
+        "simulator",
+        &[
+            "--cycles-skip",
+            "1",
+            "--cycles-count",
+            "3",
+            "--noise-protection-secs",
+            "2",
+            "--bridge-host",
+            "127.0.0.1:7600",
+            "--server",
+            "MockServer",
+            "--sim-gain",
+            "0.75",
+            "--sim-tau",
+            "1.5",
+            "--sim-dead-time",
+            "0.25",
+            "--sim-noise",
+            "0.05",
+            "--sim-seed",
+            "42",
+            "--sim-initial-pv",
+            "45",
+            "--sim-initial-mv",
+            "35",
+            "--pv-range-high",
+            "100",
+            "--pv-range-low",
+            "0",
+            "--mv-range-high",
+            "100",
+            "--mv-range-low",
+            "0",
+            "--direction",
+            "reverse",
+            "--notes",
+            "scheduled",
+            "--yes",
+            "--write-pid",
+            "moderate",
+        ],
+    )
+    .unwrap();
+    let mut http_request = minimal_http_start_request();
+    http_request["cycles_skip"] = serde_json::json!(1);
+    http_request["cycles_count"] = serde_json::json!(3);
+    http_request["noise_protection_secs"] = serde_json::json!(2);
+    http_request["bridge_host"] = serde_json::json!("127.0.0.1:7600");
+    http_request["server"] = serde_json::json!("MockServer");
+    http_request["sim_gain"] = serde_json::json!(0.75);
+    http_request["sim_tau"] = serde_json::json!(1.5);
+    http_request["sim_dead_time"] = serde_json::json!(0.25);
+    http_request["sim_noise"] = serde_json::json!(0.05);
+    http_request["sim_seed"] = serde_json::json!(42);
+    http_request["sim_initial_pv"] = serde_json::json!(45.0);
+    http_request["sim_initial_mv"] = serde_json::json!(35.0);
+    http_request["pv_range_high"] = serde_json::json!(100.0);
+    http_request["pv_range_low"] = serde_json::json!(0.0);
+    http_request["mv_range_high"] = serde_json::json!(100.0);
+    http_request["mv_range_low"] = serde_json::json!(0.0);
+    http_request["direction"] = serde_json::json!("reverse");
+    http_request["notes"] = serde_json::json!("scheduled");
+    http_request["yes"] = serde_json::json!(true);
+    http_request["write_pid"] = serde_json::json!("moderate");
+    let http = http_validated_request(http_request).unwrap();
+
+    assert_eq!(cli.as_request(), http.as_request());
+}
+
+#[test]
+fn cli_and_http_reject_the_same_invalid_values() {
+    let cli_error = cli_validated_request("simulator", &["--sim-gain", "1e40"]).unwrap_err();
+    let mut http_request = minimal_http_start_request();
+    http_request["sim_gain"] = serde_json::json!(1e40);
+    let http_error = http_validated_request(http_request).unwrap_err();
+    assert!(cli_error.contains("finite"), "{cli_error}");
+    assert!(http_error.contains("finite"), "{http_error}");
+
+    let cli_error = cli_validated_request("simulator", &["--cycles-count", "0"]).unwrap_err();
+    let mut http_request = minimal_http_start_request();
+    http_request["cycles_count"] = serde_json::json!(0);
+    let http_error = http_validated_request(http_request).unwrap_err();
+    assert!(cli_error.contains("at least 1"), "{cli_error}");
+    assert!(http_error.contains("at least 1"), "{http_error}");
+
+    let cli_error = cli_validated_request("simulator", &["--pv-range-high", "1e40"]).unwrap_err();
+    let mut http_request = minimal_http_start_request();
+    http_request["pv_range_high"] = serde_json::json!(1e40);
+    let http_error = http_validated_request(http_request).unwrap_err();
+    assert!(cli_error.contains("finite"), "{cli_error}");
+    assert!(http_error.contains("pv_range_high"), "{http_error}");
+}
+
+#[test]
+fn cli_and_http_reject_replay_as_a_tune_driver() {
+    let cli_error = cli_validated_request("replay", &[]).unwrap_err();
+    let mut http_request = minimal_http_start_request();
+    http_request["driver"] = serde_json::json!("replay");
+    let http_error = http_validated_request(http_request).unwrap_err();
+    assert!(cli_error.contains("replay"), "{cli_error}");
+    assert!(http_error.contains("replay"), "{http_error}");
 }
 
 /// Polls `GET /api/runs/{id}` (via the merged `history` router) until `outcome` is no
@@ -475,10 +654,10 @@ fn legacy_http_timing_fields_are_ignored() {
 
     let parsed: StartRunRequest = serde_json::from_value(request).unwrap();
     let args = parsed
-        .into_tune_request()
+        .into_validated_tune_request()
         .expect("legacy fields must not affect request parsing");
-    assert_eq!(args.template, "Yokogawa CentumVP");
-    assert_eq!(args.relay_amp, 10.0);
+    assert_eq!(args.as_request().template, "Yokogawa CentumVP");
+    assert_eq!(args.as_request().relay_amp, 10.0);
 }
 
 #[tokio::test]
@@ -511,11 +690,37 @@ async fn invalid_tag_override_returns_400_before_starting_a_run() {
 }
 
 #[tokio::test]
+async fn a_zero_cycles_count_is_rejected_before_creating_a_run() {
+    let state = crate::test_support::in_memory_state().await;
+    let mut request = fast_simulator_request_json();
+    request["cycles_count"] = serde_json::json!(0);
+
+    let response = post_json(crate::build_router(state.clone()), "/api/runs", request).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("at least 1")
+    );
+    assert!(
+        TuneRunRow::list(
+            &state.pool,
+            &TuneRunFilter::default(),
+            Pagination::default(),
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn a_json_number_that_overflows_f32_to_infinity_is_rejected() {
     // `1e40` is well-formed JSON (an ordinary, if large, decimal literal) but silently
     // saturates to `f32::INFINITY` on conversion -- serde_json never errors on this, so
-    // this proves `into_tune_request`'s manual finiteness check is a real gap being closed,
-    // not redundant with what axum's `Json` extractor already rejects.
+    // this proves runtime request validation is not redundant with what axum's `Json`
+    // extractor already rejects.
     let app = crate::build_router(crate::test_support::in_memory_state().await);
     let mut request = fast_simulator_request_json();
     request["sim_gain"] = serde_json::json!(1e40);
@@ -526,9 +731,7 @@ async fn a_json_number_that_overflows_f32_to_infinity_is_rejected() {
     assert!(error["error"].as_str().unwrap().contains("sim_gain"));
 }
 
-/// Covers `require_finite_if_some`'s `Some` arm specifically -- the sibling test above
-/// only exercises `require_finite` directly (via `sim_gain`, a plain non-optional
-/// `f32`), never a genuinely optional range field.
+/// Covers common validation of a genuinely optional range field.
 #[tokio::test]
 async fn a_non_finite_optional_range_field_is_also_rejected() {
     let app = crate::build_router(crate::test_support::in_memory_state().await);
@@ -541,12 +744,8 @@ async fn a_non_finite_optional_range_field_is_also_rejected() {
     assert!(error["error"].as_str().unwrap().contains("pv_range_high"));
 }
 
-/// Covers `require_finite_if_some`'s `None` arm -- every other test in this module sets
-/// `pv_range_high` explicitly, so omitting it entirely (deserializing to `None`, since
-/// `Option<f32>` fields default to `None` when missing with no `#[serde(default)]`
-/// needed) is the only way to reach it. `prepare()` still rejects the request -- a fixed
-/// PV range is mandatory for `driver: "simulator"` -- so this asserts `400`, just from a
-/// different validator further down the same handler.
+/// Missing optional ranges pass common validation; `prepare()` then enforces the simulator's
+/// requirement that fixed PV and MV ranges be supplied.
 #[tokio::test]
 async fn an_omitted_optional_range_field_passes_validation_but_prepare_still_requires_it() {
     let app = crate::build_router(crate::test_support::in_memory_state().await);
@@ -564,9 +763,8 @@ async fn an_omitted_optional_range_field_passes_validation_but_prepare_still_req
     );
 }
 
-/// Omits every field with a `#[serde(default = "...")]` custom default function. Every
-/// other test in this module sets these explicitly, which left the simulator defaults
-/// themselves untested. The timing values are global configuration, not request defaults.
+/// Omits all simulator fields with request defaults. The timing values are global
+/// configuration, not request defaults.
 #[tokio::test]
 async fn omitted_fields_with_custom_defaults_fall_back_to_the_cli_defaults() {
     let state = crate::test_support::in_memory_state().await;
@@ -582,6 +780,8 @@ async fn omitted_fields_with_custom_defaults_fall_back_to_the_cli_defaults() {
     assert_eq!(parsed.sim_gain, 1.0);
     assert_eq!(parsed.sim_tau, 2.0);
     assert_eq!(parsed.sim_dead_time, 5.0);
+    assert_eq!(parsed.sim_noise, 0.0);
+    assert_eq!(parsed.sim_seed, 0);
     assert_eq!(parsed.sim_initial_pv, 50.0);
     assert_eq!(parsed.sim_initial_mv, 50.0);
 

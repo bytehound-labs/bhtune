@@ -339,6 +339,7 @@ pub(crate) async fn start_run(
     // directly to `StartRunRequest` would lose the distinction between an omitted forbidden
     // field and an explicitly supplied `null`/`false` field.
     let request = parse_demo_request(value)?;
+    let tune_request = request.into_validated_tune_request()?;
     let _request_permit = ordinary_request_permit(&state)?;
 
     let identity = identify_without_lookup(&headers)?;
@@ -405,12 +406,11 @@ pub(crate) async fn start_run(
                 ));
             }
 
-            let args = request.into_tune_request()?;
             let mut config = state.config_snapshot()?;
             config.tuning.mrft_delay_secs = Some(0);
             config.tuning.poll_interval_ms = Some(state.demo_policy.poll_interval_ms);
             config.tuning.timeout_secs = Some(state.demo_policy.run_timeout_secs);
-            let prepared = prepare_owned(&state.pool, args, &config, session.id)
+            let prepared = prepare_owned(&state.pool, tune_request, &config, session.id)
                 .await
                 .map_err(|error| prepare_error(error, &state))?;
             Ok::<_, ApiError>((session.id, prepared))
