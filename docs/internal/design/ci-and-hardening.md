@@ -63,7 +63,7 @@ Pulled into `bhtune` from `opcda-bridge`'s example:
   The original package job still surfaced a real bug before this distinction mattered —
   every workspace-internal path dependency lacked a `version` requirement, which `cargo
 package` refuses even to assemble. Giving `bhtune-core`/`bhtune-driver`/`bhtune-db`/
-  `bhtune-cli` `{ path, version }` entries in `[workspace.dependencies]` and switching every
+`bhtune` `{ path, version }` entries in `[workspace.dependencies]` and switching every
   consumer to `.workspace = true` remains required.
 - **`concurrency` groups, `permissions: contents: read`, and `--locked` everywhere** across
   `checks.yml`/`coverage.yml`/`e2e.yml`.

@@ -20,7 +20,7 @@ v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only repl
 | `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                    |
 | `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                   |
 | `bhtune-runtime`      | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
-| `bhtune-cli`          | `bhtune` clap adapter, terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                                                                 |
+| `bhtune`              | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`. |
 | `bhtune-server`       | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                      |
 | `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                    |
 | `frontend/`           | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                                                                               |
@@ -63,7 +63,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - MSRV is Rust 1.94 (`rust-version` in the root `Cargo.toml`). Edition is 2024.
 - Lint policy is `[workspace.lints]` and the "Lint policy" section in [`CONTRIBUTING.md`](CONTRIBUTING.md). Do not weaken a lint, add `NOSONAR`, or accept a finding only to clear a dashboard.
 - Do not add an unused path dependency to reserve a crate graph. Promote a dependency to `[workspace.dependencies]` when a second crate needs it.
-- `bhtune-cli` and `bhtune-server` are peer adapters over `bhtune-runtime`; neither adapter may become the other adapter's application-service dependency.
+- `bhtune` and `bhtune-server` are peer adapters over `bhtune-runtime`; neither adapter may become the other adapter's application-service dependency.
 - Local browser testing binds `bhtune-server` to `0.0.0.0:8787` with an isolated temporary database, never the user's normal database. Rebuild and restart after a source or frontend change. Do not test a stale copied binary. Demo access off loopback requires the exact configured HTTPS origin.
 - Export affected rows before a destructive database change.
 - A non-interactive `gh` call does not source the zsh token wrapper. This repository uses the personal identity. Never print a token.
@@ -90,7 +90,7 @@ When the producing definitions change, regenerate and commit the output:
 
 ```sh
 cargo run -p bhtune-server --example gen_openapi
-cargo run -p bhtune-cli --example gen_docs --features schemars
+cargo run -p bhtune --example gen_docs --features schemars
 pnpm --filter bhtune-frontend run generate:api
 ```
 

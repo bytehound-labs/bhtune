@@ -351,7 +351,7 @@ overridden — see [Configuration precedence](../reference/config.md)):
 | Windows      | `%APPDATA%\bhtune\`                                                |
 
 (BHTune resolves this the same way on macOS as Linux — a plain XDG-style fallback, not
-`~/Library/Application Support/` — see `default_db_path_from` in `bhtune-cli`'s `config.rs` if
+`~/Library/Application Support/` — see `default_db_path_from` in the `bhtune` package's `config.rs` if
 you need the exact precedence.)
 
 This holds `bhtune.db` (the SQLite database — every template, loop, tune run, sample, result,

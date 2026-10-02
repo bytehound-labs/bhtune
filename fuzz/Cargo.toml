@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-bhtune-cli = { path = "../crates/bhtune-cli" }
+bhtune_cli = { package = "bhtune", path = "../crates/bhtune-cli" }
 bhtune-core = { path = "../crates/bhtune-core" }
 bhtune-driver = { path = "../crates/bhtune-driver" }
 bhtune-runtime = { path = "../crates/bhtune-runtime" }

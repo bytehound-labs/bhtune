@@ -120,7 +120,7 @@ async fn dcs_template_get_rejects_versions_json_with_the_wrong_shape() {
 }
 
 /// Distinct from `dcs_template_round_trips_every_built_in_template`, which only ever seeds
-/// (and therefore only ever exercises) `origin = 'builtin'`: nothing in `bhtune-cli` produces
+/// (and therefore only ever exercises) `origin = 'builtin'`: nothing in the `bhtune` CLI produces
 /// `TemplateOrigin::Catalog` yet (`template-user-catalog` is what will), so this is the only
 /// place any test proves `dcs_templates.origin` round-trips *every* variant the `CHECK`
 /// constraint allows, not just the one variant real callers currently use.

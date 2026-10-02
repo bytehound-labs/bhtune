@@ -122,7 +122,7 @@ covered somewhere below with an explicit replicate-or-fix decision, tagged with 
    platform-standard data directory** — never an implicit hardcoded path or "wherever the process
    happened to start". Legacy: `TuningConstantsExport()` wrote to a hardcoded developer path
    (`C:\Dropbox\Auto-Tuner Proj\...`); `LogLoopLocking()` wrote to the current working directory
-   rather than the log directory. Fixed: `bhtune-cli`'s `export`/`history export` commands take an
+   rather than the log directory. Fixed: the `bhtune` CLI's `export`/`history export` commands take an
    explicit `--output <path>` (or write structured data to stdout for piping), and shared
    logging resolves its directory through the normal config precedence, defaulting to a
    documented platform-standard data directory — never an implicit/hardcoded path.

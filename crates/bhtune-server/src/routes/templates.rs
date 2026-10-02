@@ -1,7 +1,7 @@
 //! Template CRUD routes: `GET /api/templates`, `GET /api/templates/{name}`,
 //! `POST /api/templates`, `PUT /api/templates/{name}`, `DELETE /api/templates/{name}`.
 //!
-//! Mirrors `bhtune-cli`'s `commands::template` behavior exactly (see `import_one` there):
+//! Mirrors the `bhtune` CLI's `commands::template` behavior exactly (see `import_one` there):
 //! validate, then check for a name collision, then insert. HTTP-created templates are
 //! always [`TemplateOrigin::User`] -- the same origin the CLI's single-template `import`
 //! path assigns, as opposed to the auto-loaded `Builtin`/`Catalog` origins, which only ever
@@ -23,7 +23,7 @@ use crate::state::AppState;
 
 /// The HTTP-facing shape of a stored template: the caller-supplied [`DcsTemplate`] fields
 /// flattened alongside the database-assigned `id`/`origin`/timestamps. Per this workspace's
-/// established DTO-decoupling convention (see `bhtune-cli`'s `commands::history` module doc
+/// established DTO-decoupling convention (see the `bhtune` CLI's `commands::history` module doc
 /// comments), [`DcsTemplateRow`] itself deliberately does not derive `Serialize` -- every
 /// JSON-facing consumer builds its own projection rather than the DB row shape leaking
 /// straight onto the wire.

@@ -167,7 +167,7 @@ impl DcsTemplateRow {
 
     /// Deletes the row at `id`. Returns `Ok(true)` if a row existed and was removed,
     /// `Ok(false)` if no row with that id existed (not an error -- deciding whether "nothing
-    /// to delete" should itself be an error is the caller's call; `bhtune-cli`'s `template
+    /// to delete" should itself be an error is the caller's call; the `bhtune` CLI's `template
     /// delete` already resolves `id` from a name via [`Self::get_by_name`] and produces its
     /// own "no template named" error before ever calling this).
     ///

@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 
 /// Every way a request can fail, already carrying the HTTP status it maps to -- handlers
 /// return `Result<_, ApiError>` and let `?` do the conversion (see the `From` impls below),
-/// the same "one error enum, converted at the boundary" shape `bhtune-cli`'s commands use
+/// the same "one error enum, converted at the boundary" shape the `bhtune` CLI's commands use
 /// with `anyhow::Result`.
 #[derive(Debug)]
 pub enum ApiError {

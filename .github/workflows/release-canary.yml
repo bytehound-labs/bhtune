@@ -163,7 +163,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bhtune-logs"
           "$extract/bhtune" \
             --config "$RUNNER_TEMP/bhtune.toml" \
-            --db "$RUNNER_TEMP/bhtune-cli.db" \
+            --db "$RUNNER_TEMP/bhtune.db" \
             simulate \
             --cycles-skip 0 \
             --cycles-count 1 \
@@ -241,7 +241,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bhtune-logs"
           "$extract/bhtune" \
             --config "$RUNNER_TEMP/bhtune.toml" \
-            --db "$RUNNER_TEMP/bhtune-cli.db" \
+            --db "$RUNNER_TEMP/bhtune.db" \
             simulate \
             --cycles-skip 0 \
             --cycles-count 1 \
@@ -310,7 +310,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP "bhtune-logs") | Out-Null
           & $bhtune `
             --config $config `
-            --db (Join-Path $env:RUNNER_TEMP "bhtune-cli.db") `
+            --db (Join-Path $env:RUNNER_TEMP "bhtune.db") `
             simulate `
             --cycles-skip 0 `
             --cycles-count 1 `

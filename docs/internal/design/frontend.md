@@ -52,7 +52,7 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
   10, not this slice's. `frontend/src/api/runs.ts` (`useRuns`/`useRun`) mirrors the existing
   `templates.ts` hook shape exactly. Everything here was verified against a real running
   `bhtune-server`, not just typechecked: curl against every template CRUD status code
-  (200/201/204/400/404/409) and a real `bhtune-cli simulate` run rendered through
+  (200/201/204/400/404/409) and a real `bhtune simulate` run rendered through
   `chromium --headless=new --dump-dom` (an already-present system binary, not a new project
   dependency — the permanent Playwright harness is the separate, not-yet-started
   `e2e-playwright` phase) confirmed real data renders on all six routes. The remaining
@@ -93,7 +93,7 @@ src/api/schema.d.ts`, mirroring the Rust `gen_openapi` pattern exactly) would sh
      by using `step={1}` for both; a numeric field's default should never itself be
      off-step.
   2. **The simulator driver actually requires five fields, not one.**
-     `bhtune-cli`'s `build_loop_tags` (`commands/tune.rs`) hard-requires
+     the `bhtune` CLI's `build_loop_tags` (`commands/tune.rs`) hard-requires
      `pv_range_high`, `pv_range_low`, `mv_range_high`, `mv_range_low`, **and**
      `direction` whenever `driver: "simulator"` — the frontend had only validated and
      defaulted `pv_range_high`, so a first-time visitor's default simulator run 400'd
@@ -322,7 +322,7 @@ The same graceful helper now also powers a new `RunDetailResponse.original_reque
 specific_ run's own request, independent of whether it's the newest one), added specifically to
 power "Duplicate this run" without a second network round-trip. On the frontend, `NewRunPage.tsx`
 seeds its form once from `useLastRunRequest()` on a plain visit (a `formFromRequest` inverse of the
-existing `buildRequest`, informed by tracing `bhtune-cli`'s `RequestSnapshot`: fields with a
+existing `buildRequest`, informed by tracing the `bhtune` package's `RequestSnapshot`: fields with a
 CLI/serde default are always concrete in a real stored request and are copied straight across, while
 the genuinely-optional fields — cycles, ranges, direction, connection overrides, name — are shown
 _blank_ when absent rather than substituting today's hardcoded default, since an absence there

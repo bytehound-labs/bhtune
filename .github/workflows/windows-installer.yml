@@ -141,9 +141,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
-          $package = @($metadata.packages | Where-Object { $_.name -eq 'bhtune-cli' })[0]
+          $package = @($metadata.packages | Where-Object { $_.name -eq 'bhtune' })[0]
           if ($null -eq $package) {
-            throw 'bhtune-cli package was not found in cargo metadata'
+            throw 'bhtune package was not found in cargo metadata'
           }
           $workspaceVersion = [string]$package.version
           if ($env:MODE -eq 'release') {
@@ -435,7 +435,7 @@ jobs:
             Copy-Item -LiteralPath (Join-Path $sourcePayload.FullName 'README.md') -Destination $payload
           } else {
             pnpm --filter bhtune-frontend run build
-            cargo build --release --locked -p bhtune-cli -p bhtune-server
+            cargo build --release --locked -p bhtune -p bhtune-server
             Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'target\release\bhtune.exe') -Destination $payload
             Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'target\release\bhtune-server.exe') -Destination $payload
             Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'LICENSE') -Destination $payload

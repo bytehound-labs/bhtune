@@ -20,7 +20,7 @@ regenerate-and-diff idiom (see "Key architectural decisions" above), the pattern
 own doc comment named this example as the intended reuse of:
 
 ```sh
-cargo run -p bhtune-cli --example gen_docs --features schemars
+cargo run -p bhtune --example gen_docs --features schemars
 ```
 
 - **`docs/reference/cli.md`** — the full CLI reference as one Markdown document, via
@@ -61,7 +61,7 @@ decisions" above), not a plain dev-dependency: an optional regular `[dependencie
 `#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]` alongside the existing
 `#[cfg_attr(feature = "utoipa", ...)]` on `DcsTemplate` and the four `pid_config` enums it
 embeds (`ProportionalType`/`IntegralType`/`DerivativeType`/`TimeUnit`), and a `schemars`
-feature forwarding from `bhtune-cli` to `bhtune-core/schemars` and
+feature forwarding from `bhtune` to `bhtune-core/schemars` and
 `bhtune-runtime/schemars`. `BhtuneConfig`/`LogConfig` are owned by `bhtune-runtime` and get
 the same `cfg_attr` treatment there. `clap-markdown`/
 `clap_mangen`/`clap_complete`, by contrast, are used only by `gen_docs.rs` itself, never by
@@ -79,7 +79,7 @@ drift step, same shape:
 ```yaml
 - name: Regenerate CLI docs and check for drift
   run: |
-    cargo run -p bhtune-cli --example gen_docs --features schemars
+    cargo run -p bhtune --example gen_docs --features schemars
     git diff --exit-code -- docs/reference/ man/ completions/
 ```
 
@@ -244,7 +244,7 @@ containing "/api/", so the page says so explicitly rather than leaving it to be 
 `cargo doc`; it built no Rust code before this. The push-trigger `paths:` filter was widened
 to include `crates/**` and root `Cargo.toml`, since rustdoc content now depends on source
 changes, not just `docs/`/`website/` edits. `--all-features` (matching `checks.yml`'s
-clippy/test convention) ensures `bhtune-cli`'s optional `schemars` feature — which gates the
+clippy/test convention) ensures `bhtune`'s optional `schemars` feature — which gates the
 JSON-Schema-deriving types `docs-generated-cli`'s `gen_docs` example needs — is included in
 the published docs.
 

@@ -5,7 +5,7 @@ check:
     just deny
     cargo run --locked -p bhtune-server --example gen_openapi
     LEFTHOOK=0 git diff --exit-code -- openapi.json
-    cargo run --locked -p bhtune-cli --example gen_docs --features schemars
+    cargo run --locked -p bhtune --example gen_docs --features schemars
     LEFTHOOK=0 git diff --exit-code -- docs/reference/ man/ completions/
     cargo build --workspace --locked
 
@@ -27,7 +27,7 @@ cov:
 
 gen:
     cargo run --locked -p bhtune-server --example gen_openapi
-    cargo run --locked -p bhtune-cli --example gen_docs --features schemars
+    cargo run --locked -p bhtune --example gen_docs --features schemars
     pnpm --filter bhtune-frontend run generate:api
 
 fe:

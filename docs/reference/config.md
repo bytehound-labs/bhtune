@@ -1,6 +1,6 @@
 # Configuration reference
 
-Generated from the real `BhtuneConfig`/`DcsTemplate` Rust types (`schemars`) -- never hand-edit this file, run `cargo run -p bhtune-cli --example gen_docs --features schemars` instead. See `docs/dcs-templates.md` for a worked, prose explanation of the template fields; this page is the exhaustive machine-checked contract both formats must satisfy.
+Generated from the real `BhtuneConfig`/`DcsTemplate` Rust types (`schemars`) -- never hand-edit this file, run `cargo run -p bhtune --example gen_docs --features schemars` instead. See `docs/dcs-templates.md` for a worked, prose explanation of the template fields; this page is the exhaustive machine-checked contract both formats must satisfy.
 
 ## `bhtune.toml`
 

@@ -17,7 +17,7 @@ use super::dcs_templates::TemplateOrigin;
 /// A `bhtune-db`-local mirror of [`bhtune_driver::Quality`], not a reuse of it directly:
 /// `bhtune-db` deliberately doesn't depend on `bhtune-driver` (a leaf I/O-adapter crate with
 /// a much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business
-/// in the persistence crate just to name one three-variant enum), so `bhtune-cli`, which
+/// in the persistence crate just to name one three-variant enum), so the `bhtune` package, which
 /// already depends on both, is the one place that converts between them. This mirrors
 /// [`TemplateOrigin`]'s own precedent: a small, persistence-local enum rather than a second
 /// dependency edge.

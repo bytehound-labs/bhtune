@@ -35,7 +35,7 @@ spawned subprocess's stderr never contains the product-output string, and a manu
 compiled binary with `--log-level debug` against the simulator driver confirmed the log file
 captured every instrumented line while stderr stayed silent (no attached console).
 
-**Initialized once by each adapter.** `bhtune-cli`'s `lib.rs::run()` loads the config, resolves
+**Initialized once by each adapter.** The `bhtune` package's `lib.rs::run()` loads the config, resolves
 `default_log_dir`, calls `logging::resolve_log_settings`/`logging::init_tracing`, holds the
 returned `WorkerGuard` for the rest of the process's life (dropping it early would silently
 truncate buffered lines not yet flushed on exit), then delegates to `run_with_cli`. This

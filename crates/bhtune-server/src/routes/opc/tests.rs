@@ -732,7 +732,7 @@ async fn read_returns_the_value_quality_and_timestamp_from_a_mock_gateway() {
         // Constructed directly (rather than via `good_reading`, which hardcodes an
         // `"ignored"` tag_id -- fine for `runs.rs`'s tests, which don't echo it back, but
         // this handler does) so the mocked response's tag_id matches what was requested,
-        // matching `bhtune-cli`'s own `read_prints_values_from_a_mock_gateway` precedent.
+        // matching the `bhtune` CLI's own `read_prints_values_from_a_mock_gateway` precedent.
         read_response: ReadResponse {
             values: vec![ProtoTagValue {
                 tag_id: "Unit1.LIC101.PV".to_string(),
@@ -891,7 +891,7 @@ async fn read_surfaces_uncertain_and_bad_quality_without_failing() {
 }
 
 /// Direct unit test of the shared timeout wrapper (rather than driving a full HTTP
-/// handler through a real stalled gateway call) -- mirrors `bhtune-cli`'s own
+/// handler through a real stalled gateway call) -- mirrors the `bhtune` CLI's own
 /// `bounded_driver_call_returns_timed_out_when_the_driver_call_stalls` test precedent:
 /// `start_paused = true` lets `tokio::time::timeout`'s deadline elapse in virtual rather
 /// than real time, so this proves the elapsed-deadline branch without an actual 30s wait.

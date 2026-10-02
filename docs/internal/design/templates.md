@@ -18,7 +18,7 @@ and get a Rust PR reviewed.
   here: `mode_manual_value`/`mode_auto_value`/`controller_action_direct_value` are, for some
   templates, literally the _strings_ `"true"`/`"false"`/`"0"` — YAML would silently coerce
   unquoted forms of these to bool/int on exactly the fields that decide whether a loop gets
-  put into Manual. `toml` was already a dependency (`bhtune-cli`'s single-template import/
+  put into Manual. `toml` was already a dependency (the `bhtune` CLI's single-template import/
   export); the mainstream YAML crates are unusable under this project's `cargo deny` gate
   (`serde_yaml` is deprecated/archived, its `serde_yml` fork carries RUSTSEC-2025-0068). JSON
   import/export stays supported for interop; a `toml` export format is done (`template-cli`,
@@ -36,7 +36,7 @@ Vec<DcsTemplate> }` wrapper (TOML's array-of-tables idiom, one `[[template]]` bl
   semantically incomplete contribution (e.g. a mode suffix with no manual/auto value) is
   rejected at parse time, not mid-tune. Parsing a `&'static str` embedded at compile time is
   not I/O, so `bhtune-core`'s "no I/O, no clock, no async" purity rule is preserved — all
-  _file_ reading stays in `bhtune-cli`, which reuses this exact function to load a user
+  _file_ reading stays in the `bhtune` CLI, which reuses this exact function to load a user
   catalog from disk (`template-user-catalog`, done — see below).
 - **`DcsTemplate::validate()`** mirrors the `LoopConfig::validate` precedent from
   `cli-safety`: non-empty `name` (trimmed); non-empty `process_variable_suffix`; non-empty
@@ -78,7 +78,7 @@ field }`, `MissingModeValue { name, field }`, `MissingModeAttributeProgramValue 
 "R6"]` (field-confirmed), Honeywell Experion `["R400", "R410", "R430"]`, Schneider Modicon
   `["Unity Pro V8.0", "Unity Pro V8.1", "Unity Pro V11.0"]`, Allen-Bradley PlantPAx `["3.0",
 "3.5", "4.0"]`.
-- **`toml` promoted to `[workspace.dependencies]`** now that both `bhtune-cli` (single-
+- **`toml` promoted to `[workspace.dependencies]`** now that both `bhtune` (single-
   template JSON/TOML import/export) and `bhtune-core` (the embedded catalog) consume it, per
   the root `Cargo.toml`'s own documented convention of promoting on a second consumer.
 - **`bhtune-db` fallout, resolved by `template-provenance`.** `DcsTemplate` is `bhtune-db`'s
@@ -125,7 +125,7 @@ INTEGER`. `bhtune_db::models::TemplateOrigin` (`Builtin`/`Catalog`/`User`) — p
   was broadened to mention it).
 - **`seed_builtin_templates` generalized into `seed_templates(pool, templates, origin, now)`**,
   with `seed_builtin_templates` kept as a thin wrapper (`seed_templates(pool,
-built_in_templates(), TemplateOrigin::Builtin, now)`) rather than renamed, since `bhtune-cli`
+built_in_templates(), TemplateOrigin::Builtin, now)`) rather than renamed, since the `bhtune` CLI
   already has established callers of the original name. `template-user-catalog` (see below)
   is the first real caller of `seed_templates` directly, with `TemplateOrigin::Catalog`. The
   `SkippedUserOwned` outcome generalizes the same way the boolean did: a row exists but its
@@ -146,7 +146,7 @@ built_in_templates(), TemplateOrigin::Builtin, now)`) rather than renamed, since
 
 `template-catalog`/`template-provenance` (above) made the catalog format and the database's
 three-way `origin` real, but nothing yet populated `TemplateOrigin::Catalog` with real data —
-a site's own `templates.toml` was still not read by anything. `bhtune-cli` now auto-loads one
+a site's own `templates.toml` was still not read by anything. The `bhtune` CLI now auto-loads one
 on every startup, mirroring `bhtune.toml`'s own `cli-config` precedence chain exactly rather
 than inventing a new pattern.
 
@@ -177,7 +177,7 @@ templates.toml` on Windows — since both are per-user hand-edited settings file
 - **Reuses `bhtune_core::template::parse_catalog` directly** — the same function
   `template-catalog` built for the embedded built-in catalog already parses the `[[template]]`
   TOML shape _and_ calls `.validate()` on every template, so a single call handles both
-  "shape" and "content" validation with no new parsing code in `bhtune-cli` at all.
+  "shape" and "content" validation with no new parsing code in the `bhtune` CLI at all.
 - **`db::open`'s signature grew a `user_templates: Option<Vec<DcsTemplate>>` parameter.** It
   seeds the built-ins first (as before), then — only if `Some` — seeds the user catalog via
   `bhtune_db::seed_templates(&pool, templates, TemplateOrigin::Catalog, now)`, the first real
@@ -256,7 +256,7 @@ template])` — a single-template file is just a one-entry catalog, so it round-
   rather than going through `parse_catalog`, so — unlike `import_catalog`, which inherits
   validation for free from `parse_catalog` — it never got the validation `template-catalog`
   added to `DcsTemplate` in the first place; this closes that gap explicitly.
-- **`bhtune-cli` gained a `sqlx` dev-dependency** (not a production one — this crate's
+- **The `bhtune` package gained a `sqlx` dev-dependency** (not a production one — this crate's
   non-test code still only ever talks to `bhtune-db`'s repository API) purely so the
   `delete`-still-referenced test can insert a raw `loops` row via SQL, mirroring the exact
   pattern `bhtune-db`'s own `tests/schema.rs` already uses for the identical FK check; there

@@ -223,7 +223,7 @@ export type FormState = {
 };
 
 /**
- * Every default here matches `StartRunRequest`'s server defaults or `bhtune-cli`'s
+ * Every default here matches `StartRunRequest`'s server defaults or the `bhtune` CLI's
  * simulator defaults, field-for-field.
  */
 export const initialForm: FormState = {

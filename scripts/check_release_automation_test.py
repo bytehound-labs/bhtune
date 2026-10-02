@@ -34,6 +34,8 @@ PUBLISHED_AT = "published_at"
 INTRO_DOC = "docs/intro.md"
 INTRO_BODY = "---\nsidebar_position: 1\n---\n# Intro\n"
 UPDATED_INTRO_BODY = INTRO_BODY + "\nUpdated.\n"
+# Workspace source-directory names; the CLI source stays under `bhtune-cli` while the
+# Cargo package name is `bhtune`.
 WORKSPACE_CRATES = (
     "bhtune-core",
     "bhtune-driver",
@@ -105,8 +107,9 @@ def workspace_files(version=FIRST_RELEASE):
         )
     }
     for name in WORKSPACE_CRATES:
+        package_name = "bhtune" if name == "bhtune-cli" else name
         files[f"crates/{name}/Cargo.toml"] = (
-            f'[package]\nname = "{name}"\nversion.workspace = true\n'
+            f'[package]\nname = "{package_name}"\nversion.workspace = true\n'
         )
     return files
 
@@ -133,7 +136,7 @@ class ReleasePlzConfigTests(unittest.TestCase):
         config = validate_config(self.root / RELEASE_PLZ_CONFIG)
         self.assertFalse(config["workspace"]["publish"])
         self.assertFalse(config["workspace"]["release"])
-        self.assertEqual(config["package"][0]["name"], "bhtune-cli")
+        self.assertEqual(config["package"][0]["name"], "bhtune")
 
     def test_non_anchor_package_override_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

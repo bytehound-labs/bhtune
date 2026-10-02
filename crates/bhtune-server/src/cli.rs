@@ -2,7 +2,7 @@
 //! subcommands (`install`/`uninstall`/`start`/`stop`/`status`) that manage this binary's
 //! registration as a platform service.
 //!
-//! Kept deliberately tiny -- unlike `bhtune-cli`, this binary is still meant to be run mostly
+//! Kept deliberately tiny -- unlike the `bhtune` CLI, this binary is still meant to be run mostly
 //! unconfigured (env vars / `bhtune.toml` cover everything else, see `crate::run`). `--config`
 //! is the one flag worth adding now: it lets `install` bake an explicit, stable config path
 //! into the service's registered launch command (see `crate::service::service_launch_arguments`),

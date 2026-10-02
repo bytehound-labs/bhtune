@@ -20,11 +20,11 @@ WORKSPACE_PACKAGES = {
     "bhtune-core",
     "bhtune-driver",
     "bhtune-db",
-    "bhtune-cli",
+    "bhtune",
     "bhtune-runtime",
     "bhtune-server",
 }
-ANCHOR_PACKAGE = "bhtune-cli"
+ANCHOR_PACKAGE = "bhtune"
 ANCHOR_CONTEXT = f"package.{ANCHOR_PACKAGE}"
 RELEASE_COMMIT_PATTERN = (
     r"^(feat|fix|perf|refactor|docs|test|build|ci|revert)"
@@ -102,7 +102,7 @@ def _package_map(packages: object) -> dict[str, dict]:
 def _validate_anchor(package_map: dict[str, dict], workspace: dict) -> None:
     if set(package_map) != {ANCHOR_PACKAGE}:
         raise ReleasePlzConfigError(
-            "only bhtune-cli may override the workspace release configuration"
+            "only bhtune may override the workspace release configuration"
         )
 
     anchor = package_map[ANCHOR_PACKAGE]
@@ -123,7 +123,7 @@ def _validate_anchor(package_map: dict[str, dict], workspace: dict) -> None:
     _require(anchor, "changelog_path", "CHANGELOG.md", ANCHOR_CONTEXT)
 
     included = anchor.get("changelog_include")
-    if set(included or ()) != WORKSPACE_PACKAGES - {"bhtune-cli"}:
+    if set(included or ()) != WORKSPACE_PACKAGES - {"bhtune"}:
         raise ReleasePlzConfigError(
             f"{ANCHOR_CONTEXT}.changelog_include must contain every other product crate"
         )

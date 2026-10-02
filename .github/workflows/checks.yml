@@ -187,7 +187,7 @@ jobs:
 
       - name: Regenerate CLI docs and check for drift
         run: |
-          cargo run --locked -p bhtune-cli --example gen_docs --features schemars
+          cargo run --locked -p bhtune --example gen_docs --features schemars
           git diff --exit-code -- docs/reference/ man/ completions/
 
       - name: Build workspace
@@ -231,7 +231,7 @@ jobs:
 
       - name: Regenerate CLI docs and check for drift
         run: |
-          cargo run --locked -p bhtune-cli --example gen_docs --features schemars
+          cargo run --locked -p bhtune --example gen_docs --features schemars
           git diff --exit-code -- docs/reference/ man/ completions/
 
   package:

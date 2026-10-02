@@ -21,7 +21,7 @@ mock-driver = []
 
 [dependencies]
 # Same pins `bhtune-driver` uses for its smoke-test mock. This crate must not depend on
-# `bhtune-driver`, `bhtune-cli`, `bhtune-server`, or `bhtune-core`.
+# `bhtune-driver`, `bhtune`, `bhtune-server`, or `bhtune-core`.
 opcda-bridge-proto = "0.5"
 tokio = { version = "1", features = ["net", "rt", "sync"] }
 tokio-stream = "0.1"

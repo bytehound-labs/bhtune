@@ -5,7 +5,8 @@ the [design notes index](README.md) for provenance.
 
 ## CLI reference (`cli-commands`)
 
-`bhtune-cli` (binary name `bhtune`) is the `clap` adapter over `bhtune-runtime`. It owns
+The `bhtune` package exposes the `bhtune_cli` Rust library and `bhtune` binary. The binary
+is the `clap` adapter over `bhtune-runtime`; it owns
 command parsing, terminal prompts, exit codes, and command output; the runtime owns shared
 configuration, database bootstrap, driver setup, and tune orchestration. Data commands use
 the same SQLite database through `bhtune_runtime::db::open`, which also seeds the four

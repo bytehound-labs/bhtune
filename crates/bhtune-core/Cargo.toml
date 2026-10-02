@@ -24,7 +24,7 @@ serde = { version = "1", features = ["derive"] }
 # Parses the embedded DCS/PLC template catalog (`crates/bhtune-core/templates/builtin.toml`,
 # `template-catalog`) via `toml::from_str` on an `include_str!`-embedded `&'static str` --
 # not I/O, so this doesn't violate this crate's "no I/O" rule (see the description above);
-# all real file reading (the user catalog, imports) stays in bhtune-cli.
+# all real file reading (the user catalog, imports) stays in the `bhtune` package.
 toml.workspace = true
 # Optional, feature-gated: derives `utoipa::ToSchema` on the types `bhtune-server`'s HTTP
 # DTOs embed directly (enums like `ProcessType`, and structs like `LoopConfig`/`DcsTemplate`/
@@ -39,10 +39,10 @@ toml.workspace = true
 # doesn't need to (and doesn't) depend on `bhtune-db`.
 utoipa = { workspace = true, optional = true, features = ["chrono"] }
 # Optional, feature-gated, same rationale as `utoipa` immediately above: derives
-# `schemars::JsonSchema` on `DcsTemplate` (and the types it embeds) so `bhtune-cli`'s
+# `schemars::JsonSchema` on `DcsTemplate` (and the types it embeds) so the `bhtune` package's
 # `docs-generated-cli` codegen (`examples/gen_docs.rs`) can emit a real JSON Schema for the
 # DCS/PLC template catalog shape instead of hand-written prose that silently drifts. Off by
-# default; only `bhtune-cli`'s `schemars` feature enables it (`bhtune-core/schemars`).
+# default; only `bhtune`'s `schemars` feature enables it (`bhtune-core/schemars`).
 schemars = { version = "1", optional = true, features = ["derive"] }
 
 [features]

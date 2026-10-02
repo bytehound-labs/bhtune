@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
+# These are source-directory names, not Cargo package names. The CLI package is `bhtune`,
+# while its source directory remains `crates/bhtune-cli`.
 WORKSPACE_MEMBERS = (
     "bhtune-core",
     "bhtune-driver",

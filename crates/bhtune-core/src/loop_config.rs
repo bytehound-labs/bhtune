@@ -342,7 +342,7 @@ mod tests {
     }
 
     /// `LoopConfigError` must be usable as a trait object / via `?` in a `Result<_,
-    /// anyhow::Error>` call site (`bhtune-cli`'s `build_loop_config`, in particular), which
+    /// anyhow::Error>` call site (the `bhtune` CLI's `build_loop_config`, in particular), which
     /// requires a real `std::error::Error` impl, not just `Display`.
     #[test]
     fn loop_config_error_is_a_std_error() {

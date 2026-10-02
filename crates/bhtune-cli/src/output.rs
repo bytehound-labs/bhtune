@@ -4,7 +4,7 @@
 //!
 //! Mirrors `opcda-bridge-client`'s `output.rs` in spirit (a small `OutputFormat` enum plus a
 //! `format_error` helper), but deliberately without its generic `render<T: Tabled +
-//! Serialize>` function: bhtune-cli's commands print bespoke, multi-section reports (`history
+//! Serialize>` function: the `bhtune` CLI's commands print bespoke, multi-section reports (`history
 //! show`'s run detail, `tune`'s calculated-PID listing), not flat single-row-type tables, so
 //! there is no one shared row shape to hand to a generic renderer. Each command instead
 //! builds its own JSON-serializable summary type and calls `serde_json::to_string_pretty`
