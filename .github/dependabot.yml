@@ -40,6 +40,23 @@ updates:
       - dependencies
       - frontend
 
+  # Dockerfile base images; routine update PRs stay suppressed, while security updates remain enabled.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      docker-routine-updates:
+        update-types:
+          - "minor"
+          - "patch"
+        patterns:
+          - "*"
+    labels:
+      - dependencies
+      - docker
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

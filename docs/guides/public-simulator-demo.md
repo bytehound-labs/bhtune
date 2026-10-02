@@ -163,7 +163,8 @@ Use an immutable container digest for deployment rather than a mutable tag. Keep
 previous-image reference and a timestamped database backup so a failed migration or local
 health check can restore both the executable and its data. A public ingress failure with a
 healthy local backend is a proxy or network incident, not a reason to discard healthy
-application state.
+application state. The image's built-in health check is a loopback HTTP liveness probe; it does
+not replace database integrity, migration-preservation, or public-ingress checks.
 
 ### Hosted image publication and deployment handoff
 

@@ -1,6 +1,5 @@
-//! `bhtune-server`'s CLI surface: a `--config` flag plus five subcommands
-//! (`install`/`uninstall`/`start`/`stop`/`status`) that manage this binary's
-//! registration as a platform service.
+//! `bhtune-server`'s CLI surface: a `--config` flag, one liveness probe, and service-management
+//! subcommands.
 //!
 //! Kept deliberately tiny -- unlike the `bhtune` CLI, this binary is still meant to be run mostly
 //! unconfigured (env vars / `bhtune.toml` cover everything else, see `crate::run`). `--config`
@@ -12,7 +11,7 @@
 //! up while testing from their own terminal session -- see
 //! `docs/getting-started/installation.md`'s "Run as a background service" section.
 //!
-//! `ServiceCommand` is parsed identically on every platform (so `--help` output and argument
+//! `ServerCommand` is parsed identically on every platform (so `--help` output and argument
 //! validation are covered by CI's Windows *and* Linux jobs alike), even though only Windows
 //! can actually act on it -- see `crate::service`'s module doc comment for how the two other
 //! platforms respond instead.
@@ -21,9 +20,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// Manage `bhtune-server`'s registration as a platform service.
+/// A command accepted by the `bhtune-server` binary.
 #[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServiceCommand {
+pub enum ServerCommand {
+    /// Probe the local HTTP liveness endpoint without starting server services.
+    Healthcheck,
     /// Register bhtune-server as a Windows service (does not start it).
     Install,
     /// Stop (if running) and remove the registered service.
@@ -45,7 +46,7 @@ pub enum ServiceCommand {
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Option<ServiceCommand>,
+    pub command: Option<ServerCommand>,
 
     /// Path to a TOML config file (default: platform-specific, see `bhtune_runtime::config`).
     /// Baked into the registered launch command by `install` -- see this module's doc
@@ -73,17 +74,30 @@ mod tests {
     }
 
     #[test]
-    fn every_service_subcommand_parses() {
+    fn every_server_subcommand_parses() {
         for (arg, expected) in [
-            ("install", ServiceCommand::Install),
-            ("uninstall", ServiceCommand::Uninstall),
-            ("start", ServiceCommand::Start),
-            ("stop", ServiceCommand::Stop),
-            ("status", ServiceCommand::Status),
+            ("healthcheck", ServerCommand::Healthcheck),
+            ("install", ServerCommand::Install),
+            ("uninstall", ServerCommand::Uninstall),
+            ("start", ServerCommand::Start),
+            ("stop", ServerCommand::Stop),
+            ("status", ServerCommand::Status),
         ] {
             let cli = Cli::parse_from(["bhtune-server", arg]);
             assert_eq!(cli.command, Some(expected));
         }
+    }
+
+    #[test]
+    fn healthcheck_accepts_the_global_config_flag_after_the_subcommand() {
+        let cli = Cli::parse_from([
+            "bhtune-server",
+            "healthcheck",
+            "--config",
+            "/etc/bhtune/bhtune.toml",
+        ]);
+        assert_eq!(cli.command, Some(ServerCommand::Healthcheck));
+        assert_eq!(cli.config, Some(PathBuf::from("/etc/bhtune/bhtune.toml")));
     }
 
     #[test]
@@ -97,7 +111,7 @@ mod tests {
             "--config",
             "C:\\ProgramData\\bhtune\\bhtune.toml",
         ]);
-        assert_eq!(cli.command, Some(ServiceCommand::Install));
+        assert_eq!(cli.command, Some(ServerCommand::Install));
         assert_eq!(
             cli.config,
             Some(PathBuf::from("C:\\ProgramData\\bhtune\\bhtune.toml"))

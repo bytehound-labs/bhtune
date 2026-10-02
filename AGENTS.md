@@ -20,7 +20,7 @@ v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only repl
 | `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                    |
 | `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                   |
 | `bhtune-runtime`      | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
-| `bhtune`              | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`. |
+| `bhtune`              | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                   |
 | `bhtune-server`       | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                      |
 | `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                    |
 | `frontend/`           | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                                                                               |
@@ -182,6 +182,8 @@ Run detail can export CSV or JSON and can delete a terminal run. Delete checks t
 ## Web app architecture
 
 One HTTP API, described by OpenAPI, consumed by one generated client. There is no second transport and no swappable client interface. The release binary embeds `frontend/dist/`. `index.html` is `Cache-Control: no-cache`; content-hashed assets are immutable. A dotted missing asset is 404. A client route falls back to `index.html`. Unknown `/api/*` returns JSON 404, not the SPA shell. Live samples use server-sent events, not WebSocket. `build.rs` creates `frontend/dist/` before the embed derive runs, so a missing directory at compile time cannot permanently reject every asset.
+
+`bhtune-server healthcheck` is a read-only liveness probe dispatched before server startup, SCM dispatch, logging, and database bootstrap. It sends one raw HTTP/1.1 request to loopback `/api/health`, using the port from `BHTUNE_BIND > config file > default`, with a three-second overall deadline. The Docker image uses this command for its built-in health status. The probe does not check database readiness or live-plant safety.
 
 Write and revert use one styled review modal and name the loop, tags, and exact values. Calculated results move above the trend once they exist. Sampling diagnostics start collapsed. The normal page does not render the raw actuation table.
 

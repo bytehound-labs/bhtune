@@ -10,7 +10,8 @@
 # simply lack container runtimes -- see docs/internal/design/packaging-and-release.md.
 
 # ---- Frontend --------------------------------------------------------------------------
-FROM node:22-slim AS frontend
+# Pin the multi-platform OCI index so BuildKit selects the matching verified child manifest.
+FROM node:22-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c AS frontend
 WORKDIR /src
 RUN corepack enable
 
@@ -21,7 +22,8 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY frontend/package.json frontend/package.json
 COPY website/package.json website/package.json
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=bhtune-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm install --frozen-lockfile
 
 # frontend/src/api/schema.d.ts is committed and drift-checked in CI (see openapi-contract),
 # so this build needs no openapi.json input -- unlike `pnpm run generate:api`, `run build`
@@ -57,18 +59,26 @@ COPY crates/ crates/
 # embed step, so the copy order here is load-bearing, not just convenient.
 COPY --from=frontend /src/frontend/dist/ frontend/dist/
 
-RUN cargo build --release --locked -p bhtune -p bhtune-server
+ARG TARGETARCH
+RUN --mount=type=cache,id=bhtune-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=bhtune-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=bhtune-cargo-target-${TARGETARCH},target=/src/target,sharing=locked \
+    cargo build --release --locked -p bhtune -p bhtune-server \
+    && mkdir -p /out \
+    && install -m 0755 /src/target/release/bhtune /out/bhtune \
+    && install -m 0755 /src/target/release/bhtune-server /out/bhtune-server
 
 # ---- Runtime ----------------------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+# This is also pinned to the multi-platform OCI index, not an architecture-specific manifest.
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --home-dir /var/lib/bhtune --shell /usr/sbin/nologin bhtune
 
-COPY --from=builder /src/target/release/bhtune /usr/local/bin/bhtune
-COPY --from=builder /src/target/release/bhtune-server /usr/local/bin/bhtune-server
+COPY --from=builder /out/bhtune /usr/local/bin/bhtune
+COPY --from=builder /out/bhtune-server /usr/local/bin/bhtune-server
 
 # BHTUNE_DB: both binaries' shared `CLI flag > env var > TOML config > platform default`
 # config precedence (see AGENTS.md's "Config precedence") -- points them at the persistent
@@ -89,4 +99,6 @@ VOLUME ["/var/lib/bhtune"]
 WORKDIR /var/lib/bhtune
 USER bhtune
 EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["/usr/local/bin/bhtune-server", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/bhtune-server"]

@@ -249,6 +249,8 @@ docker run -d --name bhtune \
   -v bhtune-data:/var/lib/bhtune \
   ghcr.io/bytehound-labs/bhtune:edge
 curl --fail http://127.0.0.1:8787/api/health
+docker exec bhtune bhtune-server healthcheck
+docker inspect --format='{{.State.Health.Status}}' bhtune
 docker exec bhtune bhtune simulate --output json
 ```
 
@@ -256,7 +258,10 @@ The image bundles both binaries, sets `BHTUNE_BIND=0.0.0.0:8787` and
 `BHTUNE_DB=/var/lib/bhtune/bhtune.db`, and requires explicit host port publication. Full-mode
 browser mutations still need a trusted network; `BHTUNE_ORIGIN` is needed when a reverse proxy
 rewrites `Host` or a single external origin must be pinned. This is CSRF protection, not
-authentication.
+authentication. Docker's built-in health check runs `bhtune-server healthcheck`, which sends a
+bounded request to the loopback `/api/health` endpoint using the resolved bind port. It checks
+HTTP liveness only, not database readiness, migrations, proxy reachability, or tuning safety.
+Docker may report `starting` until its first scheduled probe completes.
 
 To upgrade, pull the new image, stop/remove only the container, and reuse the same volume:
 
