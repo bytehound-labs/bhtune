@@ -3,10 +3,13 @@ import { expect, type Page } from "@playwright/test";
 
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
-export async function expectNoAccessibilityViolations(page: Page) {
-  const { violations } = await new AxeBuilder({ page })
-    .withTags(WCAG_TAGS)
-    .analyze();
+export async function expectNoAccessibilityViolations(
+  page: Page,
+  scope?: string,
+) {
+  let axe = new AxeBuilder({ page }).withTags(WCAG_TAGS);
+  if (scope) axe = axe.include(scope);
+  const { violations } = await axe.analyze();
   const details = violations
     .map(
       (violation) =>
@@ -42,9 +45,12 @@ export async function setTheme(page: Page, theme: "dark" | "light") {
   await expect(root).toHaveAttribute("data-theme", theme);
 }
 
-export async function expectAccessibilityInBothThemes(page: Page) {
+export async function expectAccessibilityInBothThemes(
+  page: Page,
+  scope?: string,
+) {
   await setTheme(page, "dark");
-  await expectNoAccessibilityViolations(page);
+  await expectNoAccessibilityViolations(page, scope);
   await setTheme(page, "light");
-  await expectNoAccessibilityViolations(page);
+  await expectNoAccessibilityViolations(page, scope);
 }

@@ -1110,4 +1110,48 @@ test.describe("Demo mode contract", () => {
     await expect(page.getByRole("link", { name: "Templates" })).toBeVisible();
     await expect(page.getByRole("link", { name: "Config" })).toBeVisible();
   });
+
+  test("removes Full-only history URL filters while retaining Demo pagination", async ({
+    page,
+  }) => {
+    await installDemoApi(page.context(), 8001);
+    const historyRequests: URL[] = [];
+    await page.route("**/api/runs?*", async (route) => {
+      const url = new URL(route.request().url());
+      historyRequests.push(url);
+      await json(route, {
+        runs: [
+          {
+            id: 8002,
+            tag_name: "Simulator demo",
+            process_type: "flow",
+            driver: "simulator",
+            outcome: "completed",
+            started_at: "2026-09-01T12:00:00Z",
+            notes: null,
+          },
+        ],
+        returned: 1,
+        total: 60,
+      });
+    });
+
+    await page.goto("/runs?process_type=flow&driver=opcda&offset=50");
+
+    await expect(page).toHaveURL(/\/runs\?offset=50$/);
+    await expect(page.getByText("Showing 51–51 of 60")).toBeVisible();
+    await expect(page.getByLabel("Filter by process type")).toHaveCount(0);
+    await expect(page.getByLabel("Filter by driver")).toHaveCount(0);
+    await expect(
+      page.getByText(
+        "History filters are unavailable in Demo mode. Unsupported URL values were reset.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+
+    const request = historyRequests.at(-1);
+    expect(request?.searchParams.get("offset")).toBe("50");
+    expect(request?.searchParams.has("process_type")).toBe(false);
+    expect(request?.searchParams.has("driver")).toBe(false);
+  });
 });

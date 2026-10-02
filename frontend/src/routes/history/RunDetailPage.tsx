@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useLocation, useNavigate, useParams } from "react-router";
 import { userFacingErrorMessage } from "../../api/errors";
 import {
   useCancelRun,
@@ -89,6 +89,28 @@ function shouldShowPidActionModal(
   return canWrite && canRevert;
 }
 
+function returnHistoryHref(state: unknown): string {
+  if (!state || typeof state !== "object" || !("historyHref" in state)) {
+    return "/runs";
+  }
+  const historyHref = state.historyHref;
+  if (typeof historyHref !== "string") return "/runs";
+
+  try {
+    const parsed = new URL(historyHref, "https://bhtune.invalid");
+    if (
+      parsed.origin !== "https://bhtune.invalid" ||
+      parsed.pathname !== "/runs" ||
+      parsed.hash
+    ) {
+      return "/runs";
+    }
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return "/runs";
+  }
+}
+
 function RunStatusAnnouncement({
   run,
 }: {
@@ -114,7 +136,9 @@ export function RunDetailPage({
 }) {
   const { id } = useParams<{ id: string }>();
   const runId = Number(id);
+  const location = useLocation();
   const navigate = useNavigate();
+  const historyHref = returnHistoryHref(location.state);
   const isDemo = capabilities.mode === "demo";
   const apiMode = isDemo ? "demo" : "full";
   const run = useRun(runId, true, apiMode);
@@ -227,7 +251,7 @@ export function RunDetailPage({
     deleteRun.mutate(runId, {
       onSuccess: () => {
         setDeleteConfirmationOpen(false);
-        void navigate("/runs");
+        void navigate(historyHref);
       },
     });
   }
@@ -368,6 +392,7 @@ export function RunDetailPage({
       <RunDetailActions
         id={id}
         runId={runId}
+        historyHref={historyHref}
         demo={isDemo}
         actions={capabilities.actions}
         isRunning={isRunning}

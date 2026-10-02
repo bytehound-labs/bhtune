@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import uPlot from "uplot";
 // oxlint-disable-next-line import/no-unassigned-import -- uPlot's stylesheet is a required Vite side effect.
 import "uplot/dist/uPlot.min.css";
@@ -7,6 +7,7 @@ import { useTheme } from "../useTheme";
 
 export interface TrendChartProps {
   readonly points: readonly TrendPoint[];
+  readonly tagName: string;
   readonly height?: number;
   readonly pollIntervalMs?: number | null;
 }
@@ -20,9 +21,18 @@ function toAlignedData(points: readonly TrendPoint[]): uPlot.AlignedData {
   return [time, pv, mv];
 }
 
-function describeTrend(points: readonly TrendPoint[]): string {
+function moveCursorToPoint(plot: uPlot, point: TrendPoint) {
+  const left = plot.valToPos(Date.parse(point.time) / 1000, "x");
+  if (Number.isFinite(left)) {
+    plot.setCursor({ left, top: plot.rect.height / 2 }, false);
+  }
+}
+
+function describeTrend(points: readonly TrendPoint[], tagName: string): string {
   const first = points[0];
-  if (!first) return "No PV or MV trend points are available.";
+  if (!first) {
+    return `No PV or MV trend points are available. The recorded run tag is ${tagName}. Engineering units are not recorded.`;
+  }
 
   const range = points.reduce(
     (current, point) => ({
@@ -42,7 +52,7 @@ function describeTrend(points: readonly TrendPoint[]): string {
   const firstTime = new Date(first.time).toLocaleString();
   const lastTime = last ? new Date(last.time).toLocaleString() : firstTime;
 
-  return `${points.length} plotted points from ${firstTime} to ${lastTime}. PV ranged from ${range.pvMinimum} to ${range.pvMaximum}; MV ranged from ${range.mvMinimum} to ${range.mvMaximum}. Time is on the horizontal axis, PV on the left axis, and MV on the right axis.`;
+  return `${points.length} plotted points from ${firstTime} to ${lastTime}. PV ranged from ${range.pvMinimum} to ${range.pvMaximum}; commanded MV ranged from ${range.mvMinimum} to ${range.mvMaximum}. Values are raw, engineering units are not recorded, and the run tag is ${tagName}. Time is on the horizontal axis, PV on the left axis, and commanded MV on the right axis.`;
 }
 
 /**
@@ -59,13 +69,40 @@ function describeTrend(points: readonly TrendPoint[]): string {
  */
 export function TrendChart({
   points,
+  tagName,
   height = 320,
   pollIntervalMs,
 }: TrendChartProps) {
   const descriptionId = useId();
+  const selectionId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
+  const [cursorIndex, setCursorIndex] = useState<number | null>(null);
   const { theme } = useTheme();
+
+  const selectedIndex =
+    points.length === 0
+      ? 0
+      : Math.min(
+          points.length - 1,
+          Math.max(0, cursorIndex ?? points.length - 1),
+        );
+  const selectedPoint = points[selectedIndex];
+  const selectedTime = selectedPoint
+    ? new Date(selectedPoint.time).toLocaleString()
+    : "No point selected";
+  const selectedPointText = selectedPoint
+    ? `Point ${selectedIndex + 1} of ${points.length}, ${selectedTime}. PV ${selectedPoint.pv} raw tag units; commanded MV ${selectedPoint.mv} raw tag units. Engineering units are not recorded.`
+    : "No PV or MV trend point is available.";
+
+  function selectPoint(index: number) {
+    setCursorIndex(index);
+    const point = points[index];
+    const plot = plotRef.current;
+    if (!point || !plot) return;
+
+    moveCursorToPoint(plot, point);
+  }
 
   // Creates (and tears down) the uPlot instance once per size/theme combination -- uPlot
   // owns its own canvas and redraw loop, so React's job is only to supply the container
@@ -97,14 +134,14 @@ export function TrendChart({
       series: [
         {},
         {
-          label: "PV",
+          label: "PV (raw tag units)",
           stroke: pvColor,
           width: 2,
           scale: "y",
           points: { show: false },
         },
         {
-          label: "MV",
+          label: "MV commanded (raw tag units)",
           stroke: mvColor,
           width: 2,
           scale: "mv",
@@ -116,7 +153,20 @@ export function TrendChart({
         { stroke: pvColor, grid: { stroke: gridColor }, scale: "y" },
         { stroke: mvColor, side: 1, grid: { show: false }, scale: "mv" },
       ],
-      legend: { show: true },
+      cursor: { show: true, x: true, y: false },
+      legend: { show: false },
+      hooks: {
+        setCursor: [
+          (currentPlot) => {
+            const index = currentPlot.cursor.idx;
+            setCursorIndex(
+              typeof index === "number" && Number.isInteger(index)
+                ? index
+                : null,
+            );
+          },
+        ],
+      },
     };
 
     const plot = new uPlot(options, toAlignedData(points), container);
@@ -148,8 +198,60 @@ export function TrendChart({
   return (
     <figure aria-describedby={descriptionId}>
       <div ref={containerRef} />
+      <div
+        role="group"
+        aria-label="Trend series legend"
+        className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-300"
+      >
+        <span className="inline-flex items-center gap-2">
+          <span
+            aria-hidden="true"
+            className="h-0.5 w-4"
+            style={{ backgroundColor: "var(--bhtune-chart-pv)" }}
+          />
+          PV (raw tag units)
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span
+            aria-hidden="true"
+            className="h-0.5 w-4"
+            style={{ backgroundColor: "var(--bhtune-chart-mv)" }}
+          />
+          Commanded MV (raw tag units)
+        </span>
+      </div>
+      <p className="mt-1 break-words text-xs text-slate-500">
+        Recorded run tag: <span className="font-mono">{tagName}</span>. PV and
+        commanded MV are shown as raw values; engineering units are not
+        recorded.
+      </p>
+      <label
+        htmlFor={`${selectionId}-slider`}
+        className="mt-3 block text-xs font-medium text-slate-300"
+      >
+        Inspect trend points
+      </label>
+      <input
+        id={`${selectionId}-slider`}
+        type="range"
+        min={0}
+        max={Math.max(points.length - 1, 0)}
+        step={1}
+        value={selectedIndex}
+        disabled={points.length < 2}
+        aria-valuetext={selectedPointText}
+        aria-describedby={`${descriptionId} ${selectionId}-readout`}
+        onChange={(event) => selectPoint(Number(event.target.value))}
+        className="mt-1 w-full accent-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+      />
+      <p
+        id={`${selectionId}-readout`}
+        className="mt-1 break-words text-xs text-slate-300"
+      >
+        {selectedPointText}
+      </p>
       <figcaption id={descriptionId} className="mt-2 text-xs text-slate-400">
-        {describeTrend(points)}
+        {describeTrend(points, tagName)}
       </figcaption>
     </figure>
   );

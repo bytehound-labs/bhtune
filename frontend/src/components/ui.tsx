@@ -50,26 +50,37 @@ function focusableElements(container: HTMLElement): HTMLElement[] {
 export function PageHeading({
   title,
   description,
+  titleActions,
   actions,
   documentationId,
 }: {
   readonly title: string;
   readonly description?: string;
+  readonly titleActions?: ReactNode;
   readonly actions?: ReactNode;
   readonly documentationId?: string;
 }) {
   return (
     <div
-      className="mb-6 flex items-start justify-between gap-4"
+      className="mb-6 flex flex-col items-start justify-between gap-4 min-[1025px]:flex-row"
       data-doc-section={documentationId}
     >
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        {description && (
-          <p className="mt-1 text-sm text-slate-400">{description}</p>
-        )}
+      <div className="flex min-w-0 flex-wrap items-start gap-3">
+        <div className="min-w-0">
+          <h1 className="break-words text-2xl font-semibold tracking-tight">
+            {title}
+          </h1>
+          {description && (
+            <p className="mt-1 text-sm text-slate-400">{description}</p>
+          )}
+        </div>
+        {titleActions}
       </div>
-      {actions && <div className="flex shrink-0 gap-2">{actions}</div>}
+      {actions && (
+        <div className="flex w-full flex-wrap gap-2 min-[1025px]:w-auto min-[1025px]:justify-end">
+          {actions}
+        </div>
+      )}
     </div>
   );
 }
@@ -250,6 +261,35 @@ export function ErrorBanner({ message }: { readonly message: string }) {
     <div
       role="alert"
       className="rounded-md border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-300"
+    >
+      {message}
+    </div>
+  );
+}
+
+const inlineStatusTones = {
+  success: "border-emerald-800 bg-emerald-950/50 text-emerald-300",
+  error: "border-red-800 bg-red-950/50 text-red-300",
+  warning: "border-amber-800 bg-amber-950/50 text-amber-300",
+  info: "border-slate-700 bg-slate-900/60 text-slate-300",
+} as const;
+
+export function InlineStatus({
+  message,
+  tone = "success",
+  className = "",
+}: {
+  readonly message: string;
+  readonly tone?: keyof typeof inlineStatusTones;
+  readonly className?: string;
+}) {
+  const isError = tone === "error";
+  return (
+    <div
+      role={isError ? "alert" : "status"}
+      aria-live={isError ? "assertive" : "polite"}
+      aria-atomic="true"
+      className={`rounded-md border px-3 py-2 text-sm ${inlineStatusTones[tone]} ${className}`}
     >
       {message}
     </div>

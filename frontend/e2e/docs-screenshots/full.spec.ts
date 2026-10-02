@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { captureScenario, settle } from "./capture";
 import { installFullRoutes, runningFullRun } from "./fixtures";
+import { expectNoAccessibilityViolations } from "../support/accessibility";
 
 async function openNewTune(page: Page) {
   await page.goto("/runs/new");
@@ -188,6 +189,41 @@ test("full-opc-tag-browser", async ({ page }) => {
   await captureScenario(page, "full-opc-tag-browser");
 });
 
+test("full-opc-tag-browser-copy-itemid", async ({ page }) => {
+  await openOpcTune(page);
+  await page.getByRole("button", { name: "Browse tags" }).click();
+  await page.getByRole("treeitem", { name: "Area01", exact: true }).click();
+  await page
+    .getByRole("treeitem", { name: "Area01.FIC101", exact: true })
+    .click();
+  await page
+    .getByRole("treeitem", { name: "Area01.FIC101.OUT", exact: true })
+    .click();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          window.localStorage.setItem("copied-item-id", value);
+        },
+      },
+    });
+  });
+
+  await page.getByRole("button", { name: "Copy ItemID" }).click();
+
+  await expect(
+    page.getByText("ItemID copied to the clipboard.", { exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => localStorage.getItem("copied-item-id")),
+  ).toBe("Area01.FIC101.OUT");
+  await expectNoAccessibilityViolations(
+    page,
+    '[data-testid="copy-button-control"]',
+  );
+});
+
 test("full-opc-tag-applied", async ({ page }) => {
   await openOpcTune(page);
   await page.getByRole("button", { name: "Browse tags" }).click();
@@ -323,7 +359,7 @@ test("full-history-delete-confirmation", async ({ page }) => {
   ).toBeVisible();
   await expect(dialog).toBeVisible();
   await expect(
-    page.getByText("Area01.FIC101.PV", { exact: true }),
+    page.getByRole("definition").filter({ hasText: "Area01.FIC101.PV" }),
   ).toBeVisible();
   expect(deleteCount()).toBe(1);
   await captureScenario(page, "full-history-delete-confirmation");

@@ -1,12 +1,14 @@
 import { Link } from "react-router";
 import { runExportUrl } from "../../api/runs";
 import type { StartRunRequest } from "../../api/runs";
+import { CopyButton } from "../../components/CopyButton";
 import type { CapabilityActions } from "../../api/capabilities";
 import { Button, PageHeading } from "../../components/ui";
 
 interface RunDetailActionsProps {
   readonly id: string | undefined;
   readonly runId: number;
+  readonly historyHref: string;
   readonly demo: boolean;
   readonly actions: CapabilityActions;
   readonly isRunning: boolean;
@@ -23,6 +25,7 @@ interface RunDetailActionsProps {
 export function RunDetailActions({
   id,
   runId,
+  historyHref,
   demo,
   actions,
   isRunning,
@@ -42,6 +45,11 @@ export function RunDetailActions({
     <PageHeading
       title={demo ? `Simulator demo #${id ?? ""}` : `Tune #${id ?? ""}`}
       documentationId="run-detail.page"
+      titleActions={
+        Number.isSafeInteger(runId) ? (
+          <CopyButton value={String(runId)} label="run ID" />
+        ) : undefined
+      }
       actions={
         <>
           {isRunning && actions.cancel_run && (
@@ -79,7 +87,7 @@ export function RunDetailActions({
           >
             Duplicate this run
           </Button>
-          <Link to="/runs">
+          <Link to={historyHref}>
             <Button>{demo ? "Back to History" : "Back to tune history"}</Button>
           </Link>
         </>

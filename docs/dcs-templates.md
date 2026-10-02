@@ -116,16 +116,16 @@ final separator are preserved.
 
 {/* web-ui-screenshot: full-opc-tag-browser */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=41fec8857832">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=41fec8857832" alt="BHTune OPC tag browser with Area01.FIC101.OUT selected and its quality read visible" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=ece031f850cf">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=ece031f850cf" alt="BHTune OPC tag browser with Area01.FIC101.OUT selected and its quality read visible" />
   </a>
   <figcaption>The browser verifies the originally selected item before applying the template's process-variable suffix.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: full-opc-tag-applied */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=e8e6b822f62b">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=e8e6b822f62b" alt="BHTune Loop mapping showing Area01.FIC101.PV after selecting Area01.FIC101.OUT" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=d38ddaddf798">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=d38ddaddf798" alt="BHTune Loop mapping showing Area01.FIC101.PV after selecting Area01.FIC101.OUT" />
   </a>
   <figcaption>Final-component replacement changes the selected `OUT` item to the active template's `PV` item while preserving the path.</figcaption>
 </figure>

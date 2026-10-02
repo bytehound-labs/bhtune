@@ -58,7 +58,7 @@ can never merge.
 | `/templates/new`        | Create a template (all `DcsTemplate` fields).                                                                                                                              |
 | `/templates/:name`      | Read-only template detail, with an Edit link for user-owned templates.                                                                                                     |
 | `/templates/:name/edit` | Edit a user-owned template (all fields except Name, which is immutable once created).                                                                                      |
-| `/runs`                 | Filterable, paginated tune-run history list.                                                                                                                               |
+| `/runs`                 | Filterable, paginated tune-run history list with URL-backed filters and page offsets.                                                                                      |
 | `/runs/new`             | Start a tune: connection, tag mapping, test parameters, simulator parameters, and write-back, all in one form.                                                             |
 | `/runs/:id`             | Run detail: configuration, initial readings, calculated results, write-back audit trail, and a PV/MV trend chart with initial-reading and terminal restored-MV boundaries. |
 
@@ -78,6 +78,12 @@ poll intervals on the x-axis and leave unused future space blank, then fit the f
 run once that horizon is reached. The same `TrendChart` component renders live and historical
 cases identically without fabricating samples.
 
+The trend legend identifies PV and commanded MV as raw tag-unit values. If the run does not
+record engineering units, the chart says so instead of deriving units or displaying a guessed
+percent label. A visible keyboard-operable point selector moves the cursor and exposes the
+selected timestamp and values to screen readers. The recorded run tag is shown for context,
+without inferring a separate PV or MV ItemID.
+
 When calculated results exist, the run detail screen promotes the **Calculated results** panel
 above the trend as the primary post-tune action area. Each response-level row uses **Review &
 write** to open a centered viewport popup with the exact loop tag, destination tags, parameter
@@ -95,6 +101,14 @@ Run-detail sections are independently collapsible. Calculated results, Trend, Su
 Test configuration, Initial readings, and PID change history start expanded; MV actuation
 verification appears after PID change history as the final diagnostic section and starts
 collapsed.
+
+History filter selections and page offsets are query parameters. Full mode supports process
+type, outcome, driver, and pagination; Demo keeps pagination but removes Full-only filters.
+Invalid URL values are reset with an inline explanation. Run details return to their
+originating filtered history view. Selected OPC ItemIDs and run IDs can be copied with visible
+success or failure feedback. The navigation, tune mapping form, page headings, and history
+table adapt at and below 1024 pixels; the table scrolls within its own container on narrow
+screens.
 
 ## Scripts
 
