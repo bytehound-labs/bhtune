@@ -189,6 +189,16 @@ runtime without an interactive write-back handler, so a background `drive()` fut
 handler for prompts and progress output; validation, cancellation, writes, verification,
 rollback, and persistence remain in the runtime.
 
+## Read-only preflight endpoint
+
+Full mode exposes `POST /api/runs/preflight` with the same `StartRunRequest` body as
+`POST /api/runs`. The handler calls `bhtune_runtime::tune::preflight`, converts its checks and
+tag reads to the HTTP response schema, and reports the overall runtime pass/warn/fail status.
+It uses a separate read-only SQLite pool for saved templates; the runtime wraps the selected
+driver in `ReadOnlyDriver`. The endpoint never calls `prepare()` or `drive()`, inserts a run,
+starts background work, writes controller values, or refreshes a namespace. Demo mode does not
+mount it.
+
 **Tests exercise concurrent starts through the real preparation boundary.**
 `a_genuine_race_between_two_starts_marks_the_losing_row_failed` calls the `start_run`
 handler function _directly_ (bypassing the router/tower/hyper stack entirely — `State(state)`

@@ -326,6 +326,9 @@ test.describe("Demo mode contract", () => {
       page.getByRole("heading", { name: "BHTune Simulator Demo" }),
     ).toBeVisible();
     await expect(
+      page.getByRole("button", { name: "Check readiness" }),
+    ).toHaveCount(0);
+    await expect(
       page.getByText(
         "Choose a built-in template and bounded simulator settings, then watch a synthetic MRFT tune.",
         { exact: true },

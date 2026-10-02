@@ -163,14 +163,20 @@ started. For OPC DA it performs bounded gateway discovery and reads every derive
 including PID constant tags. It reports values and OPC quality, validates template mode values,
 and checks the initial PV/MV state and requested write-back readiness.
 
-The command does not create or update run history, run a tune, change controller values, or
+Full mode offers the same check from the New Tune page's **Check readiness** action. The
+browser sends the same tune-request fields to `POST /api/runs/preflight` and displays the
+overall pass/warn/fail result, individual checks, and tag reads. The route uses a read-only
+database connection and read-only driver; it does not create run history, start a tune, or
+write controller values. Demo mode does not mount the route or show the action.
+
+The CLI command does not create or update run history, run a tune, change controller values, or
 probe write permissions. It uses a read-only database connection when saved templates are
 needed and a driver wrapper that rejects writes. When a template defines a mode-attribute
 program value, the check reads that value as another write-back prerequisite but never changes
 it. A passing write-back check confirms only that the P/I/D tags are configured and readable
 as numeric values and any template-specific prerequisites are met; it cannot prove a future
-write will be accepted or that an accepted MV write will move the plant. Follow the live-plant
-procedures below before running a tune.
+write will be accepted or that an accepted MV write will move the plant. The GUI report has
+the same limitation. Follow the live-plant procedures below before running a tune.
 
 `--output json` emits the full report. Exit code `0` means the checks passed, `1` means the
 preflight could not run, and `8` means a check failed or `--strict` treated a warning as a

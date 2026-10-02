@@ -326,7 +326,9 @@ async fn shared_routes_require_a_cookie() {
 async fn demo_mode_replaces_unavailable_full_api_routes_with_404() {
     let mut state = crate::test_support::in_memory_state().await;
     state.mode = ServerMode::Demo;
-    let response = crate::build_router(state)
+    let app = crate::build_router(state);
+    let response = app
+        .clone()
         .oneshot(
             Request::get("/api/openapi.json")
                 .body(Body::empty())
@@ -336,6 +338,26 @@ async fn demo_mode_replaces_unavailable_full_api_routes_with_404() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(body_text(response).await.contains("Demo mode"));
+}
+
+#[tokio::test]
+async fn demo_mode_does_not_mount_preflight_route() {
+    let mut state = crate::test_support::in_memory_state().await;
+    state.mode = ServerMode::Demo;
+    state.allowed_origin = Some(DEMO_ORIGIN.into());
+    let response = crate::build_router(state)
+        .oneshot(with_peer(
+            Request::post("/api/runs/preflight")
+                .header(header::ORIGIN, DEMO_ORIGIN)
+                .header(header::COOKIE, cookie("ab"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+            "127.0.0.1:12345",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]

@@ -31,8 +31,8 @@ offers its indexed matches as an accessible listbox.
 
 {/* web-ui-screenshot: full-tune-simulator */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=4cd88f723658">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=4cd88f723658" alt="BHTune Full mode New Tune page with the Simulator driver selected" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=df25fde5bb15">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=df25fde5bb15" alt="BHTune Full mode New Tune page with the Simulator driver selected" />
   </a>
   <figcaption>The New Tune page is the default landing screen. Simulator-only runs keep the form layout stable and disable controls that require live OPC DA equipment.</figcaption>
 </figure>
@@ -46,6 +46,7 @@ the full-size Pages asset.
 
 Full mode exposes the complete local/operator workflow:
 
+- check tune readiness from the New Tune page without starting a run or writing values;
 - start Simulator or OPC DA runs;
 - browse OPC DA servers and tags;
 - edit user-owned templates;
@@ -54,7 +55,8 @@ Full mode exposes the complete local/operator workflow:
 
 Demo mode exposes only bounded simulator tuning and visitor-owned run history. The Demo notice
 explains the fixed policy and simulator boundary in the browser; it is not an authentication
-system or a route-level substitute for the server's Demo enforcement.
+system or a route-level substitute for the server's Demo enforcement. The Full-mode readiness
+action and `POST /api/runs/preflight` endpoint are not available in Demo mode.
 
 {/* web-ui-screenshot: demo-tune */}
 <figure>

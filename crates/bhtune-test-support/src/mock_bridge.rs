@@ -61,6 +61,8 @@ pub struct MockBridgeService {
     pub fail_read_from_call: Option<u32>,
     /// Count of `read` calls, including calls that then fail.
     pub read_calls: Arc<AtomicU32>,
+    /// Count of `write` calls, including calls that then fail.
+    pub write_calls: Arc<AtomicU32>,
     /// Count of `close_browse_session` calls that did not return [`Self::close_error`].
     pub close_browse_session_calls: Arc<AtomicU32>,
     /// RPC error for `list_servers`.
@@ -124,6 +126,7 @@ impl Default for MockBridgeService {
             search_error: None,
             fail_read_from_call: None,
             read_calls: Arc::new(AtomicU32::new(0)),
+            write_calls: Arc::new(AtomicU32::new(0)),
             close_browse_session_calls: Arc::new(AtomicU32::new(0)),
             list_servers_error: None,
             browse_error: None,
@@ -305,6 +308,7 @@ impl Bridge for MockBridgeService {
         &self,
         _request: Request<WriteRequest>,
     ) -> Result<Response<WriteResponse>, Status> {
+        self.write_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(status) = self.write_error.clone() {
             return Err(status);
         }

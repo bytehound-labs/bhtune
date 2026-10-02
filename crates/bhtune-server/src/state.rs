@@ -275,6 +275,8 @@ fn remove_accepted_start(
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
+    /// Read-only connection used by the Full-mode preflight endpoint to resolve templates.
+    pub(crate) preflight_database: Option<SqlitePool>,
     /// The in-flight tune registry and exclusive post-hoc write/revert reservation -- see
     /// [`ActiveRun`]'s own doc comment for the concurrency and shutdown behavior.
     pub active_run: ActiveRun,
@@ -315,6 +317,7 @@ impl AppState {
     ) -> Self {
         Self {
             pool,
+            preflight_database: None,
             active_run: ActiveRun::default(),
             config_store,
             allowed_origin,
@@ -323,6 +326,14 @@ impl AppState {
             mode,
             demo_policy,
         }
+    }
+
+    pub(crate) fn with_preflight_database(
+        mut self,
+        preflight_database: Option<SqlitePool>,
+    ) -> Self {
+        self.preflight_database = preflight_database;
+        self
     }
 }
 

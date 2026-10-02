@@ -2,7 +2,8 @@ use bhtune_core::{ControllerDirection, ControllerType, ProcessType, ResponseLeve
 use bhtune_db::models::TuneDriver;
 use bhtune_runtime::tune::{
     DEFAULT_SIM_DEAD_TIME, DEFAULT_SIM_GAIN, DEFAULT_SIM_INITIAL_VALUE, DEFAULT_SIM_NOISE,
-    DEFAULT_SIM_SEED, DEFAULT_SIM_TAU,
+    DEFAULT_SIM_SEED, DEFAULT_SIM_TAU, PreflightCheck, PreflightCheckStatus, PreflightReport,
+    PreflightTagRead,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -26,13 +27,13 @@ fn default_sim_initial_value() -> f32 {
     DEFAULT_SIM_INITIAL_VALUE
 }
 
-/// The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values
-/// are intentionally absent: they are resolved from the global `[tuning]` configuration by
-/// `prepare()`, just as they are for a CLI invocation. Every field that has a CLI default
-/// (`--sim-gain`, etc.) repeats that exact default here via `#[serde(default = "...")]`, so an
-/// HTTP caller that omits a field gets identical behavior to a CLI invocation that omits the
-/// matching flag. `Option<T>` fields need no `#[serde(default)]` of their own -- serde already
-/// treats a missing key as `None` for an `Option` field.
+/// The bodies of `POST /api/runs` and `POST /api/runs/preflight` contain the per-run tune
+/// inputs. Operational timing values are intentionally absent: both preparation and preflight
+/// resolve them from the global `[tuning]` configuration, just as they are for a CLI invocation.
+/// Every field that has a CLI default (`--sim-gain`, etc.) repeats that exact default here via
+/// `#[serde(default = "...")]`, so an HTTP caller that omits a field gets identical behavior to a
+/// CLI invocation that omits the matching flag. `Option<T>` fields need no `#[serde(default)]`
+/// of their own -- serde already treats a missing key as `None` for an `Option` field.
 ///
 /// Also derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s
 /// response (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses
@@ -114,6 +115,98 @@ pub struct StartRunRequest {
     /// Non-interactively write this response level's calculated PID parameters back to the
     /// DCS. Requires `yes: true`.
     pub write_pid: Option<ResponseLevel>,
+}
+
+/// Overall severity of a read-only preflight report.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PreflightStatus {
+    Pass,
+    Warn,
+    Fail,
+}
+
+impl From<PreflightCheckStatus> for PreflightStatus {
+    fn from(status: PreflightCheckStatus) -> Self {
+        match status {
+            PreflightCheckStatus::Pass => Self::Pass,
+            PreflightCheckStatus::Warn => Self::Warn,
+            PreflightCheckStatus::Fail => Self::Fail,
+        }
+    }
+}
+
+/// One check and its operator-facing detail in a preflight report.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PreflightCheckResponse {
+    /// Check name.
+    pub name: String,
+    /// Result severity.
+    pub status: PreflightStatus,
+    /// Diagnostic detail.
+    pub detail: String,
+}
+
+impl From<PreflightCheck> for PreflightCheckResponse {
+    fn from(check: PreflightCheck) -> Self {
+        Self {
+            name: check.name,
+            status: check.status.into(),
+            detail: check.detail,
+        }
+    }
+}
+
+/// One derived tag read and its operator-facing detail in a preflight report.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PreflightTagReadResponse {
+    /// Exact derived tag name.
+    pub tag: String,
+    /// Roles this tag serves in the requested loop.
+    pub roles: Vec<String>,
+    /// Value returned by the driver, if any.
+    pub value: Option<String>,
+    /// Driver quality, if any.
+    pub quality: Option<String>,
+    /// Result severity.
+    pub status: PreflightStatus,
+    /// Diagnostic detail.
+    pub detail: String,
+}
+
+impl From<PreflightTagRead> for PreflightTagReadResponse {
+    fn from(read: PreflightTagRead) -> Self {
+        Self {
+            tag: read.tag,
+            roles: read.roles,
+            value: read.value,
+            quality: read.quality,
+            status: read.status.into(),
+            detail: read.detail,
+        }
+    }
+}
+
+/// The summarized pass/warn/fail result returned by the read-only preflight endpoint.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PreflightResponse {
+    /// Highest severity in the checks and tag reads.
+    pub status: PreflightStatus,
+    /// Configuration, template, gateway, and loop checks.
+    pub checks: Vec<PreflightCheckResponse>,
+    /// Per-tag values, qualities, and validation results.
+    pub tag_reads: Vec<PreflightTagReadResponse>,
+}
+
+impl From<PreflightReport> for PreflightResponse {
+    fn from(report: PreflightReport) -> Self {
+        let status = report.status().into();
+        Self {
+            status,
+            checks: report.checks.into_iter().map(Into::into).collect(),
+            tag_reads: report.tag_reads.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 /// The body of `PUT /api/runs/{id}/notes`.

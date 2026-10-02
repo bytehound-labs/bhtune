@@ -9,10 +9,11 @@ Feedback Tests (MRFT) and calculates PID constants for operator review.
 - **No proprietary dependencies.** The project's dependencies are open-source.
 - **CLI and web GUI.** Both use the same application runtime, tuning engine, SQLite database,
   simulator defaults, and common tune-request validation.
-- **Read-only preflight.** `bhtune check` validates tune inputs and reads the configured tags
-  before a live tune without starting an MRFT test, writing to the controller, or creating or
-  changing the local database. It can report template-specific mode-attribute prerequisites
-  without changing them.
+- **Read-only preflight.** `bhtune check` and the Full-mode New Tune page's "Check readiness"
+  action validate inputs and inspect configured tags before a tune starts. They use the same
+  runtime checks without starting an MRFT test, creating run history, or writing controller
+  values. The browser report shows each check and tag-read result; the readiness endpoint is
+  not mounted in Demo mode.
 - **Plain SQLite.** Run history and templates are stored in an inspectable database.
 - **OPC DA through [opcda-bridge](https://github.com/bytehound-labs/opcda-bridge).** A separate
   Windows-side gateway handles OPC DA access; BHTune runs on any supported platform.
@@ -47,8 +48,8 @@ A live MRFT can switch a loop to Manual and stroke its valve. Read the
 [safety guide](docs/guides/safety.md) before connecting to plant equipment: PID constants are
 not written automatically, CLI and GUI write-back actions require explicit confirmation and
 readback verification, and an incomplete restore requires an operator to inspect the loop.
-`bhtune check` is a read-only preflight for a proposed tune; it does not prove controller write
-permissions or replace live-plant safety procedures.
+`bhtune check` and Full mode's "Check readiness" action are read-only preflights for a proposed
+tune; neither proves controller write permissions or replaces live-plant safety procedures.
 
 ## Explore
 

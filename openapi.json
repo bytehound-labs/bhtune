@@ -1166,6 +1166,58 @@
         }
       }
     },
+    "/api/runs/preflight": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Check whether a proposed tune is ready without preparing or starting a run.",
+        "description": "`POST /api/runs/preflight` accepts the same request as `POST /api/runs`, then delegates\nto the runtime's read-only preflight with the server's read-only template database.\nIt does not insert a run, start background work, or write controller values.\nThe endpoint is mounted only in Full mode; Demo mode does not expose preflight.",
+        "operationId": "preflight_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The pass/warn/fail readiness report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is invalid or the preflight could not complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server configuration could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{id}": {
       "get": {
         "tags": [
@@ -4269,6 +4321,112 @@
           }
         }
       },
+      "PreflightCheckResponse": {
+        "type": "object",
+        "description": "One check and its operator-facing detail in a preflight report.",
+        "required": [
+          "name",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Diagnostic detail."
+          },
+          "name": {
+            "type": "string",
+            "description": "Check name."
+          },
+          "status": {
+            "$ref": "#/components/schemas/PreflightStatus",
+            "description": "Result severity."
+          }
+        }
+      },
+      "PreflightResponse": {
+        "type": "object",
+        "description": "The summarized pass/warn/fail result returned by the read-only preflight endpoint.",
+        "required": [
+          "status",
+          "checks",
+          "tag_reads"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreflightCheckResponse"
+            },
+            "description": "Configuration, template, gateway, and loop checks."
+          },
+          "status": {
+            "$ref": "#/components/schemas/PreflightStatus",
+            "description": "Highest severity in the checks and tag reads."
+          },
+          "tag_reads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreflightTagReadResponse"
+            },
+            "description": "Per-tag values, qualities, and validation results."
+          }
+        }
+      },
+      "PreflightStatus": {
+        "type": "string",
+        "description": "Overall severity of a read-only preflight report.",
+        "enum": [
+          "pass",
+          "warn",
+          "fail"
+        ]
+      },
+      "PreflightTagReadResponse": {
+        "type": "object",
+        "description": "One derived tag read and its operator-facing detail in a preflight report.",
+        "required": [
+          "tag",
+          "roles",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Diagnostic detail."
+          },
+          "quality": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Driver quality, if any."
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Roles this tag serves in the requested loop."
+          },
+          "status": {
+            "$ref": "#/components/schemas/PreflightStatus",
+            "description": "Result severity."
+          },
+          "tag": {
+            "type": "string",
+            "description": "Exact derived tag name."
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Value returned by the driver, if any."
+          }
+        }
+      },
       "ProcessControllerCompatibility": {
         "type": "object",
         "required": [
@@ -4774,7 +4932,7 @@
       },
       "StartRunRequest": {
         "type": "object",
-        "description": "The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values\nare intentionally absent: they are resolved from the global `[tuning]` configuration by\n`prepare()`, just as they are for a CLI invocation. Every field that has a CLI default\n(`--sim-gain`, etc.) repeats that exact default here via `#[serde(default = \"...\")]`, so an\nHTTP caller that omits a field gets identical behavior to a CLI invocation that omits the\nmatching flag. `Option<T>` fields need no `#[serde(default)]` of their own -- serde already\ntreats a missing key as `None` for an `Option` field.\n\nAlso derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s\nresponse (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses\na run's stored `request_json` straight into a `StartRunRequest` rather than duplicating\nits ~30 fields into a second struct, giving a \"what you `GET` is exactly what you'd `POST`\nto repeat it\" symmetry in both the Rust types and the generated OpenAPI schema. This is\nsafe precisely because `request_json` is *already* built to this exact shape -- the\nruntime's `RequestSnapshot` serializes the same transport-neutral request fields.",
+        "description": "The bodies of `POST /api/runs` and `POST /api/runs/preflight` contain the per-run tune\ninputs. Operational timing values are intentionally absent: both preparation and preflight\nresolve them from the global `[tuning]` configuration, just as they are for a CLI invocation.\nEvery field that has a CLI default (`--sim-gain`, etc.) repeats that exact default here via\n`#[serde(default = \"...\")]`, so an HTTP caller that omits a field gets identical behavior to a\nCLI invocation that omits the matching flag. `Option<T>` fields need no `#[serde(default)]`\nof their own -- serde already treats a missing key as `None` for an `Option` field.\n\nAlso derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s\nresponse (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses\na run's stored `request_json` straight into a `StartRunRequest` rather than duplicating\nits ~30 fields into a second struct, giving a \"what you `GET` is exactly what you'd `POST`\nto repeat it\" symmetry in both the Rust types and the generated OpenAPI schema. This is\nsafe precisely because `request_json` is *already* built to this exact shape -- the\nruntime's `RequestSnapshot` serializes the same transport-neutral request fields.",
         "required": [
           "tagname",
           "template",

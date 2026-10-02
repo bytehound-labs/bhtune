@@ -10,6 +10,7 @@ export type RunDetailResponse = components["schemas"]["RunDetailResponse"];
 export type SampleResponse = components["schemas"]["SampleResponse"];
 type InitialReadingsResponse = components["schemas"]["InitialReadingsResponse"];
 export type StartRunRequest = components["schemas"]["StartRunRequest"];
+export type PreflightResponse = components["schemas"]["PreflightResponse"];
 export type NewRunDraft = components["schemas"]["NewRunDraft"];
 type TuneOutcome = components["schemas"]["TuneOutcome"];
 export type ResponseLevel = components["schemas"]["ResponseLevel"];
@@ -296,6 +297,20 @@ export function useStartRun(mode: AppMode = "full") {
     onSuccess: (data) => {
       queryClient.setQueryData(runKey(data.id, mode), data);
       void queryClient.invalidateQueries({ queryKey: runsRootKey(mode) });
+    },
+  });
+}
+
+/** `POST /api/runs/preflight` — checks a proposed tune without creating a run or writing values. */
+export function useRunPreflight() {
+  return useMutation({
+    mutationFn: async (request: StartRunRequest) => {
+      const { data, error, response } = await apiClient.POST(
+        "/api/runs/preflight",
+        { body: request },
+      );
+      if (error) throw toApiError(error, response);
+      return data;
     },
   });
 }

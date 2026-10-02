@@ -138,6 +138,11 @@ pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundSer
         )
         .await?;
     }
+    let preflight_database = if mode == config::ServerMode::Full {
+        db::open_read_only(&db_path).await?
+    } else {
+        None
+    };
 
     let config_store = Arc::new(RwLock::new(loaded_config));
     spawn_retention_sweeper(pool.clone(), config_store.clone());
@@ -149,7 +154,8 @@ pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundSer
         demo_policy,
         allowed_origin,
         config.trusted_proxy.clone(),
-    );
+    )
+    .with_preflight_database(preflight_database);
     if mode == config::ServerMode::Demo {
         spawn_demo_cleanup(state.clone());
     }
