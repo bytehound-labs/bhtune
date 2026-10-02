@@ -129,7 +129,7 @@ activation step, not an application default.
 ## Demo implementation status
 
 The public simulator Demo extension is complete across `bhtune-db`, `bhtune-runtime`,
-`bhtune-cli`, `bhtune-server`, and `frontend/`; the separate FrontEnd deployment/Caddy assets
+`bhtune`, `bhtune-server`, and `frontend/`; the separate FrontEnd deployment/Caddy assets
 are also authored. Public activation
 remains pending private deployment and rollback rehearsal, so DNS, firewall exposure, Caddy routing,
 Cloudflare Tunnel, authentication, CAPTCHA, and multi-replica coordination remain disabled and out
@@ -139,7 +139,7 @@ of scope.
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bhtune-db`         | Complete: anonymous session storage, nullable run ownership, owner-scoped queries, cleanup, recovery, and compatibility migration are implemented.                                                                   |
 | `bhtune-runtime`    | Complete: shared owned-run preparation and simulator-only orchestration enforce runtime bounds and persistence behavior.                                                                                             |
-| `bhtune-cli`        | Complete: the CLI adapter keeps its Full-mode contract while shared tune and policy behavior is provided by the runtime.                                                                                             |
+| `bhtune`            | Complete: the CLI adapter keeps its Full-mode contract while shared tune and policy behavior is provided by the runtime.                                                                                             |
 | `bhtune-server`     | Complete: validated Full/Demo runtime modes, restricted Demo routes, quotas, security checks, recovery, cleanup, and capabilities contract are implemented. Private deployment and public activation remain pending. |
 | `frontend/`         | Complete: capability-aware simulator-only UI, private history, live streaming, bounded requests, and Demo browser coverage are implemented.                                                                          |
 | FrontEnd deployment | Authored separately under `/home/mike/git/FrontEnd`; Compose, Caddy, Woodpecker, rollout, rollback, and validation assets await private rehearsal.                                                                   |

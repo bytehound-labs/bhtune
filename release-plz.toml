@@ -1,5 +1,5 @@
 # Configures one product release for the complete BHTune workspace. The
-# bhtune-cli package is the release anchor because it is the user-facing
+# bhtune package is the release anchor because it is the user-facing
 # product; the other workspace crates contribute to its root changelog but do
 # not create their own tags or GitHub Releases.
 [workspace]
@@ -14,7 +14,7 @@ pr_name = "chore(release): prepare v{{ version }}"
 pr_branch_prefix = "release-plz-"
 
 [[package]]
-name = "bhtune-cli"
+name = "bhtune"
 release = true
 git_tag_enable = true
 git_tag_name = "v{{ version }}"

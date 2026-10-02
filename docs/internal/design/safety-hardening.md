@@ -110,7 +110,7 @@ rationale for code that still exists (not a changelog of the review itself):
   no loop I/O at all) remains on the roadmap as a separate future command, not a flag on a
   live tune.
 - **No externally supplied number reaches the engine unvalidated** — done
-  (`bhtune-core::range`, `LoopConfig::validate`, `bhtune-cli::args` value parsers,
+  (`bhtune-core::range`, `LoopConfig::validate`, `bhtune_cli::args` value parsers,
   `bhtune-runtime::tune::validate_initial_state`). Previously `--cycles-count 0` reached
   `tuning_math::measure_oscillation`'s internal `assert!` and panicked _after_ the loop had
   already been switched to manual and stroked through a full relay test, with no restore on
@@ -134,7 +134,7 @@ rationale for code that still exists (not a changelog of the review itself):
     and tag-override validation. Both `TuneArgs` and `StartRunRequest` convert through this
     type before `prepare()` can connect to a driver or write a run row. Simulator defaults
     also come from runtime constants used by both adapters.
-  - `bhtune-cli::args` — `finite_f32` and `positive_u32` clap `value_parser` functions call
+  - `bhtune_cli::args` — `finite_f32` and `positive_u32` clap `value_parser` functions call
     the same runtime numeric validators so command-line input still gets an early, clear
     parse error. They cover relay amplitude, cycle count, PV/MV range bounds, and simulator
     process parameters. Deliberately _not_ applied to `mrft_delay`, `cycles_skip`,
@@ -490,7 +490,7 @@ previous)` tuples with index-based `[Option<f32>; 3]` temporaries for the writte
   `failing_read_from_call(n)` builder to fail exactly Integral's post-write verification
   readback (call 5 of 6: three pre-reads plus Proportional's own verification succeed
   first), proving Derivative is never attempted and the failure is still fully audited. A
-  final test exercises the `--output json` success path directly (`bhtune-cli`'s own
+  final test exercises the `--output json` success path directly (the `bhtune` package's own
   subprocess-level "stdout is exactly one JSON object" contract remains
   `safety-json-contract`'s responsibility, not re-proven per command here).
 

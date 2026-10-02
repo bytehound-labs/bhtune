@@ -57,7 +57,7 @@ COPY crates/ crates/
 # embed step, so the copy order here is load-bearing, not just convenient.
 COPY --from=frontend /src/frontend/dist/ frontend/dist/
 
-RUN cargo build --release --locked -p bhtune-cli -p bhtune-server
+RUN cargo build --release --locked -p bhtune -p bhtune-server
 
 # ---- Runtime ----------------------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime

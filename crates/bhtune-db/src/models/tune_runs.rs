@@ -225,7 +225,7 @@ pub struct TuneRunRow {
     pub tags: LoopTags,
     /// The complete run request exactly as submitted (CLI flags or the HTTP
     /// `POST /api/runs` body), before any config-driven defaulting -- raw JSON rather than a
-    /// typed struct, since its shape is owned by `bhtune-cli`/`bhtune-server`, not
+    /// typed struct, since its shape is owned by the `bhtune`/`bhtune-server` adapters, not
     /// `bhtune-db`. `"{}"` for any run started before
     /// [`TuneRunRow::record_connection`] is called. Powers `ui-prefill-last-run` and
     /// "duplicate this run"; never treat this as the source of truth for connection
@@ -657,7 +657,7 @@ impl TuneRunRow {
     /// positional parameters across dozens of call sites in this workspace's test suites
     /// alone, and three more would make every one of them noisier for no benefit, since none
     /// of those tests care about connection provenance. Unlike that method, this data *is*
-    /// normally known the instant a run begins; the one production caller (`bhtune-cli`'s
+    /// normally known the instant a run begins; the one production caller (the `bhtune` CLI's
     /// `prepare()`) calls this immediately after `start()` succeeds, before any driver I/O.
     /// `opc_server`/`bridge_host` default to `NULL` and `request_json` defaults to `"{}"`
     /// (see the migration), so every existing `start()` call site keeps compiling and
@@ -818,7 +818,7 @@ impl TuneRunRow {
     /// naturally has on hand at the moment a run begins the way `template_origin`/`template`/
     /// `tags` are. The column defaults to `0`/`false` (see the migration), so every existing
     /// `start()` call site keeps compiling and behaving exactly as before; only the one
-    /// production caller in `bhtune-cli`'s `run()` needs to call this, right after `start()`
+    /// production caller in the `bhtune` package's `run()` needs to call this, right after `start()`
     /// succeeds.
     pub async fn record_allow_uncertain_quality(
         pool: &SqlitePool,

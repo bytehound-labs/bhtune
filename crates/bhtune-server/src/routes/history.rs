@@ -2,7 +2,7 @@
 //! (full run detail: config, initial readings, samples, results, writes), `GET
 //! /api/runs/{id}/export` (CSV/JSON sample export), and `DELETE /api/runs/{id}`.
 //!
-//! DTO shapes deliberately mirror `bhtune-cli`'s `commands::history` `--output json` JSON
+//! DTO shapes deliberately mirror the `bhtune` CLI's `commands::history` `--output json` JSON
 //! (`RunSummaryJson`/`RunDetailJson`/etc.) field-for-field, so the CLI and the HTTP API
 //! describe the same run the same way -- one shape for the product's two faces, per this
 //! workspace's DTO-decoupling convention (every JSON-facing consumer builds its own

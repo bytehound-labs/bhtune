@@ -6,7 +6,7 @@
 //! Split into a lib (this crate, `bhtune_server`) and a thin `main.rs` binary shell so route
 //! handlers are directly testable via [`tower::ServiceExt::oneshot`] against
 //! [`build_router`]'s output, with no bound TCP socket needed -- the same lib/bin split
-//! `bhtune-cli` already uses for the same reason.
+//! the `bhtune` package already uses for the same reason.
 
 #![cfg_attr(
     test,
@@ -152,7 +152,7 @@ mod tests {
         let opc_servers = app
             .clone()
             .oneshot(
-                // Port 1 (a privileged/unlikely-bound port, matching `bhtune-cli`'s own
+                // Port 1 (a privileged/unlikely-bound port, matching the `bhtune` package's own
                 // `servers_connect_failure_surfaces_as_an_error` test precedent) so this
                 // resolves via a fast, deterministic connection refusal rather than the
                 // default bridge host, which nothing is guaranteed to be listening on either

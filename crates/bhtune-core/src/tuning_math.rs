@@ -394,7 +394,7 @@ pub fn opc_write_values(
 ///
 /// Returns both the intermediate [`TuningResult`] (Kp/Ti/Td, DCS-unit-independent) and the
 /// final [`PidParameters`] (in the template's own units) for each response level, since
-/// callers that persist a run (e.g. `bhtune-cli`'s `tune` command, via
+/// callers that persist a run (e.g. the `bhtune` CLI's `tune` command, via
 /// `bhtune_db::TuneResultRow::from_calculated`) need both — the schema records the
 /// control-theory result alongside the exact values it derived for the connected DCS.
 #[allow(clippy::too_many_arguments)]

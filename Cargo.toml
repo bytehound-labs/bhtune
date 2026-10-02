@@ -61,10 +61,10 @@ thiserror = "2"
 # (`crates/bhtune-core/templates/builtin.toml`) and `bhtune-runtime` parses configuration
 # and the user template catalog. Same major version `opcda-bridge` uses.
 toml = "1"
-# `bhtune-cli` has used this from the start; `bhtune-server` became a second consumer with
+# `bhtune` has used this from the start; `bhtune-server` became a second consumer with
 # `server-windows-service` (its `install`/`uninstall`/`start`/`stop`/`status` subcommands and
 # `--config` flag) -- promoted here rather than duplicating the version pin. Only `derive` is
-# common to both; `bhtune-cli`'s own `Cargo.toml` adds `env` on top, since `bhtune-server`'s
+# common to both; `bhtune`'s own `Cargo.toml` adds `env` on top, since `bhtune-server`'s
 # handful of flags have no env-var-flag equivalents (matching `utoipa`'s `chrono`-on-top
 # pattern below).
 clap = { version = "4", features = ["derive"] }

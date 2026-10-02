@@ -19,7 +19,7 @@ order here, not a fixed sequence.
 The release infrastructure is implemented, but the first stable product release remains
 pending. The state machine is fail-closed and keeps ownership explicit:
 
-- `bhtune-cli` is the single product-release anchor for the shared workspace version, product
+- `bhtune` is the single product-release anchor for the shared workspace version, product
   tag, and root `CHANGELOG.md`.
 - `release-plz` prepares git-only release changes and does not publish BHTune crates or create
   GitHub Releases.

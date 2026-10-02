@@ -15,7 +15,7 @@ the [design notes index](README.md) for provenance.
   so both adapters share configuration precedence, database bootstrap, and tracing setup
   without depending on one another. Every JSON-facing DTO in `routes/**/*.rs` is its
   own hand-written projection of the corresponding `bhtune-db` row type (never a `Serialize`
-  impl on the row type itself), mirroring `bhtune-cli`'s own `--output json` shapes
+  impl on the row type itself), mirroring the `bhtune` CLI's own `--output json` shapes
   field-for-field so the CLI and the HTTP API describe the same run the same way. Shuts down
   gracefully on Ctrl+C and, on Unix, `SIGTERM` (`axum::serve(...).with_graceful_shutdown(...)`),
   draining in-flight requests rather than dropping connections — proven by real subprocess
@@ -38,10 +38,9 @@ the [design notes index](README.md) for provenance.
   name both `"bhtune-server"`), the correct lookup in a test is
   `env!("CARGO_BIN_EXE_bhtune-server")` — **not** the underscored
   `CARGO_BIN_EXE_bhtune_server`, which fails to compile ("environment variable not defined at
-  compile time") even in a clean build. This is easy to get wrong by analogy with
-  `bhtune-cli`'s own tests, which use `CARGO_BIN_EXE_bhtune` without incident only because its
-  `[[bin]]` is named `bhtune` (no hyphen) while the package is `bhtune-cli` — a different name,
-  so there's nothing to substitute. The underscored form only exists as a _proposed_, not yet
+  compile time") even in a clean build. The `bhtune` package's binary is also named `bhtune`,
+  so its tests use `CARGO_BIN_EXE_bhtune`; the hyphen-preservation caveat does not apply to
+  that binary. The underscored form only exists as a _proposed_, not yet
   implemented, Cargo enhancement (upstream issue #16438); don't trust a search result that
   describes it as already shipped. Any future same-named, hyphenated `[[bin]]` in this
   workspace will hit the same thing.
@@ -129,7 +128,7 @@ string` is the one shared helper every hook (`templates.ts`, `runs.ts`) uses to 
   directly on every type an HTTP-facing DTO embeds (enums like `ProcessType`/
   `ControllerType`/`TemplateOrigin`, and structs like `LoopConfig`/`DcsTemplate`/`Tick`/
   `MrftState`). `bhtune-server` enables the feature (`features = ["utoipa"]`) on both path
-  dependencies; `bhtune-cli` never requests it, so a `cargo build -p bhtune-cli` in isolation
+  dependencies; `bhtune` never requests it, so a `cargo build -p bhtune` in isolation
   never even fetches `utoipa` into its dependency graph — the derive costs nothing for a
   consumer that doesn't ask for it, exactly the same shape this workspace already uses for
   optional `serde`-adjacent derives elsewhere. (Cargo's feature unification means a
@@ -238,7 +237,7 @@ and the three new tests (`revert_errors_when_the_run_has_no_recorded_connection`
 `revert_errors_when_an_explicit_bridge_host_flag_contradicts_the_recorded_one`). `bhtune-server`'s
 `/api/runs` list gained matching `opc_server`/`bridge_host` query filters, and the run-detail
 response gained the same two fields (deliberately _not_ the list/summary rows, matching `history
-list`'s table having no connection column either); `bhtune-cli`'s `history show` gained a
+list`'s table having no connection column either); the `bhtune` CLI's `history show` gained a
 "Connection:" line in `Table` mode and the same two fields in its `RunDetailJson`, so the CLI and
 HTTP API stay in JSON-shape parity. Unblocks `api-post-run-write` and `ui-prefill-last-run`, both of
 which need a stored, trustworthy connection/request to act on.
@@ -268,7 +267,7 @@ an ordinary `200` with the failure visible in the returned `writes[]` audit row,
 — matching how a failed write already behaved during an in-run write-back, and confirmed directly by
 a dedicated test. Route tests use the shared unpublished `bhtune-test-support` mock
 gRPC `Bridge` service through `crate::test_support::mock_bridge`. The same service backs
-`bhtune-cli::test_support` and `driver-opcda` smoke tests, so the three consumers cannot
+`bhtune_cli::test_support` and `driver-opcda` smoke tests, so the three consumers cannot
 drift. Both new routes
 were initially missing from `openapi.rs`'s explicit `paths(...)`/ `components(schemas(...))` lists —
 that module's own doc comment warns this fails silently (the route works; it's just absent from the

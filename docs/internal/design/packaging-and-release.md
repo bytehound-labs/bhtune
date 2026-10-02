@@ -7,7 +7,7 @@ the [design notes index](README.md) for provenance.
 
 `pkg-evaluate-others` and `pkg-aur` provide `.deb` and `.rpm` packages (via `cargo-deb` and
 `cargo-generate-rpm`, sharing the same asset set as the Docker image), the guarded `bhtune-bin` AUR
-generator and reusable validation/publication workflow, `cargo-binstall` metadata on `bhtune-cli`,
+generator and reusable validation/publication workflow, `cargo-binstall` metadata on `bhtune`,
 and a prepared-but-inert Homebrew formula awaiting a real tap repo and release checksums. The AUR
 workflow accepts only exact stable `vX.Y.Z` tags for publication; prereleases and arbitrary refs are
 validation-only, and the first publication is still a manual post-release action. `release.yml`
@@ -222,12 +222,12 @@ error but silently packages the wrong files (or none), so this was verified by b
 and manually inspecting the contents of both a real `.deb` and a real `.rpm` file — not
 just by reading the source.
 
-**`cargo-generate-rpm -p` is a path, not a crate name, despite its own `--help` text
+**`cargo-generate-rpm -p` is a path, not a package name, despite its own `--help` text
 saying otherwise** ("Name of a crate in the workspace") — confirmed in its source
 (`Config::new(Path::new(p), ...)` joins the argument directly with `Cargo.toml`). It must
-be invoked as `cargo generate-rpm -p crates/bhtune-cli`, not `-p bhtune-cli` (the latter
-fails with "No such file or directory"). `cargo-deb -p`, by contrast, really is a crate
-name, matching its own `--help` text correctly.
+be invoked as `cargo generate-rpm -p crates/bhtune-cli`, not `-p bhtune` (the latter fails
+with "No such file or directory"). `cargo-deb -p`, by contrast, really is a package name,
+matching its own `--help` text correctly.
 
 **Neither tool needs a hand-written `dpkg-shlibdeps`/`find-requires` step for shared
 library dependencies, but for different reasons.** `cargo-deb`'s `depends = "$auto"` calls
@@ -280,8 +280,8 @@ generate-rpm` does not and is built from source via `cargo install --locked` ins
 confirmed against its GitHub Releases, which carry no binary assets at all, only source
 tags.
 
-**`[package.metadata.binstall]`, added to `bhtune-cli` only, not `bhtune-server`.** Inert
-until `bhtune-cli` is actually published to crates.io (`release-plz.toml` has
+**`[package.metadata.binstall]`, added to `bhtune` only, not `bhtune-server`.** Inert
+until `bhtune` is actually published to crates.io (`release-plz.toml` has
 `publish = false` workspace-wide, pending `release-v1`), but ready the moment it is, since
 `cargo binstall` only reads this from a manifest it's already fetched — no separate opt-in
 step needed later. `bhtune-server` is deliberately excluded: it has its own
@@ -328,7 +328,7 @@ dependency list.
 ## Deferred setup (deliberate, not oversights)
 
 - **Release automation is implemented but fail-closed.** `release-plz.toml` is git-only and
-  keeps crates.io publication and GitHub Release creation disabled. `bhtune-cli` is the only
+  keeps crates.io publication and GitHub Release creation disabled. `bhtune` is the only
   product-release anchor; `.github/workflows/release.yml` is the sole GitHub Release/artifact
   owner. `.github/workflows/release-plz.yml`, `auto-merge.yml`, and `release-integrity.yml`
   exist, but every side-effecting release/tag/PR or auto-merge path requires

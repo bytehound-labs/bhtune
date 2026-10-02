@@ -1,4 +1,4 @@
-//! `bhtune-cli` — the headless adapter.
+//! `bhtune` — the headless adapter (Rust library target `bhtune_cli`).
 //!
 //! Builds the `bhtune` binary: a scriptable, no-GUI way to run an MRFT tune and inspect its
 //! history, intended for scheduled/unattended use (cron, CI, batch tuning campaigns) as well

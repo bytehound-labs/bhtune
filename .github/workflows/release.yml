@@ -156,7 +156,7 @@ jobs:
         run: pnpm --filter bhtune-frontend run build
 
       - name: Build release binaries
-        run: cargo build --release --locked -p bhtune-cli -p bhtune-server
+        run: cargo build --release --locked -p bhtune -p bhtune-server
 
       # Neither cargo-deb (with --no-build below) nor cargo-generate-rpm (which never
       # builds at all) strips symbols themselves in this invocation -- confirmed by local
@@ -182,7 +182,7 @@ jobs:
       # misleading here -- see the Cargo.toml comment above the
       # [package.metadata.generate-rpm] block for the source-level confirmation).
       - name: Build .deb package
-        run: cargo deb -p bhtune-cli --no-build -o target/debian/
+        run: cargo deb -p bhtune --no-build -o target/debian/
 
       # Unlike cargo-deb, cargo-generate-rpm does not create a missing `-o` directory
       # itself: confirmed by CI failing here with "Is a directory (os error 21)" on a

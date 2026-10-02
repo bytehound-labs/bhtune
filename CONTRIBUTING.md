@@ -37,7 +37,7 @@ recognized automatically on every later pull request.
 - `bhtune-runtime` owns the application services shared by the CLI and server: configuration,
   database bootstrap, logging, retention, driver setup, tune execution and safety, history
   write/revert operations, and shared exports.
-- `bhtune-cli` adapts `clap` commands and terminal interaction to the runtime. CLI prompts,
+- `bhtune` adapts `clap` commands and terminal interaction to the runtime. CLI prompts,
   exit codes, output formatting, and generated command references remain adapter concerns.
 - `bhtune-server` adapts HTTP requests and responses to the runtime. Axum routes, HTTP DTOs,
   OpenAPI schemas, and SPA serving remain server concerns; the server does not depend on the
@@ -238,7 +238,7 @@ Rust PRs must pass `cargo fmt --check --all`, `cargo clippy --workspace --all-ta
 --all-features -- -D warnings`, `cargo test --workspace`, `cargo deny check`, `cargo
 machete`, and a check that the generated OpenAPI spec (`openapi.json`) and CLI reference
 (`docs/reference/cli.md`, `man/`, `completions/`) are up to date before merge — run `cargo
-run -p bhtune-server --example gen_openapi` and `cargo run -p bhtune-cli --example gen_docs
+run -p bhtune-server --example gen_openapi` and `cargo run -p bhtune --example gen_docs
 --features schemars` and commit the result after changing an HTTP route/DTO or a `clap`
 argument, respectively. The package job runs `cargo package --workspace --locked
 --no-verify` to validate that every release archive can be assembled. Tarball verification
@@ -401,7 +401,7 @@ documentation, but should not hand-edit release version entries or workspace ver
 `release-plz` generates the release preparation commit and owns the versioned changelog entry
 when the release process is activated.
 
-Releases use a single product tag cut from `main`; there are no release branches. `bhtune-cli`
+Releases use a single product tag cut from `main`; there are no release branches. `bhtune`
 owns the product tag and release version, while `.github/workflows/release.yml` alone creates the
 GitHub Release and uploads artifacts. The current policy is git-only: BHTune crates are not
 published to crates.io. Release automation is guarded by the

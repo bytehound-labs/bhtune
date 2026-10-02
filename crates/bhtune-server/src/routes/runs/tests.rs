@@ -13,7 +13,7 @@ use clap::Parser;
 use tokio::sync::oneshot;
 use tower::ServiceExt;
 
-/// A fast-converging simulator-backed request body, mirroring `bhtune-cli`'s own
+/// A fast-converging simulator-backed request body, mirroring the `bhtune` CLI's own
 /// `fast_simulator_args()` test fixture for the per-run inputs. Global timing is supplied
 /// by `in_memory_state()`'s fast test configuration.
 fn fast_simulator_request_json() -> serde_json::Value {

@@ -58,7 +58,7 @@ exp(-dt/tau)`) is the exact analytical solution, not an approximation — verifi
   feature is never enabled anywhere in this workspace even after adding `opcda-bridge`/`tonic`:
   Cargo's feature unification would otherwise silently re-enable `Utc::now()`/`Local::now()`
   for `bhtune-core` too in any build that includes both crates (`cargo build --workspace`,
-  `cargo test --workspace`, and eventually `bhtune-cli`'s own binary) — confirmed by
+  `cargo test --workspace`, and eventually the `bhtune` binary) — confirmed by
   temporarily adding a `Utc::now()` call to `bhtune-core` and observing it still fails to
   compile with `opcda-bridge` present in the workspace. The field is diagnostic only (e.g.
   detecting a frozen tag whose timestamp stops advancing); it is never the tick time the
@@ -211,7 +211,7 @@ discretization and its numerical cross-check against that reference.
 `driver-replay` is implemented in `crates/bhtune-driver/src/replay.rs`: `ReplayDriver` feeds a
 recorded `(time, pv)` trace through the real `Driver` trait. Unlike `driver-opcda`/
 `driver-simulator`, it is **not a live driver and has no CLI-selectable driver kind** —
-`bhtune-cli`'s `DriverKindArg` enum deliberately has no `Replay` variant, and
+The `bhtune` CLI's `DriverKindArg` enum deliberately has no `Replay` variant, and
 `TryFrom<bhtune_db::models::TuneDriver>` errors for `TuneDriver::Replay` on purpose. Its entire
 purpose is validation: proving the `Driver` trait abstraction itself introduces no bugs on top
 of the already-proven-correct `MrftEngine`, by replaying a trace through the real trait rather

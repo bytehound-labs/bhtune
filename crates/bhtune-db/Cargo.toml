@@ -57,7 +57,7 @@ sqlx = { version = "0.9", default-features = false, features = [
 # `MvActuationKind`, `MvActuationStatus`, `RollbackState`, `WriteKind`) so
 # `bhtune-server`'s OpenAPI spec (`openapi-contract`)
 # describes them from the real type. Same rationale as `bhtune-core`'s identical optional
-# dependency -- see that crate's `Cargo.toml` comment; off by default, so `bhtune-cli` (which
+# dependency -- see that crate's `Cargo.toml` comment; off by default, so `bhtune` (which
 # depends on this crate but never touches HTTP) never pulls `utoipa` in.
 utoipa = { workspace = true, optional = true }
 

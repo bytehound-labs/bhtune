@@ -184,7 +184,7 @@ impl From<toml::de::Error> for TemplateError {
 }
 
 /// The embedded/user catalog's top-level shape: a TOML `[[template]]` array of tables. Also
-/// used in reverse by [`to_catalog_toml`] (bhtune-cli's `template export --format toml`), so
+/// used in reverse by [`to_catalog_toml`] (the `bhtune` CLI's `template export --format toml`), so
 /// export and import always agree on the exact same wire shape with no separate format to
 /// keep in sync by hand.
 #[derive(Debug, Serialize, Deserialize)]
@@ -194,9 +194,9 @@ struct Catalog {
 }
 
 /// Parses a TOML catalog (the `[[template]]` array-of-tables format used by
-/// `templates/builtin.toml` and the user catalog file bhtune-cli auto-loads) and validates
+/// `templates/builtin.toml` and the user catalog file the `bhtune` CLI auto-loads) and validates
 /// every template it contains. Pure -- takes an in-memory string and does no I/O itself;
-/// all file reading is the caller's job (bhtune-cli's `template-user-catalog`/
+/// all file reading is the caller's job (the `bhtune` CLI's `template-user-catalog`/
 /// `template-cli`), keeping this crate's "no I/O" rule intact.
 pub fn parse_catalog(input: &str) -> Result<Vec<DcsTemplate>, TemplateError> {
     let catalog: Catalog = toml::from_str(input)?;
@@ -207,7 +207,7 @@ pub fn parse_catalog(input: &str) -> Result<Vec<DcsTemplate>, TemplateError> {
 }
 
 /// Serializes `templates` as a TOML catalog in the exact `[[template]]` array-of-tables
-/// shape [`parse_catalog`] reads back -- the inverse operation. Used by bhtune-cli's
+/// shape [`parse_catalog`] reads back -- the inverse operation. Used by the `bhtune` CLI's
 /// `template export --format toml` (a single template exports as a one-entry catalog) so
 /// the contribution loop is export -> annotate -> PR with no hand-transcription step. Pure,
 /// like [`parse_catalog`]: writing the result to a file is the caller's job.

@@ -64,7 +64,7 @@ pub(crate) mod mock_bridge {
     }
 
     /// A "Good"-quality reading, regardless of which tag was requested --
-    /// matching `bhtune-cli`'s own `history::revert` test fixtures' rationale: every
+    /// matching the `bhtune` package's own `history::revert` test fixtures' rationale: every
     /// pre-read and every write's confirmation readback returns this same value, so a
     /// fixture that also writes/reverts to `10.0` always sees a matching readback no
     /// matter which of the three PID constants is being processed.

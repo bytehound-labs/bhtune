@@ -4680,7 +4680,7 @@
       },
       "SampleQuality": {
         "type": "string",
-        "description": "How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the\nmoment it was read (finding 5 of the live-plant safety review).\n\nA `bhtune-db`-local mirror of [`bhtune_driver::Quality`], not a reuse of it directly:\n`bhtune-db` deliberately doesn't depend on `bhtune-driver` (a leaf I/O-adapter crate with\na much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business\nin the persistence crate just to name one three-variant enum), so `bhtune-cli`, which\nalready depends on both, is the one place that converts between them. This mirrors\n[`TemplateOrigin`]'s own precedent: a small, persistence-local enum rather than a second\ndependency edge.",
+        "description": "How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the\nmoment it was read (finding 5 of the live-plant safety review).\n\nA `bhtune-db`-local mirror of [`bhtune_driver::Quality`], not a reuse of it directly:\n`bhtune-db` deliberately doesn't depend on `bhtune-driver` (a leaf I/O-adapter crate with\na much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business\nin the persistence crate just to name one three-variant enum), so the `bhtune` package, which\nalready depends on both, is the one place that converts between them. This mirrors\n[`TemplateOrigin`]'s own precedent: a small, persistence-local enum rather than a second\ndependency edge.",
         "enum": [
           "good",
           "uncertain",
@@ -5087,7 +5087,7 @@
             }
           }
         ],
-        "description": "The HTTP-facing shape of a stored template: the caller-supplied [`DcsTemplate`] fields\nflattened alongside the database-assigned `id`/`origin`/timestamps. Per this workspace's\nestablished DTO-decoupling convention (see `bhtune-cli`'s `commands::history` module doc\ncomments), [`DcsTemplateRow`] itself deliberately does not derive `Serialize` -- every\nJSON-facing consumer builds its own projection rather than the DB row shape leaking\nstraight onto the wire."
+        "description": "The HTTP-facing shape of a stored template: the caller-supplied [`DcsTemplate`] fields\nflattened alongside the database-assigned `id`/`origin`/timestamps. Per this workspace's\nestablished DTO-decoupling convention (see the `bhtune` CLI's `commands::history` module doc\ncomments), [`DcsTemplateRow`] itself deliberately does not derive `Serialize` -- every\nJSON-facing consumer builds its own projection rather than the DB row shape leaking\nstraight onto the wire."
       },
       "Tick": {
         "type": "object",

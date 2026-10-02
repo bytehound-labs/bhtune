@@ -43,7 +43,7 @@ pub enum DbError {
 
     /// [`crate::models::DcsTemplateRow::delete`] targeted a template that at least one
     /// `loops` row still references. The schema's `ON DELETE RESTRICT` foreign key is what
-    /// actually enforces this; this variant exists so `bhtune-cli`'s `template delete` can
+    /// actually enforces this; this variant exists so the `bhtune` CLI's `template delete` can
     /// turn the resulting SQLite foreign-key-violation error into a message naming the
     /// template rather than a raw SQL error, without needing its own `sqlx` dependency just
     /// to inspect the error kind.

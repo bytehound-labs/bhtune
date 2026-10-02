@@ -1,4 +1,4 @@
-//! `bhtune-server` binary: a thin bootstrap shell, mirroring `bhtune-cli`'s own `main.rs`/
+//! `bhtune-server` binary: a thin bootstrap shell, mirroring the `bhtune` package's own `main.rs`/
 //! `lib.rs::run` split -- see `bhtune_server`'s crate doc comment for why the actual routes
 //! live in the lib target instead.
 //!

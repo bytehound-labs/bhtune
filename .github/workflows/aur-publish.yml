@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           workspace_version="$(
             cargo metadata --locked --no-deps --format-version 1 |
-              python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "bhtune-cli"))'
+              python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "bhtune"))'
           )"
           tag_version="${TAG#v}"
           tag_base="${tag_version%%[-+]*}"
@@ -139,7 +139,7 @@ jobs:
           mkdir -p aur-fixture aur-release
           if [[ "$MODE" == dry-run ]]; then
             pnpm --filter bhtune-frontend run build
-            cargo build --release --locked -p bhtune-cli -p bhtune-server
+            cargo build --release --locked -p bhtune -p bhtune-server
             payload="aur-fixture/payload"
             mkdir -p "$payload"
             install -m755 target/release/bhtune "$payload/bhtune"

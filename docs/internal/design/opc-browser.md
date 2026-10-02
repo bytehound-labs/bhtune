@@ -63,7 +63,7 @@ servers [--bridge-host <HOST>]` fills the discovery gap in the existing `opc rea
 diagnostic family — it was previously impossible to discover a server's ProgID from bhtune at all,
 forcing a round-trip to `opcda-bridge-client`'s own CLI just to find out what to pass to `--server`.
 Both the shared smoke-test mock gateway (`bhtune-driver::opcda`'s own `smoke_tests` module) and
-`bhtune-cli`'s separate `test_support::MockBridgeService` gained a settable `list_servers_response`
+the `bhtune` package's separate `test_support::MockBridgeService` gained a settable `list_servers_response`
 field to cover this — the latter's mock previously hardcoded an empty response with a comment noting
 `list_servers` was never actually exercised by any CLI test, which is no longer true.
 

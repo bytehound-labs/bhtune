@@ -17,7 +17,7 @@ until the approved RC has passed its canary.
 
 | Responsibility                                        | Owner                                     |
 | ----------------------------------------------------- | ----------------------------------------- |
-| Product version, product tag, and root `CHANGELOG.md` | `bhtune-cli` through `release-plz`        |
+| Product version, product tag, and root `CHANGELOG.md` | `bhtune` through `release-plz`             |
 | Release preparation PR                                | `.github/workflows/release-plz.yml`       |
 | Release PR integrity status                           | `.github/workflows/release-integrity.yml` |
 | Protected-branch squash auto-merge request            | `.github/workflows/auto-merge.yml`        |

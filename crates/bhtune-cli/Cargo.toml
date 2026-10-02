@@ -1,5 +1,5 @@
 [package]
-name = "bhtune-cli"
+name = "bhtune"
 description = "Headless command-line adapter for BHTune: run MRFT tunes from scripts and schedulers with no GUI."
 version.workspace = true
 edition.workspace = true
@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation = "https://docs.rs/bhtune-cli"
+documentation = "https://docs.rs/bhtune"
 readme = "README.md"
 keywords = ["command-line", "control-systems", "industrial", "pid", "tuning"]
 categories = ["command-line-utilities"]
@@ -115,12 +115,12 @@ libc = "0.2"
 # `Command` clap definitions every real invocation of `bhtune` already parses against, so
 # these can never drift the way hand-written usage docs would. Dev-dependencies rather than
 # regular ones since nothing at runtime in the shipped `bhtune` binary needs to *generate*
-# its own docs -- only `cargo run -p bhtune-cli --example gen_docs` does.
+# its own docs -- only `cargo run -p bhtune --example gen_docs` does.
 clap-markdown = "0.1.5"
 clap_mangen = "0.3.3"
 clap_complete = "4.6.9"
 
-# `.deb` packaging (`pkg-evaluate-others`), built with `cargo deb -p bhtune-cli`. Lives on
+# `.deb` packaging (`pkg-evaluate-others`), built with `cargo deb -p bhtune`. Lives on
 # this crate rather than `bhtune-server` because it follows the release archive's own "one
 # package, not two" precedent (see `.github/workflows/release.yml`'s single
 # `bhtune-$tag-$target` bundle): one `.deb` ships both binaries, this crate's man
@@ -211,7 +211,7 @@ start = false
 # stripper itself; see its own README). Despite its `--help` text ("Name of a crate in the
 # workspace"), `-p`/`--package` is actually a *path* to the crate's directory, joined with
 # `Cargo.toml` and resolved relative to the current directory (confirmed in its own
-# source, `main.rs`/`Config::new`) -- a bare crate name like `bhtune-cli` fails with
+# source, `main.rs`/`Config::new`) -- a bare package name like `bhtune` fails with
 # "No such file or directory", it must be the path `crates/bhtune-cli`. Mirrors the `.deb`
 # block above: one package, the same asset set,
 # and the same `.deb`-variant systemd unit. Unlike `cargo-deb`, relative asset/script paths
@@ -224,7 +224,7 @@ start = false
 name = "bhtune"
 # Overrides the one-line RPM summary independently of this crate's own `description`
 # (unlike `cargo-deb`, which has no such override field and always inherits it verbatim --
-# see that block's comment above). Worth using here since `bhtune-cli`'s crate-level
+# see that block's comment above). Worth using here since `bhtune`'s crate-level
 # description only describes the CLI, not the bundled `bhtune-server` binary.
 summary = "MRFT PID auto-tuner (CLI + HTTP API/web GUI) for industrial control loops over OPC DA"
 vendor = "ByteHound Corp."
@@ -283,7 +283,7 @@ fi
 # `systemctl` is present whenever the scripts above run.
 systemd = ""
 
-# `cargo-binstall` metadata (`pkg-eval-binstall`). Inert today -- `bhtune-cli` isn't on
+# `cargo-binstall` metadata (`pkg-eval-binstall`). Inert today -- `bhtune` isn't on
 # crates.io yet (`release-plz.toml` has `publish = false` workspace-wide pending
 # `release-v1`) -- but ready the moment it is, since binstall only reads this from a
 # manifest it already fetched, needing no separate opt-in step. Only added to this crate,

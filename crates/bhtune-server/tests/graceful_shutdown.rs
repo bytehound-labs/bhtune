@@ -5,7 +5,7 @@
 //! `main.rs`'s own bootstrap (config/log/db resolution, `TcpListener::bind`,
 //! `axum::serve`) and `shutdown_signal()`'s real OS signal handling never run at all under
 //! `oneshot`, which drives the router directly against an in-memory request/response pair.
-//! Mirrors `bhtune-cli`'s own `tests/ctrlc_abort.rs` pattern and rationale: a real signal
+//! Mirrors the `bhtune` package's own `tests/ctrlc_abort.rs` pattern and rationale: a real signal
 //! can't be delivered to one `#[test]` inside a shared multi-threaded `cargo test` binary
 //! without also hitting every other concurrently running test, so this has to be a real
 //! subprocess. Unix-only (there is no POSIX `SIGINT`/`SIGTERM` on Windows; CI runs
@@ -33,7 +33,7 @@ async fn spawn_server() -> (Child, u16, tempfile::TempDir, tempfile::TempDir) {
     // Redirects the default log directory (and every other XDG-style default this process
     // would otherwise resolve) into a throwaway temp dir -- `bhtune-server` has no `--log-
     // dir`/`--config` flags of its own to override this more directly (see `main.rs`'s doc
-    // comment), unlike `bhtune-cli`'s `tests/ctrlc_abort.rs`, which passes `--log-dir`
+    // comment), unlike the `bhtune` package's `tests/ctrlc_abort.rs`, which passes `--log-dir`
     // explicitly. Without this, logging setup would resolve the real platform default (e.g.
     // `~/.local/share/bhtune/logs`) using this test process's actual inherited `HOME`, since
     // `Command::new` inherits the parent's environment by default.

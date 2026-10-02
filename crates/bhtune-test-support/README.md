@@ -3,7 +3,7 @@
 Unpublished shared test doubles for BHTune. This crate is not a product and is not a
 release artifact.
 
-`MockBridgeService` is the one mock gRPC `Bridge` used by `bhtune-driver`, `bhtune-cli`,
+`MockBridgeService` is the one mock gRPC `Bridge` used by `bhtune-driver`, `bhtune`,
 and `bhtune-server` tests. It depends only on `opcda-bridge-proto`, so those crates can
 depend on it from tests without a cycle. `start_mock_server` binds an ephemeral localhost
 port and returns a handle whose `shutdown` method joins the server task.

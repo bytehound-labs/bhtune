@@ -43,7 +43,7 @@ pub use models::DemoSessionRow;
 pub use pool::{connect, connect_in_memory, connect_read_only};
 pub use seed::{SeedOutcome, SeedResult, seed_builtin_templates, seed_templates};
 // Every `models`/`pool` function already takes/returns `sqlx::SqlitePool` in its public
-// signature, so re-exporting the type here lets downstream crates (e.g. `bhtune-cli`) name
+// signature, so re-exporting the type here lets downstream crates (e.g. the `bhtune` package) name
 // and hold onto a pool without adding their own direct `sqlx` dependency that would then
 // need to independently track the exact same version this crate uses internally.
 pub use sqlx::SqlitePool;
