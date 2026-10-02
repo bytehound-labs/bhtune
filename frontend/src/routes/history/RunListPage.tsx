@@ -76,11 +76,16 @@ export function RunListPage({
     parsedUrl.state,
     isDemo,
   ).toString();
-  const invalidUrlMessage = invalidParameterKey
-    ? unavailableInDemo
-      ? "History filters are unavailable in Demo mode. Unsupported URL values were reset."
-      : "Invalid history filter or page URL values were reset."
-    : null;
+  let invalidUrlMessage: string | null = null;
+  if (invalidParameterKey) {
+    if (unavailableInDemo) {
+      invalidUrlMessage =
+        "History filters are unavailable in Demo mode. Unsupported URL values were reset.";
+    } else {
+      invalidUrlMessage =
+        "Invalid history filter or page URL values were reset.";
+    }
+  }
   const urlNoticeMessage =
     invalidUrlMessage ?? storedHistoryNotice(location.state, rawSearch);
   const processTypeFilterId = useId();

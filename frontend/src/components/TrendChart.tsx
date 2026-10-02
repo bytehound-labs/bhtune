@@ -198,18 +198,15 @@ export function TrendChart({
   return (
     <figure aria-describedby={descriptionId}>
       <div ref={containerRef} />
-      <div
-        role="group"
-        aria-label="Trend series legend"
-        className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-300"
-      >
+      <fieldset className="mt-3 flex min-w-0 flex-wrap gap-x-5 gap-y-2 border-0 p-0 text-xs text-slate-300">
+        <legend className="sr-only">Trend series legend</legend>
         <span className="inline-flex items-center gap-2">
           <span
             aria-hidden="true"
             className="h-0.5 w-4"
             style={{ backgroundColor: "var(--bhtune-chart-pv)" }}
           />
-          PV (raw tag units)
+          <span>PV (raw tag units)</span>
         </span>
         <span className="inline-flex items-center gap-2">
           <span
@@ -217,9 +214,9 @@ export function TrendChart({
             className="h-0.5 w-4"
             style={{ backgroundColor: "var(--bhtune-chart-mv)" }}
           />
-          Commanded MV (raw tag units)
+          <span>Commanded MV (raw tag units)</span>
         </span>
-      </div>
+      </fieldset>
       <p className="mt-1 break-words text-xs text-slate-500">
         Recorded run tag: <span className="font-mono">{tagName}</span>. PV and
         commanded MV are shown as raw values; engineering units are not
