@@ -4,11 +4,46 @@ use super::helpers::{
 };
 use super::validation::require_writable_run;
 use super::{
-    ApiError, AppState, CtrlC, ErrorBody, Json, Path, RunAlreadyActive, RunDetailResponse,
-    StartRunRequest, State, StatusCode, TuneResultRow, TuneRunRow, UpdateNotesRequest, Utc,
-    WriteKind, WriteReadback, WriteRunRequest, build_run_detail, drive, opc_write_values,
-    pid_parameters_for_result, prepare, require_present,
+    ApiError, AppState, CtrlC, ErrorBody, Json, Path, PreflightResponse, RunAlreadyActive,
+    RunDetailResponse, StartRunRequest, State, StatusCode, TuneResultRow, TuneRunRow,
+    UpdateNotesRequest, Utc, WriteKind, WriteReadback, WriteRunRequest, build_run_detail, drive,
+    opc_write_values, pid_parameters_for_result, preflight, prepare, require_present,
 };
+
+/// Check whether a proposed tune is ready without preparing or starting a run.
+///
+/// `POST /api/runs/preflight` accepts the same request as `POST /api/runs`, then delegates
+/// to the runtime's read-only preflight with the server's read-only template database.
+/// It does not insert a run, start background work, or write controller values.
+/// The endpoint is mounted only in Full mode; Demo mode does not expose preflight.
+#[utoipa::path(
+    post,
+    path = "/api/runs/preflight",
+    tag = "runs",
+    request_body = StartRunRequest,
+    responses(
+        (status = 200, description = "The pass/warn/fail readiness report.", body = PreflightResponse),
+        (status = 400, description = "The request is invalid or the preflight could not complete.", body = ErrorBody),
+        (status = 500, description = "The server configuration could not be read.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn preflight_run(
+    State(state): State<AppState>,
+    Json(request): Json<StartRunRequest>,
+) -> Result<Json<PreflightResponse>, ApiError> {
+    let request = request.into_validated_tune_request()?;
+    let app_config = state.config_snapshot()?;
+    let report = preflight(
+        request,
+        &app_config,
+        state.preflight_database.as_ref(),
+        None,
+    )
+    .await
+    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+
+    Ok(Json(report.into()))
+}
 
 /// Start a new tune run.
 ///

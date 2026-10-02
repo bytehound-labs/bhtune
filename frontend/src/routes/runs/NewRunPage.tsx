@@ -14,6 +14,7 @@ import { userFacingErrorMessage } from "../../api/errors";
 import {
   useLastRunRequest,
   useRunDraft,
+  useRunPreflight,
   useSaveRunDraft,
   useStartRun,
 } from "../../api/runs";
@@ -30,6 +31,7 @@ import {
 } from "./SimulatorFields";
 import { TestParameterFields } from "./TestParameterFields";
 import { WriteBackFields } from "./WriteBackFields";
+import { PreflightReportModal } from "./PreflightReportModal";
 import { applyTagNameChange } from "./applyTagNameChange";
 import {
   demoDraftFromForm,
@@ -111,6 +113,7 @@ export function NewRunPage({
   const isDemo = capabilities.mode === "demo";
   const templates = useTemplates(!isDemo);
   const startRun = useStartRun(isDemo ? "demo" : "full");
+  const preflight = useRunPreflight();
   const lastRunRequest = useLastRunRequest(!isDemo);
   const runDraft = useRunDraft(!isDemo);
   const {
@@ -175,6 +178,7 @@ export function NewRunPage({
   const draftSaveChainRef = useRef(Promise.resolve());
   const saveDraftAsync = saveRunDraft.mutateAsync;
   const [tagBrowserOpen, setTagBrowserOpen] = useState(false);
+  const [preflightOpen, setPreflightOpen] = useState(false);
   const activeTemplate = templates.data?.find(
     (template) => template.name === form.template,
   );
@@ -207,6 +211,7 @@ export function NewRunPage({
   if (hydratedPageState) setPageState(hydratedPageState);
 
   function setForm(action: SetStateAction<FormState>) {
+    preflight.reset();
     setPageState((previous) => ({
       ...previous,
       form: typeof action === "function" ? action(previous.form) : action,
@@ -266,6 +271,7 @@ export function NewRunPage({
   }
 
   function resetToDefaults() {
+    preflight.reset();
     setPageState((previous) => ({
       ...previous,
       form: defaultPageForm,
@@ -406,6 +412,7 @@ export function NewRunPage({
   }
 
   function setTemplate(value: string) {
+    preflight.reset();
     setPageState((previous) => {
       const template = templates.data?.find((item) => item.name === value);
       const tagname = template
@@ -459,6 +466,18 @@ export function NewRunPage({
     });
   }
 
+  function checkReadiness() {
+    preflight.reset();
+    setValidationError(null);
+    const request = buildRequest(form);
+    if (typeof request === "string") {
+      setValidationError(request);
+      return;
+    }
+    setPreflightOpen(true);
+    preflight.mutate(request);
+  }
+
   function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     submitTune();
@@ -476,9 +495,18 @@ export function NewRunPage({
         }
         actions={
           <>
+            {!isDemo && (
+              <Button
+                loading={preflight.isPending}
+                disabled={preflight.isPending || startRun.isPending}
+                onClick={checkReadiness}
+              >
+                Check readiness
+              </Button>
+            )}
             <Button
               variant="primary"
-              disabled={startRun.isPending}
+              disabled={startRun.isPending || preflight.isPending}
               onClick={submitTune}
             >
               {startRun.isPending ? "Starting…" : "Start tune"}
@@ -605,6 +633,13 @@ export function NewRunPage({
           onSelect={setTagName}
         />
       )}
+      <PreflightReportModal
+        open={preflightOpen}
+        pending={preflight.isPending}
+        report={preflight.data}
+        error={preflight.isError ? preflight.error : null}
+        onClose={() => setPreflightOpen(false)}
+      />
     </div>
   );
 }

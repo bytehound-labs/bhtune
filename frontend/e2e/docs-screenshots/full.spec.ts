@@ -101,6 +101,66 @@ test("full-tune-opc", async ({ page }) => {
   await captureScenario(page, "full-tune-opc");
 });
 
+test("full-preflight-report", async ({ page }) => {
+  await page.route("**/api/runs/preflight", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "warn",
+        checks: [
+          {
+            name: "Configuration and tuning",
+            status: "pass",
+            detail: "[tuning] is valid for the requested run.",
+          },
+          {
+            name: "Gateway compatibility",
+            status: "warn",
+            detail: "The gateway version could not be verified.",
+          },
+          {
+            name: "Initial state",
+            status: "pass",
+            detail: "The initial PV and MV values are within range.",
+          },
+        ],
+        tag_reads: [
+          {
+            tag: "Area01.FIC101.PV",
+            roles: ["process_variable"],
+            value: "48.2",
+            quality: "Good",
+            status: "pass",
+            detail: "The current process value is readable.",
+          },
+          {
+            tag: "Area01.FIC101.OUT",
+            roles: ["manipulated_variable"],
+            value: "41.0",
+            quality: "Good",
+            status: "pass",
+            detail: "The current output is readable.",
+          },
+        ],
+      }),
+    }),
+  );
+  await openOpcTune(page);
+  await page.getByRole("button", { name: "Check readiness" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByRole("heading", { name: "Readiness check" }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: "Tag reads" }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByText("Area01.FIC101.PV", { exact: true }),
+  ).toBeVisible();
+  await captureScenario(page, "full-preflight-report");
+});
+
 test("full-opc-server-picker", async ({ page }) => {
   await openOpcTune(page);
   await page.getByRole("button", { name: "Browse servers" }).click();

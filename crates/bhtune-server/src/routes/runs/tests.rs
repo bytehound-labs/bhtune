@@ -109,6 +109,168 @@ async fn body_json(response: axum::http::Response<Body>) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+#[tokio::test]
+async fn preflight_returns_the_runtime_report_without_creating_a_run() {
+    let state = crate::test_support::in_memory_state().await;
+
+    let response = post_json(
+        crate::build_router(state.clone()),
+        "/api/runs/preflight",
+        fast_simulator_request_json(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let report = body_json(response).await;
+    assert_eq!(report["status"], "pass");
+    assert!(
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["name"] == "Configuration and tuning")
+    );
+    assert!(
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|check| ["pass", "warn", "fail"].contains(&check["status"].as_str().unwrap()))
+    );
+    assert!(report["tag_reads"].is_array());
+
+    let runs = TuneRunRow::list(
+        &state.pool,
+        &TuneRunFilter::default(),
+        Pagination::default(),
+    )
+    .await
+    .unwrap();
+    assert!(runs.is_empty());
+    assert!(state.active_run.active_run_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn preflight_rejects_unsupported_driver_without_database_writes() {
+    let state = crate::test_support::in_memory_state().await;
+    let mut request = fast_simulator_request_json();
+    request["driver"] = serde_json::json!("replay");
+
+    let response = post_json(
+        crate::build_router(state.clone()),
+        "/api/runs/preflight",
+        request,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("replay driver")
+    );
+    assert!(
+        TuneRunRow::list(
+            &state.pool,
+            &TuneRunFilter::default(),
+            Pagination::default(),
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn preflight_surfaces_missing_server_as_bad_request_without_writes() {
+    let state = crate::test_support::in_memory_state().await;
+    let mut request = fast_simulator_request_json();
+    request["driver"] = serde_json::json!("opcda");
+
+    let response = post_json(
+        crate::build_router(state.clone()),
+        "/api/runs/preflight",
+        request,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(response).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("server")
+    );
+    assert!(
+        TuneRunRow::list(
+            &state.pool,
+            &TuneRunFilter::default(),
+            Pagination::default(),
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+    assert!(state.active_run.active_run_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn opcda_preflight_does_not_write_to_the_mock_controller() {
+    use std::sync::atomic::Ordering;
+
+    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+    use opcda_bridge_proto::bridge::ListServersResponse;
+
+    let service = MockBridgeService {
+        read_response: good_reading("10"),
+        list_servers_response: ListServersResponse {
+            servers: vec!["Mock.Server".to_string()],
+        },
+        ..Default::default()
+    };
+    let write_calls = std::sync::Arc::clone(&service.write_calls);
+    let (bridge_host, mock_server) = start_mock_server(service).await;
+    let state = crate::test_support::in_memory_state().await;
+    let mut request = fast_simulator_request_json();
+    request["driver"] = serde_json::json!("opcda");
+    request["tagname"] = serde_json::json!("Area1.LIC101.PV");
+    request["bridge_host"] = serde_json::json!(bridge_host);
+    request["server"] = serde_json::json!("Mock.Server");
+    request["yes"] = serde_json::json!(true);
+    request["write_pid"] = serde_json::json!("moderate");
+
+    let response = post_json(
+        crate::build_router(state.clone()),
+        "/api/runs/preflight",
+        request,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let report = body_json(response).await;
+    assert!(
+        report["checks"]
+            .as_array()
+            .is_some_and(|checks| !checks.is_empty())
+    );
+    assert!(
+        report["tag_reads"]
+            .as_array()
+            .is_some_and(|reads| reads.iter().any(|read| read["tag"] == "Area1.LIC101.PV"))
+    );
+    assert_eq!(write_calls.load(Ordering::SeqCst), 0);
+    assert!(
+        TuneRunRow::list(
+            &state.pool,
+            &TuneRunFilter::default(),
+            Pagination::default(),
+        )
+        .await
+        .unwrap()
+        .is_empty()
+    );
+    assert!(state.active_run.active_run_ids().await.is_empty());
+    mock_server.shutdown().await;
+}
+
 #[test]
 fn cli_and_http_start_requests_share_simulator_defaults() {
     let cli = cli_validated_request("simulator", &[]).unwrap();

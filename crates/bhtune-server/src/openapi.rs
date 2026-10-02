@@ -38,6 +38,7 @@ use crate::routes::{capabilities, config, draft, health, history, opc, runs, str
         history::show_run,
         history::export_run,
         history::delete_run,
+        runs::preflight_run,
         runs::start_run,
         runs::cancel_run,
         runs::update_notes,
@@ -73,6 +74,10 @@ use crate::routes::{capabilities, config, draft, health, history, opc, runs, str
         history::RunDetailResponse,
         bhtune_db::models::EffectiveTuning,
         history::RunExportFormat,
+        runs::PreflightCheckResponse,
+        runs::PreflightResponse,
+        runs::PreflightStatus,
+        runs::PreflightTagReadResponse,
         runs::StartRunRequest,
         draft::NewRunDraft,
         config::ConfigResponse,
@@ -171,6 +176,36 @@ mod tests {
             "OpcIndexSchedulerResponse",
             "OpcIndexedSearchMatchResponse",
             "OpcSearchIndexResponse",
+        ] {
+            assert!(
+                document["components"]["schemas"][schema].is_object(),
+                "missing schema {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_spec_documents_full_mode_preflight_request_and_report() {
+        let spec = ApiDoc::openapi();
+        let document: serde_json::Value =
+            serde_json::from_str(&spec.to_json().expect("generated spec must be valid JSON"))
+                .expect("generated spec must be valid JSON");
+        let operation = &document["paths"]["/api/runs/preflight"]["post"];
+
+        assert!(operation.is_object(), "missing POST /api/runs/preflight");
+        assert_eq!(
+            operation["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/StartRunRequest"
+        );
+        assert_eq!(
+            operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/PreflightResponse"
+        );
+        for schema in [
+            "PreflightResponse",
+            "PreflightCheckResponse",
+            "PreflightTagReadResponse",
+            "PreflightStatus",
         ] {
             assert!(
                 document["components"]["schemas"][schema].is_object(),

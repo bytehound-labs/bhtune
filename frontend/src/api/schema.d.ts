@@ -345,6 +345,29 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/runs/preflight": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Check whether a proposed tune is ready without preparing or starting a run.
+     * @description `POST /api/runs/preflight` accepts the same request as `POST /api/runs`, then delegates
+     *     to the runtime's read-only preflight with the server's read-only template database.
+     *     It does not insert a run, start background work, or write controller values.
+     *     The endpoint is mounted only in Full mode; Demo mode does not expose preflight.
+     */
+    post: operations["preflight_run"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/runs/{id}": {
     parameters: {
       query?: never;
@@ -1458,6 +1481,44 @@ export interface components {
       sample_persist: components["schemas"]["TimingSummary"];
       tick_work: components["schemas"]["TimingSummary"];
     };
+    /** @description One check and its operator-facing detail in a preflight report. */
+    PreflightCheckResponse: {
+      /** @description Diagnostic detail. */
+      detail: string;
+      /** @description Check name. */
+      name: string;
+      /** @description Result severity. */
+      status: components["schemas"]["PreflightStatus"];
+    };
+    /** @description The summarized pass/warn/fail result returned by the read-only preflight endpoint. */
+    PreflightResponse: {
+      /** @description Configuration, template, gateway, and loop checks. */
+      checks: components["schemas"]["PreflightCheckResponse"][];
+      /** @description Highest severity in the checks and tag reads. */
+      status: components["schemas"]["PreflightStatus"];
+      /** @description Per-tag values, qualities, and validation results. */
+      tag_reads: components["schemas"]["PreflightTagReadResponse"][];
+    };
+    /**
+     * @description Overall severity of a read-only preflight report.
+     * @enum {string}
+     */
+    PreflightStatus: "pass" | "warn" | "fail";
+    /** @description One derived tag read and its operator-facing detail in a preflight report. */
+    PreflightTagReadResponse: {
+      /** @description Diagnostic detail. */
+      detail: string;
+      /** @description Driver quality, if any. */
+      quality?: string | null;
+      /** @description Roles this tag serves in the requested loop. */
+      roles: string[];
+      /** @description Result severity. */
+      status: components["schemas"]["PreflightStatus"];
+      /** @description Exact derived tag name. */
+      tag: string;
+      /** @description Value returned by the driver, if any. */
+      value?: string | null;
+    };
     ProcessControllerCompatibility: {
       controller_types: components["schemas"]["ControllerType"][];
       process_type: components["schemas"]["ProcessType"];
@@ -1667,13 +1728,13 @@ export interface components {
      */
     ServerMode: "full" | "demo";
     /**
-     * @description The body of `POST /api/runs` contains the per-run tune inputs. Operational timing values
-     *     are intentionally absent: they are resolved from the global `[tuning]` configuration by
-     *     `prepare()`, just as they are for a CLI invocation. Every field that has a CLI default
-     *     (`--sim-gain`, etc.) repeats that exact default here via `#[serde(default = "...")]`, so an
-     *     HTTP caller that omits a field gets identical behavior to a CLI invocation that omits the
-     *     matching flag. `Option<T>` fields need no `#[serde(default)]` of their own -- serde already
-     *     treats a missing key as `None` for an `Option` field.
+     * @description The bodies of `POST /api/runs` and `POST /api/runs/preflight` contain the per-run tune
+     *     inputs. Operational timing values are intentionally absent: both preparation and preflight
+     *     resolve them from the global `[tuning]` configuration, just as they are for a CLI invocation.
+     *     Every field that has a CLI default (`--sim-gain`, etc.) repeats that exact default here via
+     *     `#[serde(default = "...")]`, so an HTTP caller that omits a field gets identical behavior to a
+     *     CLI invocation that omits the matching flag. `Option<T>` fields need no `#[serde(default)]`
+     *     of their own -- serde already treats a missing key as `None` for an `Option` field.
      *
      *     Also derives `Serialize` so the exact same type can serve as `GET /api/runs/last-request`'s
      *     response (`ui-prefill-last-run`, in `routes::history::last_request`): that endpoint parses
@@ -2704,6 +2765,48 @@ export interface operations {
         };
         content: {
           "application/json": null | components["schemas"]["StartRunRequest"];
+        };
+      };
+    };
+  };
+  preflight_run: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["StartRunRequest"];
+      };
+    };
+    responses: {
+      /** @description The pass/warn/fail readiness report. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PreflightResponse"];
+        };
+      };
+      /** @description The request is invalid or the preflight could not complete. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The server configuration could not be read. */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
         };
       };
     };
