@@ -116,8 +116,8 @@ final separator are preserved.
 
 {/* web-ui-screenshot: full-opc-tag-browser */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=41fec8857832">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=41fec8857832" alt="BHTune OPC tag browser with Area01.FIC101.OUT selected and its quality read visible" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=31a936ca2e44">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=31a936ca2e44" alt="BHTune OPC tag browser with Area01.FIC101.OUT selected and its quality read visible" />
   </a>
   <figcaption>The browser verifies the originally selected item before applying the template's process-variable suffix.</figcaption>
 </figure>

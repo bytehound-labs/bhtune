@@ -465,7 +465,7 @@ function TagMappingRow({
       }`}
     >
       <legend className="sr-only">{row.label}</legend>
-      <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(10rem,1fr)_auto_minmax(14rem,2fr)_auto] lg:items-start lg:gap-4">
+      <div className="flex flex-col gap-3 min-[1025px]:grid min-[1025px]:grid-cols-[minmax(10rem,1fr)_auto_minmax(14rem,2fr)_auto] min-[1025px]:items-start min-[1025px]:gap-4">
         <div>
           <div className="text-sm font-medium text-slate-200">{row.label}</div>
           <div className="mt-1 text-xs text-slate-500">
@@ -657,7 +657,7 @@ function ValueMappingRow({
   return (
     <fieldset className="m-0 rounded-md border border-slate-800 p-3">
       <legend className="sr-only">{row.label}</legend>
-      <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(10rem,1fr)_auto_minmax(14rem,2fr)_auto] lg:items-start lg:gap-4">
+      <div className="flex flex-col gap-3 min-[1025px]:grid min-[1025px]:grid-cols-[minmax(10rem,1fr)_auto_minmax(14rem,2fr)_auto] min-[1025px]:items-start min-[1025px]:gap-4">
         <div>
           <div className="text-sm font-medium text-slate-200">{row.label}</div>
           <div className="mt-1 text-xs text-slate-500">

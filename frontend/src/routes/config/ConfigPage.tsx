@@ -11,6 +11,7 @@ import {
   CheckboxField,
   ErrorBanner,
   FormSection,
+  InlineStatus,
   LoadingState,
   NumberField,
   PageHeading,
@@ -200,11 +201,7 @@ function ConfigStatusMessages({
           You have unsaved changes.
         </div>
       )}
-      {saveMessage && (
-        <div className="rounded-md border border-emerald-800 bg-emerald-950/50 px-4 py-3 text-sm text-emerald-300">
-          {saveMessage}
-        </div>
-      )}
+      {saveMessage && <InlineStatus message={saveMessage} />}
       {saveError && !isConflict && (
         <ErrorBanner message={apiErrorMessage(saveError)} />
       )}

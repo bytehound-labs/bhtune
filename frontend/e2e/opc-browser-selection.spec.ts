@@ -101,6 +101,24 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await expect(tagNode).toBeFocused();
     await page.keyboard.press("Space");
     await expect(tagNode).toHaveAttribute("aria-selected", "true");
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            window.localStorage.setItem("copied-item-id", value);
+          },
+        },
+      });
+    });
+    await page.getByRole("button", { name: "Copy ItemID" }).click();
+    await expect(
+      page.getByText("ItemID copied to the clipboard.", { exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(() => localStorage.getItem("copied-item-id")),
+    ).toBe(originalTag);
+    await tagNode.focus();
     await page.keyboard.press("Enter");
     await page.keyboard.press("ArrowLeft");
     await expect(systemNode).toBeFocused();

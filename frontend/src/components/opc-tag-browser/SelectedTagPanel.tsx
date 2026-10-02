@@ -4,6 +4,7 @@ import {
   SAMPLE_QUALITY_LABELS,
   SAMPLE_QUALITY_TONE,
 } from "../../lib/enumLabels";
+import { CopyButton } from "../CopyButton";
 import { Badge, Button, ErrorBanner } from "../ui";
 
 type SelectedTagPanelProps = Readonly<{
@@ -42,9 +43,13 @@ export function SelectedTagPanel({
       )}
       {selectedTag && (
         <>
-          <p className="text-sm text-slate-200">
-            Selected: <span className="font-mono">{selectedTag}</span>
-          </p>
+          <div className="flex max-w-full flex-wrap items-center gap-2">
+            <p className="text-sm text-slate-200">
+              Selected:{" "}
+              <span className="break-all font-mono">{selectedTag}</span>
+            </p>
+            <CopyButton value={selectedTag} label="ItemID" />
+          </div>
           <p className="mt-1 text-xs text-slate-500">
             Select tag applies the active template&apos;s process-variable
             suffix. Review or override the rest of the mapping in the collapsed

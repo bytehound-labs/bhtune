@@ -99,9 +99,11 @@ function LiveProgress({ stream }: { readonly stream: RunStreamState }) {
 
 function TrendSection({
   points,
+  tagName,
   pollIntervalMs,
 }: {
   readonly points: readonly TrendPoint[];
+  readonly tagName: string;
   readonly pollIntervalMs: number | null | undefined;
 }) {
   return (
@@ -109,7 +111,11 @@ function TrendSection({
       {points.length === 0 ? (
         <p className="text-sm text-slate-500">No measurements recorded yet.</p>
       ) : (
-        <TrendChart points={points} pollIntervalMs={pollIntervalMs} />
+        <TrendChart
+          points={points}
+          tagName={tagName}
+          pollIntervalMs={pollIntervalMs}
+        />
       )}
     </CollapsibleSection>
   );
@@ -623,7 +629,11 @@ export function RunDetailContent({
           onWrite={onWrite}
         />
       )}
-      <TrendSection points={trendPoints} pollIntervalMs={trendPollIntervalMs} />
+      <TrendSection
+        points={trendPoints}
+        tagName={run.tag_name}
+        pollIntervalMs={trendPollIntervalMs}
+      />
       <SummarySection run={run} demo={demo} />
       {!demo && (
         <NotesSection

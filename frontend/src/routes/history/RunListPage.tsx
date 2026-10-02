@@ -1,5 +1,5 @@
-import { useId, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useId } from "react";
+import { Link, useLocation, useSearchParams } from "react-router";
 import { useRuns } from "../../api/runs";
 import type { RunListFilter } from "../../api/runs";
 import { userFacingErrorMessage } from "../../api/errors";
@@ -14,20 +14,18 @@ import {
   Button,
   EmptyState,
   ErrorBanner,
+  InlineStatus,
   LoadingState,
   PageHeading,
 } from "../../components/ui";
-
-const PROCESS_TYPES = [
-  "flow",
-  "pressure_line",
-  "pressure_vessel",
-  "level",
-  "temperature_mixing",
-  "temperature_heat_exchange",
-] as const;
-const OUTCOMES = ["running", "completed", "failed", "aborted"] as const;
-const DRIVERS = ["opcda", "simulator", "replay"] as const;
+import {
+  HISTORY_DRIVERS,
+  HISTORY_OUTCOMES,
+  HISTORY_PAGE_SIZE,
+  HISTORY_PROCESS_TYPES,
+  historyUrlSearchParams,
+  parseHistoryUrlState,
+} from "./historyUrlState";
 
 const outcomeTone = {
   running: "neutral",
@@ -36,7 +34,24 @@ const outcomeTone = {
   aborted: "warning",
 } as const;
 
-const PAGE_SIZE = 50;
+function storedHistoryNotice(state: unknown, search: string): string | null {
+  if (
+    !state ||
+    typeof state !== "object" ||
+    !("historyNotice" in state) ||
+    !state.historyNotice ||
+    typeof state.historyNotice !== "object" ||
+    !("search" in state.historyNotice) ||
+    !("message" in state.historyNotice)
+  ) {
+    return null;
+  }
+
+  return state.historyNotice.search === search &&
+    typeof state.historyNotice.message === "string"
+    ? state.historyNotice.message
+    : null;
+}
 
 export function RunListPage({
   capabilities,
@@ -44,31 +59,100 @@ export function RunListPage({
   readonly capabilities: AppCapabilities;
 }) {
   const isDemo = capabilities.mode === "demo";
-  const [processType, setProcessType] = useState("");
-  const [outcome, setOutcome] = useState("");
-  const [driver, setDriver] = useState("");
-  const [offset, setOffset] = useState(0);
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawSearch = searchParams.toString();
+  const parsedUrl = parseHistoryUrlState(
+    new URLSearchParams(rawSearch),
+    isDemo,
+  );
+  const { processType, outcome, driver, offset } = parsedUrl.state;
+  const invalidParameterKey = parsedUrl.invalidParameters.join(",");
+  const unavailableInDemo =
+    isDemo &&
+    parsedUrl.invalidParameters.some((parameter) => parameter !== "offset");
+  const normalizedSearch = historyUrlSearchParams(
+    searchParams,
+    parsedUrl.state,
+    isDemo,
+  ).toString();
+  let invalidUrlMessage: string | null = null;
+  if (invalidParameterKey) {
+    if (unavailableInDemo) {
+      invalidUrlMessage =
+        "History filters are unavailable in Demo mode. Unsupported URL values were reset.";
+    } else {
+      invalidUrlMessage =
+        "Invalid history filter or page URL values were reset.";
+    }
+  }
+  const urlNoticeMessage =
+    invalidUrlMessage ?? storedHistoryNotice(location.state, rawSearch);
   const processTypeFilterId = useId();
   const outcomeFilterId = useId();
   const driverFilterId = useId();
 
   const filter: RunListFilter = {
-    limit: PAGE_SIZE,
+    limit: HISTORY_PAGE_SIZE,
     offset,
     ...(processType && {
-      process_type: processType as (typeof PROCESS_TYPES)[number],
+      process_type: processType,
     }),
-    ...(outcome && { outcome: outcome as (typeof OUTCOMES)[number] }),
-    ...(driver && { driver: driver as (typeof DRIVERS)[number] }),
+    ...(outcome && { outcome }),
+    ...(driver && { driver }),
   };
   const runs = useRuns(filter, true, isDemo ? "demo" : "full");
 
-  function resetPageAnd(setter: (value: string) => void) {
-    return (value: string) => {
-      setOffset(0);
-      setter(value);
-    };
+  useEffect(() => {
+    if (rawSearch === normalizedSearch) return;
+
+    setSearchParams(new URLSearchParams(normalizedSearch), {
+      replace: true,
+      state: invalidUrlMessage
+        ? {
+            historyNotice: {
+              search: normalizedSearch,
+              message: invalidUrlMessage,
+            },
+          }
+        : null,
+    });
+  }, [invalidUrlMessage, normalizedSearch, rawSearch, setSearchParams]);
+
+  const lastAvailableOffset = runs.isSuccess
+    ? Math.max(0, Math.ceil(runs.data.total / HISTORY_PAGE_SIZE) - 1) *
+      HISTORY_PAGE_SIZE
+    : null;
+  const clampedSearch =
+    lastAvailableOffset !== null && offset > lastAvailableOffset
+      ? historyUrlSearchParams(
+          searchParams,
+          { ...parsedUrl.state, offset: lastAvailableOffset },
+          isDemo,
+        ).toString()
+      : null;
+
+  useEffect(() => {
+    if (clampedSearch === null) return;
+    setSearchParams(new URLSearchParams(clampedSearch), {
+      replace: true,
+      state: {
+        historyNotice: {
+          search: clampedSearch,
+          message:
+            "That history page is no longer available. Showing the last available page.",
+        },
+      },
+    });
+  }, [clampedSearch, setSearchParams]);
+
+  function updateHistory(nextState: typeof parsedUrl.state) {
+    setSearchParams(historyUrlSearchParams(searchParams, nextState, isDemo), {
+      state: null,
+    });
   }
+
+  const historyHref = normalizedSearch ? `/runs?${normalizedSearch}` : "/runs";
 
   return (
     <div>
@@ -87,6 +171,10 @@ export function RunListPage({
         }
       />
 
+      {urlNoticeMessage && (
+        <InlineStatus message={urlNoticeMessage} tone="warning" />
+      )}
+
       <div className="mb-4 flex flex-wrap gap-3">
         {!isDemo && (
           <>
@@ -96,11 +184,18 @@ export function RunListPage({
             <select
               id={processTypeFilterId}
               value={processType}
-              onChange={(e) => resetPageAnd(setProcessType)(e.target.value)}
+              onChange={(e) =>
+                updateHistory({
+                  ...parsedUrl.state,
+                  processType: e.target
+                    .value as typeof parsedUrl.state.processType,
+                  offset: 0,
+                })
+              }
               className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
             >
               <option value="">All process types</option>
-              {PROCESS_TYPES.map((p) => (
+              {HISTORY_PROCESS_TYPES.map((p) => (
                 <option key={p} value={p}>
                   {PROCESS_TYPE_LABELS[p]}
                 </option>
@@ -116,11 +211,17 @@ export function RunListPage({
             <select
               id={outcomeFilterId}
               value={outcome}
-              onChange={(e) => resetPageAnd(setOutcome)(e.target.value)}
+              onChange={(e) =>
+                updateHistory({
+                  ...parsedUrl.state,
+                  outcome: e.target.value as typeof parsedUrl.state.outcome,
+                  offset: 0,
+                })
+              }
               className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
             >
               <option value="">All outcomes</option>
-              {OUTCOMES.map((o) => (
+              {HISTORY_OUTCOMES.map((o) => (
                 <option key={o} value={o}>
                   {OUTCOME_LABELS[o]}
                 </option>
@@ -136,11 +237,17 @@ export function RunListPage({
             <select
               id={driverFilterId}
               value={driver}
-              onChange={(e) => resetPageAnd(setDriver)(e.target.value)}
+              onChange={(e) =>
+                updateHistory({
+                  ...parsedUrl.state,
+                  driver: e.target.value as typeof parsedUrl.state.driver,
+                  offset: 0,
+                })
+              }
               className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-100"
             >
               <option value="">All drivers</option>
-              {DRIVERS.map((b) => (
+              {HISTORY_DRIVERS.map((b) => (
                 <option key={b} value={b}>
                   {DRIVER_LABELS[b]}
                 </option>
@@ -166,8 +273,8 @@ export function RunListPage({
 
       {runs.isSuccess && runs.data.runs.length > 0 && (
         <>
-          <div className="overflow-hidden rounded-lg border border-slate-800">
-            <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto rounded-lg border border-slate-800">
+            <table className="w-full min-w-[48rem] text-left text-sm">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="px-4 py-2 font-medium">ID</th>
@@ -187,6 +294,7 @@ export function RunListPage({
                       <td className="px-4 py-3 font-mono text-slate-400">
                         <Link
                           to={`/runs/${run.id}`}
+                          state={{ historyHref }}
                           className="hover:underline"
                         >
                           #{run.id}
@@ -195,6 +303,7 @@ export function RunListPage({
                       <td className="px-4 py-3 font-medium">
                         <Link
                           to={`/runs/${run.id}`}
+                          state={{ historyHref }}
                           className="hover:underline"
                         >
                           {isDemo ? "Simulator demo" : run.tag_name}
@@ -231,13 +340,23 @@ export function RunListPage({
             <div className="flex gap-2">
               <Button
                 disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                onClick={() =>
+                  updateHistory({
+                    ...parsedUrl.state,
+                    offset: Math.max(0, offset - HISTORY_PAGE_SIZE),
+                  })
+                }
               >
                 Previous
               </Button>
               <Button
                 disabled={offset + runs.data.returned >= runs.data.total}
-                onClick={() => setOffset(offset + PAGE_SIZE)}
+                onClick={() =>
+                  updateHistory({
+                    ...parsedUrl.state,
+                    offset: offset + HISTORY_PAGE_SIZE,
+                  })
+                }
               >
                 Next
               </Button>

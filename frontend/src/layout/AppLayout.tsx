@@ -152,10 +152,10 @@ export function AppLayout({
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/40">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-6 py-4">
-          <div className="flex items-center gap-8">
+        <div className="mx-auto flex max-w-5xl flex-col items-stretch gap-4 px-4 py-4 min-[1025px]:flex-row min-[1025px]:items-center min-[1025px]:justify-between min-[1025px]:gap-4 min-[1025px]:px-6">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-5 gap-y-3 min-[1025px]:justify-start min-[1025px]:gap-8">
             <span className="text-lg font-semibold tracking-tight">BHTune</span>
-            <nav className="flex gap-2">
+            <nav aria-label="Main navigation" className="flex flex-wrap gap-2">
               {capabilities.actions.start_simulator_tune && (
                 <NavLink to="/runs/new" className={navLinkClass}>
                   Tune
@@ -181,14 +181,14 @@ export function AppLayout({
               )}
             </nav>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-4 min-[1025px]:justify-end">
             <ThemeToggle />
             <HealthIndicator />
           </div>
         </div>
       </header>
       {isDemo && (
-        <div className="border-b-2 border-amber-700 bg-amber-950/70 px-6 py-3 text-center text-sm text-amber-200">
+        <div className="break-words border-b-2 border-amber-700 bg-amber-950/70 px-4 py-3 text-center text-sm text-amber-200 min-[1025px]:px-6">
           <strong>Demo mode — Simulator only.</strong> All measurements and PID
           results are synthetic. No OPC connection or plant write is possible.
           {capabilities.quotas &&
@@ -200,7 +200,7 @@ export function AppLayout({
       {originMismatch && (
         <div
           role="alert"
-          className="border-b border-red-800 bg-red-950/80 px-6 py-3 text-center text-sm text-red-200"
+          className="break-words border-b border-red-800 bg-red-950/80 px-4 py-3 text-center text-sm text-red-200 min-[1025px]:px-6"
         >
           State-changing Demo actions are blocked at this address. Open the Demo
           through{" "}
@@ -213,7 +213,10 @@ export function AppLayout({
           instead.
         </div>
       )}
-      <main className="mx-auto max-w-5xl px-6 py-8" data-doc-screenshot-content>
+      <main
+        className="mx-auto max-w-5xl px-4 py-6 min-[1025px]:px-6 min-[1025px]:py-8"
+        data-doc-screenshot-content
+      >
         <Outlet />
       </main>
     </div>
