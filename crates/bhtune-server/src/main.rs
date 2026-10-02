@@ -2,9 +2,8 @@
 //! `lib.rs::run` split -- see `bhtune_server`'s crate doc comment for why the actual routes
 //! live in the lib target instead.
 //!
-//! Platform-split, following the exact same shape `opcda-bridge-gateway`'s `main.rs`
-//! already proves out (`server-windows-service`): on Windows, `main` must be a plain,
-//! synchronous `fn` -- `windows_service::service_dispatcher::start` (called from
+//! Platform-split: on Windows, `main` must be a plain, synchronous `fn` --
+//! `windows_service::service_dispatcher::start` (called from
 //! `service::run_as_service`) cannot be invoked from inside an already-running Tokio
 //! runtime, so no `#[tokio::main]` here; the interactive fallback and the real Windows
 //! service path (`crate::service::windows_impl::run_service`) each construct their own

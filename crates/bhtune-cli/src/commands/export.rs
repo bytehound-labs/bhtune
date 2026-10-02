@@ -1,8 +1,7 @@
 //! `bhtune export <run_id>`: dumps a run's recorded samples as CSV or JSON.
 //!
-//! CSV rows are generated from the same `#[derive(Serialize)]` struct as the header, making
-//! the legacy app's MV/SV column-transposition bug (header `Time,PV,SV,MV,P,I,D` vs. data
-//! `Time,PV,MV,SV,P,I,D` — see AGENTS.md's bug register) structurally impossible here.
+//! CSV rows are generated from the same `#[derive(Serialize)]` struct as the header, so the
+//! header and data columns cannot drift out of order.
 
 use std::io::Write;
 
@@ -13,7 +12,7 @@ use crate::args::{ExportArgs, ExportFormat};
 
 /// Serializes a run's recorded samples to CSV or JSON bytes -- the one place this mapping is
 /// implemented, shared by this module's own `run()` (writing to a file or stdout) and
-/// `bhtune-server`'s `GET /api/runs/{id}/export` route (`history-explorer-ui`), so the CLI
+/// `bhtune-server`'s `GET /api/runs/{id}/export` route, so the CLI
 /// and the web GUI can never disagree about what a run's export looks like.
 pub fn samples_to_bytes(
     samples: &[TuneSampleRow],

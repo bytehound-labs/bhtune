@@ -784,10 +784,9 @@ impl Driver for OpcDaDriver {
 
 /// Maps `opcda_bridge`'s raw OPC quality string to [`Quality`].
 ///
-/// Per `opc-da-client`'s documented contract (the Windows-only library the gateway wraps on
-/// the other side), this is one of `"Good"`, `"Bad"`, `"Uncertain"`, or a synthesized
-/// `"Unknown(0xNNNN)"` for an OPC quality code the library doesn't otherwise recognize. Any
-/// string other than an exact `"Good"`/`"Uncertain"` match — including that
+/// The gateway reports one of `"Good"`, `"Bad"`, `"Uncertain"`, or a synthesized
+/// `"Unknown(0xNNNN)"` for an OPC quality code it doesn't otherwise recognize. Any string
+/// other than an exact `"Good"`/`"Uncertain"` match — including that
 /// `"Unknown(...)"` case — is treated as [`Quality::Bad`]: an unrecognized quality is
 /// exactly the situation where guessing "trustworthy" would be the wrong default.
 pub fn quality_from_raw(raw: &str) -> Quality {
@@ -807,8 +806,8 @@ pub fn tag_value_from_raw(raw: opcda_bridge::TagValue) -> TagValue {
         quality: quality_from_raw(&raw.quality),
         // The gateway reports each tag's last-change time as a *local*, offset-less
         // "YYYY-MM-DD HH:MM:SS" string (or a "N/A"/"Invalid" sentinel for tags that have
-        // none), per `opc-da-client`'s documented contract. There is no reliable way to
-        // convert that into a trustworthy `DateTime<Utc>` without knowing the gateway
+        // none). There is no reliable way to convert that into a trustworthy `DateTime<Utc>`
+        // without knowing the gateway
         // host's timezone, which isn't part of the bridge protocol and can't safely be
         // assumed to match wherever `bhtune` itself runs — so this is always `None` rather
         // than a guess. Purely diagnostic regardless (see `TagValue::timestamp`'s doc
@@ -1123,8 +1122,8 @@ mod tests {
 
     #[test]
     fn quality_from_raw_treats_unrecognized_codes_as_bad() {
-        // `opc-da-client` synthesizes "Unknown(0xNNNN)" for quality codes it doesn't
-        // otherwise recognize; an unrecognized quality must never be silently trusted.
+        // The gateway synthesizes "Unknown(0xNNNN)" for quality codes it doesn't otherwise
+        // recognize; an unrecognized quality must never be silently trusted.
         assert_eq!(quality_from_raw("Unknown(0x1234)"), Quality::Bad);
         assert_eq!(quality_from_raw(""), Quality::Bad);
     }

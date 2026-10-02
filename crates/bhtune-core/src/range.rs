@@ -1,9 +1,7 @@
 //! Validated PV/MV range types -- the boundary a live OPC DA read or a CLI flag override
 //! must pass through before an untrusted number is treated as a range with a known,
-//! trustworthy shape (finite bounds, correctly ordered, non-zero span). See AGENTS.md's
-//! "Live-plant safety hardening" section for the review finding this closes (`--cycles-count
-//! 0` panicking mid-run was the same finding's other symptom: no externally supplied number
-//! reached the engine validated).
+//! trustworthy shape (finite bounds, correctly ordered, non-zero span). Validating external
+//! values before they reach the engine prevents malformed ranges from interrupting a live run.
 //!
 //! [`PvRange`] and [`MvRange`] both still expose plain public fields and can be constructed
 //! directly with a struct literal -- deliberately, since that's how already-trusted values

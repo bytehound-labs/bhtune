@@ -1,15 +1,6 @@
-//! Spawns the real, compiled `bhtune` binary and proves `tune --output json` emits *exactly
-//! one* parseable JSON value on stdout, with nothing printed ahead of it
-//! (`safety-json-contract`, finding 8 of the live-plant safety review).
-//!
-//! Before this finding was fixed, `maybe_write_back` (`commands::tune`) unconditionally
-//! `println!`ed its status/prompt lines regardless of `--output`, so a JSON-mode run of
-//! exactly the shape this test drives -- a simulator driver, which never has PID constant
-//! tags configured (see `build_tags`'s `DriverKindArg::Simulator` arm) -- printed "No PID
-//! constant tags configured for this run's driver/template; skipping write-back." on stdout
-//! *before* the run's final JSON object, breaking `serde_json::from_str` for every
-//! scripted/scheduled caller. This has to be a real subprocess rather than an in-process
-//! `Command`-level check: capturing whether *any* prose reaches real stdout ahead of the
+//! Spawns the real, compiled `bhtune` binary and proves `tune --output json` emits exactly
+//! one parseable JSON value on stdout. This has to be a real subprocess rather than an
+//! in-process `Command`-level check: capturing whether any prose reaches stdout ahead of the
 //! JSON object requires the process's actual stdout stream, not a return value.
 //!
 //! Uses the same fast-completing simulator parameters as `commands::tune`'s own

@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 /// A process/loop category. Each has its own row in the tuning-constant matrices in
 /// [`crate::constants`] and its own default cycle/noise-protection settings.
 ///
-/// Discriminants double as the row index into those matrices — see
-/// [`ProcessType::index`].
+/// Discriminants double as row indexes into those matrices, in [`ProcessType::ALL`] order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]

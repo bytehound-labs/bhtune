@@ -2,9 +2,8 @@
 //! served through the [`Driver`] trait, for fully automated E2E tests (no Windows, no
 //! Kepware, no external process) and demo mode.
 //!
-//! Ported from `Model/ProcessModelOPC.py`, the Python model the legacy app's hidden
-//! `OPCClass.Python` test path shells out to (see `AGENTS.md`'s behavior-spec notes). This
-//! module splits into three independent pieces:
+//! Ported from `Model/ProcessModelOPC.py`, the process model used by the legacy application's
+//! `OPCClass.Python` test path. This module splits into three independent pieces:
 //!
 //! - [`FopdtProcess`]: the process itself -- pure state advanced one tick at a time, with no
 //!   `Driver`/async awareness at all.
@@ -888,8 +887,8 @@ mod tests {
     /// the test, as `bhtune-core`'s own equivalent test necessarily uses (it cannot depend
     /// on `bhtune-driver`, which depends on it) -- and completes with plausible peaks,
     /// troughs, and switch counts. Proves `SimulatorDriver` is actually fit for its
-    /// intended purpose: driving synthetic MRFT runs for `core-replay-harness`-style
-    /// coverage and future `e2e-simulator` CI tests, entirely without wall-clock sleeps.
+    /// intended purpose: driving synthetic MRFT runs for integration coverage, entirely
+    /// without wall-clock sleeps.
     #[tokio::test]
     async fn mrft_engine_completes_a_realistic_relay_test_against_the_simulator_driver() {
         use bhtune_core::{

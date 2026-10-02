@@ -71,9 +71,8 @@ pub(crate) fn option_enum_text<T: Serialize>(value: Option<&T>) -> DbResult<Opti
 /// Decodes a value read from `column` back into a fieldless, `serde`-tagged enum.
 ///
 /// Only fails if `value` doesn't match any of `T`'s variants — which the migration's `CHECK`
-/// constraint on every enum-shaped column should make unreachable in practice, but the
-/// database file is plain and open (see AGENTS.md), so nothing stops something else from
-/// writing a row that bypasses it.
+/// constraint on every enum-shaped column should make unreachable in practice. The SQLite
+/// file can still be modified outside this crate, so values are validated when decoded.
 pub fn text_to_enum<T: DeserializeOwned>(column: &'static str, value: &str) -> DbResult<T> {
     serde_json::from_value(enum_text_value(value)).map_err(|_| invalid_enum_value(column, value))
 }

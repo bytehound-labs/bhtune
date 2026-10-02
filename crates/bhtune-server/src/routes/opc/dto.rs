@@ -448,7 +448,7 @@ pub struct OpcReadQuery {
 ///
 /// `quality` reuses [`SampleQuality`] rather than a third quality representation --
 /// `bhtune-db`'s `SampleQuality` (mapped from the driver's live [`bhtune_driver::Quality`] by
-/// [`sample_quality_from_driver`]) is already exposed directly over HTTP in
+/// [`bhtune_runtime::tune::sample_quality_from_driver`]) is already exposed directly over HTTP in
 /// `GET /api/runs/{id}`'s `SampleResponse::pv_quality` (see `routes::history`), so this
 /// follows that same precedent instead of inventing a parallel `OpcQualityResponse` enum.
 #[derive(Debug, Serialize, ToSchema)]

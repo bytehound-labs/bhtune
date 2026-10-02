@@ -5,8 +5,8 @@
 //!
 //! The built-in templates are not hardcoded Rust -- they are parsed from an embedded TOML
 //! catalog (`templates/builtin.toml`), so adding support for a new DCS/PLC family is a data
-//! file change, not a Rust change. See AGENTS.md's "Community DCS/PLC template catalog"
-//! section for the full design and contribution rationale.
+//! file change, not a Rust change. See `docs/dcs-templates.md` for the catalog format and
+//! contribution guidance.
 
 use serde::{Deserialize, Serialize};
 
@@ -88,9 +88,8 @@ impl DcsTemplate {
     /// Validates cross-field invariants a data file can't express on its own: a name, a PV
     /// suffix, and an MV suffix are always required (without them tag derivation is
     /// impossible); a mode suffix requires both a manual and an auto value; a
-    /// mode-attribute suffix requires its program value. Mirrors `LoopConfig::validate`'s
-    /// rationale (see AGENTS.md's "Live-plant safety hardening") -- a half-configured
-    /// template should fail loudly at parse/import time, not mid-tune against a live loop.
+    /// mode-attribute suffix requires its program value. A half-configured template should
+    /// fail loudly at parse/import time, not mid-tune against a live loop.
     /// Called on every template parsed from the embedded catalog
     /// ([`parse_catalog`]), an imported file, or the user catalog.
     pub fn validate(&self) -> Result<(), TemplateError> {
@@ -196,8 +195,8 @@ struct Catalog {
 /// Parses a TOML catalog (the `[[template]]` array-of-tables format used by
 /// `templates/builtin.toml` and the user catalog file the `bhtune` CLI auto-loads) and validates
 /// every template it contains. Pure -- takes an in-memory string and does no I/O itself;
-/// all file reading is the caller's job (the `bhtune` CLI's `template-user-catalog`/
-/// `template-cli`), keeping this crate's "no I/O" rule intact.
+/// all file reading is the caller's job (the runtime configuration loader and CLI commands),
+/// keeping this crate's "no I/O" rule intact.
 pub fn parse_catalog(input: &str) -> Result<Vec<DcsTemplate>, TemplateError> {
     let catalog: Catalog = toml::from_str(input)?;
     for template in &catalog.templates {

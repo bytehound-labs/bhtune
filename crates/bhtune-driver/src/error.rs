@@ -6,27 +6,26 @@ use crate::types::TagId;
 ///
 /// Deliberately not a single opaque/`anyhow`-style error: callers need to tell "the driver
 /// itself is unreachable" apart from "one read/write/browse call failed" apart from "this
-/// driver doesn't support that at all" to react correctly — in particular the
-/// unattended-operation guardrails planned for `cli-safety` need to distinguish a connection
-/// failure (abort immediately, nothing was attempted) from an operation failure (may be worth
-/// one retry) rather than treating every failure identically.
+/// driver doesn't support that at all" to react correctly. A connection failure means nothing
+/// was attempted; an operation failure may be worth retrying; an unsupported operation cannot
+/// succeed on retry.
 ///
 /// The underlying cause is boxed (`Box<dyn std::error::Error + Send + Sync>`) rather than
 /// naming a concrete type, since different [`crate::Driver`] implementations wrap
-/// completely unrelated error types (a future `driver-opcda`'s `opcda_bridge::Error`, a
-/// simulator's own internal error, golden-trace parse errors for `driver-replay`) and this
-/// trait/error model must not force all of them to share one. `#[source]` still preserves the
-/// full chain for `std::error::Error::source()`/`anyhow`/logging to walk.
+/// unrelated error types (`opcda_bridge::Error`, a simulator's internal error, or replay
+/// fixture parse errors) and this trait/error model must not force all of them to share one.
+/// `#[source]` still preserves the full chain for `std::error::Error::source()`/`anyhow`/
+/// logging to walk.
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
     /// The driver could not be reached at all — nothing was read or written. For
-    /// `driver-opcda`, this is expected to wrap `opcda_bridge::Error::Connect`.
+    /// [`crate::opcda::OpcDaDriver`], this wraps `opcda_bridge::Error::Connect`.
     #[error("failed to connect to driver")]
     Connect(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// A `read`/`write`/`browse` call reached the driver but failed there — an RPC error,
-    /// an unresolvable tag, a malformed response. For `driver-opcda`, this is expected to
-    /// wrap `opcda_bridge::Error::Rpc`. Distinct from a rejected-but-otherwise-successful
+    /// an unresolvable tag, a malformed response. For [`crate::opcda::OpcDaDriver`], this
+    /// wraps `opcda_bridge::Error::Rpc`. Distinct from a rejected-but-otherwise-successful
     /// write (see [`crate::types::WriteOutcome`]), which is not an error at all.
     #[error("driver operation failed")]
     Operation(#[source] Box<dyn std::error::Error + Send + Sync>),

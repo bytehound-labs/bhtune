@@ -50,7 +50,8 @@ impl Quality {
 /// `timestamp` is `Option`, not a bare `DateTime<Utc>` — deliberately, since not every driver
 /// can honestly supply one. OPC DA over the bridge, in particular, reports the item's last-
 /// change time as a *local*, offset-less `"YYYY-MM-DD HH:MM:SS"` string, with `"N/A"`/
-/// `"Invalid"` sentinels for items that have none (see `driver-opcda`'s `parse_timestamp`).
+/// `"Invalid"` sentinels for items that have none (see the OPC DA driver's
+/// `parse_timestamp`).
 /// `None` when a driver cannot supply a trustworthy value, rather than a synthetic
 /// stand-in — this field is diagnostic (e.g. detecting a frozen tag whose timestamp stops
 /// advancing while its value doesn't change), never the tick time the tuning engine itself

@@ -4,8 +4,8 @@
 //! bhtune setting) -- see `crate::config::LogConfig`/`resolve_log_settings`.
 //!
 //! **Deliberately never writes to stdout.** `bhtune tune`/`simulate --output json` prints a
-//! single machine-readable JSON object to stdout as its whole documented contract (see
-//! AGENTS.md's "Automation" section); mirroring diagnostic log lines onto that same stream
+//! single machine-readable JSON object to stdout as its whole documented contract; mirroring
+//! diagnostic log lines onto that same stream
 //! (as `opcda-bridge-gateway`'s equivalent does, safely, since it owns stdout outright) would
 //! risk interleaving free-form log text into a stream a scheduler parses as JSON. Log lines
 //! go to the rotating file always, and to **stderr** (never stdout) when a console is

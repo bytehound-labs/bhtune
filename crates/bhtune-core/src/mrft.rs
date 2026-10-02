@@ -1,6 +1,6 @@
 //! The MRFT (Modified Relay Feedback Test) engine: the pure, I/O-free relay-switching state
-//! machine at the heart of bhtune. See `AGENTS.md`'s "Key architectural decisions" for why
-//! this must never read a clock, perform network I/O, or touch a UI.
+//! machine at the heart of bhtune. It never reads a clock, performs network I/O, or touches a
+//! UI.
 //!
 //! Scope is deliberately narrow: this module decides *when to switch the MV and when the
 //! test is complete*. It does not read or write OPC tags (`bhtune-driver`'s job) and it does
@@ -55,9 +55,10 @@ pub struct InitialReadings {
 }
 
 /// Legacy-bug replication flags, for bug-for-bug replay validation against captured legacy
-/// traces (see `core-bug-register`). Every field defaults to `false`: the fixed, correct
-/// behavior. Set a field `true` only to intentionally reproduce that specific legacy defect,
-/// e.g. when asserting parity against a captured trace that has the bug baked in.
+/// traces (see `docs/internal/design/correctness-register.md`). Every field defaults to
+/// `false`: the fixed, correct behavior. Set a field `true` only to intentionally reproduce
+/// that specific legacy defect, e.g. when asserting parity against a captured trace that has
+/// the bug baked in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MrftCompat {
     /// Replicates `CheckMVboundaries`'s lower-clamp bug: clamps to `mv_range_low + mv_ini`
@@ -516,9 +517,8 @@ mod tests {
 
     /// Full 3-switch run to completion, beta=0.3 (a realistic hysteresis multiplier),
     /// Reverse action. Expected values cross-checked against an independent Python
-    /// transcription of the same C# formulas (see the `core-mrft` task notes) rather than
-    /// hand-derived, since MRFT's peak/trough/hysteresis interaction is easy to get subtly
-    /// wrong by inspection alone.
+    /// transcription of the same C# formulas rather than hand-derived, since MRFT's
+    /// peak/trough/hysteresis interaction is easy to get subtly wrong by inspection alone.
     #[test]
     fn full_run_reverse_action_completes_with_expected_peaks_troughs_and_snap_back() {
         let mut engine = MrftEngine::new(

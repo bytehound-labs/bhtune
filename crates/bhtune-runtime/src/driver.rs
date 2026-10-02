@@ -5,8 +5,7 @@ use bhtune_driver::{Driver, FopdtConfig, OpcDaDriver, SimulatorDriver};
 use crate::tune::{DriverKind, TuneRequest};
 
 /// The two tag names [`SimulatorDriver`] is configured with — fixed rather than derived
-/// from `--tagname`/a template, since the simulator has no DCS suffix convention at all (see
-/// `driver-simulator`'s two-tag-only contract).
+/// from `--tagname`/a template, since the simulator has no DCS suffix convention.
 pub const SIMULATOR_PV_TAG: &str = "Sim.PV";
 pub const SIMULATOR_MV_TAG: &str = "Sim.MV";
 

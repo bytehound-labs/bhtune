@@ -1,6 +1,7 @@
 check:
     just fmt check
     just lint
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
     just test
     just deny
     cargo run --locked -p bhtune-server --example gen_openapi

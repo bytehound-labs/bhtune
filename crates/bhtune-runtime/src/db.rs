@@ -1,5 +1,5 @@
 //! Opens the CLI's database for mutating commands, seeds the built-in and user-catalog
-//! DCS/PLC templates, and runs the `history-retention` sweep. Read-only commands such as
+//! DCS/PLC templates, and runs the retention sweep. Read-only commands such as
 //! `bhtune check` use a separate connection that skips bootstrap and retention.
 
 use std::path::Path;
@@ -11,15 +11,15 @@ use bhtune_db::models::TemplateOrigin;
 /// Opens (creating if necessary) the database at `path`, running migrations, then upserts the
 /// built-in templates via [`bhtune_db::seed_builtin_templates`] so a fresh database is
 /// immediately usable without a separate setup step. If `user_templates` is `Some` (the
-/// caller found and parsed a user catalog file -- see `crate::config::load_user_templates`,
-/// `template-user-catalog`), those templates are additionally upserted with
+/// caller found and parsed a user catalog file -- see `crate::config::load_user_templates`),
+/// those templates are additionally upserted with
 /// [`TemplateOrigin::Catalog`] via [`bhtune_db::seed_templates`]. `None` means no user
 /// catalog file was found at all, which is not an error and simply skips this second seed
 /// pass -- the common case, since most installs never create `templates.toml`.
 ///
 /// If `retention_days` is `Some` (see `crate::config::resolve_retention_days`), also runs
-/// [`crate::retention::sweep_retention`] once before returning -- the "on startup" half of
-/// `history-retention`'s policy, shared by both binaries since both call this function.
+/// [`crate::retention::sweep_retention`] once before returning, shared by both binaries since
+/// both call this function.
 /// `None` (the default) skips the sweep entirely: no query, no log line, nothing -- matching
 /// "ships disabled by default (retain forever)". A sweep failure is propagated (`?`) rather
 /// than logged-and-ignored: unlike `bhtune-server`'s periodic re-sweep (which must not crash

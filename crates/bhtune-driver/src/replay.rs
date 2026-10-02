@@ -2,7 +2,7 @@
 //! [`Driver`] trait, tick by tick, instead of a live OPC DA connection or the in-process
 //! FOPDT simulator.
 //!
-//! `core-replay-harness` (`crates/bhtune-core/tests/golden_replay.rs`) already proves the
+//! `crates/bhtune-core/tests/golden_replay.rs` already proves the
 //! *pure* `MrftEngine` reproduces the legacy C# application's behavior exactly, by feeding a
 //! fixture's recorded ticks directly into `engine.step(Tick { time, pv })`. That test cannot
 //! exercise anything in this crate at all -- `bhtune-core` cannot depend on `bhtune-driver`,
@@ -34,9 +34,8 @@ use crate::{
 /// [`ReplayDriver`] actually needs to serve a PV read.
 ///
 /// Deliberately not `bhtune-core`'s `Tick`: this crate stays free of a `bhtune-core`
-/// dependency in production code (matching `driver-trait`/`driver-opcda`/
-/// `driver-simulator`'s "reading/writing named string tags has no domain meaning by
-/// itself" rule -- see `driver-trait`'s design notes in `AGENTS.md`). Also deliberately not
+/// dependency in production code because reading and writing named string tags has no domain
+/// meaning by itself. Also deliberately not
 /// the full golden-fixture JSON schema `crates/bhtune-core/tests/golden_replay.rs` owns
 /// (`config`, `direction`, `initial`, `pv_range`, `template_name`, each tick's `expected`
 /// block, `expected_final`) -- none of that is needed to *serve* a replay, only to
@@ -113,8 +112,8 @@ struct ReplayState {
 
 /// Serves a captured `(time, PV)` trace through the real [`Driver`] trait, for validating
 /// that a live `MrftEngine` run reproduces a golden-master trace's result when driven
-/// through the actual async abstraction -- not just when fed the trace directly, as
-/// `core-replay-harness` already does at the pure-engine level.
+/// through the actual async abstraction -- not just when fed the trace directly, as the
+/// pure-engine golden-replay test does.
 ///
 /// Reading the configured PV tag returns the next unconsumed sample's PV value, with its
 /// *real* recorded time in `TagValue.timestamp`. This is the one [`Driver`] implementation
@@ -174,12 +173,12 @@ impl ReplayDriver {
     }
 
     /// Parses a golden-master fixture JSON document's `ticks[].time`/`ticks[].pv` fields
-    /// (see [`FixtureFile`]) into the sample sequence [`ReplayDriver::new`] expects, so a
+    /// into the sample sequence [`ReplayDriver::new`] expects, so a
     /// validation test can point this driver directly at the same fixture file
-    /// `core-replay-harness` already validates against (`tests/golden/fixtures/*.json`)
+    /// the pure-engine golden-replay test already validates against
+    /// (`tests/golden/fixtures/*.json`)
     /// rather than hand-transcribing the tick sequence a second time. A parse failure is
-    /// [`DriverError::Operation`], matching this crate's error-model doc comment's own
-    /// forward-looking note that golden-trace parse errors belong there.
+    /// [`DriverError::Operation`], since parsing the fixture is part of this driver's work.
     pub fn from_fixture_json(
         pv_tag: impl Into<TagId>,
         mv_tag: impl Into<TagId>,
@@ -628,8 +627,8 @@ mod tests {
 
     /// End-to-end: a real `MrftEngine` (from `bhtune-core`) drives `ReplayDriver` through
     /// the actual `Driver` trait, fed from the *same* captured golden-master fixture
-    /// `core-replay-harness` (`crates/bhtune-core/tests/golden_replay.rs`) already validates
-    /// at the pure-engine level, and reaches the same final tuning result. This is
+    /// `crates/bhtune-core/tests/golden_replay.rs` already validates at the pure-engine
+    /// level, and reaches the same final tuning result. This is
     /// deliberately not a re-run of that test's exhaustive per-tick assertions (hysteresis,
     /// `mv_sign_next_step`, cycle counters, ...) at every tick -- that would just duplicate
     /// already-proven engine correctness. What this test adds is proof that the *real* async
@@ -772,9 +771,8 @@ mod tests {
             TuningMathCompat::default(),
         );
 
-        // The aggressive-response proportional band, in the fixture's own DCS units --
-        // matching the same "PB=157.7" figure already confirmed control-theory-consistent
-        // and recorded against this exact capture in AGENTS.md's `capture-traces` notes.
+        // The aggressive-response proportional band, in the fixture's own DCS units,
+        // matches the independently checked control-theory calculation for this capture.
         // Same tolerance shape `golden_replay.rs` uses for its own final numbers -- see that
         // test for the full rationale (float rounding, and the period-truncation-bug-driven
         // `ti_minutes`/`integral` slack in particular, which is why this test doesn't also
@@ -798,8 +796,9 @@ mod tests {
              Driver trait"
         );
         // The engine stops driving reads the instant completion is observed (matching
-        // `core-replay-harness`'s own "any remaining fixture ticks are exactly this harmless
-        // trailing data and are not replayed" behavior -- see that test's comment), so this
+        // the pure-engine golden-replay test's "any remaining fixture ticks are exactly this
+        // harmless trailing data and are not replayed" behavior -- see that test's comment),
+        // so this
         // trace's trailing padding ticks are expected to remain unconsumed; the meaningful
         // assertion is that real consumption happened at all, not that every recorded tick
         // was read.

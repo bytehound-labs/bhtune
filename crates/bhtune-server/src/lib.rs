@@ -4,7 +4,9 @@
 //! v1 GUI adapter.
 //!
 //! Split into a lib (this crate, `bhtune_server`) and a thin `main.rs` binary shell so route
-//! handlers are directly testable via [`tower::ServiceExt::oneshot`] against
+//! handlers are directly testable via
+//! [Tower's `ServiceExt::oneshot` method](https://docs.rs/tower/latest/tower/util/trait.ServiceExt.html#method.oneshot)
+//! against
 //! [`build_router`]'s output, with no bound TCP socket needed -- the same lib/bin split
 //! the `bhtune` package already uses for the same reason.
 
@@ -47,7 +49,7 @@ pub use state::AppState;
 /// `axum::Router<S>` with the UI's one route already attached, so it merges in directly
 /// rather than needing its own handler function.
 ///
-/// Everything that isn't one of those routes falls through to [`spa::static_handler`], which
+/// Everything that isn't one of those routes falls through to the SPA fallback handler, which
 /// serves the built React SPA -- so this one router is the whole HTTP surface of a real
 /// `bhtune-server` deployment, API and UI alike. None of the merged sub-routers set their own
 /// fallback (axum panics if two merged routers each declare one), so this is the only place

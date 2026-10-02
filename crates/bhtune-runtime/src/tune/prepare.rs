@@ -94,14 +94,14 @@ impl PreparedTune {
         self.run_id
     }
 }
-/// The shape persisted into `tune_runs.request_json` (`db-run-request-snapshot`).
+/// The shape persisted into `tune_runs.request_json`.
 /// Its stable fields correspond to the transport-neutral [`TuneRequest`] shared by the CLI
 /// and HTTP adapters, so either adapter persists the same snapshot shape.
 ///
 /// Built from `args` *before* [`prepare`]'s own `bridge_host`/`server` resolution mutates
 /// them, so a field left unset by the caller stays absent here rather than silently baking
-/// in a resolved default -- this is what lets `ui-prefill-last-run` show blanks where the
-/// user relied on a default, instead of freezing yesterday's resolved values into today's
+/// in a resolved default -- this lets the last-run form prefill show blanks where the user
+/// relied on a default, instead of freezing resolved values into the next
 /// form. `output` is deliberately excluded: it's a CLI/HTTP-transport concern with no
 /// meaning as a "setting" to remember or duplicate.
 #[derive(serde::Serialize)]
@@ -134,13 +134,11 @@ pub(super) struct RequestSnapshot<'a> {
     pub(super) yes: bool,
     pub(super) write_pid: Option<ResponseLevel>,
 }
-/// Resolves and validates runtime inputs before any driver connection or database mutation.
+/// Validates a tune request and prepares the driver and persisted run record.
 ///
-/// Identical in behavior to what `run_with_ctrl_c` did inline before this split: the
-/// `--write-pid`-without-`--yes` guard, `bridge_host`/`server` resolution, template lookup,
-/// `LoopConfig`/`LoopTags` construction, driver connection, and the `tune_runs` insert all
-/// run in exactly the same order against exactly the same inputs. Extracting this into its
-/// own function changes nothing about what runs or when -- only who else can call it.
+/// The unattended-write guard and timing/config validation run before driver I/O. The
+/// caller's request is snapshotted before effective connection defaults are resolved, and
+/// the resolved connection and tuning context are persisted before polling starts.
 pub async fn prepare<R>(
     pool: &SqlitePool,
     args: R,
@@ -180,8 +178,7 @@ pub(super) async fn prepare_internal(
 
     // Snapshotted before `bridge_host`/`server` are resolved to their effective values just
     // below, so a field the caller left unset stays absent here instead of silently baking
-    // in a resolved default (`db-run-request-snapshot`) -- see `RequestSnapshot`'s doc
-    // comment.
+    // in a resolved default -- see `RequestSnapshot`'s doc comment.
     #[allow(
         clippy::expect_used,
         reason = "RequestSnapshot is plain enums and finite scalars, serialized before any driver I/O"
@@ -433,13 +430,10 @@ pub(super) struct InitialState {
     pub(super) mode_raw: Option<String>,
     pub(super) mode_attribute_raw: Option<String>,
     /// The setpoint, captured here -- before any mutation of the loop -- whenever the loop's
-    /// original mode is Auto and both a mode and a setpoint tag are configured (mirrors
-    /// `SvValueIni` in the legacy app, which captured it later, at the moment of actually
-    /// transitioning out of Auto). Hoisting the read this early means it's durably persisted
-    /// via [`TuneRunRow::record_initial_readings`] before `transition_to_manual`'s first
-    /// mutating write is even attempted, so a crashed run's restore intent survives the
-    /// process dying outright (`safety-restore-guard`, finding 3 of the live-plant safety
-    /// review). Note that this field being `Some(..)` only proves the loop *was* in Auto --
+    /// original mode is Auto and both a mode and a setpoint tag are configured. Persisting
+    /// this through [`TuneRunRow::record_initial_readings`] before
+    /// `transition_to_manual`'s first mutating write lets a crashed run recover its restore
+    /// intent. Note that this field being `Some(..)` only proves the loop *was* in Auto --
     /// not that a mode transition was actually attempted, since `read_initial_values` runs
     /// unconditionally, before any such decision is made -- so `restore`'s setpoint-revert
     /// step is additionally gated on [`MutationGuard::mode_written`], not on this field
@@ -449,11 +443,8 @@ pub(super) struct InitialState {
 /// Tracks which of `transition_to_manual`'s mutations were actually *attempted* -- armed
 /// immediately before each write is issued, not after it succeeds -- so `restore` can
 /// independently decide what's safe/necessary to revert even when `transition_to_manual`
-/// itself returns partway through with an error (`safety-restore-guard`, finding 3 of the
-/// live-plant safety review). Renamed from the former `ModeRestoreState`, which held only
-/// the captured setpoint; that value now lives on [`InitialState`] instead, read before any
-/// mutation rather than during `transition_to_manual` -- see that field's doc comment for
-/// why.
+/// itself returns partway through with an error. The captured setpoint lives on
+/// [`InitialState`], where it can be persisted before any mutation.
 #[derive(Debug, Default)]
 pub(super) struct MutationGuard {
     /// The mode-attribute tag's "put in program/computer mode" write was attempted.
@@ -510,8 +501,8 @@ pub(super) async fn execute_with_timing(
     validate_initial_state(&initial)?;
     validate_relay_actuation_step(args, config, &initial)?;
 
-    // Persisted before any mutation is attempted (`safety-restore-guard`): a crash between
-    // here and a confirmed restore still leaves a durable record of the mode/mode-attribute/
+    // Persisted before any mutation is attempted: a crash between here and a confirmed
+    // restore still leaves a durable record of the mode/mode-attribute/
     // setpoint as they were *before* anything was written, so `bhtune restore-loop` can
     // reconstruct and restore the loop later even if the process never gets to do so itself.
     TuneRunRow::record_initial_readings(
@@ -1122,8 +1113,7 @@ pub(super) async fn read_initial_values(
 /// `read_initial_values` and `transition_to_manual` in `execute`, never after). `read_f32`/
 /// `resolve_f32` already reject a non-finite individual value as it's read; this additionally
 /// checks values *together*: range ordering, zero span, and that the initial MV actually
-/// lies inside its own reported range. Closes finding 4 of the live-plant safety review --
-/// see AGENTS.md's "Live-plant safety hardening" section.
+/// lies inside its own reported range.
 pub(super) fn validate_initial_state(initial: &InitialState) -> anyhow::Result<()> {
     PvRange::new(initial.pv_range_high, initial.pv_range_low)
         .map_err(|e| anyhow::anyhow!("invalid PV range: {e}"))?;

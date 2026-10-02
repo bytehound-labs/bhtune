@@ -119,11 +119,9 @@ async fn dcs_template_get_rejects_versions_json_with_the_wrong_shape() {
     ));
 }
 
-/// Distinct from `dcs_template_round_trips_every_built_in_template`, which only ever seeds
-/// (and therefore only ever exercises) `origin = 'builtin'`: nothing in the `bhtune` CLI produces
-/// `TemplateOrigin::Catalog` yet (`template-user-catalog` is what will), so this is the only
-/// place any test proves `dcs_templates.origin` round-trips *every* variant the `CHECK`
-/// constraint allows, not just the one variant real callers currently use.
+/// Distinct from `dcs_template_round_trips_every_built_in_template`, which only exercises
+/// `origin = 'builtin'`: this verifies that every variant allowed by the `CHECK` constraint
+/// round-trips, including catalog and user origins.
 #[tokio::test]
 async fn dcs_template_origin_round_trips_every_variant() {
     let pool = connect_in_memory().await.unwrap();
@@ -462,10 +460,10 @@ async fn tune_run_rejects_invalid_outcome_and_driver() {
     );
 }
 
-/// Covers the three `CHECK` constraints `safety-run-snapshot` added to `tune_runs`: a
-/// `template_origin` outside the three known values, and invalid JSON in either of the two
-/// new JSON blob columns. Mirrors `loops_reject_invalid_json_and_invalid_enum_values` above,
-/// which covers the same shape of constraint on `loops.tags_json`/`process_type`.
+/// Covers the `tune_runs` constraints for valid `template_origin` values and JSON in the
+/// template and tag snapshot columns. Mirrors
+/// `loops_reject_invalid_json_and_invalid_enum_values` above, which covers the same shape of
+/// constraint on `loops.tags_json`/`process_type`.
 #[tokio::test]
 async fn tune_runs_reject_invalid_template_origin_and_invalid_json() {
     let pool = connect_in_memory().await.unwrap();
@@ -516,9 +514,9 @@ async fn tune_runs_reject_invalid_template_origin_and_invalid_json() {
     );
 }
 
-/// Covers `db-run-request-snapshot`'s `request_json` `CHECK (json_valid(request_json))`
-/// constraint, and confirms the column's `DEFAULT '{}'` lets a plain `INSERT` that omits it
-/// (exactly what `TuneRunRow::start`'s own `INSERT` does) succeed unchanged.
+/// Covers the `request_json` `CHECK (json_valid(request_json))` constraint, and confirms the
+/// column's `DEFAULT '{}'` lets a plain `INSERT` that omits it (exactly what
+/// `TuneRunRow::start`'s own `INSERT` does) succeed unchanged.
 #[tokio::test]
 async fn tune_runs_default_and_reject_invalid_request_json() {
     let pool = connect_in_memory().await.unwrap();
@@ -703,8 +701,9 @@ async fn tune_runs_gateway_compatibility_snapshot_is_nullable_validated_json() {
     assert_eq!(recorded.outcome, started.outcome);
 }
 
-/// Covers the `CHECK` constraints `safety-quality` added: `tune_runs.allow_uncertain_quality`
-/// must be `0` or `1`, and `tune_samples.pv_quality` must be one of `good`/`uncertain`/`bad`.
+/// Covers the `CHECK` constraints on `tune_runs.allow_uncertain_quality` and
+/// `tune_samples.pv_quality`: the former must be `0` or `1`, and the latter one of
+/// `good`/`uncertain`/`bad`.
 #[tokio::test]
 async fn tune_runs_and_tune_samples_reject_invalid_quality_columns() {
     let pool = connect_in_memory().await.unwrap();

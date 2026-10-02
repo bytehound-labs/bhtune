@@ -51,10 +51,8 @@ pub(super) enum TickOperation<T> {
 /// Races one driver call against `ctrl_c` and a fresh `op_timeout_secs` sleep, so a single
 /// stalled read/write (gateway down, DCOM wedged, network black-holed) can never make the
 /// polling loop -- or the restore, via [`attempt_restore_with_actuation`] -- uninterruptible.
-/// This is what
-/// fixes finding 2 of the live-plant safety review: previously, `run_polling_loop`'s Ctrl+C
-/// and `[tuning].timeout_secs` listeners only ran *between* tick-body awaits, so a hung call inside
-/// one was invisible to both. `fut` is taken by value (not `&mut`) and is simply dropped,
+/// This keeps Ctrl+C and `[tuning].timeout_secs` responsive even while a driver call is stalled.
+/// `fut` is taken by value (not `&mut`) and is simply dropped,
 /// abandoning the in-flight operation, on the losing branches -- there is no cancellation
 /// signal sent to the driver itself, only to this call's own wait for it. A genuine `Err`
 /// from `fut` resolving still propagates through the `?` here, distinct from either

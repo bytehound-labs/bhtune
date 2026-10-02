@@ -1,8 +1,7 @@
-//! Integration tests for `history-query-api`: the typed repository/query layer `bhtune_db::models`
-//! builds on top of the raw schema `tests/schema.rs` already proves. These tests cover run
+//! Integration tests for the typed repository/query layer in `bhtune_db::models`, built on
+//! top of the raw schema `tests/schema.rs` already proves. These tests cover run
 //! lifecycle transitions, filter/pagination correctness, and the samples/results/writes
-//! `list_for_run` helpers — the actual query patterns the CLI and GUI history explorer will
-//! depend on.
+//! `list_for_run` helpers used by the CLI and web history explorer.
 
 #![allow(
     clippy::unwrap_used,
@@ -773,10 +772,9 @@ async fn list_filters_by_process_type_controller_type_outcome_and_driver() {
     assert_eq!(combined[0].id, flow_pid_running_replay.id);
 }
 
-/// Mirrors the test above but for the two filter fields findings 9 (`safety-run-snapshot`)
-/// added -- seeded with `TuneRunRow::start` directly rather than [`seed_run`], since this is
-/// the one test in the file that actually needs to vary the snapshotted template/origin
-/// per-run rather than using the fixed [`sample_template`]/[`sample_tags`] pair.
+/// Mirrors the test above for the two template filter fields. It seeds rows with
+/// [`TuneRunRow::start`] rather than [`seed_run`] so each run can have a different template
+/// and origin.
 #[tokio::test]
 async fn list_filters_by_template_name_and_template_origin() {
     let pool = connect_in_memory().await.unwrap();
@@ -867,9 +865,8 @@ async fn list_filters_by_template_name_and_template_origin() {
     assert_eq!(combined[0].id, yokogawa_user.id);
 }
 
-/// Mirrors the two tests above but for `opc_server`/`bridge_host` -- the columns
-/// `db-run-request-snapshot` added, populated via [`TuneRunRow::record_connection`] rather
-/// than at `start()` time.
+/// Mirrors the two tests above but for `opc_server`/`bridge_host`, populated via
+/// [`TuneRunRow::record_connection`] rather than at `start()` time.
 #[tokio::test]
 async fn list_filters_by_opc_server_and_bridge_host() {
     let pool = connect_in_memory().await.unwrap();
@@ -2095,7 +2092,7 @@ async fn tune_write_list_for_run_is_empty_when_nothing_was_written() {
 }
 // }}}1
 
-// delete_matching (history-retention) {{{1
+// delete_matching {{{1
 
 #[tokio::test]
 async fn delete_matching_deletes_only_runs_matching_the_filter_and_returns_the_count() {
@@ -2273,7 +2270,7 @@ async fn delete_matching_with_an_empty_filter_deletes_every_run() {
 }
 // }}}1
 
-// delete (history-explorer-ui) {{{1
+// delete {{{1
 
 #[tokio::test]
 async fn delete_removes_exactly_the_run_with_that_id_and_returns_true() {

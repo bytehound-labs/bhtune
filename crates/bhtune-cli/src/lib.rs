@@ -15,10 +15,10 @@
 //! - [`output`] — CLI-specific `--output table|json` formatting and error presentation;
 //!   shared sample export serialization is provided by `bhtune-runtime`.
 //!
-//! `main.rs` stays a one-line delegator to [`run`]; [`run_with_cli`] is the actual entry
+//! `main.rs` stays a one-line delegator to [`run`]; `run_with_cli` is the internal entry
 //! point, kept separate so tests can exercise it against an already-parsed [`args::Cli`]
 //! without needing to control `std::env::args()` — mirroring `opcda-bridge-client`'s
-//! `run`/`run_with_cli` split. Logging is initialized in [`run`], not [`run_with_cli`], for
+//! `run`/`run_with_cli` split. Logging is initialized in [`run`], not `run_with_cli`, for
 //! the same reason: it keeps tracing setup (and its process-global, only-succeeds-once
 //! subscriber installation) entirely out of `run_with_cli`'s own large, injection-based test
 //! suite -- see `logging`'s test module doc comment.
@@ -129,7 +129,7 @@ pub const EXIT_CHECK_FAILED: u8 = 8;
 /// Parses real CLI arguments, initializes structured logging, and runs, returning a process
 /// exit code.
 ///
-/// Logging is resolved and initialized here rather than in [`run_with_cli`] -- see the crate
+/// Logging is resolved and initialized here rather than in `run_with_cli` -- see the crate
 /// doc comment. It reads the config file once, purely for `[log]` settings; `run_with_cli`
 /// reads it again moments later for the database path and other settings. That small,
 /// one-time duplication keeps `run_with_cli`'s own extensively unit-tested call path (which
@@ -139,7 +139,7 @@ pub const EXIT_CHECK_FAILED: u8 = 8;
 /// prevents the actual command (and its `println!`-based result) from running.
 ///
 /// [`cancel::CtrlC::install`] is called here, as the very first line, rather than inside
-/// [`run_with_cli`] or anywhere later -- deliberately earlier than the Ctrl+C listener's
+/// `run_with_cli` or anywhere later -- deliberately earlier than the Ctrl+C listener's
 /// strict minimum requirement (registered once before the polling loop starts), so that a
 /// Ctrl+C pressed during config loading, logging setup, database open/migrate/seed, or the
 /// initial-readings/mode-transition sequence is also captured rather than lost or hitting

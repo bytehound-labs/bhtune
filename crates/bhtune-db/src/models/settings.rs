@@ -5,7 +5,7 @@ use crate::error::{DbError, DbResult};
 
 // settings {{{1
 
-/// One row of `settings`: an app-wide key/value pair (e.g. the `history-retention` policy).
+/// One row of `settings`: an app-wide key/value pair (e.g. the history retention policy).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingRow {
     pub key: String,

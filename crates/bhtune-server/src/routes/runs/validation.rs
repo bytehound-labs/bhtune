@@ -44,7 +44,7 @@ impl StartRunRequest {
     }
 }
 
-/// Checks that `run` is eligible for a post-hoc PID write or revert (`api-post-run-write`):
+/// Checks that `run` is eligible for a post-hoc PID write or revert:
 /// finished (not still running its own test), used the `opcda` driver, has PID constant
 /// tags in its snapshotted [`bhtune_core::LoopTags`], and recorded the OPC server/bridge
 /// host it actually connected through. Shared by [`write_run`] and [`revert_run`] -- both

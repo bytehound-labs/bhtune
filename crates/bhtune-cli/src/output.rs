@@ -1,6 +1,6 @@
-//! Output format selection for the handful of commands that support `--output json`
-//! (`history list`/`history show` and `tune`/`simulate`'s final summary line — see
-//! AGENTS.md's `cli-automation` section for why exactly these three).
+//! Output format selection for `history list`, `history show`, `tune`, and `simulate`.
+//! These commands support `--output json`; other commands keep their existing
+//! human-readable output.
 //!
 //! Mirrors `opcda-bridge-client`'s `output.rs` in spirit (a small `OutputFormat` enum plus a
 //! `format_error` helper), but deliberately without its generic `render<T: Tabled +

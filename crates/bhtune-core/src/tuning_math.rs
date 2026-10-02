@@ -4,7 +4,7 @@
 //!
 //! Pure port of `TuningConstantsCalc` ([`measure_oscillation`] + [`calculate_tuning_result`])
 //! and `CalculatePIDparameters` ([`calculate_pid_parameters`]), split the same way the legacy
-//! app split them. Like `core-mrft`, this module does no I/O and reads no clock — every
+//! app split them. Like the MRFT engine, this module does no I/O and reads no clock — every
 //! timestamp it reasons about is already inside `switch_times`, taken from a completed
 //! [`crate::mrft::Action::Complete`].
 
@@ -22,8 +22,8 @@ use crate::{
 };
 
 /// Legacy-bug replication flags for this module, mirroring [`crate::mrft::MrftCompat`]'s
-/// pattern (see `core-bug-register`). Every field defaults to `false`: the fixed, correct
-/// behavior.
+/// pattern (see `docs/internal/design/correctness-register.md`). Every field defaults to
+/// `false`: the fixed, correct behavior.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TuningMathCompat {
     /// Replicate `TuningConstantsCalc`'s period calculation, which reconstructs elapsed time
@@ -245,18 +245,12 @@ pub fn measure_oscillation(
         (peaks.iter().sum::<f32>(), troughs[1..].iter().sum::<f32>())
     };
 
-    // `TuningConstantsCalc` reconstructs elapsed time from a `TimeSpan`'s `.Hours`/`.Minutes`/
-    // `.Seconds` *component* properties -- each an integer, so the sub-second remainder is
-    // silently dropped -- and `.Hours` additionally wraps at 24, dropping whole days for a
-    // run lasting that long. Reproducing the bug therefore needs *both* effects: whole-second
-    // precision and a 24-hour wrap (`elapsed_ms / 1000 % 86_400`). The fixed default instead
-    // keeps millisecond precision (ample for any real polling cadence) and never wraps, using
-    // the duration's true elapsed time -- this matters in practice, not just past 24 hours:
-    // an oscillation period under one second (a fast loop with a short poll interval) used to
-    // collapse to exactly zero here even by default, silently zeroing `ti_minutes`/`td_minutes`
-    // for a real, measured oscillation (caught by `e2e-simulator`'s real-timing coverage,
-    // which -- unlike this module's other tests -- drives a real polling loop with genuine,
-    // sub-second switch-time deltas rather than hand-picked whole-second ones).
+    // The compatibility path reproduces the legacy `TimeSpan` component arithmetic: it
+    // truncates to whole seconds and wraps after 24 hours (`elapsed_ms / 1000 % 86_400`).
+    // The default keeps the true elapsed milliseconds and never wraps. Short poll intervals
+    // can produce sub-second periods, so retaining millisecond precision is necessary to
+    // calculate nonzero `ti_minutes`/`td_minutes`; `bhtune-cli/tests/e2e_simulator.rs`
+    // exercises this with actual switch timestamps.
     let elapsed_ms = (switch_times[switch_times.len() - 1] - switch_times[0]).num_milliseconds();
     let secs_for_period = if compat.replicate_period_truncation_bug {
         ((elapsed_ms / 1000) % 86_400) as f32
@@ -729,15 +723,10 @@ mod tests {
         assert_approx(buggy.period_minutes, 30.0, 1e-3);
     }
 
-    /// A run lasting well under one second total: proves the *default* (non-compat) path
-    /// keeps millisecond precision rather than truncating to whole seconds the way
-    /// `TimeSpan.Seconds` does. Before this was fixed, elapsed time was computed via
-    /// `Duration::num_seconds()` *unconditionally* -- the compat flag only gated the extra
-    /// `% 86_400` day-wrap on top of it -- so any run completing in under a second (entirely
-    /// plausible for a fast loop with a short poll interval, and exactly the shape
-    /// `e2e-simulator`'s real-timing coverage exercises) silently collapsed `period_minutes`,
-    /// and therefore `ti_minutes`/`td_minutes`, to exactly zero even with
-    /// `TuningMathCompat::default()`.
+    /// A run lasting well under one second total verifies the *default* path preserves
+    /// millisecond precision, while the compatibility path reproduces whole-second
+    /// truncation. This keeps short-period calculations meaningful for fast loops with short
+    /// poll intervals; `bhtune-cli/tests/e2e_simulator.rs` also exercises real switch times.
     #[test]
     fn measure_oscillation_keeps_sub_second_precision_by_default() {
         let t_ms = |offset_ms: i64| {
