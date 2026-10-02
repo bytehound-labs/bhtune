@@ -2,8 +2,7 @@
 //!
 //! A single, plain, open SQLite database (via `sqlx`, WAL mode + busy timeout + foreign keys
 //! enforced) holds everything: DCS/PLC templates, loop configuration, and tune run history.
-//! There is deliberately no encryption and no licensing/usage-gating table — see AGENTS.md
-//! for why.
+//! The database is unencrypted and has no licensing or usage-gating table.
 //!
 //! - [`pool`] — opens the database and runs migrations (`connect`/`connect_in_memory`). The
 //!   only supported way to get a `SqlitePool` in bhtune.

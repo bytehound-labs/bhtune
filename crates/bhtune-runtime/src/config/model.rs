@@ -11,7 +11,7 @@ use super::tuning::TuningConfig;
 pub const DEFAULT_BRIDGE_HOST: &str = "localhost:7600";
 
 /// Default address `bhtune-server` binds to when nothing else specifies one -- loopback
-/// only, matching the "v1 binds to `127.0.0.1` by default" decision in AGENTS.md. Lives
+/// only, so the server is not exposed to the network unless explicitly configured. Lives
 /// alongside [`DEFAULT_BRIDGE_HOST`] in this shared config module (rather than in
 /// `bhtune-server` itself) even though only the server binary ever calls
 /// [`resolve_bind_addr`], the same way `templates`/`log` below are settings only some

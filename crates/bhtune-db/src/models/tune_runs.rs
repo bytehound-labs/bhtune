@@ -174,7 +174,7 @@ pub struct TuneRunInitialReadings {
     /// The controller mode tag's raw value at read time, before any mutation --
     /// `None` when the template/loop has no mode tag at all. Persisted (rather than kept
     /// only in-process) so a crashed run's restore intent survives the process dying
-    /// outright -- `safety-restore-guard` (finding 3 of the live-plant safety review).
+    /// outright.
     pub mode_raw: Option<String>,
     /// The mode-attribute tag's raw value at read time, before any mutation -- `None` when
     /// the template/loop has no mode-attribute tag at all. See `mode_raw`.
@@ -215,7 +215,7 @@ pub struct TuneRunRow {
     /// Snapshot of the exact [`DcsTemplate`] this run was configured against, deserialized
     /// from `template_snapshot_json`. Held as the full struct rather than just its `name` --
     /// which is what makes a historical run stay interpretable once the template catalog
-    /// changes underneath it (`safety-run-snapshot`). There's no separate `template_name`
+    /// changes underneath it. There's no separate `template_name`
     /// field here even though the table has a `template_name` column: `.name` on this field
     /// already carries that value, and the column exists purely so it's filterable/indexable
     /// without `json_extract` (see this module's own doc comment).
@@ -227,7 +227,7 @@ pub struct TuneRunRow {
     /// `POST /api/runs` body), before any config-driven defaulting -- raw JSON rather than a
     /// typed struct, since its shape is owned by the `bhtune`/`bhtune-server` adapters, not
     /// `bhtune-db`. `"{}"` for any run started before
-    /// [`TuneRunRow::record_connection`] is called. Powers `ui-prefill-last-run` and
+    /// [`TuneRunRow::record_connection`] is called. It supports last-run prefill and
     /// "duplicate this run"; never treat this as the source of truth for connection
     /// facts -- that's `opc_server`/`bridge_host` above.
     pub request_json: String,
@@ -235,8 +235,8 @@ pub struct TuneRunRow {
     pub notes: Option<String>,
     pub initial_readings: Option<TuneRunInitialReadings>,
     /// Whether this run permitted `Quality::Uncertain` OPC readings under the global
-    /// `allow_uncertain_quality` policy (finding 5 of the live-plant safety review;
-    /// `Quality::Bad` is never accepted regardless). `false` for every run started before
+    /// `allow_uncertain_quality` policy (`Quality::Bad` is never accepted regardless).
+    /// `false` for every run started before
     /// [`TuneRunRow::record_allow_uncertain_quality`] is called -- see that method's doc
     /// comment for why it's a separate post-`start()` update rather than a `start()`
     /// parameter.
@@ -387,12 +387,10 @@ impl TuneRunRow {
     /// never saved as a reusable [`LoopRow`].
     ///
     /// `template_origin`/`template`/`tags` snapshot exactly what this run was configured
-    /// against (`safety-run-snapshot`), so a historical run stays interpretable even after
-    /// the template catalog changes underneath it. Serializing `template`/`tags` returns
-    /// [`DbError::Serialize`] if the JSON encoder rejects a value. Both types are plain,
-    /// `derive`d structures, and every `f32` field they can carry is validated finite well
-    /// before a run reaches this call (see `safety-validation`); a serialization failure
-    /// means that contract regressed upstream rather than a normal plant condition.
+    /// against, so a historical run stays interpretable even after the template catalog
+    /// changes underneath it. Serializing `template`/`tags` returns [`DbError::Serialize`]
+    /// if the JSON encoder rejects a value. Both are plain derived structures; a serialization
+    /// failure indicates a persistence contract regression rather than a plant condition.
     #[allow(clippy::too_many_arguments)]
     pub async fn start(
         pool: &SqlitePool,
@@ -646,22 +644,16 @@ impl TuneRunRow {
         .map_err(DbError::Query)
     }
 
-    /// Records this run's connection provenance and the exact request it was started with
-    /// (`db-run-request-snapshot`): the OPC DA server ProgID and opcda-bridge gateway host
+    /// Records this run's connection provenance and the exact request it was started with:
+    /// the OPC DA server ProgID and opcda-bridge gateway host
     /// actually used (`None`/`None` for a non-opcda run), and a JSON snapshot of the complete
     /// submitted request (CLI flags or the HTTP `POST /api/runs` body), captured *before* any
     /// config-driven defaulting so it reflects what the caller actually asked for.
     ///
-    /// A separate post-`start()` update rather than three more `start()` parameters, matching
-    /// [`Self::record_allow_uncertain_quality`]'s precedent -- `start()` already has 8
-    /// positional parameters across dozens of call sites in this workspace's test suites
-    /// alone, and three more would make every one of them noisier for no benefit, since none
-    /// of those tests care about connection provenance. Unlike that method, this data *is*
-    /// normally known the instant a run begins; the one production caller (the `bhtune` CLI's
-    /// `prepare()`) calls this immediately after `start()` succeeds, before any driver I/O.
-    /// `opc_server`/`bridge_host` default to `NULL` and `request_json` defaults to `"{}"`
-    /// (see the migration), so every existing `start()` call site keeps compiling and
-    /// behaving exactly as before.
+    /// Recorded after `start()` so callers that do not have connection provenance can still
+    /// create a run without extra arguments. The production caller stores this immediately
+    /// after `start()` succeeds, before any driver I/O. `opc_server`/`bridge_host` default to
+    /// `NULL` and `request_json` defaults to `"{}"` (see the migration).
     pub async fn record_connection(
         pool: &SqlitePool,
         run_id: i64,
@@ -769,14 +761,12 @@ impl TuneRunRow {
         row_to_tune_run(row)
     }
 
-    /// Records the driver's initial-readings snapshot (`ReadInitialOPCvalues` in the legacy
-    /// app) for an already-started run. Called at most once per run, right after that read
-    /// succeeds -- and, deliberately, *before* `transition_to_manual`'s first mutating write
-    /// rather than after it (`safety-restore-guard`, finding 3 of the live-plant safety
-    /// review), so `mode_raw`/`mode_attribute_raw`/`setpoint_ini` are always durably
-    /// persisted before the loop is touched at all, letting a crashed run be reconstructed
-    /// and restored later via `bhtune restore-loop`. A run that fails before or during the
-    /// read instead goes straight to [`Self::fail`] with `initial_readings` left `None`.
+    /// Records the driver's initial-readings snapshot for an already-started run. Called at
+    /// most once per run, right after that read succeeds and before `transition_to_manual`'s
+    /// first mutating write. This durably preserves `mode_raw`/`mode_attribute_raw`/
+    /// `setpoint_ini` so a crashed run can be reconstructed and restored later via
+    /// `bhtune restore-loop`. A run that fails before or during the read instead goes
+    /// straight to [`Self::fail`] with `initial_readings` left `None`.
     pub async fn record_initial_readings(
         pool: &SqlitePool,
         run_id: i64,
@@ -811,15 +801,10 @@ impl TuneRunRow {
     }
 
     /// Records whether this run permitted `Quality::Uncertain` OPC readings under the global
-    /// configuration policy (finding 5 of the live-plant safety review). A separate
-    /// post-`start()` update rather than a new `start()` parameter deliberately: `start()`
-    /// already has 8 positional parameters across 28 call sites in this crate's own test
-    /// suite alone, and this is a rarely-used escape hatch, not information every caller
-    /// naturally has on hand at the moment a run begins the way `template_origin`/`template`/
-    /// `tags` are. The column defaults to `0`/`false` (see the migration), so every existing
-    /// `start()` call site keeps compiling and behaving exactly as before; only the one
-    /// production caller in the `bhtune` package's `run()` needs to call this, right after `start()`
-    /// succeeds.
+    /// configuration policy. This is a separate post-`start()` update because the resolved
+    /// policy is available to the orchestration layer, not to every repository caller. The
+    /// column defaults to `0`/`false` (see the migration), and the production caller stores
+    /// the resolved value after `start()` succeeds.
     pub async fn record_allow_uncertain_quality(
         pool: &SqlitePool,
         run_id: i64,
@@ -869,8 +854,8 @@ impl TuneRunRow {
         row_to_tune_run(row)
     }
 
-    /// Records the outcome of a best-effort loop-restore attempt made after this run ended
-    /// (`safety-restore-guard`, finding 3 of the live-plant safety review). Called once,
+    /// Records the outcome of a best-effort loop-restore attempt made after this run ended.
+    /// Called once,
     /// after `complete`/`fail`/`abort` (whichever applies) and after `attempt_restore` has
     /// actually run -- never before, and never for a run that ended without ever mutating
     /// the loop (nothing to restore, so nothing to record). `detail` should be `Some(..)`
@@ -967,8 +952,8 @@ impl TuneRunRow {
         row_to_tune_run(row)
     }
 
-    /// Marks a run `aborted` — stopped deliberately (by a human, or `cli-safety`'s
-    /// wall-clock timeout guardrail) rather than failing on its own.
+    /// Marks a run `aborted` — stopped deliberately by a human or by the configured run
+    /// timeout rather than failing on its own.
     pub async fn abort(
         pool: &SqlitePool,
         run_id: i64,
@@ -1106,12 +1091,12 @@ impl TuneRunRow {
     /// Deletes every run matching `filter` in one statement (SQLite treats a single
     /// statement as its own transaction, so no explicit `BEGIN`/`COMMIT` is needed). Returns
     /// the number of runs deleted. `tune_samples`/`tune_results`/`tune_writes`'s `ON DELETE
-    /// CASCADE` foreign keys (see `db-schema`'s migration) remove each deleted run's samples,
+    /// CASCADE` foreign keys in the schema remove each deleted run's samples,
     /// results, and write-back audit rows automatically.
     ///
-    /// Shares [`push_filter`] with [`Self::list`]/[`Self::count`], so "what a `--dry-run`
+    /// Shares `push_filter` with [`Self::list`]/[`Self::count`], so "what a `--dry-run`
     /// preview reports" and "what an actual sweep deletes" can never disagree — used this way
-    /// by `history-retention`'s automatic sweep and `bhtune history prune`.
+    /// by the automatic retention sweep and `bhtune history prune`.
     ///
     /// An empty `filter` (every field `None`) matches and deletes every run in the table —
     /// callers that mean to scope a deletion must build a `filter` that says so explicitly;
@@ -1128,12 +1113,12 @@ impl TuneRunRow {
         Ok(result.rows_affected())
     }
 
-    /// Deletes exactly one run by id (`history-explorer-ui`'s delete action). Returns
-    /// whether a row was actually deleted -- `false` if no run has that id, letting the
+    /// Deletes exactly one run by id, as used by the browser history page's delete action.
+    /// Returns whether a row was actually deleted -- `false` if no run has that id, letting the
     /// caller map that to a 404 rather than a silent no-op. Unlike
     /// [`DcsTemplateRow::delete`], no foreign key ever blocks this: `tune_runs` has no
     /// parent-side `RESTRICT` reference pointing at it, only the `ON DELETE CASCADE`
-    /// children (`tune_samples`/`tune_results`/`tune_writes`, see `db-schema`'s migration),
+    /// children (`tune_samples`/`tune_results`/`tune_writes`, see the schema migration),
     /// which SQLite removes automatically as part of the same statement.
     pub async fn delete(pool: &SqlitePool, id: i64) -> DbResult<bool> {
         let result = sqlx::query("DELETE FROM tune_runs WHERE id = ?")

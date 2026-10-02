@@ -8,8 +8,7 @@
 //! Mirrors the `bhtune` package's own `tests/ctrlc_abort.rs` pattern and rationale: a real signal
 //! can't be delivered to one `#[test]` inside a shared multi-threaded `cargo test` binary
 //! without also hitting every other concurrently running test, so this has to be a real
-//! subprocess. Unix-only (there is no POSIX `SIGINT`/`SIGTERM` on Windows; CI runs
-//! `ubuntu-latest` only, see `AGENTS.md`).
+//! subprocess. Unix-only because Windows does not provide POSIX `SIGINT`/`SIGTERM`.
 
 #![cfg(unix)]
 #![allow(
@@ -147,10 +146,9 @@ async fn serves_real_http_and_shuts_down_gracefully_on_sigterm() {
         "expected the health body in the response, got: {response}"
     );
 
-    // SIGTERM is what a service manager's ordinary "stop" sends (`systemctl stop`, and
-    // eventually the Windows Service Control Manager -- see `server-windows-service` in
-    // AGENTS.md), so this proves the deployed-as-a-service path drains cleanly, not just an
-    // interactive Ctrl+C.
+    // SIGTERM is what a Unix service manager's ordinary "stop" sends (for example,
+    // `systemctl stop`), so this proves the deployed-as-a-service path drains cleanly, not
+    // just an interactive Ctrl+C.
     send_signal(&child, libc::SIGTERM);
 
     let exit_code = wait_for_exit(child, "SIGTERM").await;

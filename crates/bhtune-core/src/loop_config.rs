@@ -61,13 +61,9 @@ impl LoopConfig {
 
     /// Validates fields whose legality can't be expressed in the type system alone: relay
     /// amplitude against `[RELAY_AMP_PERCENT_MIN, RELAY_AMP_PERCENT_MAX]`, `num_cycles_count`
-    /// must be at least 1 (zero previously reached `tuning_math::measure_oscillation`'s
-    /// internal `assert!` and panicked mid-run, after the loop had already been switched to
-    /// manual and stroked -- see `docs/internal/v1-checklist.md` §2), and `mrft_delay_secs` against
-    /// `MRFT_DELAY_SECS_MAX`. This is real range validation at the model/construction level,
-    /// not just a client-side keystroke filter or a single "not blank" check, so it applies
-    /// no matter how the `LoopConfig` was built (CLI flags, an imported template, or a
-    /// future web GUI request).
+    /// of at least 1, and `mrft_delay_secs` against `MRFT_DELAY_SECS_MAX`. This model-level
+    /// validation applies regardless of how the `LoopConfig` was built (CLI flags, an
+    /// imported template, or an HTTP request), not just to client-side form input.
     pub fn validate(&self) -> Result<(), LoopConfigError> {
         let amp = self.relay_amp_percent;
         if !amp.is_finite()
@@ -251,9 +247,8 @@ mod tests {
         assert!(cfg.validate().is_err());
     }
 
-    /// The motivating case: BHTune's predecessor let a leftover debug shortcut leave a
-    /// four-digit value in this exact field with only a "not blank" check to catch it (see
-    /// `docs/internal/v1-checklist.md` §2). `validate` must reject it.
+    /// A nonblank value can still exceed the configured relay-amplitude range, so
+    /// `validate` must reject this input.
     #[test]
     fn validate_rejects_a_legacy_style_four_digit_value() {
         let mut cfg = sample();
@@ -280,10 +275,8 @@ mod tests {
         assert!(cfg.validate().is_ok());
     }
 
-    /// The reproduced panic: `--cycles-count 0` used to reach
-    /// `tuning_math::measure_oscillation`'s internal `assert!` and panic mid-run, after the
-    /// loop had already been switched to manual and stroked. `validate` must reject it before
-    /// any of that happens.
+    /// `validate` rejects a zero cycle count before a tune can start or perform any driver
+    /// operations.
     #[test]
     fn validate_rejects_zero_cycles_count() {
         let mut cfg = sample();

@@ -1392,7 +1392,7 @@ export interface components {
      *
      *     `quality` reuses [`SampleQuality`] rather than a third quality representation --
      *     `bhtune-db`'s `SampleQuality` (mapped from the driver's live [`bhtune_driver::Quality`] by
-     *     [`sample_quality_from_driver`]) is already exposed directly over HTTP in
+     *     [`bhtune_runtime::tune::sample_quality_from_driver`]) is already exposed directly over HTTP in
      *     `GET /api/runs/{id}`'s `SampleResponse::pv_quality` (see `routes::history`), so this
      *     follows that same precedent instead of inventing a parallel `OpcQualityResponse` enum.
      */
@@ -1527,8 +1527,7 @@ export interface components {
      * @description A process/loop category. Each has its own row in the tuning-constant matrices in
      *     [`crate::constants`] and its own default cycle/noise-protection settings.
      *
-     *     Discriminants double as the row index into those matrices — see
-     *     [`ProcessType::index`].
+     *     Discriminants double as row indexes into those matrices, in [`ProcessType::ALL`] order.
      * @enum {string}
      */
     ProcessType:
@@ -1683,7 +1682,9 @@ export interface components {
      * @description How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the
      *     moment it was read (finding 5 of the live-plant safety review).
      *
-     *     A `bhtune-db`-local mirror of [`bhtune_driver::Quality`], not a reuse of it directly:
+     *     A `bhtune-db`-local mirror of
+     *     [`bhtune_driver::Quality`](https://docs.rs/bhtune-driver/latest/bhtune_driver/types/enum.Quality.html),
+     *     not a reuse of it directly:
      *     `bhtune-db` deliberately doesn't depend on `bhtune-driver` (a leaf I/O-adapter crate with
      *     a much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business
      *     in the persistence crate just to name one three-variant enum), so the `bhtune` package, which

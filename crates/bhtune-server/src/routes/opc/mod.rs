@@ -5,7 +5,7 @@
 //! test.
 //!
 //! Read-only diagnostics remain independent of [`crate::state::AppState::active_run`], and every
-//! OPC operation is bounded by an explicit [`OPC_QUERY_TIMEOUT_SECS`] timeout (see that constant's
+//! OPC operation is bounded by an explicit `OPC_QUERY_TIMEOUT_SECS` timeout (see that constant's
 //! doc comment for why one is needed at all). Index management does not acquire the active-tune
 //! lock either: starting or controlling a gateway inventory must not block, or be blocked by, an
 //! in-flight tune.

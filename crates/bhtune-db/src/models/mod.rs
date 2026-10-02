@@ -13,12 +13,10 @@
 //! [`DemoSessionRow`], [`DcsTemplateRow`], and
 //! [`TuneRunRow`]/[`TuneSampleRow`]/[`TuneResultRow`]/
 //! [`TuneMvActuationRow`]/[`TuneWriteRow`] have full repository methods (insert, lifecycle
-//! transitions, filtering, pagination) — covering `db-seed-templates` and
-//! `history-query-api`. [`LoopRow`] deliberately has none yet: full CRUD for saved loops
-//! (list/update/delete) is a separate "loop management" concern from history (which is about
-//! *runs*, not the loops they reference), left to whichever future todo actually needs it.
-//! Until then, tests construct `loops` rows with raw SQL (see `tests/schema.rs`'s `seed_loop`
-//! helper) purely as foreign-key setup.
+//! transitions, filtering, pagination). [`LoopRow`] deliberately has no repository methods:
+//! full CRUD for saved loops (list/update/delete) is separate from run history, which is about
+//! *runs*, not the loops they reference. Tests construct `loops` rows with raw SQL (see
+//! `tests/schema.rs`'s `seed_loop` helper) purely as foreign-key setup.
 //!
 //! [`TuneRunRow::list`]/[`TuneRunRow::count`] build their `WHERE` clause dynamically with
 //! `sqlx::QueryBuilder`, since [`TuneRunFilter`]'s fields are all optional and the set of

@@ -1,4 +1,4 @@
-//! Platform service registration and lifecycle management (`server-windows-service`).
+//! Platform service registration and lifecycle management.
 //!
 //! Only the imperative Windows Service Control Manager (SCM) glue is
 //! `#[cfg(target_os = "windows")]` -- it is invisible to the Linux/macOS coverage runs, so it
@@ -13,8 +13,8 @@
 //! gateway -- genuinely runs cross-platform.
 //!
 //! Linux and macOS have no equivalent self-registration API: the idiomatic path there is a
-//! static unit/plist file an administrator (or a future `.deb`/`.rpm`/Homebrew package)
-//! installs with the OS's own tooling, not something this binary does to itself at runtime --
+//! static unit/plist file installed by an administrator or package with the OS's own tooling,
+//! not something this binary does to itself at runtime --
 //! see `packaging/systemd/bhtune-server.service` and
 //! `packaging/launchd/com.bytehound-labs.bhtune-server.plist`. So on those platforms, this
 //! module's public functions are still real (not `#[cfg(windows)]`-gated away, so

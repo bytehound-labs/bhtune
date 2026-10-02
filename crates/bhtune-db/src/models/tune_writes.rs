@@ -17,10 +17,9 @@ use super::{tune_results::TuneResultRow, tune_runs::TuneRunRow};
 /// ([`TuneResultRow`]). Flattened for the same reason as `TuneResultRow`.
 ///
 /// `*_written`/`*_readback` are independently nullable (not all-or-nothing like `previous`)
-/// because `safety-writeback-rollback` writes and verifies P, then I, then D in sequence,
-/// stopping at the first failure -- so a partial attempt leaves the constants after the
-/// failure point at `None` rather than 0, distinguishing "never attempted" from "attempted
-/// and confirmed zero".
+/// because the operation writes and verifies P, then I, then D in sequence, stopping at the
+/// first failure. A partial attempt leaves constants after the failure point at `None` rather
+/// than 0, distinguishing "never attempted" from "attempted and confirmed zero".
 #[derive(Debug, Clone, PartialEq)]
 pub struct TuneWriteRow {
     pub id: i64,
@@ -101,11 +100,9 @@ pub enum WriteKind {
 }
 
 /// Everything needed to record one write-back attempt, successful or not. Built up by the
-/// caller as it works through the sequential pre-read / write-and-verify / rollback steps,
-/// then persisted in a single [`TuneWriteRow::insert`] call -- replacing the old two-outcome
-/// `insert_success`/`insert_failure` split, which could not represent a partial write or a
-/// rollback attempt at all. See `safety-writeback-rollback` in AGENTS.md for the four
-/// distinguishable outcomes this shape exists to capture.
+/// caller through the sequential pre-read / write-and-verify / rollback steps, then persisted
+/// in a single [`TuneWriteRow::insert`] call so partial writes and rollback outcomes are
+/// represented alongside complete success or pre-read failure.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewTuneWrite {
     pub response_level: ResponseLevel,
@@ -201,7 +198,7 @@ impl TuneWriteRow {
     }
 
     /// Lists every write-back attempt for `run_id`, oldest first — the full "who changed this
-    /// loop and when" audit trail `history-writeback-audit` exists to provide.
+    /// loop and when" audit trail.
     pub async fn list_for_run(pool: &SqlitePool, run_id: i64) -> DbResult<Vec<TuneWriteRow>> {
         let rows = sqlx::query("SELECT * FROM tune_writes WHERE run_id = ? ORDER BY written_at")
             .bind(run_id)

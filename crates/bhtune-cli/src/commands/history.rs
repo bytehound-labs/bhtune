@@ -233,12 +233,12 @@ struct RunDetailJson {
     completed_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Name of the template snapshotted onto this run at start time -- not necessarily the
     /// template `template_name` currently resolves to in the catalog, since templates can be
-    /// edited or re-versioned after a run is recorded (`safety-run-snapshot`).
+    /// edited or re-versioned after a run is recorded.
     template_name: String,
     template_origin: bhtune_db::models::TemplateOrigin,
     config: bhtune_core::LoopConfig,
     /// The resolved OPC DA server ProgID this run actually used, or `None` for a
-    /// simulator/replay run (`db-run-request-snapshot`). This is what `history revert`
+    /// simulator/replay run. This is what `history revert`
     /// trusts over any `--server` flag, rather than re-resolving one.
     opc_server: Option<String>,
     /// The resolved bridge host this run actually used, matching `opc_server` above.
@@ -252,7 +252,7 @@ struct RunDetailJson {
     writes: Vec<WriteJson>,
     mv_actuations: Vec<MvActuationJson>,
     /// Outcome of the best-effort restore attempted after this run ended -- `None` if the
-    /// run never mutated the loop, or hasn't ended yet (`safety-restore-guard`).
+    /// run never mutated the loop, or hasn't ended yet.
     restore_status: Option<bhtune_db::models::RestoreStatus>,
     restore_detail: Option<String>,
 }
@@ -331,7 +331,7 @@ fn is_table_output(output: OutputFormat) -> bool {
     output == OutputFormat::Table
 }
 
-/// `bhtune history prune` -- applies `history-retention`'s age-based policy on demand,
+/// `bhtune history prune` -- applies the age-based retention policy on demand,
 /// instead of waiting for the next startup or (for `bhtune-server`) the next periodic sweep.
 ///
 /// `older_than_days` overrides the configured `retention_days` policy for this invocation
@@ -772,11 +772,11 @@ struct RevertedTargetJson {
 }
 
 /// Resolves the OPC DA connection a revert should use for `run` -- always its own recorded
-/// `opc_server`/`bridge_host` (`db-run-request-snapshot`), never a value re-resolved from
+/// `opc_server`/`bridge_host`, never a value re-resolved from
 /// `--server`/`--bridge-host`/config at revert time. Re-resolving at revert time is exactly
-/// the bug this closes: running `history revert` from a shell whose flags/config point at a
-/// *different* gateway would otherwise confidently write the wrong plant's old PID constants
-/// under tag names that may happen to exist on both. An explicit `--server`/`--bridge-host`
+/// unsafe: running `history revert` from a shell whose flags/config point at a *different*
+/// gateway could write the wrong plant's old PID constants under tag names that may happen
+/// to exist on both. An explicit `--server`/`--bridge-host`
 /// flag is still accepted, but purely as a cross-check against the recorded value -- a
 /// contradicting flag is a hard error, never a silent override, and there is no fallback to
 /// config when a flag is omitted (unlike every other command's connection resolution).
@@ -804,10 +804,9 @@ fn resolve_revert_connection(
 /// `--yes`, no PID constant tags, a contradicting/missing recorded connection, or a failed
 /// connection) is a plain `Err`, which `lib.rs`'s existing `fail()` reports through
 /// `--output json`'s own error contract -- exactly the same path `history show`'s "no such
-/// run" error already takes. Only the outcome of an *attempted* revert is reported here, and
-/// only ever as prose gated on `output == OutputFormat::Table` (never unconditionally,
-/// unlike `tune`'s own write-back step -- see finding 8) or as the one `RevertJson` object
-/// printed on success.
+/// run" error already takes. Only the outcome of an *attempted* revert is reported here, as
+/// prose gated on `output == OutputFormat::Table` or as the one `RevertJson` object printed
+/// on success.
 #[allow(clippy::too_many_arguments)]
 async fn revert(
     pool: &SqlitePool,
@@ -1449,11 +1448,9 @@ mod tests {
     }
 
     /// Starts an `Opcda`-driver run (using the sample template/tags, which have PID
-    /// constant tags configured) with `record_connection` already called for it -- exactly
-    /// what `prepare` does for a real run (`db-run-request-snapshot`) -- so `revert`'s own
-    /// connection-resolution logic has a stored value to resolve against, matching
-    /// production shape rather than the pre-`db-run-request-snapshot` gap where a run had no
-    /// recorded connection at all. Returns it without recording any write-back yet -- each
+    /// constant tags configured) with `record_connection` already called for it, so
+    /// `revert`'s own connection-resolution logic has a stored value to resolve against.
+    /// Returns it without recording any write-back yet -- each
     /// `revert_*` test below inserts whatever `TuneWriteRow` fixture its scenario needs.
     async fn opcda_run_with_no_writes(bridge_host: &str, server: &str) -> (SqlitePool, i64) {
         let pool = bhtune_db::connect_in_memory().await.unwrap();
@@ -1684,7 +1681,7 @@ mod tests {
         // A run created directly via `TuneRunRow::start` without ever calling
         // `record_connection` -- shouldn't happen for a real run created through
         // `prepare`/the HTTP API, but `revert` must still refuse loudly rather than guess
-        // which OPC server/gateway to target (`db-run-request-snapshot`).
+        // which OPC server/gateway to target.
         let pool = bhtune_db::connect_in_memory().await.unwrap();
         let now = chrono::Utc::now();
         let run = TuneRunRow::start(
@@ -2020,7 +2017,8 @@ mod tests {
 
         // This isn't a substitute for a real stdout-capture test proving JSON mode never
         // interleaves prose ahead of the final object (that end-to-end contract belongs to
-        // `safety-json-contract`'s subprocess test, across every subcommand at once) -- it
+        // subprocess contract test in `tests/json_output_contract.rs`, across every
+        // subcommand at once) -- it
         // only proves `revert`'s `OutputFormat::Json` branch itself runs to completion
         // without erroring, i.e. that constructing and serializing `RevertJson` from a real
         // successful revert actually works, which the Table-mode test above never exercises.
@@ -2172,7 +2170,8 @@ mod tests {
         // Only proves the `Json` branch runs to completion and produces a well-formed
         // `PruneJson` in both the dry-run and real-deletion cases -- the full
         // one-JSON-value-on-stdout contract across every subcommand belongs to
-        // `safety-json-contract`'s dedicated subprocess test, not to this unit test.
+        // dedicated subprocess contract test in `tests/json_output_contract.rs`, not to this
+        // unit test.
         prune(&pool, &config, None, true, OutputFormat::Json)
             .await
             .unwrap();

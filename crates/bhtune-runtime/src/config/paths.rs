@@ -34,7 +34,7 @@ pub fn config_path_from(
 /// settings a site admin edits by hand, not persistent application data (contrast
 /// [`default_db_path_from`]/[`default_log_dir_from`], which live under the platform data
 /// directory instead). See [`load_user_templates`] for how this default fits into the full
-/// `template-user-catalog` precedence chain.
+/// configuration precedence chain.
 ///
 /// - Windows (`is_windows = true`): `%APPDATA%\bhtune\templates.toml`.
 /// - Elsewhere: `$XDG_CONFIG_HOME/bhtune/templates.toml`, falling back to

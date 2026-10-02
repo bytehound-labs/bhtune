@@ -33,7 +33,7 @@ pub fn resolve_bridge_host(cli_host: Option<String>, config: &BhtuneConfig) -> S
         .unwrap_or_else(|| DEFAULT_BRIDGE_HOST.to_string())
 }
 
-/// Resolve the history retention policy (`history-retention`) with `CLI flag > env var >
+/// Resolve the history retention policy with `CLI flag > env var >
 /// config file > default` precedence, matching [`resolve_bridge_host`]'s shape. The env var
 /// is already folded into `cli_days` by clap's `env` attribute on `Cli::retention_days`.
 /// `None` means retain forever -- there is no built-in default number of days; see
@@ -185,9 +185,8 @@ mod tests {
 
     #[test]
     fn resolve_retention_days_default_is_retain_forever() {
-        // No CLI flag, env var, or config key at all -- the deliberate "ships disabled by
-        // default" behavior `history-retention`'s design note calls for, not merely the
-        // absence of a hardcoded number.
+        // No CLI flag, env var, or config key at all -- retention is disabled by default,
+        // rather than merely lacking a hardcoded number.
         assert_eq!(resolve_retention_days(None, &BhtuneConfig::default()), None);
     }
 

@@ -74,6 +74,7 @@ Run the smallest command that covers the change, then every gate that change can
 
 ```sh
 cargo fmt --all --check
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 cargo deny check

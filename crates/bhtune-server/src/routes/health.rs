@@ -1,7 +1,7 @@
 //! `GET /api/health` -- an unauthenticated liveness probe, deliberately the only endpoint
 //! that touches neither [`crate::state::AppState`] nor the database: a load balancer or the
-//! Windows Service manager (`server-windows-service`) needs to be able to tell "the process
-//! is up and answering HTTP" apart from "the process is up but the database is unreachable"
+//! Windows Service manager needs to be able to tell "the process is up and answering HTTP"
+//! apart from "the process is up but the database is unreachable"
 //! (the latter would fail on essentially every other route already). It also exposes the
 //! server package version for the web application's shell.
 

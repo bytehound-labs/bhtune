@@ -1,18 +1,15 @@
-//! A single, process-wide Ctrl+C listener shared by every await point in a tune, replacing
-//! the pre-`safety-cancellation` design of constructing `tokio::signal::ctrl_c()` fresh on
-//! every polling-loop iteration (see AGENTS.md's `safety-cancellation`). Registering the
-//! signal exactly once, as early in the process as possible, closes the gap where a Ctrl+C
-//! delivered while no listener happens to be alive is silently swallowed -- tokio installs a
-//! process-wide `SIGINT` handler the first time `ctrl_c()` is polled and never reverts to the
-//! OS default, so a lost signal isn't merely unhandled, it's gone.
+//! A single, process-wide Ctrl+C listener shared by every await point in a tune. Registering
+//! the signal exactly once, as early in the process as possible, closes the gap where a
+//! Ctrl+C delivered while no listener happens to be alive is silently swallowed -- tokio
+//! installs a process-wide `SIGINT` handler the first time `ctrl_c()` is polled and never
+//! reverts to the OS default, so a lost signal isn't merely unhandled, it's gone.
 //!
 //! Built on [`tokio::sync::watch`] rather than `tokio_util::sync::CancellationToken` (which
 //! would need a new dependency) specifically for its per-clone "have I observed this value
-//! yet" semantics: a fresh [`CtrlC::signalled`] call after a signal already fired resolves
+//! yet" semantics: a fresh `CtrlC::signalled` call after a signal already fired resolves
 //! immediately (including one that arrived before this handle's first `signalled()` call at
-//! all), and a *second* signal is a second, distinguishable resolution on the same handle --
-//! exactly the two states `safety-cancellation` needs to tell apart (first Ctrl+C aborting
-//! the run, versus a second one during the restore forcing it to give up).
+//! all), and a *second* signal is a second, distinguishable resolution on the same handle:
+//! the first aborts the run, while another during restore forces it to give up.
 
 use std::future::Future;
 
@@ -23,7 +20,7 @@ use tokio::sync::watch;
 /// calling `tokio::signal::ctrl_c()` itself.
 ///
 /// The CLI calls [`CtrlC::install`] exactly once, as early as possible in process startup;
-/// runtime tests instead pass [`CtrlC::never`] and the server passes a manually-triggered
+/// runtime tests instead pass `CtrlC::never` and the server passes a manually-triggered
 /// handle for each HTTP run. Tests never install a real process-wide signal handler. That
 /// matters beyond this crate's tests: once *anything* in a process calls
 /// `tokio::signal::ctrl_c()`, the OS's default "terminate on SIGINT" behavior is gone for the
@@ -33,7 +30,7 @@ use tokio::sync::watch;
 ///
 /// `pub` (rather than `pub(crate)`) so `bhtune-server` can name the type as it threads a
 /// [`CtrlC::manual`] handle through [`crate::tune::drive_report`] for an HTTP-triggered run -- see
-/// that constructor's doc comment. [`CtrlC::signalled`] itself deliberately stays
+/// that constructor's doc comment. `CtrlC::signalled` itself deliberately stays
 /// `pub(crate)`: only code inside this crate (`execute`/`run_polling_loop`/`attempt_restore`)
 /// ever needs to *observe* a cancellation, an external caller only ever needs to *trigger*
 /// one, via a [`CtrlCHandle`].
@@ -82,8 +79,7 @@ impl CtrlC {
 
     /// Resolves the next time Ctrl+C is delivered -- immediately, if one already arrived
     /// since this handle last observed a change, including one that arrived before this
-    /// method was ever called (e.g. during a slow startup sequence -- see
-    /// `safety-cancellation`'s emergent pre-polling-loop behavior in AGENTS.md).
+    /// method was ever called (e.g. during the CLI's startup sequence).
     pub(crate) async fn signalled(&mut self) {
         // A real `install()`-backed handle's sender loops for the process's entire life, and
         // a `never()` handle deliberately leaks its sender (see below) -- so `changed()`'s
@@ -120,7 +116,7 @@ impl CtrlC {
     /// an HTTP request (`POST /api/runs/{id}/cancel`, or graceful shutdown) to be able to
     /// trigger the exact same cancellation an interactive Ctrl+C would.
     ///
-    /// Deliberately **not** `#[cfg(test)]`-gated, unlike [`CtrlC::never`]/[`CtrlC::test_pair`]
+    /// Deliberately **not** `#[cfg(test)]`-gated, unlike `CtrlC::never`/`CtrlC::test_pair`
     /// above: those exist purely so this crate's own unit tests can avoid installing a real
     /// process-wide signal handler, but `manual()` never touches
     /// `tokio::signal`/[`CtrlC::install`] at all, so calling it from production code any
@@ -134,7 +130,7 @@ impl CtrlC {
 /// A trigger for a [`CtrlC`] handle created via [`CtrlC::manual`] -- the HTTP-triggered
 /// equivalent of a real Ctrl+C keypress. Deliberately a thin wrapper around the same
 /// `watch::Sender<u32>` mechanism `#[cfg(test)]`'s `test_pair()` already uses internally,
-/// rather than a second, parallel cancellation mechanism: [`CtrlC::signalled`] can't tell the
+/// rather than a second, parallel cancellation mechanism: `CtrlC::signalled` can't tell the
 /// two apart, so `execute`/`run_polling_loop`/`attempt_restore` need no changes at all to
 /// support HTTP-triggered cancellation.
 ///
@@ -148,9 +144,8 @@ pub struct CtrlCHandle {
 
 impl CtrlCHandle {
     /// Requests cancellation, exactly as if Ctrl+C had been pressed. Safe to call more than
-    /// once -- a second call is exactly what lets a caller model a "second Ctrl+C" hard-exit
-    /// request arriving during an already-in-flight restore, matching `safety-cancellation`'s
-    /// interactive CLI behavior (see AGENTS.md) -- and safe to call after the paired
+    /// once -- a second call lets a caller model a "second Ctrl+C" hard-exit request arriving
+    /// during an already-in-flight restore -- and safe to call after the paired
     /// [`CtrlC`] has already been dropped (the run this handle was for has already ended):
     /// [`watch::Sender::send_modify`] never fails, unlike `send`, so there is nothing to
     /// propagate or ignore.

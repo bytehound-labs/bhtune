@@ -45,10 +45,9 @@ pub(super) enum RestoreStepOutcome {
     Succeeded,
     Failed(String),
 }
-/// The result of one [`restore`] call: each of the (up to) four independent revert steps,
-/// attempted regardless of whether an earlier one failed (`safety-restore-guard`, finding 3
-/// of the live-plant safety review, "aggregated best-effort restore") -- so a rejected MV
-/// write, say, can never prevent the mode from also being put back.
+/// The result of one [`restore`] call: each of the (up to) four independent revert steps is
+/// attempted regardless of whether an earlier one failed, so a rejected MV write can never
+/// prevent the mode from also being put back.
 #[derive(Debug, Clone, Default)]
 pub(super) struct RestoreReport {
     pub(super) mv: RestoreStepOutcome,
@@ -90,11 +89,9 @@ impl RestoreReport {
         }
     }
 }
-/// Pure port of `ResetOPC` (minus the dead Python-model branch, which is not being ported —
-/// see AGENTS.md), restructured for `safety-restore-guard` (finding 3 of the live-plant
-/// safety review): every step is attempted independently, via a per-step `match` rather than
-/// `?`, so one step failing can never prevent the others from being tried. The MV write-back
-/// is unconditional and never gated by `guard` at all -- proven safe by the fact that a
+/// Every applicable step is attempted independently, via a per-step `match` rather than `?`,
+/// so one step failing can never prevent the others from being tried. The MV write-back is
+/// unconditional and never gated by `guard` at all -- proven safe by the fact that a
 /// no-op MV write-back is always harmless (idempotent if the pre-test value is already
 /// there, or safely rejected by the DCS if the loop never actually left Auto) -- while the
 /// mode/setpoint/mode-attribute reverts are each gated by both their original value-based
@@ -1058,10 +1055,9 @@ pub(super) fn warn_restore_incomplete(
     );
     message
 }
-/// Best-effort records a restore attempt's outcome on the run (`safety-restore-guard`,
-/// finding 3 of the live-plant safety review) -- logs and swallows its own failure rather
-/// than propagating, since failing to *record* that a restore was attempted must never
-/// itself change what error (if any) a run reports.
+/// Best-effort records a restore attempt's outcome on the run -- logs and swallows its own
+/// failure rather than propagating, since failing to *record* that a restore was attempted
+/// must never itself change what error (if any) a run reports.
 pub(super) async fn record_restore_status_best_effort(
     pool: &SqlitePool,
     run_id: i64,
@@ -1081,10 +1077,9 @@ pub(super) async fn record_restore_status_best_effort(
 /// Attempts a best-effort restore, records its outcome, then returns `err` **unchanged** --
 /// the single choke point every early-return error path in `execute` funnels through, so a
 /// partial mutation is never left un-restored just because the step that failed came before
-/// `attempt_restore` was reached (`safety-restore-guard`, finding 3 of the live-plant safety
-/// review, fixing three such gaps: a failed `transition_to_manual`, a failed
-/// `record_initial_readings`/`persist_results` after a successful test, and any other hard
-/// failure from `run_polling_loop` itself). Always returns the *original* `err`:
+/// `attempt_restore` was reached -- including failures during `transition_to_manual`,
+/// `record_initial_readings`/`persist_results`, or `run_polling_loop` itself. Always returns
+/// the *original* `err`:
 /// neither an incomplete restore nor a failure recording its status should ever mask the
 /// real reason the run is failing.
 #[allow(clippy::too_many_arguments)]

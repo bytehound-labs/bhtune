@@ -1,10 +1,10 @@
-//! `bhtune-server`'s CLI surface (`server-windows-service`): a `--config` flag plus five
-//! subcommands (`install`/`uninstall`/`start`/`stop`/`status`) that manage this binary's
+//! `bhtune-server`'s CLI surface: a `--config` flag plus five subcommands
+//! (`install`/`uninstall`/`start`/`stop`/`status`) that manage this binary's
 //! registration as a platform service.
 //!
 //! Kept deliberately tiny -- unlike the `bhtune` CLI, this binary is still meant to be run mostly
 //! unconfigured (env vars / `bhtune.toml` cover everything else, see `crate::run`). `--config`
-//! is the one flag worth adding now: it lets `install` bake an explicit, stable config path
+//! lets `install` bake an explicit, stable config path
 //! into the service's registered launch command (see `crate::service::service_launch_arguments`),
 //! which matters because a Windows service normally runs under a different account than
 //! whoever ran `install` interactively, so it would otherwise resolve `%APPDATA%` to a

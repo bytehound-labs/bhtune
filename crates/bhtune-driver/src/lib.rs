@@ -16,10 +16,10 @@
 //!   standalone PID controller for closed-loop validation/demos.
 //! - [`replay`]: feeds a recorded golden-master trace ([`ReplayDriver`]) back through the
 //!   engine, for regression validation — see that module's doc comment for why this
-//!   complements, rather than duplicates, `core-replay-harness`'s pure-engine parity proof.
+//!   complements, rather than duplicates, the pure-engine parity test in `bhtune-core`.
 //!
-//! `OpcUaDriver` and `ModbusDriver` are roadmap items (see AGENTS.md) that should slot in
-//! later without requiring any changes to `bhtune-core`.
+//! `OpcUaDriver` and `ModbusDriver` are roadmap items
+//! (see `docs/roadmap.md`) that can slot in without requiring changes to `bhtune-core`.
 //!
 //! - [`driver`] — the [`Driver`] trait itself.
 //! - [`types`] — the plain data types ([`TagId`], [`TagValue`], [`TagWrite`],

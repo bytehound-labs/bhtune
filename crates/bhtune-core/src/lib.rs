@@ -1,6 +1,6 @@
 //! `bhtune-core` — the pure, I/O-free domain crate.
 //!
-//! This crate holds (once implemented — see `AGENTS.md` for phase status):
+//! This crate implements:
 //! - The MRFT (Modified Relay Feedback Test) tuning algorithm, as a pure
 //!   state machine: `fn step(&mut self, tick: Tick) -> Vec<Action>`. No
 //!   clock reads, no network calls, no UI access — that constraint is what
@@ -12,15 +12,13 @@
 //!   direction.
 //!
 //! Deliberately has no I/O, no async, and no clock reads (`chrono`'s `clock`/`now`
-//! features are disabled workspace-wide, so `Utc::now()` cannot even compile here — see
-//! `core-mrft` in AGENTS.md). This is a narrower rule than "no dependencies": `toml` is a
-//! real dependency (`template-catalog`), justified because parsing an `include_str!`-
-//! embedded `&'static str` is not I/O; the optional, feature-gated `utoipa` dependency
-//! (`openapi-contract`) is justified the same way — a compile-time `derive` macro that
-//! describes a type's shape, with zero runtime behavior of its own. Anything added here
-//! must be justified by the pure domain logic itself (or, for `utoipa`, by describing it
-//! accurately to a consumer), not by a consumer's I/O or presentation needs — those belong
-//! in `bhtune-driver`, `bhtune-db`, the `bhtune` package, or `bhtune-server`.
+//! features are disabled workspace-wide, so `Utc::now()` cannot even compile here. This is
+//! a narrower rule than "no dependencies": `toml` is a real dependency because parsing an
+//! `include_str!`-embedded `&'static str` is not I/O; the optional, feature-gated `utoipa`
+//! dependency is similarly limited to compile-time derives that describe a type's shape.
+//! Anything added here must be justified by the pure domain logic itself (or, for `utoipa`,
+//! by describing it accurately to a consumer), not by a consumer's I/O or presentation needs
+//! — those belong in `bhtune-driver`, `bhtune-db`, the `bhtune` package, or `bhtune-server`.
 
 #![cfg_attr(
     test,

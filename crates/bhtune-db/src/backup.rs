@@ -1,7 +1,7 @@
 //! Full-database backup and restore: a single portable SQLite file out, and back in.
 //!
-//! Independent of `history-retention`'s age-based deletion of old runs — this is about
-//! moving or protecting an *entire* installation (support diagnostics, migrating to a new
+//! Independent of the automatic age-based retention sweep — this is about moving or
+//! protecting an *entire* installation (support diagnostics, migrating to a new
 //! machine, or a safety net immediately before a risky operation), not about pruning
 //! individual runs. Exposed to both the CLI and the GUI.
 
@@ -85,7 +85,7 @@ pub struct RestoreOutcome {
 ///    corrupt or unrelated file never gets a chance to destroy good data.
 /// 2. The caller's own connections to `db_path` are closed first, so step 3's exclusivity
 ///    check isn't confused by this process's own still-open pool.
-/// 3. If `db_path` already exists, [`exclusive_pre_restore_snapshot`] both confirms no other
+/// 3. If `db_path` already exists, `exclusive_pre_restore_snapshot` both confirms no other
 ///    connection — in this process or another — still holds it open, and, while that's
 ///    proven true, takes a consistent `VACUUM INTO` copy of it (see
 ///    [`RestoreOutcome::pre_restore_backup`]). Restoring the wrong backup, or restoring when
@@ -108,7 +108,7 @@ pub struct RestoreOutcome {
 ///
 /// Restoring while *another* bhtune process (for instance `bhtune-server`, running
 /// alongside the CLI) has `db_path` open returns [`DbError::DatabaseInUse`] instead of
-/// proceeding — see [`exclusive_pre_restore_snapshot`] for how that's detected and its
+/// proceeding — see `exclusive_pre_restore_snapshot` for how that's detected and its
 /// residual, deliberately-accepted race.
 pub async fn restore_from(
     pool: SqlitePool,

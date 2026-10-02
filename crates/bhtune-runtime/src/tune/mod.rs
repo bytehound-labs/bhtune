@@ -1120,8 +1120,8 @@ mod tests {
                 .is_some_and(|samples| samples > 1.0)
         );
 
-        // A simulator run has no OPC DA connection at all -- `db-run-request-snapshot`
-        // requires both to be `None` here regardless of whatever `--bridge-host` default
+        // A simulator run has no OPC DA connection at all -- both connection fields must be
+        // `None` here regardless of whatever `--bridge-host` default
         // `prepare` resolved internally, since the driver never actually contacted a
         // gateway.
         assert_eq!(runs[0].opc_server, None);
@@ -1406,10 +1406,9 @@ mod tests {
     /// and (for the Yokogawa template) has no mode/mode-attribute tags to read either. Fails
     /// starting at the 2nd `read` RPC call — after the one batched setup read — so the
     /// failure always lands on the first polling tick's PV read, deep inside
-    /// `run_polling_loop`, not during setup. Also covers `db-run-request-snapshot`'s opcda
-    /// path: `prepare` records the resolved connection and the request snapshot before the
-    /// polling loop ever runs, so both must already be persisted on the row even though this
-    /// run goes on to fail.
+    /// `run_polling_loop`, not during setup. `prepare` records the resolved connection and
+    /// request snapshot before the polling loop starts, so both must already be persisted on
+    /// the row even though this run goes on to fail.
     #[tokio::test]
     async fn run_with_opcda_driver_fails_mid_poll_and_marks_the_run_failed() {
         use crate::test_support::{MockBridgeService, start_mock_server};
@@ -1466,7 +1465,7 @@ mod tests {
 
         // `record_connection` runs inside `prepare`, before the polling loop that goes on
         // to fail -- so the resolved connection and the submitted request must already be
-        // persisted even though the run itself never completes (`db-run-request-snapshot`).
+        // persisted even though the run itself never completes.
         assert_eq!(runs[0].opc_server.as_deref(), Some("MockServer"));
         assert_eq!(runs[0].bridge_host.as_deref(), Some(host.as_str()));
         let request: serde_json::Value = serde_json::from_str(&runs[0].request_json).unwrap();
@@ -1482,12 +1481,9 @@ mod tests {
     /// the config -- if resolution didn't happen, `driver::build` would either fail fast
     /// with "no OPC server specified" (server never resolved) or try to dial
     /// `DEFAULT_BRIDGE_HOST` instead of the mock (bridge_host never resolved), producing a
-    /// different failure than the one asserted below. The mock is configured to fail
-    /// starting on its very first `read` call so this stays a fast, deterministic setup
-    /// failure -- there is no wall-clock timeout in `run_polling_loop` yet (that lands in
-    /// `cli-safety`), so a config-resolution bug that instead let the run reach a real
-    /// polling loop against a frozen PV value would hang this test forever rather than
-    /// fail cleanly.
+    /// different failure than the one asserted below. The mock fails on its first `read`
+    /// call, keeping this failure deterministic without relying on a live server or a
+    /// long-running polling loop.
     #[tokio::test]
     async fn run_resolves_bridge_host_and_server_from_config_when_cli_flags_are_unset() {
         use crate::test_support::{MockBridgeService, start_mock_server};
@@ -1722,13 +1718,9 @@ mod tests {
         assert!(err.to_string().contains("out of range"));
     }
 
-    /// The reproduced panic: `--cycles-count 0` used to reach
-    /// `bhtune_core::measure_oscillation`'s internal `assert!` and panic mid-run, after the
-    /// loop had already been switched to manual and stroked. `LoopConfig::validate` (called
-    /// from `build_loop_config`, before any driver or DB I/O) must reject it cleanly
-    /// instead. The clap-level `positive_u32` parser (see `args.rs`) also rejects `0` for
-    /// this flag before it ever reaches here, but this test exercises the model-level
-    /// guarantee directly, independent of how the value arrived.
+    /// A zero cycle count is rejected during model-level validation before driver or
+    /// database I/O. The CLI parser also rejects zero, but this test exercises the model
+    /// independently of how the invalid value arrived.
     #[test]
     fn build_loop_config_rejects_zero_cycles_count_before_any_driver_or_db_io() {
         let mut args = fast_simulator_args();
@@ -1855,9 +1847,9 @@ mod tests {
     }
 
     /// Unlike Ctrl+C/timeout (which need a real signal or elapsed wall-clock time and so are
-    /// only exercised indirectly, see the test above), finding 5's `PoorQuality` abort is
-    /// purely data-driven -- the driver just has to report a non-`Good` reading -- so this
-    /// test drives `run_polling_loop` for real and checks its returned `PollOutcome`
+    /// only exercised indirectly, see the test above), a `PoorQuality` abort is purely
+    /// data-driven -- the driver just has to report a non-`Good` reading -- so this test
+    /// drives `run_polling_loop` for real and checks its returned `PollOutcome`
     /// directly, then confirms `restore` leaves the loop in the same consistent state
     /// `execute`'s `Aborted` branch would.
     #[tokio::test]
@@ -1887,8 +1879,8 @@ mod tests {
 
         // Built directly (bypassing `read_initial_values`) using `honeywell_driver_auto()`'s
         // own fixture values (see `sample_initial_state`, defined below), because
-        // `read_initial_values` itself enforces finding 5 on this very same PV tag and would
-        // hard-fail before ever reaching the polling loop this test targets.
+        // `read_initial_values` enforces the quality policy on this same PV tag and would
+        // fail before reaching the polling loop this test targets.
         let initial = sample_initial_state();
         let beta = lookup(
             config.process_type,
@@ -1935,9 +1927,8 @@ mod tests {
                 if tag == &tags.process_variable && quality == bhtune_driver::Quality::Bad
         ));
 
-        // The triggering sample was recorded (with its real, poor quality) before the abort
-        // -- finding 5 explicitly requires the operator can see exactly what was seen when
-        // the run gave up, not just that it gave up.
+        // The triggering sample was recorded (with its real, poor quality) before the abort,
+        // so the operator can see what was read when the run gave up.
         let samples = TuneSampleRow::list_for_run(&pool, run.id).await.unwrap();
         assert_eq!(samples.len(), 1);
         assert_eq!(samples[0].pv_quality, SampleQuality::Bad);
@@ -2046,14 +2037,12 @@ mod tests {
         );
     }
 
-    // --- safety-cancellation: `[tuning].op_timeout_secs` / mid-tick Ctrl+C via `bounded_driver_call`
+    // --- Driver operation timeout and mid-tick Ctrl+C via `bounded_driver_call`
 
     /// Proves the wiring, not just the mechanism (see the dedicated `bounded_driver_call`
     /// unit tests below for that): a PV read that never resolves at all -- the gateway is
     /// down, DCOM is wedged, the network is black-holed -- must abort the run via
-    /// `[tuning].op_timeout_secs` rather than hang the poll loop forever, exactly the scenario
-    /// finding 2 of the live-plant safety review names as the most severe of the three
-    /// consequences of the pre-`safety-cancellation` design. Real (unpaused) time, paying a
+    /// `[tuning].op_timeout_secs` rather than hang the poll loop forever. Real (unpaused) time, paying a
     /// real ~1s wall-clock cost: `start_paused` interacts badly with the real sqlx
     /// `SqlitePool` this test also creates (it fast-forwards the pool's own internal
     /// connection-acquire timeout too), matching the documented precedent in
@@ -2283,13 +2272,13 @@ mod tests {
         cancelled_delayed_writes: std::sync::Mutex<std::collections::HashSet<String>>,
         /// Per-tag OPC quality override, defaulting to `Quality::Good` for any tag not
         /// listed -- matching a healthy real driver and letting most tests ignore quality
-        /// entirely while a handful exercise finding 5's enforcement via `with_quality`.
+        /// entirely while a handful exercise the quality policy via `with_quality`.
         qualities: std::sync::Mutex<std::collections::HashMap<String, bhtune_driver::Quality>>,
         /// Per-tag: reports the tag's ordinarily-configured quality (from `qualities`,
         /// defaulting to `Good`) for the tag's first `usize` reads, then switches to the
         /// paired [`bhtune_driver::Quality`] for every read after that. Lets a test put a
-        /// tag's *initial* read (before any mutation is attempted, subject to finding 5 the
-        /// same as every other read) in good standing while still forcing quality to
+        /// tag's *initial* read (before any mutation is attempted, subject to the same quality
+        /// checks as every other read) in good standing while still forcing quality to
         /// degrade partway through polling -- deterministically, with no reliance on real
         /// elapsed time or a Ctrl+C race, unlike `[tuning].timeout_secs`/
         /// `[tuning].op_timeout_secs`-driven
@@ -2301,7 +2290,7 @@ mod tests {
         /// Per-tag: the tag's first `usize` reads resolve normally, then every read after
         /// that returns a transport-level error -- the same "succeeds at first, degrades
         /// partway through" shape as `degrade_quality_after`, but a hard read error rather
-        /// than a quality downgrade, so `safety-writeback-rollback`'s pre-read-succeeds/
+        /// than a quality downgrade, so the pre-read-succeeds/
         /// verify-readback-errors path can be exercised distinctly from the
         /// verify-readback-reports-poor-quality path.
         error_reads_after: std::collections::HashMap<String, usize>,
@@ -5977,7 +5966,7 @@ mod tests {
         );
     }
 
-    // --- `check_quality`: finding 5's single enforcement choke point ------------------------
+    // --- `check_quality`: quality-policy enforcement ---------------------------------------
 
     #[test]
     fn check_quality_accepts_good_regardless_of_the_quality_policy() {
@@ -6004,7 +5993,7 @@ mod tests {
         assert!(err_with_flag.to_string().contains("Bad"));
     }
 
-    // --- `pid_value_within_tolerance`: finding 6's write-back confirmation rule -------------
+    // --- `pid_value_within_tolerance`: write-back confirmation rule ------------------------
 
     #[test]
     fn pid_value_within_tolerance_accepts_an_exact_match() {
@@ -6281,8 +6270,7 @@ mod tests {
         assert!(validate_initial_state(&initial).is_ok());
     }
 
-    // --- finding 5, end to end: a poor-quality initial reading must fail `execute` before --
-    // --- any mutation of the loop, exactly like finding 4's invalid-range checks below -----
+    // --- A poor-quality initial reading must fail `execute` before any loop mutation -------
 
     #[tokio::test]
     async fn execute_hard_fails_when_the_pv_tag_reports_bad_quality() {
@@ -6404,8 +6392,8 @@ mod tests {
     async fn read_initial_values_hard_fails_when_the_setpoint_tag_reports_bad_quality() {
         // The Honeywell fixture starts in Auto (`MODE=1` == `mode_auto_value`), so
         // `read_initial_values` reads the setpoint tag as part of computing
-        // `InitialState::setpoint_ini` -- finding 5 applies to that read exactly as it does
-        // to every other tuning-critical read. This read was hoisted out of
+        // `InitialState::setpoint_ini` -- the quality policy applies to that read exactly as
+        // it does to every other tuning-critical read. This read was moved out of
         // `transition_to_manual` (see `InitialState::setpoint_ini`'s doc comment) so it can
         // be persisted before any mutation is attempted; this test moved with it.
         let template = honeywell_template();
@@ -6420,8 +6408,8 @@ mod tests {
         assert!(err.to_string().contains("Bad"));
     }
 
-    /// The end-to-end proof that finding 4's fix closes the actual safety gap, not just the
-    /// isolated unit: a driver reporting an MV range with `low >= high` must fail `execute`
+    /// End-to-end validation, beyond the isolated unit: a driver reporting an MV range with
+    /// `low >= high` must fail `execute`
     /// before `transition_to_manual`'s first write -- i.e. before the loop is touched at
     /// all, not merely before the tuning math runs.
     #[tokio::test]
@@ -6807,8 +6795,7 @@ mod tests {
     }
 
     /// Covers the `Aborted` branch's `RestoreAttempt::Incomplete` mapping -- the sibling of
-    /// the `Completed` branch's equivalent (deliberately not separately covered; see
-    /// AGENTS.md's `safety-restore-guard` notes) -- with a real, deterministic abort: the PV
+    /// the `Completed` branch's equivalent -- with a real, deterministic abort: the PV
     /// tag's quality degrades to `Bad` starting on the very first poll tick (its one
     /// `read_initial_values` read stays `Good`, via `degrade_quality_after`), and the MV tag
     /// is error-injected so the subsequent restore's unconditional MV step fails while
@@ -6886,10 +6873,8 @@ mod tests {
         assert_eq!(parse_f32_value("Unit1.LIC101.PV", " 42.5 ").unwrap(), 42.5);
     }
 
-    /// Rust's `f32::from_str` happily parses the literal strings `"nan"`/`"inf"` --
-    /// confirming this gap is what motivated hardening `read_f32` (finding 4 of the
-    /// live-plant safety review): a driver tag returning either string used to flow
-    /// unchecked into the engine.
+    /// Rust's `f32::from_str` accepts the literal strings `"nan"`/`"inf"`, so
+    /// `read_f32` must reject non-finite tag values before they reach the engine.
     #[tokio::test]
     async fn read_f32_rejects_nan() {
         let driver = MockDriver::new(&[("Unit1.LIC101.PV", "nan")]);
@@ -7352,9 +7337,8 @@ mod tests {
         assert!(new_writes.iter().all(|(t, _)| t != "Unit1.LIC101.MODEATTR"));
     }
 
-    /// The heart of `safety-restore-guard`'s "aggregated best-effort restore" (Option C): one
-    /// step failing must never prevent the others from being *attempted*, even in the
-    /// pathological case where every single one of them also fails. Calls `restore` directly
+    /// One restore step failing must never prevent the others from being *attempted*, even in
+    /// the pathological case where every single one of them also fails. Calls `restore` directly
     /// with a fully-armed `guard` (bypassing `transition_to_manual` entirely, since this test
     /// is only interested in `restore`'s own aggregation behavior in isolation, not in
     /// propagating any one mutation's own error -- that's covered by the `execute`-level
@@ -7881,7 +7865,7 @@ mod tests {
         let tags = honeywell_tags();
         // The pre-read of P (its 1st read) succeeds at the default `Good` quality; only the
         // confirmation re-read after the write (its 2nd read) reports a poor OPC quality --
-        // finding 5's rule applies to this readback exactly as it does to any other
+        // the quality policy applies to this readback exactly as it does to any other
         // tuning-critical read, so a stale/clamped value must not be mistaken for proof the
         // write actually landed.
         let driver = honeywell_driver_auto().degrade_quality_after(

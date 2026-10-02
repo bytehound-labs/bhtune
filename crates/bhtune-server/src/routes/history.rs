@@ -476,7 +476,7 @@ pub struct RunDetailResponse {
     pub restore_status: Option<RestoreStatus>,
     pub restore_detail: Option<String>,
     /// This run's own `request_json` (`db-run-request-snapshot`), parsed back into a
-    /// [`StartRunRequest`], or `None` if it isn't usable -- see [`parse_stored_request`].
+    /// [`StartRunRequest`], or `None` if it isn't usable -- see `parse_stored_request`.
     /// Powers the run detail page's "Duplicate this run" action (`ui-prefill-last-run`):
     /// unlike `GET /api/runs/last-request`, which only ever answers for the single newest
     /// run, this lets the New tune form seed itself from *this specific* historical run

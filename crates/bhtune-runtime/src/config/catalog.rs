@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use super::model::BhtuneConfig;
 use super::paths::templates_path_from;
 
-/// Resolve and load the user-supplied DCS/PLC template catalog (`template-user-catalog`):
+/// Resolve and load the user-supplied DCS/PLC template catalog:
 /// `--templates` / `BHTUNE_TEMPLATES` (already folded into `cli_templates` by clap's `env`
 /// attribute) / the config file's `templates` key, or else the platform's auto-discovered
 /// `templates.toml` next to `bhtune.toml` (see [`templates_path_from`]) -- `CLI flag > env

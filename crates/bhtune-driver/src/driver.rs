@@ -21,7 +21,7 @@ use crate::{
 /// of the seam.
 ///
 /// `Send + Sync` so an implementation can be held behind `Arc<dyn Driver>` and shared across
-/// async tasks (e.g. a CLI run and a concurrent history-retention sweep in the same process).
+/// async tasks (e.g. a CLI run and a concurrent history retention sweep in the same process).
 /// Connecting/constructing a specific driver (host/port, OPC DA server name, a trace file
 /// path, simulator parameters) is deliberately *not* part of this trait — each
 /// implementation's own inherent constructor takes whatever it individually needs, since
@@ -160,8 +160,8 @@ mod tests {
     }
 
     /// A minimal in-memory `Driver` used only to prove the trait itself is usable: object-safe
-    /// (`Box<dyn Driver>`), async-dispatchable, and that its methods compose the way real
-    /// callers (a future `driver-opcda`/`driver-simulator`) will need.
+    /// (`Box<dyn Driver>`), async-dispatchable, and that its methods compose as the OPC DA and
+    /// simulator drivers require.
     struct MockDriver {
         values: std::collections::HashMap<TagId, (String, Quality)>,
         writes: Mutex<Vec<(TagId, TagWrite)>>,

@@ -103,9 +103,9 @@ installed. Frontend recipes assume the pnpm workspace dependencies are installed
 `pnpm install --frozen-lockfile`.
 
 - `just check` is the practical local equivalent of the Linux Rust check job: it checks
-  formatting, runs Clippy and workspace tests, runs `cargo deny check` and `cargo machete`,
-  checks OpenAPI and CLI-reference drift, and builds the workspace. PR CI additionally checks
-  OpenAPI compatibility against the base branch.
+  formatting and rustdoc warnings, runs Clippy and workspace tests, runs `cargo deny check`
+  and `cargo machete`, checks OpenAPI and CLI-reference drift, and builds the workspace. PR
+  CI additionally checks OpenAPI compatibility against the base branch.
 - `just fmt` formats all Rust code. `just fmt check` runs the non-mutating
   `cargo fmt --check --all` gate; use `just check` for validation.
 - `just lint` and `just test` run the locked workspace lint and test commands. `just deny` runs
@@ -234,9 +234,11 @@ and validation rules rather than treating "latest" as an unconditional upgrade p
 
 ## CI
 
-Rust PRs must pass `cargo fmt --check --all`, `cargo clippy --workspace --all-targets
---all-features -- -D warnings`, `cargo test --workspace`, `cargo deny check`, `cargo
-machete`, and a check that the generated OpenAPI spec (`openapi.json`) and CLI reference
+Rust PRs must pass `cargo fmt --check --all`,
+`RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`cargo test --workspace`, `cargo deny check`, `cargo machete`, and a check that the generated
+OpenAPI spec (`openapi.json`) and CLI reference
 (`docs/reference/cli.md`, `man/`, `completions/`) are up to date before merge — run `cargo
 run -p bhtune-server --example gen_openapi` and `cargo run -p bhtune --example gen_docs
 --features schemars` and commit the result after changing an HTTP route/DTO or a `clap`

@@ -74,7 +74,7 @@ impl ActiveRun {
     }
 
     /// Reserves the registry for a short operation the caller awaits directly -- currently
-    /// only a post-hoc PID write or revert (`api-post-run-write`). Unlike
+    /// only a post-hoc PID write or revert. Unlike
     /// [`ActiveRun::start`], nothing is spawned here: the caller must still call
     /// [`ActiveRun::release`] itself once its own operation finishes, on every exit path
     /// including an error return.

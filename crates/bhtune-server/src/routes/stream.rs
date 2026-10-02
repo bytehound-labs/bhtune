@@ -1,22 +1,17 @@
-//! `GET /api/runs/{id}/stream` -- pushes per-tick engine state to the browser over
-//! Server-Sent Events as a run progresses, so the frontend's live trend chart doesn't have
-//! to poll `GET /api/runs/{id}` and re-fetch the whole (ever-growing) `samples` array once a
-//! second, the way `frontend/src/api/runs.ts`'s `useRun` interim-substitute polling did
-//! before this endpoint existed (`frontend-live-stream`, the last piece `frontend-screens`
-//! was blocked on).
+//! `GET /api/runs/{id}/stream` pushes per-tick engine state to the browser over Server-Sent
+//! Events as a run progresses, so the live trend chart does not have to re-fetch the whole
+//! (ever-growing) `samples` array once a second.
 //!
 //! SSE, not WebSocket: the flow is strictly server -> client, and SSE gives every browser
 //! automatic reconnection on a dropped connection, survives ordinary HTTP proxies, and is
-//! trivially inspectable with `curl -N` -- see AGENTS.md's "Web app architecture" section for
-//! the full rationale.
+//! trivially inspectable with `curl -N`.
 //!
 //! Implemented as an internal poll of `tune_samples`/`tune_runs`, **not** a broadcast channel
 //! threaded through `bhtune-runtime`'s already-tested tick loop -- deliberately, so this
 //! endpoint adds zero risk to the shared CLI/server tune-execution code path
 //! (`run_polling_loop` keeps its existing, already-proven signature and test suite untouched).
-//! At this project's documented data volumes (a pathological 2-hour run is
-//! ~9,000 samples -- see AGENTS.md's "History explorer" notes) polling the database every
-//! [`POLL_INTERVAL`] is negligible cost, not a premature optimization to avoid.
+//! At the expected data volumes (about 9,000 samples for a two-hour run), polling the
+//! database every `POLL_INTERVAL` is negligible cost.
 
 use std::convert::Infallible;
 use std::time::Duration;

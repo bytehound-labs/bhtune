@@ -7,9 +7,9 @@
 //! This has to be a real subprocess: `tokio::signal::ctrl_c()` listens for the process's own
 //! signal handler, and `cargo test` runs every test as one thread inside a single shared
 //! process, so delivering a real `SIGINT` to "just one test" isn't possible in-process — it
-//! would interrupt the entire test binary. Unix-only (there is no POSIX `SIGINT` on Windows;
-//! CI runs `ubuntu-latest` only, see `AGENTS.md`), matching the project's existing
-//! `#[cfg(unix)]`-style precedent for platform-specific test infrastructure.
+//! would interrupt the entire test binary. Unix-only because Windows does not provide POSIX
+//! `SIGINT`, matching the project's existing `#[cfg(unix)]`-style precedent for
+//! platform-specific test infrastructure.
 
 #![cfg(unix)]
 #![allow(

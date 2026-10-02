@@ -1,6 +1,6 @@
 //! Seeds a catalog of DCS/PLC templates into `dcs_templates` on startup, so a fresh database
 //! always has the built-in presets available without a separate "first run" wizard step, and
-//! so a future user-supplied catalog file can be kept in sync the same way.
+//! so a user-supplied catalog file can be kept in sync the same way.
 //!
 //! This is an upsert, not a plain insert, because a template's suffix/unit conventions can
 //! be corrected in a later catalog revision, and an existing install's `dcs_templates` table
@@ -31,8 +31,8 @@ pub enum SeedOutcome {
     SkippedUserOwned,
 }
 
-/// One template's seeding result, returned so a caller (`cli-commands`, the web GUI's
-/// startup routine) can log what happened — `bhtune-db` itself has no logging dependency.
+/// One template's seeding result, returned so a caller can log what happened —
+/// `bhtune-db` itself has no logging dependency.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedResult {
     pub name: String,
@@ -46,10 +46,9 @@ pub struct SeedResult {
 /// name collides with one being seeded but which carries a *different* `origin` — that row
 /// belongs to a different catalog (or a user), not this seed pass.
 ///
-/// The one caller today is [`seed_builtin_templates`], seeding
-/// [`bhtune_core::built_in_templates`] with [`TemplateOrigin::Builtin`]. `template-user-catalog`
-/// will be the first caller to seed a user-supplied catalog file with [`TemplateOrigin::Catalog`],
-/// reusing this exact upsert logic rather than duplicating it.
+/// The runtime uses this for a user-supplied catalog with [`TemplateOrigin::Catalog`];
+/// [`seed_builtin_templates`] uses the same upsert logic for
+/// [`bhtune_core::built_in_templates`] with [`TemplateOrigin::Builtin`].
 pub async fn seed_templates(
     pool: &SqlitePool,
     templates: Vec<DcsTemplate>,

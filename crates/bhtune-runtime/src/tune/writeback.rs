@@ -14,11 +14,9 @@ use chrono::Utc;
 use super::outcome::WriteBackOutcome;
 use super::quality::{read_f32, write_value};
 
-/// Reads the existing Proportional/Integral/Derivative values before any write is attempted
-/// -- `safety-writeback-rollback`'s pre-read step. Reading all three is a hard stop on the
-/// first failure, mirroring findings 4/5's "refuse before mutating" pattern, and has the
-/// useful side effect of guaranteeing that a rollback, if one later turns out to be
-/// necessary, always has a known-good value to roll back to. `pub(crate)`: also reused by
+/// Reads the existing Proportional/Integral/Derivative values before any write is attempted.
+/// Reading all three is a hard stop on the first failure and guarantees that a later rollback
+/// always has a known-good value to restore. `pub(crate)`: also reused by
 /// `commands::history::revert`, which needs the identical pre-read step before writing a
 /// past run's recorded values back.
 pub(crate) async fn read_previous_pid_values(
@@ -82,8 +80,8 @@ pub(crate) async fn write_and_verify_pid_value(
     }
 }
 /// Best-effort rollback of whichever PID constants were confirmed written before a later one
-/// failed -- mirroring `restore()`'s "attempt every step independently, don't short-circuit
-/// on the first failure" philosophy (`safety-restore-guard`). `targets` is `(label, tag,
+/// failed -- mirroring `restore()`'s rule to attempt every step independently rather than
+/// short-circuit on the first failure. `targets` is `(label, tag,
 /// previous_value)` triples, in any order. Returns `Ok(())` only if every rollback write
 /// succeeded; otherwise `Err` describing every one that did not.
 pub(super) async fn rollback_pid_writes(
@@ -155,15 +153,14 @@ pub trait WriteBackHandler: Send {
 /// rolls back to the pre-read values on partial failure (only for `kind =
 /// `[`WriteKind::Write`]` -- [`WriteKind::Revert`] never does, so a revert can't chase its
 /// own failure with a nested rollback; see [`WriteKind`]'s own doc comment), and records
-/// exactly one [`TuneWriteRow`] audit row for the attempt, success or not
-/// (`safety-writeback-rollback`, finding 6 of the live-plant safety review).
+/// exactly one [`TuneWriteRow`] audit row for the attempt, success or not.
 ///
 /// The one implementation of "pre-read, write, verify, roll back, audit" in the whole
-/// workspace, shared by three callers: [`maybe_write_back`]'s in-run write-back,
+/// workspace, shared by three callers: `maybe_write_back`'s in-run write-back,
 /// [`crate::history::revert_run`], and `bhtune-server`'s post-hoc `POST /api/runs/{id}/write`/
-/// `.../revert` (`api-post-run-write`) -- `pub` (not `pub(crate)`) specifically so that
+/// `.../revert` -- `pub` (not `pub(crate)`) specifically so that
 /// third, different-crate caller can reach it. `bhtune-server` calls only this function, not
-/// the lower-level [`read_previous_pid_values`]/[`write_and_verify_pid_value`] helpers this
+/// the lower-level `read_previous_pid_values`/`write_and_verify_pid_value` helpers this
 /// builds on -- those stay `pub(crate)`, since adapters need only the complete audited
 /// sequence.
 ///

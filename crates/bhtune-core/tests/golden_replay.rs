@@ -1,12 +1,10 @@
-//! `core-replay-harness`: replays a real MRFT trace captured from the legacy application
-//! (see `tests/golden/raw/` and the `capture-traces`/`trace-fixtures` todos) through the pure
-//! `bhtune-core` engine, and asserts the port is behaviorally identical to the original —
+//! Replays a real MRFT trace captured from the legacy application (`tests/golden/raw/`)
+//! through the pure `bhtune-core` engine, and asserts the port matches the recorded behavior:
 //! per-tick engine state, the final peaks/troughs/switch-times/direction, and the calculated
 //! PID constants for all three response levels.
 //!
-//! This is the gate for the entire migration: if this test passes, the Rust engine produces
-//! the exact same tuning result the legacy C# application did, for a real relay test against
-//! a real (simulated) process.
+//! This test guards parity with the legacy C# application for a real relay test against a
+//! simulated process.
 
 #![allow(
     clippy::unwrap_used,

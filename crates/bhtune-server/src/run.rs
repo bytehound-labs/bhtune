@@ -1,6 +1,6 @@
 //! The actual `bhtune-server` bootstrap-and-serve sequence, split out of `main.rs` so it can
-//! be driven two different ways (`server-windows-service`): directly, from an interactive
-//! console session or a systemd/launchd-managed foreground process, or from inside the
+//! be driven either directly from an interactive console session or a systemd/launchd-managed
+//! foreground process, or from inside the
 //! Windows Service Control Manager's own callback thread (`crate::service`'s
 //! `#[cfg(windows)]` glue), which needs its *own* shutdown trigger (an SCM Stop/Shutdown
 //! control event) instead of Ctrl+C/`SIGTERM`.
@@ -29,7 +29,7 @@ use crate::{AppState, build_router};
 /// [`ActiveRun::cancel_and_wait`]'s own doc comment for what "giving up" logs.
 const SHUTDOWN_RUN_CANCEL_TIMEOUT: Duration = Duration::from_secs(35);
 
-/// How often the server re-applies `history-retention`'s policy for as long as it keeps
+/// How often the server re-applies the retention policy for as long as it keeps
 /// running, on top of the one-shot sweep `db::open` already ran at startup. A day is far
 /// more than frequent enough for an age-based-in-days policy -- the oldest a run can ever
 /// linger past its cutoff is one interval -- while being infrequent enough that the sweep
@@ -265,7 +265,7 @@ pub fn shutdown_signal() -> anyhow::Result<impl std::future::Future<Output = ()>
     }
 }
 
-/// Spawns the background task that re-applies `history-retention`'s policy every
+/// Spawns the background task that re-applies the retention policy every
 /// [`RETENTION_SWEEP_INTERVAL`] for as long as the server keeps running. The task retains the
 /// synchronized store rather than a copied day count, so a config-page save is observed by
 /// the next sweep; a disabled policy simply makes that tick a no-op.

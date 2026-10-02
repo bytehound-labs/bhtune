@@ -14,7 +14,9 @@ use super::dcs_templates::TemplateOrigin;
 /// How much a [`TuneSampleRow`]'s `sample.pv` reading should be trusted, as recorded at the
 /// moment it was read (finding 5 of the live-plant safety review).
 ///
-/// A `bhtune-db`-local mirror of [`bhtune_driver::Quality`], not a reuse of it directly:
+/// A `bhtune-db`-local mirror of
+/// [`bhtune_driver::Quality`](https://docs.rs/bhtune-driver/latest/bhtune_driver/types/enum.Quality.html),
+/// not a reuse of it directly:
 /// `bhtune-db` deliberately doesn't depend on `bhtune-driver` (a leaf I/O-adapter crate with
 /// a much heavier dependency tree -- `tokio`, `tonic`, `opcda-bridge` -- that has no business
 /// in the persistence crate just to name one three-variant enum), so the `bhtune` package, which
@@ -86,8 +88,8 @@ impl TuneSampleRow {
         row_to_tune_sample(row)
     }
 
-    /// Lists every sample of `run_id`, ordered by tick — the full per-tick trend the history
-    /// explorer's chart (`history-explorer-ui`) plots.
+    /// Lists every sample of `run_id`, ordered by tick — the full per-tick trend shown on the
+    /// history page.
     pub async fn list_for_run(pool: &SqlitePool, run_id: i64) -> DbResult<Vec<TuneSampleRow>> {
         let rows = sqlx::query("SELECT * FROM tune_samples WHERE run_id = ? ORDER BY tick")
             .bind(run_id)
@@ -98,7 +100,7 @@ impl TuneSampleRow {
     }
 
     /// Lists only the samples of `run_id` recorded *after* `after_tick`, ordered by tick --
-    /// what `bhtune-server`'s `GET /api/runs/{id}/stream` (`frontend-live-stream`) polls on
+    /// what `bhtune-server`'s `GET /api/runs/{id}/stream` polls on
     /// every iteration so it never re-sends a tick it has already pushed to the browser.
     /// Pass `-1` to fetch every sample from the very first tick (`tune_samples.tick` is
     /// `>= 0`, so nothing is ever excluded by that sentinel).

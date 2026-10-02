@@ -6,12 +6,11 @@ use bhtune_core::{ControllerDirection, DcsTemplate, TagOrValue};
 use bhtune_db::models::SampleQuality;
 use bhtune_driver::{Driver, TagValue, TagWrite};
 
-/// The single choke point enforcing finding 5 of the live-plant safety review
-/// ("`Quality::is_trustworthy()` exists and is documented as the rule; nothing in the tune
-/// path calls it"): `Quality::Bad` is never accepted; `Quality::Uncertain` is accepted only
-/// when the global Config > OPC quality policy (`allow_uncertain_quality` in TOML) permits
-/// it, and each use of it is logged loudly so a run executed under relaxed rules is never
-/// silently indistinguishable from a normal one; `Quality::Good` always passes.
+/// Enforces the live-run quality policy: `Quality::Bad` is never accepted;
+/// `Quality::Uncertain` is accepted only when the global Config > OPC quality policy
+/// (`allow_uncertain_quality` in TOML) permits it, and each use of it is logged so a run
+/// executed under relaxed rules is not silently indistinguishable from a normal one.
+/// `Quality::Good` always passes.
 pub(super) fn check_quality(
     tag: &str,
     quality: bhtune_driver::Quality,

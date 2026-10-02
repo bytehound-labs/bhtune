@@ -1,4 +1,4 @@
-//! `history-retention`: age-based deletion of old tune runs.
+//! Age-based deletion of old tune runs.
 //!
 //! The actual `DELETE` lives in [`bhtune_db::models::TuneRunRow::delete_matching`] (a single
 //! statement, which SQLite already treats as its own transaction); this module owns the one
@@ -10,9 +10,8 @@
 //! policy, so "what a `bhtune history prune` run deletes", "what `crate::db::open`'s startup
 //! sweep deletes", and "what `bhtune-server`'s periodic timer deletes" can never disagree:
 //!
-//! - `crate::db::open` calls it once, synchronously, on every startup of both binaries --
-//!   the "on startup" half of the policy described in AGENTS.md's `history-retention` design
-//!   note. A failure here is propagated (`?`), matching how that function already treats a
+//! - `crate::db::open` calls it once, synchronously, on every startup of both binaries.
+//!   A failure here is propagated (`?`), matching how that function already treats a
 //!   failed template-seed as fatal: a one-shot CLI invocation failing fast and clearly beats
 //!   silently skipping a maintenance step that might be masking a real database problem.
 //! - `bhtune-server`'s `main.rs` additionally calls it on a periodic timer for as long as the
@@ -45,8 +44,8 @@ fn deletion_log_is_info(deleted: u64) -> bool {
 /// [`cutoff_for`]), along with -- via `ON DELETE CASCADE` -- its samples, results, and
 /// write-back audit rows. Returns the number of runs deleted.
 ///
-/// Logs at INFO when something was actually deleted (so deletions are never silent, per
-/// `history-retention`'s design note) and at DEBUG otherwise, so a no-op sweep -- the common
+/// Logs at INFO when something was actually deleted (so deletions are never silent) and at
+/// DEBUG otherwise, so a no-op sweep -- the common
 /// case for an install well under its retention window -- doesn't add log noise at the
 /// default level.
 pub async fn sweep_retention(
