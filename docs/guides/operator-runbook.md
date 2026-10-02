@@ -148,6 +148,8 @@ tail -n 100 /usr/local/var/log/bhtune-server.error.log
 ```sh
 docker ps --filter name=bhtune
 docker logs --tail 100 bhtune
+docker inspect --format='{{.State.Health.Status}}' bhtune
+docker exec bhtune bhtune-server healthcheck
 docker exec bhtune bhtune history list
 curl --fail http://127.0.0.1:8787/api/health
 docker stop bhtune
@@ -155,7 +157,9 @@ docker start bhtune
 ```
 
 Keep the named or bind-mounted `/var/lib/bhtune` volume. Replacing a container without the
-volume creates a new empty database.
+volume creates a new empty database. The image health check confirms that the local HTTP
+liveness endpoint responds; it does not verify database readiness, external proxy access, or
+live-plant safety.
 
 ## 4. Configuration and localhost access
 

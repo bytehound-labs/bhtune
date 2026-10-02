@@ -98,12 +98,20 @@ architectural decisions" for the full reasoning. Nothing about shipping a Docker
 changes that ordering.
 
 **Three stages, each stripped to exactly what the next stage or the runtime needs.**
-`frontend` (`node:22-slim`) builds the React SPA with `pnpm`; `builder`
-(`rust:1-slim-bookworm`) compiles `bhtune`/`bhtune-server` in release mode; `runtime`
-(`debian:bookworm-slim`) contains only the two resulting binaries, `ca-certificates`, and a
-non-root user — no Node, no Rust toolchain, no source tree. Manifests are copied before
-source in the `frontend` stage specifically so `pnpm install --frozen-lockfile` is
-cache-hit across rebuilds that only touch application code.
+`frontend` builds the React SPA with `pnpm`; `builder` compiles `bhtune` and
+`bhtune-server` in release mode with the repository's pinned Rust toolchain; `runtime`
+contains only the two resulting binaries, `ca-certificates`, and a non-root user — no Node,
+no Rust toolchain, no source tree. The Node and Debian bases are pinned to verified
+multi-platform OCI index digests in the Dockerfile, allowing BuildKit to select the matching
+platform manifest. Manifests are copied before source in the `frontend` stage so
+`pnpm install --frozen-lockfile` remains layer-cacheable across source-only changes.
+
+BuildKit cache mounts retain the pnpm store and Cargo registry, Git, and architecture-specific
+target data between builds. The final release binaries are copied from the mounted Cargo
+target into ordinary builder-layer paths before the runtime stage copies them, so the cache
+mount does not hide the artifacts from later stages. The runtime image's Docker health check
+runs `bhtune-server healthcheck`; it probes the loopback `/api/health` endpoint with a bounded
+HTTP request and does not open the database, initialize logging, or prove database readiness.
 
 **The `frontend/dist/`-before-`cargo build` ordering is load-bearing, not just
 convenient.** `bhtune-server`'s `rust-embed` usage only embeds `frontend/dist/` into the
