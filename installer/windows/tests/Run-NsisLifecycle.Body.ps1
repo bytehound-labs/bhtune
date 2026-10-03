@@ -470,7 +470,13 @@ function Remove-EmptyLifecycleRegistryKey {
     }
 
     $key = Get-Item -LiteralPath $Path -ErrorAction Stop
-    if (@($key.GetSubKeyNames()).Count -gt 0 -or @($key.GetValueNames()).Count -gt 0) {
+    try {
+        $hasChildren = @($key.GetSubKeyNames()).Count -gt 0
+        $hasValues = @($key.GetValueNames()).Count -gt 0
+    } finally {
+        $key.Close()
+    }
+    if ($hasChildren -or $hasValues) {
         throw "Refusing to remove non-empty lifecycle registry parent '$Path'."
     }
     Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
