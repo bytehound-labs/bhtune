@@ -62,7 +62,8 @@ use the same scope as production. NSIS embeds the module, thin entry script, and
 tree for both install and uninstall. Candidate copies, scoped ACL targets, clean-install recovery
 allowlists, and rollback snapshots derive their private-file paths from the module manifest and
 fail closed when the on-disk private tree differs. Every module file copy is SHA-256 checked
-before it can be used as an installed candidate or uninstall finalizer.
+before it can be used as an installed candidate or uninstall finalizer. The thin entrypoint records
+module-import and invocation failures in the supplied trace path when it is writable.
 
 **Validation is intentionally split.** The Windows PowerShell 5.1 contract suite covers release
 and payload tamper checks, service/listener ownership, schema-2 compatibility, rollback/recovery,
@@ -75,6 +76,8 @@ root that existed before the run. It runs the complete real-SCM matrix from a sc
 whose SID must be `S-1-5-18` on a disposable GitHub Windows runner; the harness refuses a
 pre-existing protected service, registry state, or listener on ports `7600` and `8787`. The test
 binary is not uploaded; only the production installer and lifecycle evidence log are artifacts.
+The SYSTEM task propagates matrix failures to the workflow after recording bounded diagnostic
+evidence.
 The matrix covers the silent opt-in boundary, explicit installation, opt-out/add-on,
 stopped/running upgrades, injected two-service rollback, ProgramData-preserving uninstall,
 unowned service/listener refusal, and an unchanged firewall fingerprint. Its one-hour overall

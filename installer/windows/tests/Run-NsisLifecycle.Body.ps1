@@ -683,7 +683,7 @@ if (-not $Child) {
 
     if (-not (Test-Path -LiteralPath $InstallerPath -PathType Leaf)) {
         Write-DiagnosticLog 'HARNESS_ERROR=installer path does not exist'
-        exit 2
+        throw "The lifecycle installer path does not exist: $InstallerPath"
     }
 
     $taskName = "BhtuneNsisDiagnostic-$LifecycleTestId"
@@ -739,7 +739,7 @@ $identitySid = [string]$identity.User.Value
 Write-DiagnosticLog "CHILD_START=$([DateTime]::Now.ToString('o')) USER=$env:USERNAME SID=$identitySid"
 if ($identitySid -cne 'S-1-5-18') {
     Write-DiagnosticLog "SYSTEM_IDENTITY_REJECTED sid=$identitySid"
-    exit 10
+    throw "The lifecycle task must run as SYSTEM; received SID '$identitySid'."
 }
 Write-DiagnosticLog "SYSTEM_IDENTITY_OK sid=$identitySid"
 
@@ -1018,7 +1018,8 @@ try {
     Write-DiagnosticLog 'PROTECTED_STATE_POSTFLIGHT=PASS official_gateway_service=untouched port_7600=free'
     Write-DiagnosticLog 'LIFECYCLE_RESULT=PASS scenarios=silent-opt-in,explicit-gateway,opt-out,legacy-add-on,upgrade-state,rollback,uninstall,service-conflict,listener-conflict,firewall'
 } catch {
-    Write-DiagnosticLog "START_ERROR=$($_.Exception.ToString())"
+    $failure = $_
+    Write-DiagnosticLog "START_ERROR=$($failure.Exception.ToString())"
     try {
         $paths = Get-InstallerPaths
         $service = Get-ServiceSnapshot -Name $paths.ServiceName
@@ -1069,7 +1070,7 @@ try {
     } catch {
         Write-DiagnosticLog "FAILURE_SNAPSHOT_ERROR=$($_.Exception.Message)"
     }
-    exit 10
+    throw $failure
 }
 
 Write-DiagnosticLog "CHILD_END=$([DateTime]::Now.ToString('o'))"

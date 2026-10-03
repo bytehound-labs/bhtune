@@ -250,6 +250,10 @@ try {
         [ref]$entryErrors
     )
     Assert-Equal -Actual @($entryErrors).Count -Expected 0 -Message 'the thin installer entry script parses'
+    $entrySource = [System.IO.File]::ReadAllText($entryPath)
+    Assert-True `
+        -Condition ($entrySource -match '(?s)\$entryStage\s*=\s*''module\.import''.*\$entryStage\s*=\s*''module\.entrypoint''.*Stage\s*=\s*"\$entryStage\.failed".*\[System\.IO\.File\]::AppendAllText') `
+        -Message 'the installer entry script records module bootstrap failures in its trace'
     $entryParameters = @($entryAst.ParamBlock.Parameters)
     $entryFunctionAst = Find-InstallerPrivateFunctionAst -Name 'Invoke-BhtuneInstaller'
     Assert-True -Condition ($null -ne $entryFunctionAst) -Message 'the module exports its installer entrypoint from a private domain file'
@@ -1067,6 +1071,10 @@ exit 7
         [ref]$diagnosticParseErrors
     )
     Assert-Equal -Actual @($diagnosticParseErrors).Count -Expected 0 -Message 'NSIS lifecycle diagnostic parses for command-scope regression coverage'
+    $diagnosticSource = [System.IO.File]::ReadAllText($diagnosticScriptPath)
+    Assert-True `
+        -Condition ($diagnosticSource.Contains('$failure = $_') -and $diagnosticSource.Contains('throw $failure')) `
+        -Message 'a failed SYSTEM lifecycle matrix propagates a nonzero task result after capturing diagnostics'
     $diagnosticFunctions = @(
         $diagnosticAst.FindAll({
                 param($node)

@@ -97,12 +97,40 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
-$modulePath = Join-Path $PSScriptRoot 'BhtuneInstaller.psm1'
-if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
-    throw "Installer module is missing: $modulePath"
-}
-Import-Module -Name $modulePath -ErrorAction Stop
+$entryStage = 'module.import'
+try {
+    $modulePath = Join-Path $PSScriptRoot 'BhtuneInstaller.psm1'
+    if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+        throw "Installer module is missing: $modulePath"
+    }
+    Import-Module -Name $modulePath -ErrorAction Stop
 
-$exitCode = 1
-Invoke-BhtuneInstaller @PSBoundParameters -EntryScriptPath $PSCommandPath -ExitCode ([ref]$exitCode)
-exit $exitCode
+    $entryStage = 'module.entrypoint'
+    $exitCode = 1
+    Invoke-BhtuneInstaller @PSBoundParameters -EntryScriptPath $PSCommandPath -ExitCode ([ref]$exitCode)
+    exit $exitCode
+} catch {
+    $entryError = $_
+    if (-not [string]::IsNullOrWhiteSpace($TracePath)) {
+        try {
+            $traceParent = Split-Path -Parent $TracePath
+            if (-not [string]::IsNullOrWhiteSpace($traceParent)) {
+                New-Item -ItemType Directory -Path $traceParent -Force -ErrorAction Stop | Out-Null
+            }
+            $record = [ordered]@{
+                TimestampUtc = [DateTime]::UtcNow.ToString('o')
+                ProcessId    = $PID
+                Stage        = "$entryStage.failed"
+                Detail       = $entryError.Exception.ToString()
+            }
+            $encoding = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::AppendAllText(
+                $TracePath,
+                (($record | ConvertTo-Json -Compress) + [Environment]::NewLine),
+                $encoding
+            )
+        } catch {
+        }
+    }
+    throw $entryError
+}
