@@ -185,6 +185,63 @@ try {
     Assert-True `
         -Condition ($nsisSource.Contains('!ifdef BHTUNE_TEST_LIFECYCLE') -and $nsisSource.Contains('BHTUNE_MARKER_REGISTRY_KEY')) `
         -Message 'the lifecycle-only NSIS build isolates product paths and ownership registry state'
+    Assert-True `
+        -Condition ($nsisSource.Contains('-InvocationFile "$PLUGINSDIR\installer\install-invocation.ini"') -and
+            -not $nsisSource.Contains(' -PayloadRoot "$PLUGINSDIR\payload"')) `
+        -Message 'the NSIS install bootstrap uses a short invocation-file argument instead of a long inline parameter list'
+    $installExecWaitLines = @(
+        $nsisSource -split "`r?\n" |
+            Where-Object { $_ -match '^\s*ExecWait .*Install-Bhtune\.ps1.*-InvocationFile' }
+    )
+    Assert-Equal -Actual $installExecWaitLines.Count -Expected 1 -Message 'NSIS has one PowerShell install command'
+    Assert-True `
+        -Condition ($installExecWaitLines[0].Length -lt 500) `
+        -Message 'the NSIS PowerShell install command stays comfortably below the string-length limit'
+
+    $invocationFixture = Join-Path $script:WorkRoot 'install-invocation.ini'
+    $validInvocationText = @'
+[Install]
+Mode=Install
+ExpectedVersion=1.2.3
+ReleaseTag=v1.2.3
+PayloadRoot=C:\temp\payload
+GatewayPayloadRoot=C:\temp\gateway-payload
+InstallerScriptRoot=C:\temp\installer
+UninstallerSource=C:\temp\uninstall.exe
+InstallRoot=C:\Program Files\BHTune=QA
+ProgramDataRoot=C:\ProgramData\ByteHound\bhtune
+AddToPath=0
+StartService=1
+InstallGateway=1
+StartGateway=0
+CustomDbBackupConfirmed=1
+TracePath=C:\ProgramData\ByteHound\bhtune\installer\install-trace.jsonl
+TestOnly=true
+IsolatedLifecycleTest=true
+LifecycleTestId=0123456789abcdef0123456789abcdef
+LifecycleTestRoot=C:\temp\lifecycle
+'@
+    Write-TestFile -Path $invocationFixture -Content $validInvocationText
+    $invocation = Read-InstallerInvocationFile -Path $invocationFixture
+    Assert-Equal -Actual $invocation.InstallRoot -Expected 'C:\Program Files\BHTune=QA' -Message 'installer invocation values preserve equals signs in paths'
+    Assert-True -Condition $invocation.TestOnly -Message 'installer invocation test switches are converted to booleans'
+    Assert-Equal -Actual $invocation.AddToPath -Expected '0' -Message 'installer invocation options preserve explicit false values'
+
+    $localizedInstallRoot = 'C:\Program Files\BHTune' + [char]0x00e9 + '=QA'
+    $localizedInvocationText = $validInvocationText.Replace('C:\Program Files\BHTune=QA', $localizedInstallRoot)
+    [System.IO.File]::WriteAllText($invocationFixture, $localizedInvocationText, [System.Text.Encoding]::Default)
+    $localizedInvocation = Read-InstallerInvocationFile -Path $invocationFixture
+    Assert-Equal `
+        -Actual $localizedInvocation.InstallRoot `
+        -Expected $localizedInstallRoot `
+        -Message 'installer invocation preserves paths in the active Windows code page'
+
+    Write-TestFile -Path $invocationFixture -Content ($validInvocationText + "`r`nUnexpectedSetting=1")
+    Assert-Throws -Action { Read-InstallerInvocationFile -Path $invocationFixture } -Message 'installer invocation rejects unsupported settings'
+    Write-TestFile -Path $invocationFixture -Content ($validInvocationText + "`r`nMode=Install")
+    Assert-Throws -Action { Read-InstallerInvocationFile -Path $invocationFixture } -Message 'installer invocation rejects duplicate settings'
+    Write-TestFile -Path $invocationFixture -Content ($validInvocationText.Replace('Mode=Install', 'Mode=Uninstall'))
+    Assert-Throws -Action { Read-InstallerInvocationFile -Path $invocationFixture } -Message 'installer invocation rejects non-install modes'
 
     $repositoryRoot = Split-Path -Parent (Split-Path -Parent $moduleRoot)
     $checksWorkflow = [System.IO.File]::ReadAllText(
@@ -254,7 +311,9 @@ try {
     Assert-True `
         -Condition ($entrySource -match '(?s)\$entryStage\s*=\s*''module\.import''.*\$entryStage\s*=\s*''module\.entrypoint''.*Stage\s*=\s*"\$entryStage\.failed".*\[System\.IO\.File\]::AppendAllText') `
         -Message 'the installer entry script records module bootstrap failures in its trace'
-    $entryParameters = @($entryAst.ParamBlock.Parameters)
+    $entryParameters = @($entryAst.ParamBlock.Parameters | Where-Object {
+            $_.Name.VariablePath.UserPath -ne 'InvocationFile'
+        })
     $entryFunctionAst = Find-InstallerPrivateFunctionAst -Name 'Invoke-BhtuneInstaller'
     Assert-True -Condition ($null -ne $entryFunctionAst) -Message 'the module exports its installer entrypoint from a private domain file'
     $functionParameters = @($entryFunctionAst.Body.ParamBlock.Parameters)

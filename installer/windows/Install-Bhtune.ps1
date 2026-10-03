@@ -6,6 +6,10 @@ param(
 
     [Parameter(Mandatory = $false)]
     [AllowEmptyString()]
+    [string]$InvocationFile = '',
+
+    [Parameter(Mandatory = $false)]
+    [AllowEmptyString()]
     [string]$ExpectedVersion = '',
 
     [Parameter(Mandatory = $false)]
@@ -99,6 +103,22 @@ Set-StrictMode -Version 2.0
 
 $entryStage = 'module.import'
 try {
+    $entryParameters = @{} + $PSBoundParameters
+    $entryParameters.Remove('InvocationFile') | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($InvocationFile)) {
+        if ($entryParameters.Count -gt 0) {
+            throw '-InvocationFile cannot be combined with individual installer parameters.'
+        }
+        $entryStage = 'invocation.parameters'
+        $invocationReaderPath = Join-Path $PSScriptRoot 'Private\Installer.Invocation.ps1'
+        if (-not (Test-Path -LiteralPath $invocationReaderPath -PathType Leaf)) {
+            throw "Installer invocation reader is missing: $invocationReaderPath"
+        }
+        . $invocationReaderPath
+        $entryParameters = Read-InstallerInvocationFile -Path $InvocationFile
+        $TracePath = [string]$entryParameters['TracePath']
+    }
+
     $modulePath = Join-Path $PSScriptRoot 'BhtuneInstaller.psm1'
     if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
         throw "Installer module is missing: $modulePath"
@@ -107,7 +127,7 @@ try {
 
     $entryStage = 'module.entrypoint'
     $exitCode = 1
-    Invoke-BhtuneInstaller @PSBoundParameters -EntryScriptPath $PSCommandPath -ExitCode ([ref]$exitCode)
+    Invoke-BhtuneInstaller @entryParameters -EntryScriptPath $PSCommandPath -ExitCode ([ref]$exitCode)
     exit $exitCode
 } catch {
     $entryError = $_

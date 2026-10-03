@@ -3,6 +3,7 @@ Set-StrictMode -Version 2.0
 $script:InstallerModuleRoot = $PSScriptRoot
 $script:InstallerPrivateFiles = @(
     'Private/Installer.Constants.ps1'
+    'Private/Installer.Invocation.ps1'
     'Private/Installer.Common.ps1'
     'Private/Installer.Paths.ps1'
     'Private/Installer.Config.ps1'

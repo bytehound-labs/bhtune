@@ -56,14 +56,16 @@ reuse them.
 **The PowerShell implementation is one shared-scope module.** `BhtuneInstaller.psm1` dot-sources
 the ordered domain scripts from `Private/` and explicitly exports only the installer entrypoint
 and gateway payload validation functions. `Install-Bhtune.ps1` binds the existing command-line
-contract, imports the module, and invokes the exported entrypoint. The contract suite imports the
-actual module and runs in a module-bound scope, so private functions, script state, and test mocks
-use the same scope as production. NSIS embeds the module, thin entry script, and complete private
-tree for both install and uninstall. Candidate copies, scoped ACL targets, clean-install recovery
-allowlists, and rollback snapshots derive their private-file paths from the module manifest and
-fail closed when the on-disk private tree differs. Every module file copy is SHA-256 checked
-before it can be used as an installed candidate or uninstall finalizer. The thin entrypoint records
-module-import and invocation failures in the supplied trace path when it is writable.
+contract, imports the module, and invokes the exported entrypoint. NSIS passes install options
+through a temporary, allowlisted INI invocation file so the PowerShell command stays below NSIS's
+fixed string-length limit. The contract suite imports the actual module and runs in a module-bound
+scope, so private functions, script state, and test mocks use the same scope as production. NSIS
+embeds the module, thin entry script, and complete private tree for both install and uninstall.
+Candidate copies, scoped ACL targets, clean-install recovery allowlists, and rollback snapshots
+derive their private-file paths from the module manifest and fail closed when the on-disk private
+tree differs. Every module file copy is SHA-256 checked before it can be used as an installed
+candidate or uninstall finalizer. The thin entrypoint records module-import and invocation failures
+in the supplied trace path when it is writable.
 
 **Validation is intentionally split.** The Windows PowerShell 5.1 contract suite covers release
 and payload tamper checks, service/listener ownership, schema-2 compatibility, rollback/recovery,

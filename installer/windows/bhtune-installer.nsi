@@ -427,8 +427,30 @@ Section "Install"
   ; ownership and payload checks have passed.
   WriteUninstaller "$PLUGINSDIR\uninstall.exe"
 
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "Mode" "Install"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "ExpectedVersion" "${BHTUNE_VERSION}"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "ReleaseTag" "${BHTUNE_RELEASE_TAG}"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "PayloadRoot" "$PLUGINSDIR\payload"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "GatewayPayloadRoot" "$PLUGINSDIR\gateway-payload"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "InstallerScriptRoot" "$PLUGINSDIR\installer"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "UninstallerSource" "$PLUGINSDIR\uninstall.exe"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "InstallRoot" "$INSTDIR"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "ProgramDataRoot" "$ProgramDataRootPath"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "AddToPath" "$AddToPath"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "StartService" "$StartService"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "InstallGateway" "$InstallGateway"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "StartGateway" "$StartGateway"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "CustomDbBackupConfirmed" "$CustomDbBackupConfirmed"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "TracePath" "$ProgramDataRootPath\installer\install-trace.jsonl"
+!ifdef BHTUNE_TEST_LIFECYCLE
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "TestOnly" "true"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "IsolatedLifecycleTest" "true"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "LifecycleTestId" "${BHTUNE_TEST_ID}"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "LifecycleTestRoot" "${BHTUNE_TEST_ROOT}"
+!endif
+
   DetailPrint "Validating BHTune ${BHTUNE_VERSION} (${BHTUNE_RELEASE_TAG}) payload..."
-  ExecWait '"$PowerShellExe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\installer\Install-Bhtune.ps1" -Mode Install -ExpectedVersion "${BHTUNE_VERSION}" -ReleaseTag "${BHTUNE_RELEASE_TAG}" -PayloadRoot "$PLUGINSDIR\payload" -GatewayPayloadRoot "$PLUGINSDIR\gateway-payload" -InstallerScriptRoot "$PLUGINSDIR\installer" -UninstallerSource "$PLUGINSDIR\uninstall.exe" -InstallRoot "$INSTDIR" -ProgramDataRoot "$ProgramDataRootPath" -AddToPath $AddToPath -StartService $StartService -InstallGateway $InstallGateway -StartGateway $StartGateway -CustomDbBackupConfirmed $CustomDbBackupConfirmed -TracePath "$ProgramDataRootPath\installer\install-trace.jsonl"${BHTUNE_TEST_ARGUMENTS}' $0
+  ExecWait '"$PowerShellExe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\installer\Install-Bhtune.ps1" -InvocationFile "$PLUGINSDIR\installer\install-invocation.ini"' $0
   ${If} $0 != 0
     Push "BHTune installation failed. No unowned service or partial installation was left behind. Review the installer details for the exact error."
     Call InstallerFatal
