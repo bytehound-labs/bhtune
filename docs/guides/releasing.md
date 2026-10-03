@@ -97,14 +97,21 @@ gh workflow run windows-installer.yml \
 
 The workflow must verify the pinned gateway tag and source commit, release-workflow blob,
 upstream checksum and Sigstore evidence, GitHub provenance, exact archive contents, executable
-SHA-256 and 32-bit PE architecture, version, and compatibility metadata. Its SYSTEM lifecycle
-diagnostic must cover the gateway-free silent default, explicit gateway installation, gateway
-add-on ending stopped, running/stopped managed upgrades, two-service rollback,
-ProgramData-preserving uninstall, unowned service and listener conflicts, a gateway-wide
-version/protocol handshake on a vanilla runner without OPCEnum, and an unchanged Windows
-Firewall fingerprint. The full SYSTEM-context matrix has a one-hour overall budget because it
-performs repeated real SCM install, upgrade, rollback, and uninstall cycles; each installer or
-uninstaller process remains independently capped at two minutes.
+SHA-256 and 32-bit PE architecture, version, and compatibility metadata. The SYSTEM lifecycle
+diagnostic runs a separately compiled test-only installer on the disposable hosted Windows
+runner. That build uses a unique workspace-owned install and ProgramData root, service names, and
+ownership registry key; it is never uploaded. The scheduled lifecycle task must prove the
+`S-1-5-18` SYSTEM identity and verify protected services, registry state, and ports `7600` and
+`8787` both before and after testing. The artifact contains only the production installer and
+the lifecycle evidence log.
+
+The complete lifecycle matrix covers the gateway-free silent default, explicit gateway
+installation, gateway add-on ending stopped, running/stopped managed upgrades, two-service
+rollback, ProgramData-preserving uninstall, unowned service and listener conflicts, a
+gateway-wide version/protocol handshake on a vanilla runner without OPCEnum, and an unchanged
+Windows Firewall fingerprint. The full SYSTEM-context matrix has a one-hour overall budget
+because it performs repeated real SCM install, upgrade, rollback, and uninstall cycles; each
+installer or uninstaller process remains independently capped at two minutes.
 
 Updating the bundled gateway is a reviewed source change, not a release-time lookup:
 

@@ -169,7 +169,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          . (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\InstallerSupport.ps1')
+          Import-Module -Name (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\BhtuneInstaller.psm1') -ErrorAction Stop
 
           $contractSource = Join-Path $env:GITHUB_WORKSPACE 'installer\windows\opcda-gateway-release.json'
           $contract = Assert-GatewayReleaseContract -ContractPath $contractSource
@@ -460,20 +460,27 @@ jobs:
           "PAYLOAD=$payload" >> $env:GITHUB_ENV
 
       - name: Run installer contract self-tests
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          & (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\tests\Test-InstallerSupport.ps1')
+          & (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\tests\Test-InstallerModule.ps1')
 
       - name: Parse installer PowerShell sources
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          $installerRoot = Join-Path $env:GITHUB_WORKSPACE 'installer\windows'
+          $privateRoot = Join-Path $installerRoot 'Private'
           $files = @(
-            (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\InstallerSupport.ps1'),
-            (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\Install-Bhtune.ps1'),
-            (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\tests\Test-InstallerSupport.ps1'),
-            (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\tests\Run-NsisDiagnostic.ps1')
+            (Join-Path $installerRoot 'BhtuneInstaller.psm1'),
+            (Join-Path $installerRoot 'Install-Bhtune.ps1'),
+            (Join-Path $installerRoot 'tests\Test-InstallerModule.ps1'),
+            (Join-Path $installerRoot 'tests\Test-InstallerModule.Body.ps1'),
+            (Join-Path $installerRoot 'tests\Run-NsisDiagnostic.ps1'),
+            (Join-Path $installerRoot 'tests\Run-NsisLifecycle.Body.ps1')
+          ) + @(
+            Get-ChildItem -LiteralPath $privateRoot -File -Filter '*.ps1' -Recurse |
+              ForEach-Object { $_.FullName }
           )
           foreach ($file in $files) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
@@ -500,7 +507,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $output = Join-Path $env:GITHUB_WORKSPACE 'installer-build\output'
-          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          $lifecycleOutput = Join-Path $env:GITHUB_WORKSPACE 'installer-build\lifecycle-output'
+          New-Item -ItemType Directory -Force -Path $output, $lifecycleOutput | Out-Null
           $makensis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
           $releaseTag = if ($env:MODE -eq 'release') {
             $env:RELEASE_TAG
@@ -510,25 +518,62 @@ jobs:
             # requires while keeping release mode tied to the real tag.
             "v$($env:PACKAGE_VERSION)"
           }
-          & $makensis `
-            "/DPRODUCT_VERSION=$env:PACKAGE_VERSION" `
-            "/DRELEASE_TAG=$releaseTag" `
-            "/DPAYLOAD_DIR=$env:PAYLOAD" `
-            "/DGATEWAY_PAYLOAD_DIR=$env:GATEWAY_PAYLOAD" `
-            "/DOUTPUT_DIR=$output" `
-            (Join-Path $env:GITHUB_WORKSPACE 'installer\windows\bhtune-installer.nsi')
+          $source = Join-Path $env:GITHUB_WORKSPACE 'installer\windows\bhtune-installer.nsi'
+          $productionArguments = @(
+            "/DPRODUCT_VERSION=$env:PACKAGE_VERSION"
+            "/DRELEASE_TAG=$releaseTag"
+            "/DPAYLOAD_DIR=$env:PAYLOAD"
+            "/DGATEWAY_PAYLOAD_DIR=$env:GATEWAY_PAYLOAD"
+            "/DOUTPUT_DIR=$output"
+            $source
+          )
+          & $makensis @productionArguments
           if ($LASTEXITCODE -ne 0) {
-            throw "makensis failed with exit code $LASTEXITCODE"
+            throw "Production makensis build failed with exit code $LASTEXITCODE"
           }
           $installer = Get-ChildItem -LiteralPath $output -Filter '*.exe' -File |
             Where-Object { $_.Name -notlike 'Uninstall*' } |
             Select-Object -First 1
           if ($null -eq $installer) {
-            throw 'NSIS did not produce an installer executable'
+            throw 'NSIS did not produce the production installer executable'
           }
+
+          $testId = [guid]::NewGuid().ToString('N')
+          $testRoot = Join-Path $env:GITHUB_WORKSPACE "bhtune-installer-lifecycle-$testId"
+          if (Test-Path -LiteralPath $testRoot) {
+            throw "The unique lifecycle root already exists: $testRoot"
+          }
+          $lifecycleArguments = @(
+            "/DPRODUCT_VERSION=$env:PACKAGE_VERSION"
+            "/DRELEASE_TAG=$releaseTag"
+            "/DPAYLOAD_DIR=$env:PAYLOAD"
+            "/DGATEWAY_PAYLOAD_DIR=$env:GATEWAY_PAYLOAD"
+            "/DOUTPUT_DIR=$lifecycleOutput"
+            '/DBHTUNE_TEST_LIFECYCLE=1'
+            "/DBHTUNE_TEST_ID=$testId"
+            "/DBHTUNE_TEST_ROOT=$testRoot"
+            $source
+          )
+          & $makensis @lifecycleArguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "Lifecycle-only makensis build failed with exit code $LASTEXITCODE"
+          }
+          $testInstaller = Get-ChildItem -LiteralPath $lifecycleOutput -Filter '*.exe' -File |
+            Where-Object { $_.Name -notlike 'Uninstall*' } |
+            Select-Object -First 1
+          if ($null -eq $testInstaller -or $testInstaller.FullName -ceq $installer.FullName) {
+            throw 'NSIS did not produce a separate test-only lifecycle installer'
+          }
+          if ($testInstaller.FullName -notlike "$lifecycleOutput*") {
+            throw 'The test-only lifecycle installer escaped its separate output directory.'
+          }
+
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName).Hash.ToLowerInvariant()
           "$hash  $($installer.Name)" | Set-Content -LiteralPath (Join-Path $output "$($installer.Name).sha256") -Encoding ASCII
           "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
+          "TEST_INSTALLER_PATH=$($testInstaller.FullName)" >> $env:GITHUB_ENV
+          "LIFECYCLE_TEST_ID=$testId" >> $env:GITHUB_ENV
+          "LIFECYCLE_TEST_ROOT=$testRoot" >> $env:GITHUB_ENV
           "CHECKSUM_PATH=$(Join-Path $output "$($installer.Name).sha256")" >> $env:GITHUB_ENV
 
       - name: Run silent NSIS lifecycle diagnostic
@@ -539,14 +584,48 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $diagnostic = Join-Path $env:GITHUB_WORKSPACE 'installer\windows\tests\Run-NsisDiagnostic.ps1'
           $log = Join-Path $env:GITHUB_WORKSPACE 'installer-build\output\nsis-diagnostic.log'
+          if (-not (Test-Path -LiteralPath $env:TEST_INSTALLER_PATH -PathType Leaf)) {
+            throw "The test-only lifecycle installer is missing: $env:TEST_INSTALLER_PATH"
+          }
+          if (Test-Path -LiteralPath $env:LIFECYCLE_TEST_ROOT) {
+            throw "The disposable lifecycle root already exists: $env:LIFECYCLE_TEST_ROOT"
+          }
           & $diagnostic `
-            -InstallerPath $env:INSTALLER_PATH `
+            -InstallerPath $env:TEST_INSTALLER_PATH `
             -LogPath $log `
             -ExpectedVersion $env:PACKAGE_VERSION `
             -TimeoutSeconds 120 `
-            -OverallTimeoutSeconds 3600
-          if ($LASTEXITCODE -ne 0) {
-            throw "NSIS lifecycle diagnostic failed with exit code $LASTEXITCODE"
+            -OverallTimeoutSeconds 3600 `
+            -LifecycleTestId $env:LIFECYCLE_TEST_ID `
+            -LifecycleTestRoot $env:LIFECYCLE_TEST_ROOT
+
+      - name: Verify NSIS lifecycle evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $log = Join-Path $env:GITHUB_WORKSPACE 'installer-build\output\nsis-diagnostic.log'
+          if (-not (Test-Path -LiteralPath $log -PathType Leaf)) {
+            throw 'The NSIS lifecycle diagnostic did not produce its evidence log.'
+          }
+          $evidence = Get-Content -LiteralPath $log -Raw
+          $requiredEvidence = @(
+            'SYSTEM_IDENTITY_OK sid=S-1-5-18'
+            'PROTECTED_STATE_PREFLIGHT=PASS'
+            'SCENARIO_PASS name=clean-silent-gateway-opt-in-required'
+            'SCENARIO_PASS name=clean-explicit-gateway'
+            'SCENARIO_PASS name=legacy-schema2-preserves-gateway-absence'
+            'SCENARIO_PASS name=managed-upgrade-state-preservation'
+            'SCENARIO_PASS name=gateway-smoke-failure-rollback'
+            'SCENARIO_PASS name=gateway-programdata-preservation'
+            'SCENARIO_PASS name=unowned-gateway-service-conflict'
+            'SCENARIO_PASS name=unexpected-gateway-listener-conflict'
+            'PROTECTED_STATE_POSTFLIGHT=PASS official_gateway_service=untouched port_7600=free'
+            'LIFECYCLE_RESULT=PASS'
+          )
+          foreach ($marker in $requiredEvidence) {
+            if (-not $evidence.Contains($marker)) {
+              throw "NSIS lifecycle evidence is missing required marker '$marker'."
+            }
           }
 
       - name: Upload NSIS lifecycle diagnostic

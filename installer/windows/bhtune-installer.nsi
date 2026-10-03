@@ -42,9 +42,24 @@ RequestExecutionLevel admin
 !define BHTUNE_RELEASE_TAG "${RELEASE_TAG}"
 !define REQUIRED_NSIS "3.12"
 
+!ifdef BHTUNE_TEST_LIFECYCLE
+  !ifndef BHTUNE_TEST_ID
+    !error "BHTUNE_TEST_ID is required for a lifecycle-test installer."
+  !endif
+  !ifndef BHTUNE_TEST_ROOT
+    !error "BHTUNE_TEST_ROOT is required for a lifecycle-test installer."
+  !endif
+  !define BHTUNE_MARKER_REGISTRY_KEY "Software\ByteHound\bhtune\LifecycleTests\${BHTUNE_TEST_ID}"
+  !define BHTUNE_TEST_ARGUMENTS " -TestOnly -IsolatedLifecycleTest -LifecycleTestId ${BHTUNE_TEST_ID} -LifecycleTestRoot $\"${BHTUNE_TEST_ROOT}$\""
+  InstallDir "${BHTUNE_TEST_ROOT}\ProgramFiles\ByteHound\bhtune"
+!else
+  !define BHTUNE_MARKER_REGISTRY_KEY "Software\ByteHound\bhtune"
+  !define BHTUNE_TEST_ARGUMENTS ""
+  InstallDir "$PROGRAMFILES64\ByteHound\bhtune"
+!endif
+
 Name "${PRODUCT_NAME} ${BHTUNE_VERSION}"
 OutFile "${OUTPUT_DIR}\bhtune-v${BHTUNE_VERSION}-windows-x86_64-installer.exe"
-InstallDir "$PROGRAMFILES64\ByteHound\bhtune"
 ShowInstDetails show
 ShowUninstDetails show
 
@@ -110,12 +125,16 @@ powerShellPathDone:
 FunctionEnd
 
 Function ResolveProgramDataRoot
+!ifdef BHTUNE_TEST_LIFECYCLE
+  StrCpy $ProgramDataRootPath "${BHTUNE_TEST_ROOT}\ProgramData\ByteHound\bhtune"
+!else
   ReadEnvStr $0 "ProgramData"
   ${If} $0 == ""
     Push "The ProgramData environment variable is unavailable. BHTune cannot determine its fixed data directory."
     Call InstallerFatal
   ${EndIf}
   StrCpy $ProgramDataRootPath "$0\ByteHound\bhtune"
+!endif
 FunctionEnd
 
 Function ParseInstallerOptions
@@ -223,14 +242,14 @@ Function InitializeGatewayDefaults
   StrCpy $StartGateway "1"
 
   ClearErrors
-  ReadRegDWORD $0 HKLM "Software\ByteHound\bhtune" "InstallerOwned"
+  ReadRegDWORD $0 HKLM "${BHTUNE_MARKER_REGISTRY_KEY}" "InstallerOwned"
   ${IfNot} ${Errors}
     StrCpy $ExistingInstallerMarker "1"
     ; Existing schema-v2 and gateway-free schema-v3 installations preserve
     ; gateway absence unless the operator opts in explicitly.
     StrCpy $InstallGateway "0"
     ClearErrors
-    ReadRegDWORD $1 HKLM "Software\ByteHound\bhtune" "GatewayManaged"
+    ReadRegDWORD $1 HKLM "${BHTUNE_MARKER_REGISTRY_KEY}" "GatewayManaged"
     ${IfNot} ${Errors}
       ${If} $1 == 1
         StrCpy $GatewayWasManaged "1"
@@ -398,16 +417,40 @@ Section "Install"
   File /oname=NOTICE-opcda-bridge.txt "${GATEWAY_PAYLOAD_DIR}\NOTICE-opcda-bridge.txt"
 
   SetOutPath "$PLUGINSDIR\installer"
-  File /oname=InstallerSupport.ps1 "${__FILEDIR__}\InstallerSupport.ps1"
+  File /oname=BhtuneInstaller.psm1 "${__FILEDIR__}\BhtuneInstaller.psm1"
   File /oname=Install-Bhtune.ps1 "${__FILEDIR__}\Install-Bhtune.ps1"
+  SetOutPath "$PLUGINSDIR\installer\Private"
+  File /r "${__FILEDIR__}\Private\*"
 
   ; Generate the final uninstaller into the staging directory.  The
   ; PowerShell orchestrator copies it into Program Files only after all
   ; ownership and payload checks have passed.
   WriteUninstaller "$PLUGINSDIR\uninstall.exe"
 
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "Mode" "Install"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "ExpectedVersion" "${BHTUNE_VERSION}"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "ReleaseTag" "${BHTUNE_RELEASE_TAG}"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "PayloadRoot" "$PLUGINSDIR\payload"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "GatewayPayloadRoot" "$PLUGINSDIR\gateway-payload"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "InstallerScriptRoot" "$PLUGINSDIR\installer"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "UninstallerSource" "$PLUGINSDIR\uninstall.exe"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "InstallRoot" "$INSTDIR"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "ProgramDataRoot" "$ProgramDataRootPath"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "AddToPath" "$AddToPath"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "StartService" "$StartService"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "InstallGateway" "$InstallGateway"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "StartGateway" "$StartGateway"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "CustomDbBackupConfirmed" "$CustomDbBackupConfirmed"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "TracePath" "$ProgramDataRootPath\installer\install-trace.jsonl"
+!ifdef BHTUNE_TEST_LIFECYCLE
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "TestOnly" "true"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "IsolatedLifecycleTest" "true"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "LifecycleTestId" "${BHTUNE_TEST_ID}"
+  WriteINIStr "$PLUGINSDIR\installer\install-invocation.ini" "Install" "LifecycleTestRoot" "${BHTUNE_TEST_ROOT}"
+!endif
+
   DetailPrint "Validating BHTune ${BHTUNE_VERSION} (${BHTUNE_RELEASE_TAG}) payload..."
-  ExecWait '"$PowerShellExe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\installer\Install-Bhtune.ps1" -Mode Install -ExpectedVersion "${BHTUNE_VERSION}" -ReleaseTag "${BHTUNE_RELEASE_TAG}" -PayloadRoot "$PLUGINSDIR\payload" -GatewayPayloadRoot "$PLUGINSDIR\gateway-payload" -InstallerScriptRoot "$PLUGINSDIR\installer" -UninstallerSource "$PLUGINSDIR\uninstall.exe" -InstallRoot "$INSTDIR" -ProgramDataRoot "$ProgramDataRootPath" -AddToPath $AddToPath -StartService $StartService -InstallGateway $InstallGateway -StartGateway $StartGateway -CustomDbBackupConfirmed $CustomDbBackupConfirmed -TracePath "$ProgramDataRootPath\installer\install-trace.jsonl"' $0
+  ExecWait '"$PowerShellExe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\installer\Install-Bhtune.ps1" -InvocationFile "$PLUGINSDIR\installer\install-invocation.ini"' $0
   ${If} $0 != 0
     Push "BHTune installation failed. No unowned service or partial installation was left behind. Review the installer details for the exact error."
     Call InstallerFatal
@@ -431,12 +474,16 @@ un.powerShellPathDone:
 FunctionEnd
 
 Function un.ResolveProgramDataRoot
+!ifdef BHTUNE_TEST_LIFECYCLE
+  StrCpy $ProgramDataRootPath "${BHTUNE_TEST_ROOT}\ProgramData\ByteHound\bhtune"
+!else
   ReadEnvStr $0 "ProgramData"
   ${If} $0 == ""
     Push "The ProgramData environment variable is unavailable. BHTune cannot determine its fixed data directory."
     Call un.InstallerFatal
   ${EndIf}
   StrCpy $ProgramDataRootPath "$0\ByteHound\bhtune"
+!endif
 FunctionEnd
 
 Section "Uninstall"
@@ -448,31 +495,41 @@ Section "Uninstall"
   ; ownership checks.
   InitPluginsDir
   SetOutPath "$PLUGINSDIR\installer"
-  File /oname=InstallerSupport.ps1 "${__FILEDIR__}\InstallerSupport.ps1"
+  File /oname=BhtuneInstaller.psm1 "${__FILEDIR__}\BhtuneInstaller.psm1"
   File /oname=Install-Bhtune.ps1 "${__FILEDIR__}\Install-Bhtune.ps1"
+  SetOutPath "$PLUGINSDIR\installer\Private"
+  File /r "${__FILEDIR__}\Private\*"
   DetailPrint "Verifying installer ownership before uninstall..."
-  ExecWait '"$PowerShellExe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\installer\Install-Bhtune.ps1" -Mode Uninstall -InstallRoot "$INSTDIR" -ProgramDataRoot "$ProgramDataRootPath" -LeaveInstallRoot -TracePath "$ProgramDataRootPath\installer\uninstall-trace.jsonl"' $0
+  ExecWait '"$PowerShellExe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\installer\Install-Bhtune.ps1" -Mode Uninstall -InstallRoot "$INSTDIR" -ProgramDataRoot "$ProgramDataRootPath" -LeaveInstallRoot -TracePath "$ProgramDataRootPath\installer\uninstall-trace.jsonl"${BHTUNE_TEST_ARGUMENTS}' $0
   ${If} $0 != 0
     Push "BHTune uninstall refused or failed. ProgramData was preserved."
     Call un.InstallerFatal
   ${EndIf}
-  ; Use the fixed root rather than a registry-supplied $INSTDIR value.  The
-  ; PowerShell ownership check already validated this exact location, and
-  ; keeping the deletion fixed prevents conflicting metadata from redirecting
-  ; cleanup into an unrelated directory.
+  ; Production cleanup uses the fixed root rather than a registry-supplied
+  ; $INSTDIR value. The lifecycle-test build uses its compile-time isolated
+  ; root after the PowerShell ownership check validates that exact location.
   ; NSIS keeps the running uninstaller open until this section exits.  The
   ; Delete instruction has special self-removal handling; without it, the
   ; recursive removal below can leave the entire install root behind on
   ; Windows versions that do not allow an executing image to be removed.
+!ifdef BHTUNE_TEST_LIFECYCLE
+  Delete "$INSTDIR\uninstall.exe"
+  RMDir /r "$INSTDIR"
+!else
   Delete "$PROGRAMFILES64\ByteHound\bhtune\uninstall.exe"
   RMDir /r "$PROGRAMFILES64\ByteHound\bhtune"
+!endif
   ; The PowerShell side deliberately retains ownership metadata until the
   ; fixed Program Files tree has been removed.  The PowerShell pass has
   ; already started a guarded finalizer which waits for this NSIS process to
   ; exit before removing ownership metadata and the journal.  This boundary
   ; is required on older Windows versions where the running uninstaller
   ; cannot be removed synchronously from inside its own process.
+!ifdef BHTUNE_TEST_LIFECYCLE
+  IfFileExists "$INSTDIR\." un_cleanup_deferred un_cleanup_done
+!else
   IfFileExists "$PROGRAMFILES64\ByteHound\bhtune\." un_cleanup_deferred un_cleanup_done
+!endif
 un_cleanup_deferred:
   DetailPrint "Program Files cleanup will finish after the uninstaller exits; installer ownership metadata remains protected until then."
   Goto un_cleanup_done

@@ -1,14 +1,11 @@
-[CmdletBinding()]
-param()
-
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 
-$helperPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'InstallerSupport.ps1'
-if (-not (Test-Path -LiteralPath $helperPath -PathType Leaf)) {
-    throw "Installer helper is missing: $helperPath"
-}
-. $helperPath
+$moduleRoot = $script:InstallerModuleRoot
+$modulePath = Join-Path $moduleRoot 'BhtuneInstaller.psm1'
+$helperPath = Join-Path $moduleRoot 'Private\Installer.Security.ps1'
+$installScriptPath = Join-Path $moduleRoot 'Private\Installer.Transaction.Install.ps1'
+$privateRoot = Join-Path $moduleRoot 'Private'
 
 $script:Passed = 0
 $script:WorkRoot = Join-Path $PSScriptRoot '.work'
@@ -106,24 +103,35 @@ function Write-TestFile {
     [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-function Import-InstallerFunction {
+function Assert-InstallerFunctionAvailable {
     param(
-        [Parameter(Mandatory = $true)]
-        [System.Management.Automation.Language.Ast]$ScriptAst,
-
         [Parameter(Mandatory = $true)]
         [string]$Name
     )
 
-    $functionAst = $ScriptAst.Find({
-            param($node)
-            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -eq $Name
-        }, $true)
-    if ($null -eq $functionAst) {
-        throw "Installer function '$Name' is missing from the parsed source."
+    $command = Get-Command -Name $Name -CommandType Function -ErrorAction SilentlyContinue
+    if ($null -eq $command) {
+        throw "Installer module function '$Name' was not loaded into the shared module scope."
     }
-    Set-Item -Path ("Function:\global:{0}" -f $Name) -Value $functionAst.Body.GetScriptBlock()
+}
+
+function Find-InstallerPrivateFunctionAst {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    foreach ($privateAstRecord in $script:InstallerPrivateAsts) {
+        $functionAst = $privateAstRecord.Ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq $Name
+            }, $true)
+        if ($null -ne $functionAst) {
+            return $functionAst
+        }
+    }
+    return $null
 }
 
 try {
@@ -133,6 +141,207 @@ try {
     New-Item -ItemType Directory -Path $script:WorkRoot -Force | Out-Null
     if ([string]::IsNullOrWhiteSpace($env:ProgramData)) {
         $env:ProgramData = Join-Path $script:WorkRoot 'ProgramData'
+    }
+
+    $moduleTokens = $null
+    $moduleErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $modulePath,
+        [ref]$moduleTokens,
+        [ref]$moduleErrors
+    ) | Out-Null
+    Assert-Equal -Actual @($moduleErrors).Count -Expected 0 -Message 'the installer module entry file parses'
+
+    $moduleInfo = Get-Module -Name 'BhtuneInstaller'
+    Assert-True -Condition ($null -ne $moduleInfo) -Message 'the installer module is imported before its contract tests run'
+    Assert-InstallerModulePayload -SourceRoot $moduleRoot
+
+    $declaredPrivateFiles = @($script:InstallerPrivateFiles)
+    $actualPrivateFiles = @(
+        Get-ChildItem -LiteralPath $privateRoot -File -Recurse -Force |
+            ForEach-Object {
+                $_.FullName.Substring($moduleRoot.Length).TrimStart([char[]]@('\', '/')).Replace('\', '/')
+            } |
+            Sort-Object -CaseSensitive
+    )
+    $sortedDeclaredPrivateFiles = @($declaredPrivateFiles | Sort-Object -CaseSensitive)
+    Assert-Equal -Actual $sortedDeclaredPrivateFiles -Expected $actualPrivateFiles -Message 'the module manifest loads every private source file exactly once'
+    Assert-Equal -Actual @($declaredPrivateFiles | Select-Object -Unique).Count -Expected $declaredPrivateFiles.Count -Message 'the module manifest has no duplicate private files'
+
+    $nsisPath = Join-Path $moduleRoot 'bhtune-installer.nsi'
+    $nsisSource = [System.IO.File]::ReadAllText($nsisPath)
+    foreach ($embeddedFile in @('BhtuneInstaller.psm1', 'Install-Bhtune.ps1')) {
+        $pattern = 'File /oname=' + [regex]::Escape($embeddedFile) + '\s+"\$\{__FILEDIR__\}\\'
+        Assert-Equal `
+            -Actual ([regex]::Matches($nsisSource, $pattern).Count) `
+            -Expected 2 `
+            -Message "NSIS embeds '$embeddedFile' for install and uninstall"
+    }
+    $privateTreeEmbeddings = [regex]::Matches(
+        $nsisSource,
+        '(?m)^\s*File /r "\$\{__FILEDIR__\}\\Private\\\*"\s*$'
+    ).Count
+    Assert-Equal -Actual $privateTreeEmbeddings -Expected 2 -Message 'NSIS embeds the complete private source tree for install and uninstall'
+    Assert-True `
+        -Condition ($nsisSource.Contains('!ifdef BHTUNE_TEST_LIFECYCLE') -and $nsisSource.Contains('BHTUNE_MARKER_REGISTRY_KEY')) `
+        -Message 'the lifecycle-only NSIS build isolates product paths and ownership registry state'
+    Assert-True `
+        -Condition ($nsisSource.Contains('-InvocationFile "$PLUGINSDIR\installer\install-invocation.ini"') -and
+            -not $nsisSource.Contains(' -PayloadRoot "$PLUGINSDIR\payload"')) `
+        -Message 'the NSIS install bootstrap uses a short invocation-file argument instead of a long inline parameter list'
+    $installExecWaitLines = @(
+        $nsisSource -split "`r?\n" |
+            Where-Object { $_ -match '^\s*ExecWait .*Install-Bhtune\.ps1.*-InvocationFile' }
+    )
+    Assert-Equal -Actual $installExecWaitLines.Count -Expected 1 -Message 'NSIS has one PowerShell install command'
+    Assert-True `
+        -Condition ($installExecWaitLines[0].Length -lt 500) `
+        -Message 'the NSIS PowerShell install command stays comfortably below the string-length limit'
+
+    $invocationFixture = Join-Path $script:WorkRoot 'install-invocation.ini'
+    $validInvocationText = @'
+[Install]
+Mode=Install
+ExpectedVersion=1.2.3
+ReleaseTag=v1.2.3
+PayloadRoot=C:\temp\payload
+GatewayPayloadRoot=C:\temp\gateway-payload
+InstallerScriptRoot=C:\temp\installer
+UninstallerSource=C:\temp\uninstall.exe
+InstallRoot=C:\Program Files\BHTune=QA
+ProgramDataRoot=C:\ProgramData\ByteHound\bhtune
+AddToPath=0
+StartService=1
+InstallGateway=1
+StartGateway=0
+CustomDbBackupConfirmed=1
+TracePath=C:\ProgramData\ByteHound\bhtune\installer\install-trace.jsonl
+TestOnly=true
+IsolatedLifecycleTest=true
+LifecycleTestId=0123456789abcdef0123456789abcdef
+LifecycleTestRoot=C:\temp\lifecycle
+'@
+    Write-TestFile -Path $invocationFixture -Content $validInvocationText
+    $invocation = Read-InstallerInvocationFile -Path $invocationFixture
+    Assert-Equal -Actual $invocation.InstallRoot -Expected 'C:\Program Files\BHTune=QA' -Message 'installer invocation values preserve equals signs in paths'
+    Assert-True -Condition $invocation.TestOnly -Message 'installer invocation test switches are converted to booleans'
+    Assert-Equal -Actual $invocation.AddToPath -Expected '0' -Message 'installer invocation options preserve explicit false values'
+
+    $productionInvocationText = @(
+        $validInvocationText -split "`r?\n" |
+            Where-Object { $_ -notmatch '^(TestOnly|IsolatedLifecycleTest|LifecycleTestId|LifecycleTestRoot)=' }
+    ) -join [Environment]::NewLine
+    Write-TestFile -Path $invocationFixture -Content $productionInvocationText
+    $productionInvocation = Read-InstallerInvocationFile -Path $invocationFixture
+    Assert-Equal -Actual $productionInvocation.Mode -Expected 'Install' -Message 'production invocation files do not need lifecycle-only settings'
+    Assert-True `
+        -Condition (-not $productionInvocation.ContainsKey('TestOnly')) `
+        -Message 'production invocation files do not enable test-only behavior'
+
+    $localizedInstallRoot = 'C:\Program Files\BHTune' + [char]0x00e9 + '=QA'
+    $localizedInvocationText = $validInvocationText.Replace('C:\Program Files\BHTune=QA', $localizedInstallRoot)
+    [System.IO.File]::WriteAllText($invocationFixture, $localizedInvocationText, [System.Text.Encoding]::Default)
+    $localizedInvocation = Read-InstallerInvocationFile -Path $invocationFixture
+    Assert-Equal `
+        -Actual $localizedInvocation.InstallRoot `
+        -Expected $localizedInstallRoot `
+        -Message 'installer invocation preserves paths in the active Windows code page'
+
+    Write-TestFile -Path $invocationFixture -Content ($validInvocationText + "`r`nUnexpectedSetting=1")
+    Assert-Throws -Action { Read-InstallerInvocationFile -Path $invocationFixture } -Message 'installer invocation rejects unsupported settings'
+    Write-TestFile -Path $invocationFixture -Content ($validInvocationText + "`r`nMode=Install")
+    Assert-Throws -Action { Read-InstallerInvocationFile -Path $invocationFixture } -Message 'installer invocation rejects duplicate settings'
+    Write-TestFile -Path $invocationFixture -Content ($validInvocationText.Replace('Mode=Install', 'Mode=Uninstall'))
+    Assert-Throws -Action { Read-InstallerInvocationFile -Path $invocationFixture } -Message 'installer invocation rejects non-install modes'
+
+    $repositoryRoot = Split-Path -Parent (Split-Path -Parent $moduleRoot)
+    $checksWorkflow = [System.IO.File]::ReadAllText(
+        (Join-Path $repositoryRoot '.github\workflows\checks.yml')
+    )
+    Assert-True `
+        -Condition ($checksWorkflow.Contains("- 'installer/**'") -and
+            $checksWorkflow.Contains("- '.github/workflows/windows-installer.yml'")) `
+        -Message 'the validation path filter selects installer module and workflow changes'
+    $installerWorkflow = [System.IO.File]::ReadAllText(
+        (Join-Path $repositoryRoot '.github\workflows\windows-installer.yml')
+    )
+    $normalizedInstallerWorkflow = $installerWorkflow.Replace('\', '/')
+    Assert-True `
+        -Condition ($installerWorkflow.Contains('installer-build\lifecycle-output') -and
+            $installerWorkflow.Contains('bhtune-windows-installer-lifecycle-')) `
+        -Message 'the workflow keeps lifecycle binaries separate and publishes lifecycle evidence'
+    Assert-True `
+        -Condition (-not $normalizedInstallerWorkflow.Contains('installer-build/lifecycle-output/*.exe')) `
+        -Message 'the test-only lifecycle installer is never uploaded as a product artifact'
+
+    $expectedExports = @(
+        'Assert-GatewayPayloadBinary',
+        'Assert-GatewayPayloadLayout',
+        'Assert-GatewayReleaseContract',
+        'Invoke-BhtuneInstaller'
+    )
+    Assert-Equal `
+        -Actual @($moduleInfo.ExportedFunctions.Keys | Sort-Object -CaseSensitive) `
+        -Expected $expectedExports `
+        -Message 'the installer module exposes only its explicit public entrypoints'
+
+    $script:InstallerPrivateAsts = @()
+    foreach ($relativePath in $declaredPrivateFiles) {
+        $privatePath = Join-Path $moduleRoot $relativePath
+        $parseTokens = $null
+        $parseErrors = $null
+        $privateAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $privatePath,
+            [ref]$parseTokens,
+            [ref]$parseErrors
+        )
+        Assert-Equal -Actual @($parseErrors).Count -Expected 0 -Message "private module source '$relativePath' parses"
+        $script:InstallerPrivateAsts += [pscustomobject]@{
+            Path = $privatePath
+            Ast  = $privateAst
+        }
+        foreach ($functionAst in @($privateAst.FindAll({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                    $node.Parent -is [System.Management.Automation.Language.NamedBlockAst]
+                }, $true))) {
+            Assert-InstallerFunctionAvailable -Name $functionAst.Name
+        }
+    }
+
+    $entryPath = Join-Path $moduleRoot 'Install-Bhtune.ps1'
+    $entryTokens = $null
+    $entryErrors = $null
+    $entryAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $entryPath,
+        [ref]$entryTokens,
+        [ref]$entryErrors
+    )
+    Assert-Equal -Actual @($entryErrors).Count -Expected 0 -Message 'the thin installer entry script parses'
+    $entrySource = [System.IO.File]::ReadAllText($entryPath)
+    Assert-True `
+        -Condition ($entrySource -match '(?s)\$entryStage\s*=\s*''module\.import''.*\$entryStage\s*=\s*''module\.entrypoint''.*Stage\s*=\s*"\$entryStage\.failed".*\[System\.IO\.File\]::AppendAllText') `
+        -Message 'the installer entry script records module bootstrap failures in its trace'
+    $entryParameters = @($entryAst.ParamBlock.Parameters | Where-Object {
+            $_.Name.VariablePath.UserPath -ne 'InvocationFile'
+        })
+    $entryFunctionAst = Find-InstallerPrivateFunctionAst -Name 'Invoke-BhtuneInstaller'
+    Assert-True -Condition ($null -ne $entryFunctionAst) -Message 'the module exports its installer entrypoint from a private domain file'
+    $functionParameters = @($entryFunctionAst.Body.ParamBlock.Parameters)
+    $functionParameters = @($functionParameters | Where-Object {
+            $_.Name.VariablePath.UserPath -notin @('EntryScriptPath', 'ExitCode')
+        })
+    Assert-Equal `
+        -Actual @($entryParameters | ForEach-Object { $_.Name.VariablePath.UserPath }) `
+        -Expected @($functionParameters | ForEach-Object { $_.Name.VariablePath.UserPath }) `
+        -Message 'the script and module entrypoints retain the same parameter names and order'
+    foreach ($parameterIndex in 0..($entryParameters.Count - 1)) {
+        $entryContract = $entryParameters[$parameterIndex].Extent.Text -replace '\s+', ''
+        $functionContract = $functionParameters[$parameterIndex].Extent.Text -replace '\s+', ''
+        Assert-Equal `
+            -Actual $functionContract `
+            -Expected $entryContract `
+            -Message "entry parameter '$($entryParameters[$parameterIndex].Name.VariablePath.UserPath)' retains its type, validation, and default"
     }
 
     Assert-True -Condition (Test-StableVersion -Version '1.2.3') -Message 'stable versions are accepted'
@@ -169,6 +378,9 @@ try {
     Assert-Throws -Action { Assert-FailureInjectionPolicy -FailureInjection HealthMismatch -TestOnly:$false } -Message 'normal mode rejects test-only injection'
     Assert-True -Condition (Assert-FailureInjectionPolicy -FailureInjection CommitFailure -TestOnly:$true) -Message 'test mode accepts an explicit injection'
     Assert-Throws -Action { Assert-FailureInjectionPolicy -FailureInjection None -TestOnly:$true } -Message 'test mode requires an explicit injection'
+    Assert-True `
+        -Condition (Assert-FailureInjectionPolicy -FailureInjection None -TestOnly:$true -AllowNoFailureInjection:$true) `
+        -Message 'the isolated lifecycle harness may run without injecting a failure'
     Assert-True -Condition (ConvertTo-InstallerBoolean -Value '1' -Name 'add') -Message 'numeric true installer switches are parsed'
     Assert-True -Condition (-not (ConvertTo-InstallerBoolean -Value '0' -Name 'add')) -Message 'numeric false installer switches are parsed'
     Assert-True -Condition (ConvertTo-InstallerBoolean -Value $true -Name 'add') -Message 'boolean installer switches are preserved'
@@ -182,6 +394,43 @@ try {
     Assert-Equal -Actual $paths.GatewayDatabasePath -Expected (Join-Path $script:WorkRoot 'ProgramData\ByteHound\bhtune\gateway\data\index.sqlite3') -Message 'gateway index path is fixed below ProgramData'
     Assert-Equal -Actual $paths.GatewayServiceName -Expected 'OpcdaBridgeGateway' -Message 'gateway service name is fixed'
     Assert-Equal -Actual $paths.GatewayPort -Expected 7600 -Message 'gateway listener port is fixed'
+    $previousLifecycleState = [ordered]@{
+        Id              = $script:InstallerLifecycleTestId
+        Root            = $script:InstallerLifecycleTestRoot
+        Active          = $script:InstallerLifecycleTestActive
+        ServiceName     = $script:InstallerServiceName
+        GatewayName     = $script:GatewayServiceName
+        MarkerPath      = $script:InstallerMarkerPath
+        UninstallPath   = $script:InstallerUninstallPath
+    }
+    $lifecycleTestId = [guid]::NewGuid().ToString('N')
+    $lifecycleTestRoot = Join-Path $script:WorkRoot "bhtune-installer-lifecycle-$lifecycleTestId"
+    try {
+        Set-InstallerLifecycleTestContext `
+            -LifecycleTestId $lifecycleTestId `
+            -LifecycleTestRoot $lifecycleTestRoot `
+            -InstallRoot (Join-Path $lifecycleTestRoot 'ProgramFiles\ByteHound\bhtune') `
+            -ProgramDataRoot (Join-Path $lifecycleTestRoot 'ProgramData\ByteHound\bhtune')
+        $lifecyclePaths = Get-InstallerPaths
+        Assert-Equal -Actual $lifecyclePaths.InstallRoot -Expected (Join-Path $lifecycleTestRoot 'ProgramFiles\ByteHound\bhtune') -Message 'isolated lifecycle install paths remain under their unique root'
+        Assert-Equal -Actual $lifecyclePaths.ProgramDataRoot -Expected (Join-Path $lifecycleTestRoot 'ProgramData\ByteHound\bhtune') -Message 'isolated lifecycle data paths remain under their unique root'
+        Assert-Equal -Actual $lifecyclePaths.ServiceName -Expected "BhtuneServer-$lifecycleTestId" -Message 'isolated lifecycle service identity is unique'
+        Assert-Equal -Actual $lifecyclePaths.GatewayServiceName -Expected 'OpcdaBridgeGateway' -Message 'pinned gateway service identity remains fixed during lifecycle isolation'
+        Assert-Equal -Actual $lifecyclePaths.MarkerPath -Expected "HKLM:\Software\ByteHound\bhtune\LifecycleTests\$lifecycleTestId" -Message 'isolated lifecycle ownership state uses its unique registry key'
+        Assert-Equal -Actual $lifecyclePaths.UninstallKeyPath -Expected "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BHTune-Lifecycle-$lifecycleTestId" -Message 'isolated lifecycle uninstall state uses its unique registry key'
+        Assert-Equal `
+            -Actual $lifecyclePaths.ShortcutPath `
+            -Expected (Join-Path $lifecycleTestRoot 'CommonStartMenu\Programs\BHTune\BHTune.url') `
+            -Message 'isolated lifecycle shortcuts remain under the disposable root'
+    } finally {
+        $script:InstallerLifecycleTestId = $previousLifecycleState.Id
+        $script:InstallerLifecycleTestRoot = $previousLifecycleState.Root
+        $script:InstallerLifecycleTestActive = $previousLifecycleState.Active
+        $script:InstallerServiceName = $previousLifecycleState.ServiceName
+        $script:GatewayServiceName = $previousLifecycleState.GatewayName
+        $script:InstallerMarkerPath = $previousLifecycleState.MarkerPath
+        $script:InstallerUninstallPath = $previousLifecycleState.UninstallPath
+    }
     $oldProgramW6432 = $env:ProgramW6432
     $oldProgramFiles = $env:ProgramFiles
     $oldProgramData = $env:ProgramData
@@ -566,7 +815,6 @@ exit 7
         Assert-True -Condition (-not (Test-RollbackBackup -BackupRoot $reparseBackupRoot)) -Message 'nested rollback reparse points are rejected'
     }
 
-    $installScriptPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'Install-Bhtune.ps1'
     $parseErrors = $null
     $parseTokens = $null
     $installAst = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -635,7 +883,7 @@ exit 7
             $node.Name -eq 'Copy-FileToBackup'
         }, $true)
     Assert-True -Condition ($null -ne $copyFunctionAst) -Message 'backup copy function is present for manifest regression coverage'
-    Invoke-Expression $copyFunctionAst.Extent.Text
+    Assert-InstallerFunctionAvailable -Name 'Copy-FileToBackup'
     $emptyManifest = New-Object System.Collections.ArrayList
     Copy-FileToBackup `
         -SourcePath (Join-Path $script:WorkRoot 'does-not-exist.txt') `
@@ -644,13 +892,9 @@ exit 7
         -Manifest $emptyManifest
     Assert-Equal -Actual $emptyManifest.Count -Expected 0 -Message 'backup copy accepts an initially empty manifest'
 
-    $safeBackupFilesAst = $installAst.Find({
-            param($node)
-            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-            $node.Name -eq 'Get-SafeBackupFiles'
-        }, $true)
+    $safeBackupFilesAst = Find-InstallerPrivateFunctionAst -Name 'Get-SafeBackupFiles'
     Assert-True -Condition ($null -ne $safeBackupFilesAst) -Message 'safe recursive backup enumeration is present'
-    Invoke-Expression $safeBackupFilesAst.Extent.Text
+    Assert-InstallerFunctionAvailable -Name 'Get-SafeBackupFiles'
     $backupTraversalRoot = Join-Path $script:WorkRoot 'backup-traversal'
     $backupTraversalOutside = Join-Path $script:WorkRoot 'backup-traversal-outside'
     $backupTraversalLink = Join-Path $backupTraversalRoot 'redirected'
@@ -677,7 +921,7 @@ exit 7
             $node.Name -eq 'Copy-CandidateIntoInstall'
         }, $true)
     Assert-True -Condition ($null -ne $copyCandidateFunctionAst) -Message 'candidate copy function is present for source-ordering regression coverage'
-    Invoke-Expression $copyCandidateFunctionAst.Extent.Text
+    Assert-InstallerFunctionAvailable -Name 'Copy-CandidateIntoInstall'
     $candidateRoot = Join-Path $script:WorkRoot 'candidate-install'
     $candidateScriptRoot = Join-Path $script:WorkRoot 'candidate-sources'
     $candidatePayloadRoot = Join-Path $script:WorkRoot 'candidate-payload'
@@ -685,8 +929,7 @@ exit 7
     foreach ($name in (Get-RequiredPayloadFiles)) {
         Write-TestFile -Path (Join-Path $candidatePayloadRoot $name) -Content $name
     }
-    Write-TestFile -Path (Join-Path $candidateScriptRoot 'InstallerSupport.ps1') -Content 'support'
-    Write-TestFile -Path (Join-Path $candidateScriptRoot 'Install-Bhtune.ps1') -Content 'installer'
+    Copy-InstallerModulePayload -SourceRoot $moduleRoot -DestinationRoot $candidateScriptRoot
     Write-TestFile -Path $candidateUninstaller -Content 'uninstaller'
     $candidatePaths = [pscustomobject]@{
         InstallRoot          = $candidateRoot
@@ -717,6 +960,27 @@ exit 7
         -UninstallerSource $candidateUninstaller
     Assert-True -Condition (Test-Path -LiteralPath (Join-Path $candidateRoot 'bhtune.exe') -PathType Leaf) -Message 'candidate payload is copied when all sources are outside the install root'
     Assert-True -Condition (Test-Path -LiteralPath (Join-Path $candidateRoot 'uninstall.exe') -PathType Leaf) -Message 'external uninstaller source is copied after candidate replacement'
+    Assert-InstallerModulePayload -SourceRoot $candidatePaths.InstallerScriptRoot
+    foreach ($relativePath in (Get-InstallerModulePayloadRelativePaths)) {
+        $sourcePath = Join-Path $moduleRoot $relativePath
+        $copiedPath = Join-Path $candidatePaths.InstallerScriptRoot $relativePath
+        Assert-True `
+            -Condition (Test-Path -LiteralPath $copiedPath -PathType Leaf) `
+            -Message "candidate copy includes module payload file '$relativePath'"
+        Assert-Equal `
+            -Actual (Get-FileSha256 -Path $copiedPath) `
+            -Expected (Get-FileSha256 -Path $sourcePath) `
+            -Message "candidate copy preserves module payload hash for '$relativePath'"
+    }
+    Assert-True `
+        -Condition (Test-CleanInstallRootContents -InstallRoot $candidateRoot) `
+        -Message 'clean-install recovery accepts every declared module payload file'
+    $unexpectedInstallerFile = Join-Path $candidatePaths.InstallerScriptRoot 'Private\unexpected.ps1'
+    Write-TestFile -Path $unexpectedInstallerFile -Content 'not in module manifest'
+    Assert-Throws -Action {
+        Test-CleanInstallRootContents -InstallRoot $candidateRoot
+    } -Message 'clean-install recovery refuses an undeclared private installer file'
+    Remove-Item -LiteralPath $unexpectedInstallerFile -Force
 
     $metadata = Get-ExpectedUninstallMetadata -Version '1.2.3' -InstallRoot 'C:\Program Files\ByteHound\bhtune' -UninstallerPath 'C:\Program Files\ByteHound\bhtune\uninstall.exe'
     Assert-Equal -Actual $metadata.QuietUninstallString -Expected '"C:\Program Files\ByteHound\bhtune\uninstall.exe" /S' -Message 'quiet uninstall metadata is explicit'
@@ -820,7 +1084,7 @@ exit 7
             'Resolve-RollbackManifestDestination',
             'Restore-RollbackBackup'
         )) {
-        Import-InstallerFunction -ScriptAst $installAst -Name $functionName
+        Assert-InstallerFunctionAvailable -Name $functionName
     }
 
     $missingExternalConfig = "db = ""C:/external/missing/bhtune.db""`n"
@@ -855,10 +1119,20 @@ exit 7
         [ref]$helperParseTokens,
         [ref]$helperParseErrors
     )
-    Assert-Equal -Actual @($helperParseErrors).Count -Expected 0 -Message 'installer support script parses for ACL regression coverage'
-    Import-InstallerFunction -ScriptAst $helperAst -Name 'Set-InstallerAcls'
+    Assert-Equal -Actual @($helperParseErrors).Count -Expected 0 -Message 'installer security domain script parses for ACL regression coverage'
+    Assert-InstallerFunctionAvailable -Name 'Set-InstallerAcls'
 
-    $diagnosticScriptPath = Join-Path $PSScriptRoot 'Run-NsisDiagnostic.ps1'
+    $diagnosticRunnerPath = Join-Path $PSScriptRoot 'Run-NsisDiagnostic.ps1'
+    $diagnosticRunnerTokens = $null
+    $diagnosticRunnerErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $diagnosticRunnerPath,
+        [ref]$diagnosticRunnerTokens,
+        [ref]$diagnosticRunnerErrors
+    ) | Out-Null
+    Assert-Equal -Actual @($diagnosticRunnerErrors).Count -Expected 0 -Message 'NSIS lifecycle entry script parses'
+
+    $diagnosticScriptPath = Join-Path $PSScriptRoot 'Run-NsisLifecycle.Body.ps1'
     $diagnosticParseErrors = $null
     $diagnosticParseTokens = $null
     $diagnosticAst = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -867,6 +1141,10 @@ exit 7
         [ref]$diagnosticParseErrors
     )
     Assert-Equal -Actual @($diagnosticParseErrors).Count -Expected 0 -Message 'NSIS lifecycle diagnostic parses for command-scope regression coverage'
+    $diagnosticSource = [System.IO.File]::ReadAllText($diagnosticScriptPath)
+    Assert-True `
+        -Condition ($diagnosticSource.Contains('$failure = $_') -and $diagnosticSource.Contains('throw $failure')) `
+        -Message 'a failed SYSTEM lifecycle matrix propagates a nonzero task result after capturing diagnostics'
     $diagnosticFunctions = @(
         $diagnosticAst.FindAll({
                 param($node)
@@ -1761,6 +2039,22 @@ exit 7
     $gatewayRestoreBackupRoot = Join-Path $gatewayRestorePaths.RollbackRoot 'gateway-data'
     $gatewayRestoreFilesRoot = Join-Path $gatewayRestoreBackupRoot 'files'
     $gatewayRestoreManifestEntries = New-Object System.Collections.ArrayList
+    Copy-InstallerModulePayload `
+        -SourceRoot $moduleRoot `
+        -DestinationRoot $gatewayRestorePaths.InstallerScriptRoot
+    foreach ($relativePath in (Get-InstallerModulePayloadRelativePaths)) {
+        $installRelativePath = Join-Path 'install\installer' $relativePath.Replace('/', '\')
+        $destination = Resolve-RollbackManifestDestination `
+            -Paths $gatewayRestorePaths `
+            -RelativePath $installRelativePath
+        $backupFilePath = Join-Path $gatewayRestoreFilesRoot $installRelativePath
+        New-Item -ItemType Directory -Path (Split-Path -Parent $backupFilePath) -Force | Out-Null
+        Copy-Item -LiteralPath $destination -Destination $backupFilePath -Force
+        [void]$gatewayRestoreManifestEntries.Add((New-HashManifestEntry `
+                    -SourcePath $destination `
+                    -BackupPath $backupFilePath `
+                    -RelativePath $installRelativePath))
+    }
     $gatewayRestoreContents = [ordered]@{
         'gatewaydata\opcda-bridge-gateway.toml' = "port = 7600`n"
         'gatewaydata\data\index.sqlite3'         = 'index'
@@ -1796,7 +2090,7 @@ exit 7
         ConfigPath                        = $gatewayRestorePaths.ConfigPath
         DatabasePath                      = $gatewayRestorePaths.DatabasePath
         ShortcutPath                      = $gatewayRestorePaths.ShortcutPath
-        InstallRootWasPresent             = $false
+        InstallRootWasPresent             = $true
         GatewayManaged                    = $true
         GatewayWasManaged                 = $false
         GatewayService                    = $null
@@ -1824,8 +2118,19 @@ exit 7
     } -Message 'gateway ProgramData rollback entries require a gateway-managed transaction'
     Remove-Item -LiteralPath $gatewayRestorePaths.GatewayProgramDataRoot -Recurse -Force
     Write-TestFile -Path (Join-Path $gatewayRestorePaths.GatewayProgramDataRoot 'candidate.txt') -Content 'candidate'
+    Write-TestFile -Path (Join-Path $gatewayRestorePaths.InstallerScriptRoot 'candidate.txt') -Content 'candidate'
     Restore-RollbackBackup -Paths $gatewayRestorePaths -BackupRoot $gatewayRestoreBackupRoot
     Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $gatewayRestorePaths.GatewayProgramDataRoot 'candidate.txt'))) -Message 'gateway rollback removes candidate ProgramData before restoration'
+    Assert-True `
+        -Condition (-not (Test-Path -LiteralPath (Join-Path $gatewayRestorePaths.InstallerScriptRoot 'candidate.txt'))) `
+        -Message 'upgrade rollback removes candidate installer-module files before restoration'
+    Assert-InstallerModulePayload -SourceRoot $gatewayRestorePaths.InstallerScriptRoot
+    foreach ($relativePath in (Get-InstallerModulePayloadRelativePaths)) {
+        $restoredPath = Join-Path $gatewayRestorePaths.InstallerScriptRoot $relativePath
+        Assert-True `
+            -Condition (Test-Path -LiteralPath $restoredPath -PathType Leaf) `
+            -Message "upgrade rollback restores module payload file '$relativePath'"
+    }
     foreach ($entry in $gatewayRestoreContents.GetEnumerator()) {
         $destination = Resolve-RollbackManifestDestination `
             -Paths $gatewayRestorePaths `
@@ -1837,6 +2142,9 @@ exit 7
         -InstallRoot (Join-Path $script:WorkRoot 'gateway-backup\ProgramFiles\ByteHound\bhtune') `
         -ProgramDataRoot (Join-Path $script:WorkRoot 'gateway-backup\ProgramData\ByteHound\bhtune')
     Write-TestFile -Path $gatewayBackupPaths.CliExecutable -Content 'bhtune'
+    Copy-InstallerModulePayload `
+        -SourceRoot $moduleRoot `
+        -DestinationRoot $gatewayBackupPaths.InstallerScriptRoot
     $gatewayBackupContents = [ordered]@{
         $gatewayBackupPaths.GatewayConfigPath                         = 'config'
         $gatewayBackupPaths.GatewayDatabasePath                       = 'index'
@@ -1879,6 +2187,12 @@ exit 7
     $gatewayBackupManifest = Get-Content -LiteralPath (Join-Path $gatewayBackup.PendingRoot 'manifest.json') -Raw | ConvertFrom-Json
     $gatewayBackupRelativePaths = @($gatewayBackupManifest.Files | ForEach-Object { ([string]$_.RelativePath).Replace('/', '\') })
     Assert-Equal -Actual @($gatewayBackupRelativePaths | Where-Object { $_.StartsWith('gatewaydata\', [System.StringComparison]::OrdinalIgnoreCase) }).Count -Expected $gatewayBackupContents.Count -Message 'combined rollback captures every managed gateway ProgramData file'
+    foreach ($relativePath in (Get-InstallerModulePayloadRelativePaths)) {
+        $backupRelativePath = 'install\installer\' + $relativePath.Replace('/', '\')
+        Assert-True `
+            -Condition ($gatewayBackupRelativePaths -contains $backupRelativePath) `
+            -Message "combined rollback captures installer module payload file '$relativePath'"
+    }
     foreach ($requiredGatewayBackup in @(
             'gatewaydata\opcda-bridge-gateway.toml',
             'gatewaydata\data\index.sqlite3',
@@ -1908,6 +2222,11 @@ exit 7
 
         [void]$script:AclCalls.Add($Path)
     }
+    foreach ($relativePath in (Get-InstallerModulePayloadRelativePaths)) {
+        Write-TestFile `
+            -Path (Join-Path $paths.InstallerScriptRoot $relativePath) `
+            -Content $relativePath
+    }
     Set-InstallerAcls -Paths $paths `
         -InstallRootCreated:$false `
         -DatabaseDirectoryCreated:$false `
@@ -1916,6 +2235,26 @@ exit 7
         -ConfigCreated:$false
     Assert-True -Condition (@($script:AclCalls | Where-Object { $_ -eq $paths.ProgramDataRoot }).Count -eq 1) -Message 'the fixed ProgramData root always receives the scoped ACL'
     Assert-True -Condition ((Get-InstallerAclTargets -Paths $paths) -contains $paths.ProgramDataRoot) -Message 'the fixed ProgramData root is included in rollback ACL targets'
+    $moduleAclTargets = @(
+        $paths.InstallerScriptRoot
+        (Join-Path $paths.InstallerScriptRoot 'Private')
+        foreach ($relativePath in (Get-InstallerModulePayloadRelativePaths)) {
+            Join-Path $paths.InstallerScriptRoot $relativePath
+        }
+    )
+    $rollbackAclTargets = @(Get-InstallerAclTargets -Paths $paths)
+    Assert-Equal `
+        -Actual @($rollbackAclTargets | Select-Object -Unique).Count `
+        -Expected $rollbackAclTargets.Count `
+        -Message 'rollback ACL targets remain unique after adding installer module files'
+    foreach ($moduleAclTarget in $moduleAclTargets) {
+        Assert-True `
+            -Condition ($rollbackAclTargets -contains $moduleAclTarget) `
+            -Message "rollback ACL allowlist includes module payload path '$moduleAclTarget'"
+        Assert-True `
+            -Condition (@($script:AclCalls | Where-Object { $_ -eq $moduleAclTarget }).Count -eq 1) `
+            -Message "module payload path '$moduleAclTarget' receives its scoped ACL"
+    }
     $script:AclCalls.Clear()
     Set-InstallerAcls -Paths $paths -ConfigCreated:$true
     Assert-True -Condition (@($script:AclCalls | Where-Object { $_ -eq $paths.ProgramDataRoot }).Count -eq 1) -Message 'the fixed ProgramData root remains secured when configuration is created'
@@ -1966,7 +2305,27 @@ exit 7
         Assert-True -Condition (@($script:AclCalls | Where-Object { $_ -eq $path }).Count -eq 1) -Message "managed gateway ACL target '$path' is applied exactly once"
     }
 
-    . $helperPath
+    foreach ($mockName in @(
+            'Get-ServiceEnvironmentOverrides',
+            'Invoke-CapturedProcess',
+            'Get-RegistrySnapshot',
+            'Get-ServiceSnapshot',
+            'Invoke-ServiceRegistrationQuery',
+            'Remove-RegistryKey',
+            'Start-InstallerGatewayService',
+            'Invoke-GatewaySmokeCheck',
+            'Set-RegistryValues',
+            'Restore-AclSddl',
+            'Remove-StartMenuShortcut',
+            'Set-MachinePathSnapshot',
+            'Restore-ServiceSnapshot',
+            'Get-BackupAclState',
+            'Get-MachinePathSnapshot',
+            'Set-InstallerAclPath'
+        )) {
+        Remove-Item -Path ("Function:\{0}" -f $mockName) -ErrorAction SilentlyContinue
+        Assert-InstallerFunctionAvailable -Name $mockName
+    }
     $script:WmiQueryResults = New-Object System.Collections.Queue
     [void]$script:WmiQueryResults.Enqueue('transient-error')
     [void]$script:WmiQueryResults.Enqueue([pscustomobject]@{
@@ -2165,7 +2524,7 @@ exit 7
         Assert-GatewayPortAvailable -Port 7600
     } -Message 'a pre-existing gateway port owner fails preflight'
 
-    Write-Host ("InstallerSupport self-tests passed: {0}" -f $script:Passed)
+    Write-Host ("Installer module self-tests passed: {0}" -f $script:Passed)
     exit 0
 } finally {
     $env:ProgramData = $script:OriginalProgramData
