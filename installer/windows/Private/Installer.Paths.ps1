@@ -142,7 +142,8 @@ function Set-InstallerLifecycleTestContext {
     $script:InstallerLifecycleTestRoot = $root
     $script:InstallerLifecycleTestActive = $true
     $script:InstallerServiceName = "BhtuneServer-$LifecycleTestId"
-    $script:GatewayServiceName = "OpcdaBridgeGateway-$LifecycleTestId"
+    # The pinned gateway registers a fixed SCM identity, so only BHTune's
+    # service name can be scoped to this lifecycle test.
     $script:InstallerMarkerPath = "HKLM:\Software\ByteHound\bhtune\LifecycleTests\$LifecycleTestId"
     $script:InstallerUninstallPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BHTune-Lifecycle-$LifecycleTestId"
     Assert-NoReparsePointInPath -Path $root -Name 'the isolated lifecycle test root'

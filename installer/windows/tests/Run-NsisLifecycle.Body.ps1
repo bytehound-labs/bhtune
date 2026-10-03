@@ -761,6 +761,7 @@ try {
         -InstallRoot (Join-Path $LifecycleTestRoot 'ProgramFiles\ByteHound\bhtune') `
         -ProgramDataRoot (Join-Path $LifecycleTestRoot 'ProgramData\ByteHound\bhtune')
     $paths = Get-InstallerPaths
+    Assert-Diagnostic -Condition ($paths.GatewayServiceName -ceq 'OpcdaBridgeGateway') -Message 'The pinned OPC DA gateway uses its fixed SCM service identity.'
     Assert-NoInstalledState -Paths $paths
     Assert-Diagnostic -Condition (-not (Test-Path -LiteralPath $LifecycleTestRoot)) -Message 'The disposable lifecycle root already exists; refusing to modify it.'
     Assert-Diagnostic -Condition (-not (Test-Path -LiteralPath $paths.ProgramDataRoot)) -Message 'The disposable lifecycle ProgramData root already exists.'

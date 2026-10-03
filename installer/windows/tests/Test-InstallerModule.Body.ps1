@@ -415,7 +415,7 @@ LifecycleTestRoot=C:\temp\lifecycle
         Assert-Equal -Actual $lifecyclePaths.InstallRoot -Expected (Join-Path $lifecycleTestRoot 'ProgramFiles\ByteHound\bhtune') -Message 'isolated lifecycle install paths remain under their unique root'
         Assert-Equal -Actual $lifecyclePaths.ProgramDataRoot -Expected (Join-Path $lifecycleTestRoot 'ProgramData\ByteHound\bhtune') -Message 'isolated lifecycle data paths remain under their unique root'
         Assert-Equal -Actual $lifecyclePaths.ServiceName -Expected "BhtuneServer-$lifecycleTestId" -Message 'isolated lifecycle service identity is unique'
-        Assert-Equal -Actual $lifecyclePaths.GatewayServiceName -Expected "OpcdaBridgeGateway-$lifecycleTestId" -Message 'isolated lifecycle gateway identity is unique'
+        Assert-Equal -Actual $lifecyclePaths.GatewayServiceName -Expected 'OpcdaBridgeGateway' -Message 'pinned gateway service identity remains fixed during lifecycle isolation'
         Assert-Equal -Actual $lifecyclePaths.MarkerPath -Expected "HKLM:\Software\ByteHound\bhtune\LifecycleTests\$lifecycleTestId" -Message 'isolated lifecycle ownership state uses its unique registry key'
         Assert-Equal -Actual $lifecyclePaths.UninstallKeyPath -Expected "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BHTune-Lifecycle-$lifecycleTestId" -Message 'isolated lifecycle uninstall state uses its unique registry key'
         Assert-Equal `
