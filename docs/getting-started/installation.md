@@ -377,7 +377,7 @@ starts at boot and restarts automatically without anyone needing to keep a termi
 
 #### NSIS installer
 
-A stable Windows release will provide an installer named
+A production Windows release uses an installer named
 `bhtune-vX.Y.Z-windows-x86_64-installer.exe`. It installs the release payload under
 `%ProgramFiles%\ByteHound\bhtune\`, stores configuration, SQLite data, logs, installer state,
 and one verified rollback backup under `%ProgramData%\ByteHound\bhtune\`, and registers
@@ -393,6 +393,8 @@ It also embeds the official 32-bit gateway release pinned by
 license, and notice under Program Files; registers `OpcdaBridgeGateway` as an automatic
 `LocalSystem` service; and stores its configuration, persistent search index, SQLite sidecars,
 build metadata, and logs under `%ProgramData%\ByteHound\bhtune\gateway\`.
+Only the production installer is a release artifact; the separate lifecycle-test build is
+restricted to CI validation.
 
 Interactive clean installs select and start the gateway by default after displaying its
 security warning. Silent clean installs require an explicit `/INSTALL_GATEWAY=1`, because

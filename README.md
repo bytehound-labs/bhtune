@@ -27,7 +27,11 @@ and Demo workflows.
 
 No stable `v0.1.0` release has been published. Prerelease and validation artifacts are not
 supported installs. See the [installation guide](docs/getting-started/installation.md) for
-source-build instructions and current distribution status.
+source-build instructions and supported distribution details.
+
+The Windows distribution uses an NSIS installer for the CLI and web server, with an optional
+verified OPC DA gateway component.
+
 The pre-release Docker image includes an HTTP liveness check; a healthy status does not establish
 database readiness or live-plant safety.
 
