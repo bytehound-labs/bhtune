@@ -227,6 +227,17 @@ LifecycleTestRoot=C:\temp\lifecycle
     Assert-True -Condition $invocation.TestOnly -Message 'installer invocation test switches are converted to booleans'
     Assert-Equal -Actual $invocation.AddToPath -Expected '0' -Message 'installer invocation options preserve explicit false values'
 
+    $productionInvocationText = @(
+        $validInvocationText -split "`r?\n" |
+            Where-Object { $_ -notmatch '^(TestOnly|IsolatedLifecycleTest|LifecycleTestId|LifecycleTestRoot)=' }
+    ) -join [Environment]::NewLine
+    Write-TestFile -Path $invocationFixture -Content $productionInvocationText
+    $productionInvocation = Read-InstallerInvocationFile -Path $invocationFixture
+    Assert-Equal -Actual $productionInvocation.Mode -Expected 'Install' -Message 'production invocation files do not need lifecycle-only settings'
+    Assert-True `
+        -Condition (-not $productionInvocation.ContainsKey('TestOnly')) `
+        -Message 'production invocation files do not enable test-only behavior'
+
     $localizedInstallRoot = 'C:\Program Files\BHTune' + [char]0x00e9 + '=QA'
     $localizedInvocationText = $validInvocationText.Replace('C:\Program Files\BHTune=QA', $localizedInstallRoot)
     [System.IO.File]::WriteAllText($invocationFixture, $localizedInvocationText, [System.Text.Encoding]::Default)
