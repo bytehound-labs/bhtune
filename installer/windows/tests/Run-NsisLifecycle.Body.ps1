@@ -459,6 +459,23 @@ function Remove-DiagnosticProgramData {
     }
 }
 
+function Remove-EmptyLifecycleRegistryKey {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -ErrorAction Stop)) {
+        return
+    }
+
+    $key = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if (@($key.GetSubKeyNames()).Count -gt 0 -or @($key.GetValueNames()).Count -gt 0) {
+        throw "Refusing to remove non-empty lifecycle registry parent '$Path'."
+    }
+    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+}
+
 function Set-LegacySchema2Marker {
     param(
         [Parameter(Mandatory = $true)]
@@ -721,6 +738,10 @@ if ($identitySid -cne 'S-1-5-18') {
 Write-DiagnosticLog "SYSTEM_IDENTITY_OK sid=$identitySid"
 
 try {
+    $byteHoundRegistryRoot = 'HKLM:\Software\ByteHound'
+    $byteHoundRegistryRootExistedBefore = Test-Path -LiteralPath $byteHoundRegistryRoot
+    Write-DiagnosticLog "BYTEHOUND_REGISTRY_PARENT_EXISTED_BEFORE=$byteHoundRegistryRootExistedBefore"
+
     if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) {
         $installerName = [System.IO.Path]::GetFileName($InstallerPath)
         $versionMatch = [regex]::Match($installerName, 'bhtune-v(?<version>[0-9]+\.[0-9]+\.[0-9]+)-')
@@ -970,6 +991,11 @@ try {
     Assert-Diagnostic -Condition ($null -eq (Get-ServiceSnapshot -Name 'OpcdaBridgeGateway')) -Message 'The protected official gateway service changed during lifecycle validation.'
     Assert-Diagnostic -Condition (@(Get-TcpListenerSnapshots -Port 7600).Count -eq 0) -Message 'Protected gateway port 7600 remains occupied after lifecycle validation.'
     Assert-Diagnostic -Condition (@(Get-TcpListenerSnapshots -Port 8787).Count -eq 0) -Message 'BHTune health port 8787 remains occupied after lifecycle validation.'
+    Remove-EmptyLifecycleRegistryKey -Path 'HKLM:\Software\ByteHound\bhtune\LifecycleTests'
+    Remove-EmptyLifecycleRegistryKey -Path 'HKLM:\Software\ByteHound\bhtune'
+    if (-not $byteHoundRegistryRootExistedBefore) {
+        Remove-EmptyLifecycleRegistryKey -Path $byteHoundRegistryRoot
+    }
     Assert-Diagnostic -Condition ($null -eq (Get-RegistrySnapshot -Path 'HKLM:\Software\ByteHound\bhtune')) -Message 'Protected BHTune ownership metadata changed during lifecycle validation.'
     Assert-Diagnostic -Condition ($null -eq (Get-RegistrySnapshot -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BHTune')) -Message 'Protected BHTune uninstall metadata changed during lifecycle validation.'
     if (Test-Path -LiteralPath $LifecycleTestRoot -PathType Container) {

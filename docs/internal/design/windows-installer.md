@@ -70,7 +70,8 @@ reparse-point rejection, actual module-scope behavior, explicit exports, paramet
 module-payload completeness across NSIS, ACLs, clean-install recovery, and rollback copies. The
 Windows lifecycle workflow builds a separate test-only NSIS installer with a unique workspace
 root, service names, and registry key. Install, ProgramData, and Start Menu paths remain beneath
-that root. It runs the complete real-SCM matrix from a scheduled task
+that root. Teardown removes only empty test-created registry ancestors and preserves a namespace
+root that existed before the run. It runs the complete real-SCM matrix from a scheduled task
 whose SID must be `S-1-5-18` on a disposable GitHub Windows runner; the harness refuses a
 pre-existing protected service, registry state, or listener on ports `7600` and `8787`. The test
 binary is not uploaded; only the production installer and lifecycle evidence log are artifacts.
