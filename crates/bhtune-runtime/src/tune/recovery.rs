@@ -2634,8 +2634,9 @@ mod tests {
         fs::create_dir_all(&export_directory).unwrap();
         let timestamp = evidence.exported_at.format("%Y%m%dT%H%M%S%.3fZ");
         for suffix in 0..100_u8 {
-            fs::create_dir(
+            fs::write(
                 export_directory.join(format!("{timestamp}-no-run-owner-7-{suffix:02}.json")),
+                "preserved evidence",
             )
             .unwrap();
         }
@@ -2645,6 +2646,15 @@ mod tests {
                 .to_string()
                 .contains("could not choose a unique recovery evidence export path")
         );
+        for suffix in 0..100_u8 {
+            assert_eq!(
+                fs::read_to_string(
+                    export_directory.join(format!("{timestamp}-no-run-owner-7-{suffix:02}.json"))
+                )
+                .unwrap(),
+                "preserved evidence"
+            );
+        }
     }
 
     #[cfg(unix)]

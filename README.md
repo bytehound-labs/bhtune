@@ -60,7 +60,8 @@ A live MRFT can switch a loop to Manual and stroke its valve. Read the
 not written automatically, CLI and GUI write-back actions require explicit confirmation and
 readback verification, and an incomplete restore requires an operator to inspect the loop.
 When a live tune process ends unexpectedly, Full-mode startup exports its ownership and
-mutation evidence without contacting the controller. Only evidence-backed orphan runs can be
+mutation evidence without contacting the controller. Export failure stops orphan retirement
+without overwriting existing evidence. Only evidence-backed orphan runs can be
 restored with `bhtune restore-loop <run-id> --yes`; legacy or incomplete records fail closed
 for manual operator recovery. A stale heartbeat alone never permits restoration: a paused
 owner that still holds its OS lock blocks takeover. When an Auto-start run has a configured
