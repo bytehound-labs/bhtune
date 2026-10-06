@@ -358,6 +358,8 @@ bhtune history prune --older-than-days 30
 
 Confirm the count and cutoff before the non-dry-run command. Retention deletion cascades the
 run's samples, results, and write audit rows.
+Runs with an eligible, in-progress, or incomplete live recovery remain in the database until
+recovery is confirmed, and the history delete action refuses to remove them.
 
 ## 11. Upgrade, rollback, and removal
 
@@ -408,6 +410,26 @@ separate, operator-approved archival or decommissioning task.
 Treat the loop as requiring manual inspection. Record the run ID, restore detail, MV tag,
 last confirmed value, and service/gateway logs. Do not start another tune on the same loop until
 the operator confirms the mode, setpoint, MV, and mode attribute at the DCS/PLC.
+
+### Live tune process ended unexpectedly
+
+Full-mode startup exports evidence and marks only an eligible orphan; it does not contact the
+controller. Review the startup log and the evidence export in `<database-file>.recovery/`. A
+stale heartbeat alone does not establish that the owner is gone, and legacy or
+incomplete ownership evidence is not eligible for automated recovery.
+
+After verifying the run identity, recorded gateway/server, loop, and restore values against
+the exported evidence, an authorized operator can request recovery:
+
+```sh
+bhtune restore-loop <run-id> --yes --output table
+```
+
+The command uses only the connection recorded on the run; optional `--bridge-host` and
+`--server` values are cross-checks, not overrides. Review every per-step result and the final
+audit status. Exit `0` means restore and audit completed. Exit `6`, an eligibility error, or an
+audit-persistence failure is not success: inspect the live loop and follow the site's manual
+recovery procedure before any new tune.
 
 ### MV actuation verification failed
 

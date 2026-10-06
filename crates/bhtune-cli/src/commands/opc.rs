@@ -2,22 +2,30 @@
 //! [`bhtune_driver::OpcDaDriver`], independent of running a full tune. Useful for checking
 //! gateway connectivity and confirming tag names before starting a real test.
 
+use bhtune_db::SqlitePool;
+use bhtune_db::models::LiveOperationKind;
 use bhtune_driver::{
     BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, Driver, OpcDaDriver,
     OpcDaGatewayInfo, Quality, SearchEvent, SearchIndexControlAction, SearchIndexRequest,
-    SearchIndexResponse, SearchIndexStatus, SearchMatch, SearchRequest, TagWrite,
+    SearchIndexResponse, SearchIndexStatus, SearchMatch, SearchRequest, TagWrite, WriteOutcome,
     check_gateway_compatibility, close_opcda_browse_session, get_opcda_gateway_info,
     list_opcda_servers,
 };
+use bhtune_runtime::live_ownership::{AuditedDriver, LiveOperationGuard};
 
 use crate::args::{OpcCommand, OpcSearchMatchModeArg, SearchIndexCommand};
 use crate::output::OutputFormat;
 
-pub async fn run(command: OpcCommand, config: &crate::config::BhtuneConfig) -> anyhow::Result<()> {
-    run_with_output(command, config, OutputFormat::Table).await
+pub async fn run(
+    pool: &SqlitePool,
+    command: OpcCommand,
+    config: &crate::config::BhtuneConfig,
+) -> anyhow::Result<()> {
+    run_with_output(pool, command, config, OutputFormat::Table).await
 }
 
 pub async fn run_with_output(
+    pool: &SqlitePool,
     command: OpcCommand,
     config: &crate::config::BhtuneConfig,
     output: OutputFormat,
@@ -48,7 +56,7 @@ pub async fn run_with_output(
         } => {
             let bridge_host = crate::config::resolve_bridge_host(bridge_host, config);
             let server = crate::config::resolve_server(server, config)?;
-            write_with_output(&bridge_host, &server, &tag, &value, output).await
+            write_with_output(pool, &bridge_host, &server, &tag, &value, output).await
         }
         OpcCommand::Browse {
             bridge_host,
@@ -305,24 +313,58 @@ async fn read_with_output(
 
 #[cfg(test)]
 async fn write(bridge_host: &str, server: &str, tag: &str, value: &str) -> anyhow::Result<()> {
-    write_with_output(bridge_host, server, tag, value, OutputFormat::Table).await
+    let directory = tempfile::tempdir()?;
+    let pool = bhtune_db::connect(&directory.path().join("opc-write-test.db")).await?;
+    write_with_output(&pool, bridge_host, server, tag, value, OutputFormat::Table).await
 }
 
 async fn write_with_output(
+    pool: &SqlitePool,
     bridge_host: &str,
     server: &str,
     tag: &str,
     value: &str,
     output: OutputFormat,
 ) -> anyhow::Result<()> {
-    let driver = OpcDaDriver::connect(bridge_host, server).await?;
     // Numeric-looking values are written as floats (matching a live process value or PID
     // constant write); anything else is written raw (e.g. a mode code like "MAN").
     let write_value = match value.parse::<f32>() {
         Ok(f) => TagWrite::Float(f),
         Err(_) => TagWrite::Raw(value.to_string()),
     };
-    let outcome = driver.write(&tag.to_string(), write_value).await?;
+    let target = match &write_value {
+        TagWrite::Float(value) => serde_json::json!(value),
+        TagWrite::Raw(value) => serde_json::json!(value),
+    };
+    let restore_intent = serde_json::to_string(&serde_json::json!({
+        "version": 1,
+        "kind": "opc_write",
+        "tag": tag,
+        "target": target,
+        "state": "pending",
+    }))?;
+    let ownership = LiveOperationGuard::acquire(
+        pool,
+        None,
+        LiveOperationKind::OpcWrite,
+        bridge_host,
+        server,
+        tag,
+        Some(restore_intent),
+    )
+    .await?;
+    let operation_result = async {
+        let driver = OpcDaDriver::connect(bridge_host, server).await?;
+        let audited = AuditedDriver::new(&driver, pool, &ownership, None);
+        let outcome = audited
+            .write(&tag.to_string(), write_value)
+            .await
+            .map_err(anyhow::Error::from)?;
+        anyhow::Ok(outcome)
+    }
+    .await;
+    let release_result = ownership.release().await;
+    let outcome = combine_write_and_release(operation_result, release_result)?;
     if output == OutputFormat::Json {
         println!(
             "{}",
@@ -351,6 +393,22 @@ async fn write_with_output(
             "driver rejected the write: {}",
             write_rejection_reason(outcome.error_message)
         )
+    }
+}
+
+fn combine_write_and_release(
+    operation_result: anyhow::Result<WriteOutcome>,
+    release_result: anyhow::Result<()>,
+) -> anyhow::Result<WriteOutcome> {
+    match (operation_result, release_result) {
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(anyhow::anyhow!(
+            "OPC write completed but live ownership release was not persisted: {error}"
+        )),
+        (Err(operation_error), Err(release_error)) => Err(anyhow::anyhow!(
+            "OPC write failed ({operation_error}); live ownership release also failed: {release_error}"
+        )),
     }
 }
 
@@ -968,20 +1026,56 @@ mod tests {
 
     #[tokio::test]
     async fn write_reports_success_from_a_mock_gateway() {
-        let (host, server) = start_mock_server(MockBridgeService {
+        let service = MockBridgeService {
             write_response: WriteResponse {
                 tag_id: "Unit1.LIC101.OP".to_string(),
                 success: true,
                 error: None,
             },
             ..Default::default()
-        })
-        .await;
-
-        write(&host, "Sim.Server", "Unit1.LIC101.OP", "55.0")
+        };
+        let write_calls = std::sync::Arc::clone(&service.write_calls);
+        let (host, server) = start_mock_server(service).await;
+        let directory = tempfile::tempdir().unwrap();
+        let pool = bhtune_db::connect(&directory.path().join("opc-write-audit.db"))
             .await
             .unwrap();
 
+        write_with_output(
+            &pool,
+            &host,
+            "Sim.Server",
+            "Unit1.LIC101.OP",
+            "55.0",
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap();
+        let owner_id = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM live_operation_owners ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let owner = bhtune_db::models::LiveOwnershipRow::get(&pool, owner_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let steps = bhtune_db::models::LiveMutationStepRow::list_for_owner(&pool, owner_id)
+            .await
+            .unwrap();
+
+        assert_eq!(write_calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(owner.state, bhtune_db::models::LiveOwnershipState::Released);
+        assert_eq!(steps.len(), 1);
+        assert_eq!(
+            steps[0].status,
+            bhtune_db::models::MutationStepStatus::Confirmed
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&steps[0].target_json).unwrap()["tag"],
+            "Unit1.LIC101.OP"
+        );
         server.shutdown().await;
     }
 
@@ -1041,6 +1135,41 @@ mod tests {
             write_rejection_reason(Some("read-only".to_string())),
             "read-only"
         );
+    }
+
+    #[test]
+    fn write_and_release_results_preserve_operation_and_persistence_errors() {
+        let success = combine_write_and_release(
+            Ok(WriteOutcome {
+                success: true,
+                error_message: None,
+            }),
+            Ok(()),
+        )
+        .unwrap();
+        assert!(success.success);
+
+        let operation_only =
+            combine_write_and_release(Err(anyhow::anyhow!("write failed")), Ok(())).unwrap_err();
+        assert!(operation_only.to_string().contains("write failed"));
+
+        let release_only = combine_write_and_release(
+            Ok(WriteOutcome {
+                success: true,
+                error_message: None,
+            }),
+            Err(anyhow::anyhow!("release failed")),
+        )
+        .unwrap_err();
+        assert!(release_only.to_string().contains("release failed"));
+
+        let both = combine_write_and_release(
+            Err(anyhow::anyhow!("write failed")),
+            Err(anyhow::anyhow!("release failed")),
+        )
+        .unwrap_err();
+        assert!(both.to_string().contains("write failed"));
+        assert!(both.to_string().contains("release failed"));
     }
 
     #[tokio::test]
@@ -1114,6 +1243,10 @@ mod tests {
     #[tokio::test]
     async fn run_dispatches_gateway_info_servers_read_write_and_browse() {
         let close_browse_session_calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let directory = tempfile::tempdir().unwrap();
+        let pool = bhtune_db::connect(&directory.path().join("opc-dispatch-test.db"))
+            .await
+            .unwrap();
         let (host, server) = start_mock_server(MockBridgeService {
             list_servers_response: ListServersResponse {
                 servers: vec!["Matrikon.OPC.Simulation.1".to_string()],
@@ -1143,6 +1276,7 @@ mod tests {
         let config = crate::config::BhtuneConfig::default();
 
         run(
+            &pool,
             OpcCommand::GatewayInfo {
                 bridge_host: Some(host.clone()),
             },
@@ -1152,6 +1286,7 @@ mod tests {
         .unwrap();
 
         run(
+            &pool,
             OpcCommand::Servers {
                 bridge_host: Some(host.clone()),
             },
@@ -1161,6 +1296,7 @@ mod tests {
         .unwrap();
 
         run(
+            &pool,
             OpcCommand::Read {
                 bridge_host: Some(host.clone()),
                 server: Some("Sim.Server".to_string()),
@@ -1172,6 +1308,7 @@ mod tests {
         .unwrap();
 
         run(
+            &pool,
             OpcCommand::Write {
                 bridge_host: Some(host.clone()),
                 server: Some("Sim.Server".to_string()),
@@ -1184,6 +1321,7 @@ mod tests {
         .unwrap();
 
         run(
+            &pool,
             OpcCommand::Browse {
                 bridge_host: Some(host.clone()),
                 server: Some("Sim.Server".to_string()),
@@ -1204,6 +1342,7 @@ mod tests {
         );
 
         run(
+            &pool,
             OpcCommand::Close {
                 bridge_host: Some(host),
                 session_id: "session".to_string(),
@@ -1239,8 +1378,10 @@ mod tests {
             server: Some("Sim.Server".to_string()),
             ..Default::default()
         };
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
 
         run(
+            &pool,
             OpcCommand::Read {
                 bridge_host: None,
                 server: None,
@@ -1261,8 +1402,9 @@ mod tests {
             bridge_host: Some(host),
             ..Default::default()
         };
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
 
-        run(OpcCommand::Servers { bridge_host: None }, &config)
+        run(&pool, OpcCommand::Servers { bridge_host: None }, &config)
             .await
             .unwrap();
 
@@ -1271,7 +1413,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_errors_when_server_is_unset_in_both_cli_and_config() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
         let err = run(
+            &pool,
             OpcCommand::Read {
                 bridge_host: None,
                 server: None,
@@ -1352,8 +1496,10 @@ mod tests {
         })
         .await;
         let config = crate::config::BhtuneConfig::default();
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
 
         run_with_output(
+            &pool,
             OpcCommand::Search {
                 bridge_host: Some(host.clone()),
                 server: Some("Sim.Server".into()),
@@ -1371,6 +1517,7 @@ mod tests {
         .await
         .unwrap();
         run_with_output(
+            &pool,
             OpcCommand::Search {
                 bridge_host: Some(host.clone()),
                 server: Some("Sim.Server".into()),
@@ -1405,6 +1552,7 @@ mod tests {
             },
         ] {
             run_with_output(
+                &pool,
                 OpcCommand::SearchIndex { command },
                 &config,
                 OutputFormat::Table,
@@ -1413,6 +1561,7 @@ mod tests {
             .unwrap();
         }
         run_with_output(
+            &pool,
             OpcCommand::SearchIndex {
                 command: SearchIndexCommand::Search {
                     bridge_host: Some(host.clone()),
@@ -1541,16 +1690,28 @@ mod tests {
             ..Default::default()
         };
         let (host, server) = start_mock_server(host_service).await;
+        let directory = tempfile::tempdir().unwrap();
+        let pool = bhtune_db::connect(&directory.path().join("opc-diagnostic-test.db"))
+            .await
+            .unwrap();
         servers_with_output(&host, OutputFormat::Json)
             .await
             .unwrap();
         read_with_output(&host, "Sim.Server", &["Area.PV".into()], OutputFormat::Json)
             .await
             .unwrap();
-        write_with_output(&host, "Sim.Server", "Area.MV", "1.0", OutputFormat::Json)
-            .await
-            .unwrap_err();
+        write_with_output(
+            &pool,
+            &host,
+            "Sim.Server",
+            "Area.MV",
+            "1.0",
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap_err();
         let err = write_with_output(
+            &pool,
             &host,
             "Sim.Server",
             "Area.MV",
@@ -1638,9 +1799,16 @@ mod tests {
             ..Default::default()
         })
         .await;
-        write_with_output(&host, "Sim.Server", "Area.MV", "1.0", OutputFormat::Json)
-            .await
-            .unwrap();
+        write_with_output(
+            &pool,
+            &host,
+            "Sim.Server",
+            "Area.MV",
+            "1.0",
+            OutputFormat::Json,
+        )
+        .await
+        .unwrap();
         server.shutdown().await;
     }
 

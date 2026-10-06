@@ -79,7 +79,7 @@ pub struct NewTuneMvActuation {
 /// recent physical observation made by the verifier; `attempt_count` counts every persisted
 /// observation, including attempts where no numeric value or trustworthy quality could be
 /// obtained.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct TuneMvActuationRow {
     pub id: i64,
     pub run_id: i64,

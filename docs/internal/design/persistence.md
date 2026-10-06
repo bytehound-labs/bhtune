@@ -27,6 +27,16 @@ IN (...))` constraint using the exact same literals, so an invalid value can nev
   rather than deciding case-by-case. `tune_runs`'s own `template_name`/`template_origin`
   (flat) plus `template_snapshot_json`/`tags_json` (JSON) columns (`safety-run-snapshot`, see
   "Live-plant safety hardening" below) are a second application of the exact same rule.
+- **Live ownership and recovery are structured, additive evidence.** Migration
+  `0003_live_recovery.sql` adds owner and canonical-resource claim tables, per-mutation audit
+  rows, recovery-attempt audit, and `tune_runs.recovery_state`/
+  `recovery_evidence_json`. Heartbeat age, process identifiers, and error text do not establish
+  orphan eligibility. Recovery requires the persisted ownership claim, initial readings,
+  recorded connection and resource identity, effective restore policy, and mutation evidence;
+  legacy rows without that evidence remain ineligible. Startup exports affected evidence
+  before a conditional ownership transition, and a failed recovery audit never becomes a
+  successful run transition. User deletion and age-based retention preserve rows whose
+  recovery state is `eligible`, `running`, or `incomplete` until recovery is confirmed.
 - **`tune_results` (calculated) and `tune_writes` (actually written to the DCS) are separate
   tables.** A run can produce three calculated candidate results and zero or more writes;
   conflating "the tool suggested this" with "this went into the controller" would lose the one

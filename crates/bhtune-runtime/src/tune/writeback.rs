@@ -6,10 +6,13 @@ use bhtune_core::{
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    NewTuneWrite, RollbackState, TuneResultRow, TuneWriteRow, WriteKind, WriteReadback,
+    LiveOwnershipRow, NewTuneWrite, RollbackState, TuneResultRow, TuneRunRow, TuneWriteRow,
+    WriteKind, WriteReadback,
 };
 use bhtune_driver::Driver;
 use chrono::Utc;
+
+use crate::live_ownership::{AuditedDriver, LiveOperationGuard};
 
 use super::outcome::WriteBackOutcome;
 use super::quality::{read_f32, write_value};
@@ -41,6 +44,49 @@ pub(crate) async fn read_previous_pid_values(
         derivative,
     })
 }
+
+async fn persist_pid_restore_intent(
+    pool: &SqlitePool,
+    ownership: &LiveOperationGuard,
+    run_id: i64,
+    kind: WriteKind,
+    response_level: ResponseLevel,
+    previous: WriteReadback,
+    target: WriteReadback,
+) -> anyhow::Result<()> {
+    let owner = LiveOwnershipRow::get(pool, ownership.owner().id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("live owner {} disappeared", ownership.owner().id))?;
+    let mut intent = match owner.restore_intent_json {
+        Some(json) => serde_json::from_str::<serde_json::Value>(&json)?,
+        None => serde_json::json!({}),
+    };
+    let Some(root) = intent.as_object_mut() else {
+        anyhow::bail!("persisted live restore intent is not a JSON object");
+    };
+    root.insert(
+        "pid_restore".to_string(),
+        serde_json::json!({
+            "run_id": run_id,
+            "write_kind": kind,
+            "response_level": response_level,
+            "previous": {
+                "proportional": previous.proportional,
+                "integral": previous.integral,
+                "derivative": previous.derivative,
+            },
+            "target": {
+                "proportional": target.proportional,
+                "integral": target.integral,
+                "derivative": target.derivative,
+            },
+        }),
+    );
+    ownership
+        .persist_restore_intent(&serde_json::to_string(&intent)?)
+        .await
+}
+
 /// Whether a PID write-back's confirmation readback is close enough to `requested` to count
 /// as confirmed. Combined absolute (1e-3) and relative (1%) tolerance rather than exact
 /// equality, since a DCS's own internal unit conversion/precision means the readback of a
@@ -81,15 +127,27 @@ pub(crate) async fn write_and_verify_pid_value(
 }
 /// Best-effort rollback of whichever PID constants were confirmed written before a later one
 /// failed -- mirroring `restore()`'s rule to attempt every step independently rather than
-/// short-circuit on the first failure. `targets` is `(label, tag,
-/// previous_value)` triples, in any order. Returns `Ok(())` only if every rollback write
+/// short-circuit on the first failure. `targets` contains `(label, tag, written_value,
+/// previous_value)` tuples, in any order. Returns `Ok(())` only if every rollback write
 /// succeeded; otherwise `Err` describing every one that did not.
 pub(super) async fn rollback_pid_writes(
     driver: &dyn Driver,
-    targets: &[(&str, &str, f32)],
+    targets: &[(&str, &str, f32, f32)],
+    ownership: &LiveOperationGuard,
 ) -> Result<(), String> {
     let mut failures = Vec::new();
-    for (label, tag, previous_value) in targets {
+    for (label, tag, value_written, previous_value) in targets {
+        let Some(previous_json) = serde_json::Number::from_f64(f64::from(*value_written))
+            .map(|number| number.to_string())
+        else {
+            failures.push(format!(
+                "{label} rollback audit intent for '{tag}' has a non-finite write value"
+            ));
+            continue;
+        };
+        ownership
+            .queue_previous_write_value(tag, previous_json)
+            .await;
         if let Err(e) = write_value(driver, tag, *previous_value).await {
             failures.push(format!("{label} rollback write to '{tag}' failed: {e}"));
         }
@@ -184,6 +242,118 @@ pub async fn write_pid_values(
     kind: WriteKind,
     allow_uncertain: bool,
 ) -> anyhow::Result<PidWriteOutcome> {
+    let run = TuneRunRow::get(pool, run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no run with id {run_id}"))?;
+    let operation_kind = match kind {
+        WriteKind::Write => bhtune_db::models::LiveOperationKind::PidWrite,
+        WriteKind::Revert => bhtune_db::models::LiveOperationKind::PidRevert,
+    };
+    let restore_intent = serde_json::to_string(&serde_json::json!({
+        "version": 1,
+        "kind": "pid_restore",
+        "run_id": run_id,
+        "write_kind": kind,
+        "state": "awaiting_prewrite_readings",
+    }))?;
+    let ownership =
+        LiveOperationGuard::acquire_for_recorded_run(pool, &run, operation_kind, restore_intent)
+            .await?;
+    let audited = AuditedDriver::new(driver, pool, &ownership, Some(run_id));
+    let result = write_pid_values_inner(
+        pool,
+        run_id,
+        &audited,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        kind,
+        allow_uncertain,
+        &ownership,
+    )
+    .await;
+    let release_result = ownership.release().await;
+    match (result, release_result) {
+        (Ok(outcome), Ok(())) => Ok(outcome),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(release_error)) => Err(anyhow::anyhow!(
+            "{error}; additionally failed to persist live ownership release: {release_error}"
+        )),
+    }
+}
+
+/// Performs an already-owned PID write sequence. `driver` must be the `AuditedDriver` for
+/// the same guard so each write intent is persisted before I/O.
+#[allow(clippy::too_many_arguments)]
+pub async fn write_pid_values_with_owner(
+    pool: &SqlitePool,
+    run_id: i64,
+    driver: &AuditedDriver<'_>,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain: bool,
+) -> anyhow::Result<PidWriteOutcome> {
+    if driver.run_id() != Some(run_id) || driver.owner().owner().run_id != Some(run_id) {
+        anyhow::bail!("live ownership does not match PID write run {run_id}");
+    }
+    let valid_operation =
+        operation_kind_authorizes_pid_write(kind, driver.owner().owner().operation_kind);
+    if !valid_operation {
+        anyhow::bail!("live ownership kind does not authorize the requested PID operation");
+    }
+    write_pid_values_inner(
+        pool,
+        run_id,
+        driver,
+        p_tag,
+        i_tag,
+        d_tag,
+        response_level,
+        target,
+        kind,
+        allow_uncertain,
+        driver.owner(),
+    )
+    .await
+}
+
+fn operation_kind_authorizes_pid_write(
+    kind: WriteKind,
+    operation_kind: bhtune_db::models::LiveOperationKind,
+) -> bool {
+    if kind == WriteKind::Write {
+        operation_kind == bhtune_db::models::LiveOperationKind::Tune
+            || operation_kind == bhtune_db::models::LiveOperationKind::PidWrite
+    } else {
+        operation_kind == bhtune_db::models::LiveOperationKind::PidRevert
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn write_pid_values_inner(
+    pool: &SqlitePool,
+    run_id: i64,
+    driver: &dyn Driver,
+    p_tag: &str,
+    i_tag: &str,
+    d_tag: &str,
+    response_level: ResponseLevel,
+    target: WriteReadback,
+    kind: WriteKind,
+    allow_uncertain: bool,
+    ownership: &LiveOperationGuard,
+) -> anyhow::Result<PidWriteOutcome> {
+    ownership.ensure_healthy()?;
+    if ownership.owner().run_id != Some(run_id) {
+        anyhow::bail!("live ownership does not match PID write run {run_id}");
+    }
     let written_at = Utc::now();
     let mut new_write = NewTuneWrite::new(response_level, written_at);
     new_write.kind = kind;
@@ -209,6 +379,16 @@ pub async fn write_pid_values(
             }
         };
     new_write.previous = Some(previous);
+    persist_pid_restore_intent(
+        pool,
+        ownership,
+        run_id,
+        kind,
+        response_level,
+        previous,
+        target,
+    )
+    .await?;
 
     // Write and verify Proportional, then Integral, then Derivative, stopping at the first
     // failure. `rollback_targets` accumulates only the constants confirmed written so far,
@@ -226,15 +406,19 @@ pub async fn write_pid_values(
     ];
     let mut written_vals: [Option<f32>; 3] = [None; 3];
     let mut readback_vals: [Option<f32>; 3] = [None; 3];
-    let mut rollback_targets: Vec<(&str, &str, f32)> = Vec::new();
+    let mut rollback_targets: Vec<(&str, &str, f32, f32)> = Vec::new();
     let mut failure: Option<String> = None;
 
     for (i, (label, tag, value, previous_value)) in steps.into_iter().enumerate() {
         written_vals[i] = Some(value);
+        let previous_json = serde_json::to_string(&previous_value)?;
+        ownership
+            .queue_previous_write_value(tag, previous_json)
+            .await;
         match write_and_verify_pid_value(driver, label, tag, value, allow_uncertain).await {
             Ok(readback) => {
                 readback_vals[i] = Some(readback);
-                rollback_targets.push((label, tag, previous_value));
+                rollback_targets.push((label, tag, value, previous_value));
             }
             Err(e) => {
                 failure = Some(e);
@@ -271,7 +455,7 @@ pub async fn write_pid_values(
         });
     }
 
-    match rollback_pid_writes(driver, &rollback_targets).await {
+    match rollback_pid_writes(driver, &rollback_targets, ownership).await {
         Ok(()) => {
             new_write.rollback_state = Some(RollbackState::Succeeded);
             TuneWriteRow::insert(pool, run_id, new_write).await?;
@@ -360,6 +544,7 @@ pub fn pid_parameters_for_result(result: &TuneResultRow) -> anyhow::Result<PidPa
 /// Without a handler, an unrequested write is skipped; the runtime never reads stdin or
 /// writes to stdout.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) async fn maybe_write_back(
     pool: &SqlitePool,
     run_id: i64,
@@ -369,7 +554,35 @@ pub(super) async fn maybe_write_back(
     config: LoopConfig,
     write_pid: Option<ResponseLevel>,
     allow_uncertain: bool,
+    handler: Option<&mut dyn WriteBackHandler>,
+) -> anyhow::Result<(WriteBackOutcome, Option<String>)> {
+    maybe_write_back_with_owner(
+        pool,
+        run_id,
+        tags,
+        template,
+        driver,
+        config,
+        write_pid,
+        allow_uncertain,
+        handler,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn maybe_write_back_with_owner(
+    pool: &SqlitePool,
+    run_id: i64,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    driver: &dyn Driver,
+    config: LoopConfig,
+    write_pid: Option<ResponseLevel>,
+    allow_uncertain: bool,
     mut handler: Option<&mut dyn WriteBackHandler>,
+    ownership: Option<&LiveOperationGuard>,
 ) -> anyhow::Result<(WriteBackOutcome, Option<String>)> {
     let (Some(p_tag), Some(i_tag), Some(d_tag)) = (
         &tags.proportional_constant,
@@ -449,19 +662,27 @@ pub(super) async fn maybe_write_back(
         derivative: written.derivative,
     };
 
-    let outcome = write_pid_values(
-        pool,
-        run_id,
-        driver,
-        p_tag,
-        i_tag,
-        d_tag,
-        response_level,
-        target,
-        WriteKind::Write,
-        allow_uncertain,
-    )
-    .await?;
+    let outcome = match ownership {
+        Some(ownership) => {
+            write_pid_values_inner(
+                pool,
+                run_id,
+                driver,
+                p_tag,
+                i_tag,
+                d_tag,
+                response_level,
+                target,
+                WriteKind::Write,
+                allow_uncertain,
+                ownership,
+            )
+            .await?
+        }
+        None => anyhow::bail!(
+            "PID write-back requires a live ownership guard before controller mutation"
+        ),
+    };
 
     if let Some(handler) = handler {
         handler.write_back_finished(response_level, &outcome);
@@ -476,18 +697,51 @@ pub(super) async fn maybe_write_back(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{
+        collections::HashMap,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
     use async_trait::async_trait;
     use bhtune_core::{
         ControllerType, LoopConfig, LoopTags, ProcessType, TuningResultInvalidReason,
         TuningResultStatus,
     };
-    use bhtune_db::models::{TemplateOrigin, TuneDriver, TuneRunRow};
+    use bhtune_db::models::{
+        LiveMutationStepRow, LiveOperationKind, TemplateOrigin, TuneDriver, TuneRunRow,
+    };
     use bhtune_driver::{
-        BrowsePage, BrowsePageRequest, Driver, DriverError, DriverResult, TagId, TagValue,
+        BrowsePage, BrowsePageRequest, Driver, DriverError, DriverResult, Quality, TagId, TagValue,
         TagWrite, WriteOutcome,
     };
     use chrono::Utc;
+
+    use super::*;
+    use crate::live_ownership::AuditedDriver;
+
+    #[test]
+    fn pid_write_ownership_is_operation_specific() {
+        assert!(operation_kind_authorizes_pid_write(
+            WriteKind::Write,
+            LiveOperationKind::Tune
+        ));
+        assert!(operation_kind_authorizes_pid_write(
+            WriteKind::Write,
+            LiveOperationKind::PidWrite
+        ));
+        assert!(operation_kind_authorizes_pid_write(
+            WriteKind::Revert,
+            LiveOperationKind::PidRevert
+        ));
+        assert!(!operation_kind_authorizes_pid_write(
+            WriteKind::Write,
+            LiveOperationKind::OpcWrite
+        ));
+        assert!(!operation_kind_authorizes_pid_write(
+            WriteKind::Revert,
+            LiveOperationKind::Tune
+        ));
+    }
 
     struct FailingDriver;
 
@@ -499,6 +753,83 @@ mod tests {
 
         async fn write(&self, _tag: &TagId, _value: TagWrite) -> DriverResult<WriteOutcome> {
             Err(DriverError::Unsupported { operation: "test" })
+        }
+
+        async fn browse(&self, _request: BrowsePageRequest) -> DriverResult<BrowsePage> {
+            Err(DriverError::Unsupported { operation: "test" })
+        }
+    }
+
+    struct PidDriver {
+        values: std::sync::Mutex<HashMap<String, String>>,
+        write_counts: std::sync::Mutex<HashMap<String, usize>>,
+        failure_calls: HashMap<String, Vec<usize>>,
+        write_calls: AtomicUsize,
+    }
+
+    impl PidDriver {
+        fn new(tags: &LoopTags, failure_calls: HashMap<String, Vec<usize>>) -> Self {
+            let mut values = HashMap::new();
+            for (tag, value) in [
+                (tags.proportional_constant.as_ref(), "1.0"),
+                (tags.integral_constant.as_ref(), "2.0"),
+                (tags.derivative_constant.as_ref(), "0.0"),
+            ] {
+                if let Some(tag) = tag {
+                    values.insert(tag.clone(), value.to_string());
+                }
+            }
+            Self {
+                values: std::sync::Mutex::new(values),
+                write_counts: std::sync::Mutex::new(HashMap::new()),
+                failure_calls,
+                write_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Driver for PidDriver {
+        async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
+            let values = self.values.lock().unwrap();
+            tags.iter()
+                .map(|tag| {
+                    let value = values.get(tag).cloned().ok_or_else(|| {
+                        DriverError::Operation(Box::new(std::io::Error::other(
+                            "test PID tag has no value",
+                        )))
+                    })?;
+                    Ok(TagValue {
+                        tag: tag.clone(),
+                        value,
+                        quality: Quality::Good,
+                        timestamp: None,
+                    })
+                })
+                .collect()
+        }
+
+        async fn write(&self, tag: &TagId, value: TagWrite) -> DriverResult<WriteOutcome> {
+            self.write_calls.fetch_add(1, Ordering::Relaxed);
+            let call = {
+                let mut counts = self.write_counts.lock().unwrap();
+                let count = counts.entry(tag.clone()).or_default();
+                *count += 1;
+                *count
+            };
+            if self
+                .failure_calls
+                .get(tag)
+                .is_some_and(|calls| calls.contains(&call))
+            {
+                return Ok(WriteOutcome::failure("simulated write rejection"));
+            }
+            let value = match value {
+                TagWrite::Float(value) => value.to_string(),
+                TagWrite::Raw(value) => value,
+            };
+            self.values.lock().unwrap().insert(tag.clone(), value);
+            Ok(WriteOutcome::success())
         }
 
         async fn browse(&self, _request: BrowsePageRequest) -> DriverResult<BrowsePage> {
@@ -583,6 +914,20 @@ mod tests {
         (pool, run.id, template, tags, config)
     }
 
+    async fn recorded_fixture() -> (SqlitePool, i64, DcsTemplate, LoopTags, LoopConfig) {
+        let (pool, run_id, template, tags, config) = fixture().await;
+        TuneRunRow::record_connection(
+            &pool,
+            run_id,
+            Some("Mock.Kepware.Sim"),
+            Some("127.0.0.1:7602"),
+            "{}",
+        )
+        .await
+        .unwrap();
+        (pool, run_id, template, tags, config)
+    }
+
     fn result_row(run_id: i64, response_level: ResponseLevel) -> TuneResultRow {
         TuneResultRow {
             id: 0,
@@ -623,6 +968,636 @@ mod tests {
             driver.browse(BrowsePageRequest::root(1)).await,
             Err(DriverError::Unsupported { operation: "test" })
         ));
+    }
+
+    #[tokio::test]
+    async fn pid_driver_reports_missing_value_and_unsupported_browse() {
+        let (_pool, _run_id, _template, tags, _config) = fixture().await;
+        let driver = PidDriver::new(&tags, HashMap::new());
+
+        assert!(matches!(
+            driver.read(&["missing".to_string()]).await,
+            Err(DriverError::Operation(_))
+        ));
+        assert!(matches!(
+            driver.browse(BrowsePageRequest::root(1)).await,
+            Err(DriverError::Unsupported { operation: "test" })
+        ));
+    }
+
+    #[tokio::test]
+    async fn pid_writeback_notifies_handler_after_successful_write() {
+        let (pool, run_id, template, tags, config) = fixture().await;
+        TuneResultRow::insert(&pool, &result_row(run_id, ResponseLevel::Moderate))
+            .await
+            .unwrap();
+        let owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        let driver = PidDriver::new(&tags, HashMap::new());
+        let audited = AuditedDriver::new(&driver, &pool, &owner, Some(run_id));
+        let mut handler =
+            RecordingHandler::new(WriteBackSelection::Selected(ResponseLevel::Moderate));
+
+        let (outcome, detail) = maybe_write_back_with_owner(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &audited,
+            config,
+            Some(ResponseLevel::Moderate),
+            false,
+            Some(&mut handler),
+            Some(&owner),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            WriteBackOutcome::Written {
+                response_level: ResponseLevel::Moderate
+            }
+        ));
+        assert!(detail.is_none());
+        assert_eq!(
+            handler.events,
+            ["selected:Moderate:true", "finished:Moderate:Written",]
+        );
+        owner.release().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pid_rollback_rejects_non_finite_audit_values_before_writing() {
+        let (pool, run_id, _template, tags, _config) = fixture().await;
+        let owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        let driver = PidDriver::new(&tags, HashMap::new());
+
+        let error = rollback_pid_writes(
+            &driver,
+            &[("Proportional", "Unit1.LIC101.P", f32::NAN, 1.0)],
+            &owner,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("non-finite write value"));
+        assert_eq!(driver.write_calls.load(Ordering::Relaxed), 0);
+        owner.release().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn owned_writeback_audits_all_pid_mutations_before_reporting_success() {
+        let (pool, run_id, template, tags, config) = fixture().await;
+        TuneResultRow::insert(&pool, &result_row(run_id, ResponseLevel::Moderate))
+            .await
+            .unwrap();
+        let owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        let driver = PidDriver::new(&tags, HashMap::new());
+        let audited = AuditedDriver::new(&driver, &pool, &owner, Some(run_id));
+
+        let (outcome, detail) = maybe_write_back_with_owner(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &audited,
+            config,
+            Some(ResponseLevel::Moderate),
+            false,
+            None,
+            Some(&owner),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            WriteBackOutcome::Written {
+                response_level: ResponseLevel::Moderate
+            }
+        ));
+        assert!(detail.is_none());
+        assert_eq!(driver.write_calls.load(Ordering::Relaxed), 3);
+        assert!(
+            TuneWriteRow::list_for_run(&pool, run_id)
+                .await
+                .unwrap()
+                .last()
+                .unwrap()
+                .success
+        );
+        let audit = LiveMutationStepRow::list_for_owner(&pool, owner.owner().id)
+            .await
+            .unwrap();
+        assert_eq!(audit.len(), 3);
+        assert!(
+            audit
+                .iter()
+                .all(|step| step.status == bhtune_db::models::MutationStepStatus::Confirmed)
+        );
+        owner.release().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn owned_pid_write_accepts_tune_ownership() {
+        let (pool, run_id, _template, tags, _config) = fixture().await;
+        let owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::Tune,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        let driver = PidDriver::new(&tags, HashMap::new());
+        let audited = AuditedDriver::new(&driver, &pool, &owner, Some(run_id));
+
+        let outcome = write_pid_values_with_owner(
+            &pool,
+            run_id,
+            &audited,
+            tags.proportional_constant.as_deref().unwrap(),
+            tags.integral_constant.as_deref().unwrap(),
+            tags.derivative_constant.as_deref().unwrap(),
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 5.0,
+                integral: 6.0,
+                derivative: 7.0,
+            },
+            WriteKind::Write,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(outcome, PidWriteOutcome::Written));
+        owner.release().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pid_write_with_owner_reverts_only_constants_confirmed_before_a_later_failure() {
+        let (pool, run_id, _template, tags, _config) = fixture().await;
+        let integral = tags.integral_constant.as_ref().unwrap().clone();
+        let owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        let driver = PidDriver::new(&tags, HashMap::from([(integral, vec![1])]));
+        let audited = AuditedDriver::new(&driver, &pool, &owner, Some(run_id));
+        let target = WriteReadback {
+            proportional: 5.0,
+            integral: 6.0,
+            derivative: 7.0,
+        };
+
+        let outcome = write_pid_values_with_owner(
+            &pool,
+            run_id,
+            &audited,
+            tags.proportional_constant.as_deref().unwrap(),
+            tags.integral_constant.as_deref().unwrap(),
+            tags.derivative_constant.as_deref().unwrap(),
+            ResponseLevel::Moderate,
+            target,
+            WriteKind::Write,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            outcome,
+            PidWriteOutcome::Failed { ref detail } if detail.contains("rolled back")
+        ));
+        assert_eq!(driver.write_calls.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            driver
+                .values
+                .lock()
+                .unwrap()
+                .get(tags.proportional_constant.as_deref().unwrap())
+                .map(String::as_str),
+            Some("1")
+        );
+        let persisted = TuneWriteRow::list_for_run(&pool, run_id)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(persisted.rollback_state, Some(RollbackState::Succeeded));
+        let audit = LiveMutationStepRow::list_for_owner(&pool, owner.owner().id)
+            .await
+            .unwrap();
+        assert_eq!(audit.len(), 3);
+        owner.release().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pid_write_wrapper_owns_success_and_revert_pre_read_failure_paths() {
+        let (pool, run_id, _template, tags, _config) = recorded_fixture().await;
+        let driver = PidDriver::new(&tags, HashMap::new());
+        let target = WriteReadback {
+            proportional: 2.0,
+            integral: 3.0,
+            derivative: 0.5,
+        };
+        assert_eq!(
+            write_pid_values(
+                &pool,
+                run_id,
+                &driver,
+                tags.proportional_constant.as_deref().unwrap(),
+                tags.integral_constant.as_deref().unwrap(),
+                tags.derivative_constant.as_deref().unwrap(),
+                ResponseLevel::Moderate,
+                target,
+                WriteKind::Write,
+                false,
+            )
+            .await
+            .unwrap(),
+            PidWriteOutcome::Written
+        );
+        assert_eq!(driver.write_calls.load(Ordering::Relaxed), 3);
+
+        assert!(
+            write_pid_values(
+                &pool,
+                run_id,
+                &FailingDriver,
+                tags.proportional_constant.as_deref().unwrap(),
+                tags.integral_constant.as_deref().unwrap(),
+                tags.derivative_constant.as_deref().unwrap(),
+                ResponseLevel::Moderate,
+                target,
+                WriteKind::Revert,
+                false,
+            )
+            .await
+            .is_ok_and(|outcome| matches!(outcome, PidWriteOutcome::Failed { .. }))
+        );
+        let owners = bhtune_db::models::LiveOwnershipRow::list_for_run(&pool, run_id)
+            .await
+            .unwrap();
+        assert_eq!(owners.len(), 2);
+        assert!(
+            owners
+                .iter()
+                .all(|owner| owner.state == bhtune_db::models::LiveOwnershipState::Released)
+        );
+        assert!(
+            write_pid_values(
+                &pool,
+                run_id + 100,
+                &FailingDriver,
+                "P",
+                "I",
+                "D",
+                ResponseLevel::Moderate,
+                target,
+                WriteKind::Write,
+                false,
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn pid_write_wrapper_never_hides_write_or_release_persistence_failures() {
+        let (pool, run_id, _template, tags, _config) = recorded_fixture().await;
+        sqlx::query(
+            "CREATE TRIGGER reject_pid_write_insert BEFORE INSERT ON tune_writes BEGIN SELECT RAISE(FAIL, 'injected PID write insert failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            write_pid_values(
+                &pool,
+                run_id,
+                &FailingDriver,
+                tags.proportional_constant.as_deref().unwrap(),
+                tags.integral_constant.as_deref().unwrap(),
+                tags.derivative_constant.as_deref().unwrap(),
+                ResponseLevel::Moderate,
+                WriteReadback {
+                    proportional: 2.0,
+                    integral: 3.0,
+                    derivative: 0.5,
+                },
+                WriteKind::Write,
+                false,
+            )
+            .await
+            .is_err()
+        );
+        sqlx::query("DROP TRIGGER reject_pid_write_insert")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (release_pool, release_run_id, _template, release_tags, _config) =
+            recorded_fixture().await;
+        sqlx::query(
+            "CREATE TRIGGER reject_pid_owner_release BEFORE UPDATE OF state ON live_operation_owners WHEN NEW.state = 'released' BEGIN SELECT RAISE(FAIL, 'injected owner release failure'); END",
+        )
+        .execute(&release_pool)
+        .await
+        .unwrap();
+        let release_error = write_pid_values(
+            &release_pool,
+            release_run_id,
+            &FailingDriver,
+            release_tags.proportional_constant.as_deref().unwrap(),
+            release_tags.integral_constant.as_deref().unwrap(),
+            release_tags.derivative_constant.as_deref().unwrap(),
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 2.0,
+                integral: 3.0,
+                derivative: 0.5,
+            },
+            WriteKind::Revert,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(release_error.to_string().contains("owner release failure"));
+        sqlx::query("DROP TRIGGER reject_pid_owner_release")
+            .execute(&release_pool)
+            .await
+            .unwrap();
+
+        let (combined_pool, combined_run_id, _template, combined_tags, _config) =
+            recorded_fixture().await;
+        sqlx::query(
+            "CREATE TRIGGER reject_pid_restore_intent BEFORE UPDATE OF restore_intent_json ON live_operation_owners BEGIN SELECT RAISE(FAIL, 'injected restore intent failure'); END",
+        )
+        .execute(&combined_pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER reject_pid_owner_release_again BEFORE UPDATE OF state ON live_operation_owners WHEN NEW.state = 'released' BEGIN SELECT RAISE(FAIL, 'injected owner release failure'); END",
+        )
+        .execute(&combined_pool)
+        .await
+        .unwrap();
+        let combined_error = write_pid_values(
+            &combined_pool,
+            combined_run_id,
+            &PidDriver::new(&combined_tags, HashMap::new()),
+            combined_tags.proportional_constant.as_deref().unwrap(),
+            combined_tags.integral_constant.as_deref().unwrap(),
+            combined_tags.derivative_constant.as_deref().unwrap(),
+            ResponseLevel::Moderate,
+            WriteReadback {
+                proportional: 2.0,
+                integral: 3.0,
+                derivative: 0.5,
+            },
+            WriteKind::Write,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            combined_error
+                .to_string()
+                .contains("additionally failed to persist live ownership release"),
+            "{combined_error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn owned_pid_write_rejects_mismatched_run_and_operation_kind() {
+        let (pool, run_id, _template, tags, _config) = fixture().await;
+        let owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        let driver = PidDriver::new(&tags, HashMap::new());
+        let audited = AuditedDriver::new(&driver, &pool, &owner, Some(run_id));
+        let target = WriteReadback {
+            proportional: 2.0,
+            integral: 3.0,
+            derivative: 0.5,
+        };
+        assert!(
+            write_pid_values_with_owner(
+                &pool,
+                run_id + 1,
+                &audited,
+                "P",
+                "I",
+                "D",
+                ResponseLevel::Moderate,
+                target,
+                WriteKind::Write,
+                false,
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not match PID write run")
+        );
+        assert!(
+            write_pid_values_with_owner(
+                &pool,
+                run_id,
+                &audited,
+                "P",
+                "I",
+                "D",
+                ResponseLevel::Moderate,
+                target,
+                WriteKind::Revert,
+                false,
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not authorize")
+        );
+        assert!(
+            write_pid_values_inner(
+                &pool,
+                run_id + 1,
+                &audited,
+                "P",
+                "I",
+                "D",
+                ResponseLevel::Moderate,
+                target,
+                WriteKind::Write,
+                false,
+                &owner,
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not match PID write run")
+        );
+        owner.release().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pid_restore_intent_requires_a_present_json_object_and_persists_target_values() {
+        let (pool, run_id, _template, tags, _config) = fixture().await;
+        let target = WriteReadback {
+            proportional: 2.0,
+            integral: 3.0,
+            derivative: 0.5,
+        };
+        let previous = WriteReadback {
+            proportional: 1.0,
+            integral: 2.0,
+            derivative: 0.0,
+        };
+
+        let owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            None,
+        )
+        .await
+        .unwrap();
+        persist_pid_restore_intent(
+            &pool,
+            &owner,
+            run_id,
+            WriteKind::Write,
+            ResponseLevel::Moderate,
+            previous,
+            target,
+        )
+        .await
+        .unwrap();
+        let persisted = bhtune_db::models::LiveOwnershipRow::get(&pool, owner.owner().id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(
+                persisted.restore_intent_json.as_deref().unwrap()
+            )
+            .unwrap()["pid_restore"]["target"]["proportional"]
+                == 2.0
+        );
+        owner.release().await.unwrap();
+
+        let non_object_owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("[]".to_string()),
+        )
+        .await
+        .unwrap();
+        assert!(
+            persist_pid_restore_intent(
+                &pool,
+                &non_object_owner,
+                run_id,
+                WriteKind::Write,
+                ResponseLevel::Moderate,
+                previous,
+                target,
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not a JSON object")
+        );
+        non_object_owner.release().await.unwrap();
+
+        let missing_owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM live_operation_owners WHERE id = ?")
+            .bind(missing_owner.owner().id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            persist_pid_restore_intent(
+                &pool,
+                &missing_owner,
+                run_id,
+                WriteKind::Write,
+                ResponseLevel::Moderate,
+                previous,
+                target,
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("disappeared")
+        );
+        drop(missing_owner);
     }
 
     #[tokio::test]
@@ -770,7 +1745,7 @@ mod tests {
         assert!(handler.events[1].starts_with("failed:"));
 
         let mut handler = RecordingHandler::new(WriteBackSelection::Skipped("unused".into()));
-        let result = maybe_write_back(
+        let error = maybe_write_back(
             &pool,
             run_id,
             &tags,
@@ -782,10 +1757,12 @@ mod tests {
             Some(&mut handler),
         )
         .await
-        .unwrap();
-        assert_eq!(result.0, WriteBackOutcome::Failed);
-        assert_eq!(handler.events.len(), 2);
-        assert_eq!(handler.events[0], "selected:Moderate:true");
-        assert!(handler.events[1].starts_with("finished:Moderate:Failed"));
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires a live ownership guard")
+        );
+        assert_eq!(handler.events, ["selected:Moderate:true"]);
     }
 }

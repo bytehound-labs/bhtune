@@ -21,15 +21,13 @@ workspace = true
 [dependencies]
 chrono.workspace = true
 thiserror.workspace = true
-# Only this crate needs async-trait so far (the `Driver` trait's methods must be async and
-# object-safe -- `Box<dyn Driver>`/`Arc<dyn Driver>` -- so a `bhtune`/`bhtune-server`
-# session can pick an implementation at runtime from config; native `async fn` in traits is
-# not yet dyn-compatible), so it stays local rather than promoted to `[workspace.dependencies]`.
-async-trait = "0.1"
+# `Driver` and the runtime's audited wrapper need async, object-safe methods so adapters can
+# share implementations behind `Box<dyn Driver>`/`Arc<dyn Driver>`. Native async trait methods
+# are not dyn-compatible, so both crates use the workspace's async-trait dependency.
+async-trait.workspace = true
 # `OpcDaDriver` is the only thing that talks to the bridge directly -- everything else goes
 # through the `Driver` trait instead -- so this stays local rather than promoted to
-# `[workspace.dependencies]`, matching the single-consumer convention already used for
-# `async-trait` above.
+# `[workspace.dependencies]`.
 opcda-bridge = "0.5"
 tonic = "0.14"
 # Needed for `tokio::sync::Mutex`: `opcda_bridge::Client`'s methods take `&mut self` (it
@@ -41,8 +39,7 @@ tonic = "0.14"
 # generated futures be `Send`.
 tokio = { version = "1", features = ["sync"] }
 # Only `SimulatorDriver`'s measurement-noise model needs randomness, so this stays local
-# rather than promoted to `[workspace.dependencies]`, matching the single-consumer
-# convention already used for `async-trait`/`opcda-bridge` above. `default-features = false`
+# rather than promoted to `[workspace.dependencies]`. `default-features = false`
 # drops `thread_rng`/`sys_rng`/OS-entropy machinery this crate never uses -- every RNG here
 # is explicitly seeded (see `FopdtProcess::new`) for reproducible simulation runs.
 rand = { version = "0.10", default-features = false, features = [

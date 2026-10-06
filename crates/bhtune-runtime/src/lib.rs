@@ -24,6 +24,7 @@ pub mod driver;
 pub mod export;
 pub mod gateway;
 pub mod history;
+pub mod live_ownership;
 pub mod logging;
 pub mod retention;
 pub mod tune;

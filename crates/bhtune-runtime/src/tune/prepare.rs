@@ -10,12 +10,14 @@ use bhtune_core::{
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
-    DcsTemplateRow, TimingBasis, TimingMetrics, TuneDriver, TuneRunInitialReadings, TuneRunRow,
+    DcsTemplateRow, LiveOperationKind, TimingBasis, TimingMetrics, TuneDriver,
+    TuneRunInitialReadings, TuneRunRow,
 };
 use bhtune_driver::{Driver, TagValue};
 use chrono::Utc;
 
 use crate::cancel::CtrlC;
+use crate::live_ownership::{AuditedDriver, LiveOperationGuard};
 use crate::timing::{PollTimingAccumulator, RunTimeAnchor};
 
 use super::actuation::{
@@ -42,7 +44,7 @@ use super::timing::{
     completed_oscillation_period_ms, record_timing_metrics_if_present,
     warn_on_missed_poll_opportunities,
 };
-use super::writeback::{WriteBackHandler, maybe_write_back};
+use super::writeback::{WriteBackHandler, maybe_write_back_with_owner};
 
 /// Everything [`prepare`] resolves before a tune's long-running polling phase can start:
 /// the already-validated [`ValidatedTuneRequest`], the resolved template and derived tags, a
@@ -67,6 +69,7 @@ pub struct PreparedTune {
     pub(super) time_anchor: RunTimeAnchor,
     pub(super) write_pid: Option<ResponseLevel>,
     pub(super) allow_uncertain_quality: bool,
+    pub(super) ownership: Option<LiveOperationGuard>,
 }
 /// Prepare a simulator tune and bind its history to a demo session before the background
 /// execution is started. Live OPC DA preparation is intentionally rejected by this helper.
@@ -237,7 +240,8 @@ pub(super) async fn prepare_internal(
 
     let config = build_loop_config_with_timing(&args, timing)?;
     let tags = build_loop_tags(&args, &template)?;
-    let driver = crate::driver::build_with_poll_interval(&args, timing.poll_interval_ms).await?;
+    // This gateway-only preflight is read-only and rejects unsupported peers before a run
+    // row exists. The live driver connection remains after ownership is acquired below.
     let gateway_compatibility = if let (DriverKind::Opcda, Some(bridge_host), Some(server)) = (
         args.driver,
         args.bridge_host.as_deref(),
@@ -247,7 +251,6 @@ pub(super) async fn prepare_internal(
     } else {
         None
     };
-
     let time_anchor = RunTimeAnchor::now();
     let started_at = time_anchor.utc();
     let run = TuneRunRow::start_with_demo_session(
@@ -301,6 +304,51 @@ pub(super) async fn prepare_internal(
         return Err(error);
     }
 
+    let ownership = if args.driver == DriverKind::Opcda {
+        let ownership_result = async {
+            let bridge_host = args
+                .bridge_host
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("resolved OPC bridge host is missing"))?;
+            let server = args
+                .server
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("resolved OPC server is missing"))?;
+            let intent = serde_json::to_string(&serde_json::json!({
+                "version": 1,
+                "kind": "tune_restore",
+                "run_id": run.id,
+                "state": "awaiting_initial_readings",
+                "mv_tag": tags.manipulated_variable,
+            }))?;
+            LiveOperationGuard::acquire(
+                pool,
+                Some(run.id),
+                LiveOperationKind::Tune,
+                bridge_host,
+                server,
+                &tags.manipulated_variable,
+                Some(intent),
+            )
+            .await
+            .map_err(anyhow::Error::from)
+        }
+        .await;
+        match ownership_result {
+            Ok(ownership) => Some(ownership),
+            Err(error) => {
+                finalize_preparation_failure(pool, run.id, &error.to_string()).await;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+
+    let setup_result =
+        crate::driver::build_with_poll_interval(&args, timing.poll_interval_ms).await;
+    let (driver, ownership) = complete_driver_setup(pool, run.id, setup_result, ownership).await?;
+
     tracing::info!(
         run_id = run.id,
         template = %args.template,
@@ -324,6 +372,7 @@ pub(super) async fn prepare_internal(
         time_anchor,
         write_pid,
         allow_uncertain_quality,
+        ownership,
     })
 }
 pub(super) async fn finalize_preparation_failure(pool: &SqlitePool, run_id: i64, reason: &str) {
@@ -339,6 +388,40 @@ pub(super) async fn finalize_preparation_failure(pool: &SqlitePool, run_id: i64,
                 error = %delete_error,
                 "could not remove a failed preparation run"
             );
+        }
+    }
+}
+pub(super) async fn complete_driver_setup(
+    pool: &SqlitePool,
+    run_id: i64,
+    setup_result: anyhow::Result<Box<dyn Driver>>,
+    ownership: Option<LiveOperationGuard>,
+) -> anyhow::Result<(Box<dyn Driver>, Option<LiveOperationGuard>)> {
+    match setup_result {
+        Ok(driver) => Ok((driver, ownership)),
+        Err(error) => {
+            let failure_persisted =
+                match TuneRunRow::fail(pool, run_id, Utc::now(), &error.to_string()).await {
+                    Ok(_) => true,
+                    Err(persist_error) => {
+                        tracing::error!(
+                            run_id,
+                            error = %persist_error,
+                            "failed to persist live tune preparation failure"
+                        );
+                        false
+                    }
+                };
+            if failure_persisted && let Some(ownership) = ownership {
+                ownership.release().await?;
+            }
+            if !failure_persisted {
+                tracing::error!(
+                    run_id,
+                    "retaining live ownership so startup can export this orphaned running row"
+                );
+            }
+            Err(error)
         }
     }
 }
@@ -373,7 +456,15 @@ pub async fn drive_report(
         time_anchor,
         write_pid,
         allow_uncertain_quality,
+        ownership,
     } = prepared;
+    let mut ownership = ownership;
+    let audited_driver = ownership
+        .as_ref()
+        .map(|owner| AuditedDriver::new(driver.as_ref(), pool, owner, Some(run_id)));
+    let execution_driver: &dyn Driver = audited_driver
+        .as_ref()
+        .map_or(driver.as_ref(), |audited| audited);
 
     let outcome = execute_with_timing(
         pool,
@@ -381,7 +472,7 @@ pub async fn drive_report(
         &args,
         &template,
         &tags,
-        driver.as_ref(),
+        execution_driver,
         config,
         timing,
         time_anchor,
@@ -389,6 +480,7 @@ pub async fn drive_report(
         allow_uncertain_quality,
         ctrl_c,
         handler,
+        ownership.as_ref(),
     )
     .await;
 
@@ -396,6 +488,9 @@ pub async fn drive_report(
         Ok(run_outcome) => {
             let tune_outcome = tune_outcome_for_run(&run_outcome);
             tracing::info!(run_id, outcome = tune_outcome.label(), "tune run finished");
+            if let Some(ownership) = ownership.take() {
+                ownership.release().await?;
+            }
             Ok(TuneRunReport {
                 run_id,
                 outcome: run_outcome,
@@ -409,9 +504,24 @@ pub async fn drive_report(
                 "the run failed before MV confirmation completed",
             )
             .await;
-            TuneRunRow::fail(pool, run_id, Utc::now(), &e.to_string())
-                .await
-                .ok();
+            let failure_persistence =
+                TuneRunRow::fail(pool, run_id, Utc::now(), &e.to_string()).await;
+            if let Err(persist_error) = failure_persistence {
+                return Err(anyhow::anyhow!(
+                    "{e}; additionally failed to persist the terminal run failure: \
+                     {persist_error}"
+                ));
+            }
+            let ownership_release = match ownership.take() {
+                Some(ownership) => ownership.release().await,
+                None => Ok(()),
+            };
+            if let Err(release_error) = ownership_release {
+                return Err(anyhow::anyhow!(
+                    "{e}; additionally failed to persist live ownership release: \
+                     {release_error}"
+                ));
+            }
             Err(e)
         }
     }
@@ -495,6 +605,7 @@ pub(super) async fn execute_with_timing(
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     handler: Option<&mut dyn WriteBackHandler>,
+    ownership: Option<&LiveOperationGuard>,
 ) -> anyhow::Result<RunOutcome> {
     let started_at = time_anchor.utc();
     let initial = read_initial_values(driver, tags, template, allow_uncertain_quality).await?;
@@ -522,6 +633,34 @@ pub(super) async fn execute_with_timing(
         },
     )
     .await?;
+    if let Some(ownership) = ownership {
+        let restore_intent = serde_json::to_string(&serde_json::json!({
+            "version": 1,
+            "kind": "tune_restore",
+            "run_id": run_id,
+            "state": "ready_to_restore",
+            "mv_tag": tags.manipulated_variable,
+            "initial_readings": {
+                "pv_ini": initial.pv_ini,
+                "mv_ini": initial.mv_ini,
+                "mv_range_low": initial.mv_range_low,
+                "mv_range_high": initial.mv_range_high,
+                "pv_range_low": initial.pv_range_low,
+                "pv_range_high": initial.pv_range_high,
+                "controller_direction": initial.direction,
+                "mode_raw": initial.mode_raw,
+                "mode_attribute_raw": initial.mode_attribute_raw,
+                "setpoint_ini": initial.setpoint_ini,
+            },
+            "template_policy": {
+                "revert_mode": template.revert_mode,
+                "mode_auto_value": template.mode_auto_value,
+                "mode_manual_value": template.mode_manual_value,
+                "mode_attribute_program_value": template.mode_attribute_program_value,
+            },
+        }))?;
+        ownership.persist_restore_intent(&restore_intent).await?;
+    }
 
     let mut guard = MutationGuard::default();
     let mut mv_actuations = MvActuationTracker::for_run(args, &initial);
@@ -618,6 +757,7 @@ pub(super) async fn execute_with_timing(
                 allow_uncertain_quality,
                 ctrl_c,
                 handler,
+                ownership,
                 &mut mv_actuations,
                 completion,
                 &mut timing,
@@ -694,6 +834,7 @@ pub(super) async fn execute<R: std::io::BufRead>(
         write_pid,
         allow_uncertain_quality,
         ctrl_c,
+        None,
         None,
     )
     .await
@@ -793,6 +934,7 @@ pub(super) async fn finish_completed_run(
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
     handler: Option<&mut dyn WriteBackHandler>,
+    ownership: Option<&LiveOperationGuard>,
     mv_actuations: &mut Option<MvActuationTracker>,
     mut completion: CompletedPoll,
     timing: &mut PollTimingAccumulator,
@@ -873,7 +1015,7 @@ pub(super) async fn finish_completed_run(
     .await?;
     match restore_attempt {
         RestoreAttempt::Confirmed => {
-            let (write_back, write_back_detail) = maybe_write_back(
+            let (write_back, write_back_detail) = maybe_write_back_with_owner(
                 pool,
                 run_id,
                 tags,
@@ -883,6 +1025,7 @@ pub(super) async fn finish_completed_run(
                 write_pid,
                 allow_uncertain_quality,
                 handler,
+                ownership,
             )
             .await?;
             Ok(RunOutcome::Completed {

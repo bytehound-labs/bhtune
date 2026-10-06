@@ -155,6 +155,17 @@ pub enum RestoreStatus {
     Incomplete,
 }
 
+/// The durable eligibility and outcome state for `bhtune restore-loop`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TuneRecoveryState {
+    Eligible,
+    Running,
+    Confirmed,
+    Incomplete,
+    NotRecoverable,
+}
+
 /// The initial-readings snapshot for a [`TuneRunRow`] — known only once the driver's initial
 /// read actually succeeds (`ReadInitialOPCvalues` in the legacy app); `None` for a run that
 /// failed before or during that step. Combines
@@ -162,7 +173,7 @@ pub enum RestoreStatus {
 /// resolved [`ControllerDirection`] `core-tuning-math` needs alongside them, as one bespoke
 /// type, since gluing the two existing structs together with one extra field isn't any
 /// simpler than a purpose-built one here.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct TuneRunInitialReadings {
     pub pv_ini: f32,
     pub mv_ini: f32,
@@ -188,7 +199,7 @@ pub struct TuneRunInitialReadings {
 }
 
 /// One row of `tune_runs`: a single MRFT (or future Step Test) execution against a loop.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct TuneRunRow {
     pub id: i64,
     pub loop_id: Option<i64>,
@@ -261,6 +272,11 @@ pub struct TuneRunRow {
     /// Ctrl+C, `[tuning].restore_timeout_secs`, or an individual failed restore step
     /// prevented from being confirmed.
     pub restore_detail: Option<String>,
+    /// Explicit recovery lifecycle state; absent for pre-recovery runs and ordinary terminal
+    /// runs that never became eligible for restore-loop recovery.
+    pub recovery_state: Option<TuneRecoveryState>,
+    /// Structured evidence supporting the recovery state; never inferred from error text.
+    pub recovery_evidence_json: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -1088,23 +1104,39 @@ impl TuneRunRow {
             .map_err(DbError::Query)
     }
 
+    /// Counts runs matching a deletion filter while preserving runs with an unresolved live
+    /// recovery. This is the count used by retention previews so they match the actual sweep.
+    pub async fn count_deletable_matching(
+        pool: &SqlitePool,
+        filter: &TuneRunFilter,
+    ) -> DbResult<i64> {
+        let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT COUNT(*) FROM tune_runs");
+        push_filter(&mut builder, filter)?;
+        push_deletable_recovery_guard(&mut builder);
+        builder
+            .build_query_scalar::<i64>()
+            .fetch_one(pool)
+            .await
+            .map_err(DbError::Query)
+    }
+
     /// Deletes every run matching `filter` in one statement (SQLite treats a single
     /// statement as its own transaction, so no explicit `BEGIN`/`COMMIT` is needed). Returns
     /// the number of runs deleted. `tune_samples`/`tune_results`/`tune_writes`'s `ON DELETE
     /// CASCADE` foreign keys in the schema remove each deleted run's samples,
     /// results, and write-back audit rows automatically.
     ///
-    /// Shares `push_filter` with [`Self::list`]/[`Self::count`], so "what a `--dry-run`
-    /// preview reports" and "what an actual sweep deletes" can never disagree — used this way
-    /// by the automatic retention sweep and `bhtune history prune`.
+    /// Runs with recovery state `eligible`, `running`, or `incomplete` are retained until a
+    /// recovery is confirmed. `count_deletable_matching` applies the same protection for
+    /// retention previews.
     ///
-    /// An empty `filter` (every field `None`) matches and deletes every run in the table —
-    /// callers that mean to scope a deletion must build a `filter` that says so explicitly;
-    /// this function has no separate "are you sure" guard of its own, matching `count`/`list`
-    /// treating an empty filter as "everything" rather than "nothing".
+    /// An empty `filter` (every field `None`) matches every deletable run in the table.
+    /// Callers that mean to scope a deletion must build a `filter` that says so explicitly;
+    /// unresolved live-recovery rows remain protected even when the filter is empty.
     pub async fn delete_matching(pool: &SqlitePool, filter: &TuneRunFilter) -> DbResult<u64> {
         let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new("DELETE FROM tune_runs");
         push_filter(&mut builder, filter)?;
+        push_deletable_recovery_guard(&mut builder);
         let result = builder
             .build()
             .execute(pool)
@@ -1116,12 +1148,13 @@ impl TuneRunRow {
     /// Deletes exactly one run by id, as used by the browser history page's delete action.
     /// Returns whether a row was actually deleted -- `false` if no run has that id, letting the
     /// caller map that to a 404 rather than a silent no-op. Unlike
-    /// [`DcsTemplateRow::delete`], no foreign key ever blocks this: `tune_runs` has no
-    /// parent-side `RESTRICT` reference pointing at it, only the `ON DELETE CASCADE`
-    /// children (`tune_samples`/`tune_results`/`tune_writes`, see the schema migration),
-    /// which SQLite removes automatically as part of the same statement.
+    /// [`DcsTemplateRow::delete`], ordinary run children are removed by `ON DELETE CASCADE`.
+    /// An unresolved live recovery state is excluded atomically so a concurrent delete cannot
+    /// release the recovery claim.
     pub async fn delete(pool: &SqlitePool, id: i64) -> DbResult<bool> {
-        let result = sqlx::query("DELETE FROM tune_runs WHERE id = ?")
+        let result = sqlx::query(
+            "DELETE FROM tune_runs WHERE id = ? AND (recovery_state IS NULL OR recovery_state NOT IN ('eligible', 'running', 'incomplete'))",
+        )
             .bind(id)
             .execute(pool)
             .await
@@ -1142,6 +1175,12 @@ impl TuneRunRow {
             .map_err(DbError::Query)?;
         Ok(result.rows_affected() > 0)
     }
+}
+
+fn push_deletable_recovery_guard(builder: &mut QueryBuilder<Sqlite>) {
+    builder.push(
+        " AND (recovery_state IS NULL OR recovery_state NOT IN ('eligible', 'running', 'incomplete'))",
+    );
 }
 
 /// Appends `WHERE <conditions>` to `builder` for every `Some` field in `filter`, or nothing
@@ -1257,6 +1296,12 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
     let restore_status = restore_status_text
         .map(|text| text_to_enum("restore_status", &text))
         .transpose()?;
+    let recovery_state_text: Option<String> =
+        row.try_get("recovery_state").map_err(DbError::Query)?;
+    let recovery_state = recovery_state_text
+        .as_deref()
+        .map(|text| text_to_enum("recovery_state", text))
+        .transpose()?;
 
     let template_origin: String = row.try_get("template_origin").map_err(DbError::Query)?;
     let template_snapshot_json: String = row
@@ -1328,6 +1373,10 @@ fn row_to_tune_run(row: SqliteRow) -> DbResult<TuneRunRow> {
         gateway_compatibility_json,
         restore_status,
         restore_detail: row.try_get("restore_detail").map_err(DbError::Query)?,
+        recovery_state,
+        recovery_evidence_json: row
+            .try_get("recovery_evidence_json")
+            .map_err(DbError::Query)?,
         created_at: row.try_get("created_at").map_err(DbError::Query)?,
     })
 }
@@ -1427,6 +1476,34 @@ mod tests {
         let (pool, run_id) = sample_run().await;
         assert!(TuneRunRow::delete(&pool, run_id).await.unwrap());
         assert!(!TuneRunRow::delete(&pool, run_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn deletion_preserves_runs_with_unresolved_live_recovery() {
+        for recovery_state in ["eligible", "running", "incomplete"] {
+            let (pool, run_id) = sample_run().await;
+            sqlx::query("UPDATE tune_runs SET outcome = 'failed', recovery_state = ? WHERE id = ?")
+                .bind(recovery_state)
+                .bind(run_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                TuneRunRow::count_deletable_matching(&pool, &TuneRunFilter::default())
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                TuneRunRow::delete_matching(&pool, &TuneRunFilter::default())
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert!(!TuneRunRow::delete(&pool, run_id).await.unwrap());
+            assert!(TuneRunRow::get(&pool, run_id).await.unwrap().is_some());
+        }
     }
 
     #[tokio::test]

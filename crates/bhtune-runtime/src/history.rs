@@ -2,11 +2,16 @@
 
 use bhtune_core::ResponseLevel;
 use bhtune_db::SqlitePool;
-use bhtune_db::models::{TuneDriver, TuneRunRow, TuneWriteRow, WriteKind, WriteReadback};
+use bhtune_db::models::{
+    LiveOperationKind, TuneDriver, TuneRunRow, TuneWriteRow, WriteKind, WriteReadback,
+};
 use bhtune_driver::OpcDaDriver;
 use thiserror::Error;
 
-use crate::tune::{PidWriteOutcome, write_pid_values};
+use crate::{
+    live_ownership::{AuditedDriver, LiveOperationGuard},
+    tune::{PidWriteOutcome, write_pid_values_with_owner},
+};
 
 #[derive(Debug, Error)]
 pub enum RevertRunError {
@@ -160,42 +165,80 @@ pub async fn revert_run_with_progress(
         request.server.as_deref(),
     )
     .map_err(RevertRunError::Invalid)?;
-    let driver = OpcDaDriver::connect(&bridge_host, &server)
-        .await
-        .map_err(|error| RevertRunError::Connection(anyhow::Error::new(error)))?;
-    let compatibility =
-        crate::gateway::require_live_gateway_compatible(&bridge_host, Some(&server))
-            .await
-            .map_err(RevertRunError::Gateway)?;
-    record_gateway_compatibility_if_missing(pool, &run, &compatibility).await?;
-
-    on_ready(RevertProgress {
-        run_id,
-        loop_name: &run.loop_name,
-        response_level,
-        target,
-    });
-
-    let outcome = write_pid_values(
+    let restore_intent = serde_json::to_string(&serde_json::json!({
+        "version": 1,
+        "kind": "pid_restore",
+        "run_id": run_id,
+        "write_kind": WriteKind::Revert,
+        "state": "awaiting_prewrite_readings",
+    }))
+    .map_err(|error| RevertRunError::Invalid(anyhow::Error::new(error)))?;
+    let ownership = LiveOperationGuard::acquire_for_recorded_run(
         pool,
-        run_id,
-        &driver,
-        p_tag,
-        i_tag,
-        d_tag,
-        response_level,
-        target,
-        WriteKind::Revert,
-        allow_uncertain_quality,
+        &run,
+        LiveOperationKind::PidRevert,
+        restore_intent,
     )
     .await
-    .map_err(RevertRunError::Persistence)?;
+    .map_err(|error| RevertRunError::Persistence(error.into()))?;
+    let operation_result = async {
+        ownership
+            .ensure_healthy()
+            .map_err(RevertRunError::Persistence)?;
+        let driver = OpcDaDriver::connect(&bridge_host, &server)
+            .await
+            .map_err(|error| RevertRunError::Connection(anyhow::Error::new(error)))?;
+        let compatibility =
+            crate::gateway::require_live_gateway_compatible(&bridge_host, Some(&server))
+                .await
+                .map_err(RevertRunError::Gateway)?;
+        record_gateway_compatibility_if_missing(pool, &run, &compatibility).await?;
 
-    Ok(RevertRunResult {
-        response_level,
-        target,
-        outcome,
-    })
+        on_ready(RevertProgress {
+            run_id,
+            loop_name: &run.loop_name,
+            response_level,
+            target,
+        });
+
+        let audited = AuditedDriver::new(&driver, pool, &ownership, Some(run_id));
+        let outcome = write_pid_values_with_owner(
+            pool,
+            run_id,
+            &audited,
+            p_tag,
+            i_tag,
+            d_tag,
+            response_level,
+            target,
+            WriteKind::Revert,
+            allow_uncertain_quality,
+        )
+        .await
+        .map_err(RevertRunError::Persistence)?;
+        Ok::<_, RevertRunError>(RevertRunResult {
+            response_level,
+            target,
+            outcome,
+        })
+    }
+    .await;
+    let release_result = ownership.release().await;
+    combine_revert_and_release(operation_result, release_result)
+}
+
+fn combine_revert_and_release<T>(
+    operation_result: Result<T, RevertRunError>,
+    release_result: anyhow::Result<()>,
+) -> Result<T, RevertRunError> {
+    match (operation_result, release_result) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(RevertRunError::Persistence(error)),
+        (Err(error), Err(release_error)) => Err(RevertRunError::Persistence(anyhow::anyhow!(
+            "{error}; additionally failed to persist live ownership release: {release_error}"
+        ))),
+    }
 }
 
 async fn record_gateway_compatibility_if_missing(
@@ -254,8 +297,35 @@ mod tests {
             gateway_compatibility_json: None,
             restore_status: None,
             restore_detail: None,
+            recovery_state: None,
+            recovery_evidence_json: None,
             created_at: chrono::Utc::now(),
         }
+    }
+
+    #[test]
+    fn revert_and_release_results_preserve_both_failures() {
+        assert!(combine_revert_and_release::<()>(Ok(()), Ok(())).is_ok());
+
+        let operation_only = combine_revert_and_release::<()>(
+            Err(RevertRunError::Invalid(anyhow::anyhow!("operation failed"))),
+            Ok(()),
+        )
+        .unwrap_err();
+        assert!(operation_only.to_string().contains("operation failed"));
+
+        let release_only =
+            combine_revert_and_release::<()>(Ok(()), Err(anyhow::anyhow!("release failed")))
+                .unwrap_err();
+        assert!(release_only.to_string().contains("release failed"));
+
+        let both = combine_revert_and_release::<()>(
+            Err(RevertRunError::Invalid(anyhow::anyhow!("operation failed"))),
+            Err(anyhow::anyhow!("release failed")),
+        )
+        .unwrap_err();
+        assert!(both.to_string().contains("operation failed"));
+        assert!(both.to_string().contains("release failed"));
     }
 
     #[test]

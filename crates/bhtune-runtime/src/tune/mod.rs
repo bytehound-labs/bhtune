@@ -22,6 +22,7 @@ mod poll;
 mod preflight;
 mod prepare;
 mod quality;
+mod recovery;
 mod request;
 mod restore;
 mod timing;
@@ -40,6 +41,10 @@ pub use preflight::{
 };
 pub use prepare::{PreparedTune, drive, drive_report, prepare, prepare_owned};
 pub use quality::sample_quality_from_driver;
+pub use recovery::{
+    RecoveryStepReport, RecoveryStepStatus, RestoreLoopReport, RestoreLoopRequest,
+    StartupOrphanSweepReport, recover_startup_orphans, restore_loop,
+};
 pub use request::{
     DEFAULT_SIM_DEAD_TIME, DEFAULT_SIM_GAIN, DEFAULT_SIM_INITIAL_VALUE, DEFAULT_SIM_NOISE,
     DEFAULT_SIM_SEED, DEFAULT_SIM_TAU, DriverKind, TuneRequest, TuneRequestValidationError,
@@ -47,7 +52,7 @@ pub use request::{
 };
 pub use writeback::{
     PidWriteOutcome, WriteBackHandler, WriteBackSelection, WriteBackSkipReason,
-    pid_parameters_for_result, write_pid_values,
+    pid_parameters_for_result, write_pid_values, write_pid_values_with_owner,
 };
 #[allow(unused_imports)]
 pub(crate) use writeback::{read_previous_pid_values, write_and_verify_pid_value};
@@ -118,9 +123,10 @@ mod tests {
     };
     use bhtune_db::SqlitePool;
     use bhtune_db::models::{
-        EffectiveTuning, MvActuationKind, MvActuationStatus, NewTuneMvActuation, RollbackState,
-        SampleQuality, TimingBasis, TimingMetrics, TuneDriver, TuneMvActuationRow, TuneResultRow,
-        TuneRunRow, TuneSampleRow, TuneWriteRow,
+        EffectiveTuning, LiveOperationKind, LiveOwnershipRow, LiveOwnershipState, MvActuationKind,
+        MvActuationStatus, NewTuneMvActuation, RollbackState, SampleQuality, TimingBasis,
+        TimingMetrics, TuneDriver, TuneMvActuationRow, TuneResultRow, TuneRunRow, TuneSampleRow,
+        TuneWriteRow,
     };
     use bhtune_driver::{Driver, TagValue, TagWrite};
     use chrono::{DateTime, Utc};
@@ -141,6 +147,7 @@ mod tests {
     };
     use crate::cancel::CtrlC;
     use crate::driver::{SIMULATOR_MV_TAG, SIMULATOR_PV_TAG};
+    use crate::live_ownership::{AuditedDriver, LiveOperationGuard};
     use crate::timing::{PollTimingAccumulator, RunTimeAnchor, TickTimeSource};
     use bhtune_core::ControllerType;
     use bhtune_db::models::{SamplingAdequacy, TemplateOrigin};
@@ -151,6 +158,23 @@ mod tests {
             .await
             .unwrap();
         pool
+    }
+
+    async fn attach_test_owner(pool: &SqlitePool, prepared: &mut PreparedTune) -> i64 {
+        let owner = LiveOperationGuard::acquire(
+            pool,
+            Some(prepared.run_id()),
+            LiveOperationKind::Tune,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &prepared.tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        let owner_id = owner.owner().id;
+        prepared.ownership = Some(owner);
+        owner_id
     }
 
     async fn start_opc_test_run(
@@ -430,6 +454,15 @@ mod tests {
             yes: false,
             write_pid: None,
         }
+    }
+
+    fn fast_opcda_args(bridge_host: String) -> TuneRequest {
+        let mut args = fast_simulator_args();
+        args.driver = DriverKind::Opcda;
+        args.tagname = "Unit1.LIC101.PV".to_string();
+        args.bridge_host = Some(bridge_host);
+        args.server = Some("Mock.Kepware.Sim".to_string());
+        args
     }
 
     fn completed_poll_for_settling(start: DateTime<Utc>, next_tick_index: i64) -> CompletedPoll {
@@ -1362,12 +1395,133 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drive_completes_a_prepared_simulator_run() {
+    async fn prepare_marks_run_failed_when_live_ownership_is_busy() {
         let pool = seeded_pool().await;
-        let prepared = prepare(&pool, fast_simulator_args(), &test_config())
+        let (host, server) = crate::test_support::start_mock_server(
+            crate::test_support::MockBridgeService::default(),
+        )
+        .await;
+        let blocker = LiveOperationGuard::acquire(
+            &pool,
+            None,
+            LiveOperationKind::OpcWrite,
+            "127.0.0.1:7602",
+            "Existing.Mock.Server",
+            "Existing.MV",
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+
+        let error = prepare(&pool, fast_opcda_args(host), &test_config())
+            .await
+            .err()
+            .expect("preparation must fail when another live owner holds the database lock");
+
+        assert!(
+            error
+                .to_string()
+                .contains("another live controller operation holds this database")
+        );
+        let runs = TuneRunRow::list(
+            &pool,
+            &bhtune_db::models::TuneRunFilter::default(),
+            bhtune_db::models::Pagination::first(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].outcome, bhtune_db::models::TuneOutcome::Failed);
+        blocker.release().await.unwrap();
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn prepare_releases_owner_after_opc_driver_setup_failure() {
+        let pool = seeded_pool().await;
+        let mut prepared = prepare(&pool, fast_simulator_args(), &test_config())
             .await
             .unwrap();
         let run_id = prepared.run_id();
+        let owner_id = attach_test_owner(&pool, &mut prepared).await;
+        let setup_result: anyhow::Result<Box<dyn Driver>> =
+            Err(anyhow::anyhow!("injected driver setup failure"));
+
+        let error = complete_driver_setup(&pool, run_id, setup_result, prepared.ownership.take())
+            .await
+            .err()
+            .expect("driver setup failure must be returned");
+
+        assert!(error.to_string().contains("injected driver setup failure"));
+        assert_eq!(
+            TuneRunRow::get(&pool, run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome,
+            bhtune_db::models::TuneOutcome::Failed
+        );
+        assert_eq!(
+            LiveOwnershipRow::get(&pool, owner_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            LiveOwnershipState::Released
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_retains_live_owner_when_setup_failure_cannot_be_persisted() {
+        let pool = seeded_pool().await;
+        let mut prepared = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let run_id = prepared.run_id();
+        let owner_id = attach_test_owner(&pool, &mut prepared).await;
+        sqlx::query(
+            "CREATE TRIGGER fail_setup_terminalization \
+             BEFORE UPDATE OF outcome ON tune_runs
+             BEGIN SELECT RAISE(ABORT, 'injected setup failure persistence'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let setup_result: anyhow::Result<Box<dyn Driver>> =
+            Err(anyhow::anyhow!("injected driver setup failure"));
+
+        let error = complete_driver_setup(&pool, run_id, setup_result, prepared.ownership.take())
+            .await
+            .err()
+            .expect("driver setup failure must be returned");
+
+        assert!(error.to_string().contains("injected driver setup failure"));
+        assert_eq!(
+            TuneRunRow::get(&pool, run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome,
+            bhtune_db::models::TuneOutcome::Running
+        );
+        assert_eq!(
+            LiveOwnershipRow::get(&pool, owner_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            LiveOwnershipState::Active
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_completes_a_prepared_simulator_run() {
+        let pool = seeded_pool().await;
+        let mut prepared = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let run_id = prepared.run_id();
+        let owner_id = attach_test_owner(&pool, &mut prepared).await;
 
         let outcome = drive(&pool, prepared, &mut CtrlC::never()).await.unwrap();
 
@@ -1380,6 +1534,14 @@ mod tests {
                 .outcome,
             bhtune_db::models::TuneOutcome::Completed
         );
+        assert_eq!(
+            LiveOwnershipRow::get(&pool, owner_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            LiveOwnershipState::Released
+        );
     }
 
     #[tokio::test]
@@ -1389,6 +1551,7 @@ mod tests {
             .await
             .unwrap();
         let run_id = prepared.run_id();
+        let owner_id = attach_test_owner(&pool, &mut prepared).await;
         prepared.driver = Box::new(MockDriver::default().empty_read(SIMULATOR_PV_TAG));
 
         let err = drive(&pool, prepared, &mut CtrlC::never())
@@ -1399,6 +1562,113 @@ mod tests {
         let run = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
         assert_eq!(run.outcome, bhtune_db::models::TuneOutcome::Failed);
         assert!(run.failure_reason.is_some());
+        assert_eq!(
+            LiveOwnershipRow::get(&pool, owner_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            LiveOwnershipState::Released
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_finalizes_execution_error_without_live_ownership() {
+        let pool = seeded_pool().await;
+        let mut prepared = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let run_id = prepared.run_id();
+        prepared.driver = Box::new(MockDriver::default().empty_read(SIMULATOR_PV_TAG));
+
+        let error = drive_report(&pool, prepared, &mut CtrlC::never(), None)
+            .await
+            .expect_err("the invalid simulator read must fail execution");
+
+        assert!(error.to_string().contains("no value"));
+        assert_eq!(
+            TuneRunRow::get(&pool, run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .outcome,
+            bhtune_db::models::TuneOutcome::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_does_not_report_or_release_after_terminal_failure_persistence_fails() {
+        let pool = seeded_pool().await;
+        let mut prepared = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let run_id = prepared.run_id();
+        let owner_id = attach_test_owner(&pool, &mut prepared).await;
+        prepared.driver = Box::new(MockDriver::default().empty_read(SIMULATOR_PV_TAG));
+        sqlx::query(
+            "CREATE TRIGGER fail_terminal_run_update \
+             BEFORE UPDATE OF outcome ON tune_runs
+             BEGIN SELECT RAISE(ABORT, 'injected terminal persistence failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let error = drive_report(&pool, prepared, &mut CtrlC::never(), None)
+            .await
+            .expect_err("failed run persistence must be returned to the caller");
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected terminal persistence failure")
+        );
+        let run = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
+        assert_eq!(run.outcome, bhtune_db::models::TuneOutcome::Running);
+        assert_eq!(
+            LiveOwnershipRow::get(&pool, owner_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            LiveOwnershipState::Active
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_does_not_hide_live_ownership_release_failure() {
+        let pool = seeded_pool().await;
+        let mut prepared = prepare(&pool, fast_simulator_args(), &test_config())
+            .await
+            .unwrap();
+        let run_id = prepared.run_id();
+        let owner_id = attach_test_owner(&pool, &mut prepared).await;
+        prepared.driver = Box::new(MockDriver::default().empty_read(SIMULATOR_PV_TAG));
+        sqlx::query(
+            "CREATE TRIGGER fail_owner_release \
+             BEFORE UPDATE OF state ON live_operation_owners
+             WHEN NEW.state = 'released'
+             BEGIN SELECT RAISE(ABORT, 'injected owner release failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let error = drive_report(&pool, prepared, &mut CtrlC::never(), None)
+            .await
+            .expect_err("live ownership release failure must be returned to the caller");
+
+        assert!(error.to_string().contains("injected owner release failure"));
+        let run = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
+        assert_eq!(run.outcome, bhtune_db::models::TuneOutcome::Failed);
+        assert_eq!(
+            LiveOwnershipRow::get(&pool, owner_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            LiveOwnershipState::Active
+        );
     }
 
     /// Every range/direction override is CLI-supplied below, so `read_initial_values` never
@@ -7448,6 +7718,15 @@ mod tests {
         )
         .await
         .unwrap();
+        TuneRunRow::record_connection(
+            &pool,
+            run.id,
+            Some("Mock.Kepware.Sim"),
+            Some("127.0.0.1:7602"),
+            "{}",
+        )
+        .await
+        .unwrap();
         for (level, kp, ti, td, p, i, d) in [
             (ResponseLevel::Aggressive, 1.0, 0.5, 0.1, 10.0, 2.0, 0.5),
             (ResponseLevel::Moderate, 1.5, 0.7, 0.15, 12.0, 2.5, 0.6),
@@ -7473,6 +7752,91 @@ mod tests {
             .unwrap();
         }
         (pool, run.id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn maybe_write_back_owned_for_test(
+        pool: &SqlitePool,
+        run_id: i64,
+        tags: &LoopTags,
+        template: &DcsTemplate,
+        driver: &dyn Driver,
+        config: LoopConfig,
+        write_pid: Option<ResponseLevel>,
+        allow_uncertain: bool,
+        handler: Option<&mut dyn WriteBackHandler>,
+    ) -> anyhow::Result<(WriteBackOutcome, Option<String>)> {
+        let run = TuneRunRow::get(pool, run_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no run with id {run_id}"))?;
+        let ownership = LiveOperationGuard::acquire_for_recorded_run(
+            pool,
+            &run,
+            LiveOperationKind::Tune,
+            serde_json::json!({"kind": "writeback_test"}).to_string(),
+        )
+        .await?;
+        let audited = AuditedDriver::new(driver, pool, &ownership, Some(run_id));
+        let result = maybe_write_back_with_owner(
+            pool,
+            run_id,
+            tags,
+            template,
+            &audited,
+            config,
+            write_pid,
+            allow_uncertain,
+            handler,
+            Some(&ownership),
+        )
+        .await;
+        let release_result = ownership.release().await;
+        combine_owned_write_back_and_release(result, release_result)
+    }
+
+    fn combine_owned_write_back_and_release<T>(
+        result: anyhow::Result<T>,
+        release_result: anyhow::Result<()>,
+    ) -> anyhow::Result<T> {
+        match (result, release_result) {
+            (Ok(outcome), Ok(())) => Ok(outcome),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Err(error), Err(release_error)) => Err(anyhow::anyhow!(
+                "{error}; additionally failed to persist live ownership release: {release_error}"
+            )),
+        }
+    }
+
+    #[test]
+    fn owned_write_back_and_release_results_preserve_both_failures() {
+        assert!(combine_owned_write_back_and_release::<()>(Ok(()), Ok(())).is_ok());
+        assert!(
+            combine_owned_write_back_and_release::<()>(
+                Err(anyhow::anyhow!("write-back failed")),
+                Ok(()),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("write-back failed")
+        );
+        assert!(
+            combine_owned_write_back_and_release::<()>(
+                Ok(()),
+                Err(anyhow::anyhow!("release failed")),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("release failed")
+        );
+        let both = combine_owned_write_back_and_release::<()>(
+            Err(anyhow::anyhow!("write-back failed")),
+            Err(anyhow::anyhow!("release failed")),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(both.contains("write-back failed"));
+        assert!(both.contains("release failed"));
     }
 
     #[tokio::test]
@@ -7561,7 +7925,7 @@ mod tests {
         let tags = honeywell_tags();
         let driver = honeywell_driver_auto();
 
-        let (outcome, _write_back_detail) = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7616,7 +7980,7 @@ mod tests {
         // is ever written.
         let driver = honeywell_driver_auto().erroring_read("Unit1.LIC101.K");
 
-        let (outcome, write_back_detail) = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7669,7 +8033,7 @@ mod tests {
         // confirmed, so it must be rolled back to its pre-read value.
         let driver = honeywell_driver_auto().rejecting_write("Unit1.LIC101.T1");
 
-        let (outcome, write_back_detail) = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7728,7 +8092,7 @@ mod tests {
             .rejecting_write("Unit1.LIC101.T1")
             .rejecting_write_after("Unit1.LIC101.K", 1);
 
-        let (outcome, write_back_detail) = maybe_write_back(
+        let (outcome, write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7766,7 +8130,7 @@ mod tests {
         // distinct failure mode from an erroring or poor-quality readback.
         let driver = honeywell_driver_auto().distorting_write("Unit1.LIC101.K", 5.0);
 
-        let (outcome, _write_back_detail) = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7800,7 +8164,7 @@ mod tests {
         let tags = honeywell_tags();
         let driver = honeywell_driver_auto().rejecting_write("Unit1.LIC101.K");
 
-        let (outcome, _write_back_detail) = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7830,7 +8194,7 @@ mod tests {
         // the confirmation re-read of the P tag (its 2nd read) then errors.
         let driver = honeywell_driver_auto().erroring_read_after("Unit1.LIC101.K", 1);
 
-        let (outcome, _write_back_detail) = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7874,7 +8238,7 @@ mod tests {
             bhtune_driver::Quality::Bad,
         );
 
-        let (outcome, _write_back_detail) = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7913,7 +8277,7 @@ mod tests {
         let driver = honeywell_driver_auto()
             .with_quality("Unit1.LIC101.K", bhtune_driver::Quality::Uncertain);
 
-        let (outcome, _write_back_detail) = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,
@@ -7940,7 +8304,7 @@ mod tests {
         let tags = honeywell_tags();
         let driver = honeywell_driver_auto();
 
-        let (outcome, _write_back_detail) = maybe_write_back(
+        let (outcome, _write_back_detail) = maybe_write_back_owned_for_test(
             &pool,
             run_id,
             &tags,

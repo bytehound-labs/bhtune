@@ -1295,7 +1295,7 @@
             }
           },
           "409": {
-            "description": "The run has not finished yet.",
+            "description": "The run is active or has unresolved live recovery.",
             "content": {
               "application/json": {
                 "schema": {

@@ -25,7 +25,6 @@ use bhtune_driver::OpcDaDriver;
 use bhtune_runtime::cancel::CtrlC;
 use bhtune_runtime::tune::{
     DriverKind, PidWriteOutcome, drive, pid_parameters_for_result, preflight, prepare,
-    write_pid_values,
 };
 use chrono::Utc;
 

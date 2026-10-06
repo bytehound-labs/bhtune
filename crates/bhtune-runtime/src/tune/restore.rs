@@ -398,6 +398,38 @@ pub(super) async fn restore_mv_with_verification_with_timing(
     tracker: &mut Option<MvActuationTracker>,
     restore_deadline: &mut Instant,
 ) -> anyhow::Result<RestoreMvOutcome> {
+    restore_mv_with_verification_with_timing_and_audit_policy(
+        pool,
+        run_id,
+        args,
+        effective_timing,
+        driver,
+        tag,
+        initial_mv,
+        allow_uncertain_quality,
+        ctrl_c,
+        tracker,
+        restore_deadline,
+        ActuationAuditPolicy::BestEffort,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn restore_mv_with_verification_with_timing_and_audit_policy(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneRequest,
+    effective_timing: EffectiveTiming,
+    driver: &dyn Driver,
+    tag: &str,
+    initial_mv: f32,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    tracker: &mut Option<MvActuationTracker>,
+    restore_deadline: &mut Instant,
+    audit_policy: ActuationAuditPolicy,
+) -> anyhow::Result<RestoreMvOutcome> {
     let Some(tracker) = tracker.as_mut() else {
         let write = tokio::time::timeout_at(
             *restore_deadline,
@@ -509,16 +541,29 @@ pub(super) async fn restore_mv_with_verification_with_timing(
     let accepted_at = Utc::now();
     *restore_deadline = (*restore_deadline)
         .max(accepted_instant + Duration::from_secs(MV_ACTUATION_CONFIRMATION_SECS));
-    tracker
-        .record_restore_accepted_best_effort(
-            pool,
-            run_id,
-            initial_mv,
-            accepted_at,
-            accepted_instant,
-            tolerance,
-        )
-        .await;
+    if audit_policy == ActuationAuditPolicy::Required {
+        tracker
+            .record_restore_accepted_required(
+                pool,
+                run_id,
+                initial_mv,
+                accepted_at,
+                accepted_instant,
+                tolerance,
+            )
+            .await?;
+    } else {
+        tracker
+            .record_restore_accepted_best_effort(
+                pool,
+                run_id,
+                initial_mv,
+                accepted_at,
+                accepted_instant,
+                tolerance,
+            )
+            .await;
+    }
 
     loop {
         let trigger = tracker
@@ -537,7 +582,7 @@ pub(super) async fn restore_mv_with_verification_with_timing(
             tracker,
             trigger,
             MvVerificationCallLimit::Restore(*restore_deadline),
-            ActuationAuditPolicy::BestEffort,
+            audit_policy,
             None,
         )
         .await;
@@ -675,24 +720,83 @@ pub(super) async fn attempt_restore_with_actuation_with_timing(
     measured_oscillation_period_ms: Option<f64>,
     timing: Option<&mut PollTimingAccumulator>,
 ) -> RestoreAttempt {
+    attempt_restore_with_actuation_with_timing_and_audit_policy(
+        pool,
+        run_id,
+        args,
+        effective_timing,
+        driver,
+        tags,
+        template,
+        initial,
+        guard,
+        allow_uncertain_quality,
+        ctrl_c,
+        mv_actuations,
+        completion,
+        measured_oscillation_period_ms,
+        timing,
+        ActuationAuditPolicy::BestEffort,
+    )
+    .await
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn attempt_restore_with_actuation_with_timing_and_audit_policy(
+    pool: &SqlitePool,
+    run_id: i64,
+    args: &TuneRequest,
+    effective_timing: EffectiveTiming,
+    driver: &dyn Driver,
+    tags: &LoopTags,
+    template: &DcsTemplate,
+    initial: &InitialState,
+    guard: &MutationGuard,
+    allow_uncertain_quality: bool,
+    ctrl_c: &mut CtrlC,
+    mv_actuations: &mut Option<MvActuationTracker>,
+    completion: Option<&mut CompletedPoll>,
+    measured_oscillation_period_ms: Option<f64>,
+    timing: Option<&mut PollTimingAccumulator>,
+    audit_policy: ActuationAuditPolicy,
+) -> RestoreAttempt {
     let mut restore_deadline =
         Instant::now() + Duration::from_secs(effective_timing.restore_timeout_secs);
-    let mv = match restore_mv_outcome_or_failed(
-        restore_mv_with_verification_with_timing(
-            pool,
-            run_id,
-            args,
-            effective_timing,
-            driver,
-            &tags.manipulated_variable,
-            initial.mv_ini,
-            allow_uncertain_quality,
-            ctrl_c,
-            mv_actuations,
-            &mut restore_deadline,
-        )
-        .await,
-    ) {
+    let mv_attempt = match audit_policy {
+        ActuationAuditPolicy::BestEffort => {
+            restore_mv_with_verification_with_timing(
+                pool,
+                run_id,
+                args,
+                effective_timing,
+                driver,
+                &tags.manipulated_variable,
+                initial.mv_ini,
+                allow_uncertain_quality,
+                ctrl_c,
+                mv_actuations,
+                &mut restore_deadline,
+            )
+            .await
+        }
+        ActuationAuditPolicy::Required => {
+            restore_mv_with_verification_with_timing_and_audit_policy(
+                pool,
+                run_id,
+                args,
+                effective_timing,
+                driver,
+                &tags.manipulated_variable,
+                initial.mv_ini,
+                allow_uncertain_quality,
+                ctrl_c,
+                mv_actuations,
+                &mut restore_deadline,
+                audit_policy,
+            )
+            .await
+        }
+    };
+    let mv = match restore_mv_outcome_or_failed(mv_attempt) {
         RestoreMvOutcome::Continue(outcome) => outcome,
         RestoreMvOutcome::Interrupted(reason) => {
             let _ = warn_restore_incomplete(tags, initial, &reason);

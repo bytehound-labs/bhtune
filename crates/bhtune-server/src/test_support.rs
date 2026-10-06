@@ -1,6 +1,6 @@
-//! Shared test-only helpers for building an [`AppState`] backed by a seeded, in-memory
-//! database -- every route test module needs one, so it lives here rather than being
-//! copy-pasted per module.
+//! Shared test-only helpers for building an [`AppState`] backed by a seeded database --
+//! every route test module needs one, so it lives here rather than being copy-pasted per
+//! module.
 
 #![cfg(test)]
 
@@ -9,18 +9,10 @@ use std::sync::{Arc, RwLock};
 
 use crate::state::AppState;
 
-/// An in-memory SQLite pool, migrated and seeded with the four built-in DCS/PLC templates
-/// (Yokogawa CentumVP, Honeywell Experion, Schneider Modicon, Allen-Bradley PlantPAx) --
-/// matching what any real bhtune install has from its first startup, so route tests can
-/// exercise the "list/show an existing template" paths without each test seeding its own
-/// fixture data.
-pub(crate) async fn in_memory_state() -> AppState {
-    let pool = bhtune_db::connect_in_memory()
-        .await
-        .expect("in-memory pool should always connect and migrate cleanly");
+async fn seeded_state(pool: bhtune_db::SqlitePool) -> AppState {
     bhtune_db::seed_builtin_templates(&pool, Utc::now())
         .await
-        .expect("seeding the built-in templates into a fresh in-memory db should never fail");
+        .expect("seeding the built-in templates into a fresh test database should never fail");
     let mut config_store =
         bhtune_runtime::config::load_config_store_from(None, None, None, None, false)
             .expect("default test config store should load");
@@ -42,6 +34,26 @@ pub(crate) async fn in_memory_state() -> AppState {
         bhtune_runtime::config::ServerMode::Full,
         bhtune_runtime::config::DemoPolicy::default(),
     )
+}
+
+/// A private in-memory database, migrated and seeded with the four built-in DCS/PLC
+/// templates. Use this for route tests that do not initiate live ownership.
+pub(crate) async fn in_memory_state() -> AppState {
+    let pool = bhtune_db::connect_in_memory()
+        .await
+        .expect("in-memory pool should always connect and migrate cleanly");
+    seeded_state(pool).await
+}
+
+/// A private file-backed test database for route tests that exercise live write/revert
+/// ownership, which requires a stable filesystem path.
+pub(crate) async fn file_backed_state() -> (AppState, tempfile::TempDir) {
+    let directory = tempfile::tempdir().expect("temporary test database directory should exist");
+    let pool = bhtune_db::connect(&directory.path().join("route-test.db"))
+        .await
+        .expect("file-backed pool should connect and migrate cleanly");
+    let state = seeded_state(pool).await;
+    (state, directory)
 }
 
 /// Shared mock `Bridge` for route tests that need a real `OpcDaDriver` round trip.

@@ -438,6 +438,26 @@ esac
     ;;
 esac
 ;;
+(restore-loop)
+_arguments "${_arguments_options[@]}" : \
+'--bridge-host=[Cross-check the run'\''s recorded OPC bridge host; never selects a different gateway]:BRIDGE_HOST:_default' \
+'--server=[Cross-check the run'\''s recorded OPC server; never selects a different controller]:SERVER:_default' \
+'--output=[How to print the per-step restore report]:OUTPUT:((table\:"Human-readable text (default)"
+json\:"Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped"))' \
+'--config=[Path to a TOML config file (default\: platform-specific, see \`crate\:\:config\`)]:PATH:_files' \
+'--db=[Path to the SQLite database file (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_db_path_from\`). CLI > \`BHTUNE_DB\` env var > \`db\` in the config file > platform default -- see \`crate\:\:config\:\:resolve_db_path\`]:PATH:_files' \
+'--templates=[Path to a user-supplied DCS/PLC template catalog, auto-loaded on every startup in addition to the built-in templates (default\: platform-specific, next to the config file -- see \`crate\:\:config\:\:templates_path_from\`). A missing file at the default location is fine; a file that fails to parse or validate is a hard error. CLI > \`BHTUNE_TEMPLATES\` env var > \`templates\` in the config file > platform default -- see \`crate\:\:config\:\:load_user_templates\`]:PATH:_files' \
+'--retention-days=[Delete tune runs (and their samples/results/write-back audit rows) older than this many days, automatically, on every startup (default\: unset -- retain forever). CLI > \`BHTUNE_RETENTION_DAYS\` env var > \`retention_days\` in the config file > (no default) -- see \`crate\:\:config\:\:resolve_retention_days\`. \`bhtune history prune\` applies the same policy on demand, with a \`--dry-run\` preview, instead of waiting for the next startup]:RETENTION_DAYS:_default' \
+'--log-level=[Log level / directive spec, e.g. "info" or "bhtune_cli=debug,bhtune_runtime=debug,sqlx=warn" (default\: info). Diagnostic detail only -- never printed to stdout, so it can never interleave with \`--output json\`'\''s single-object contract; see \`crate\:\:logging\`]:LOG_LEVEL:_default' \
+'--log-dir=[Directory to write log files to (default\: a platform-standard data directory, see \`crate\:\:config\:\:default_log_dir_from\`)]:PATH:_files' \
+'--log-format=[Log file format\: "pretty" or "json" (default\: pretty)]:LOG_FORMAT:_default' \
+'--log-rotation=[Log file rotation\: "hourly", "daily", or "never" (default\: daily)]:LOG_ROTATION:_default' \
+'--yes[Confirm the live restore. Required; no interactive prompt is offered]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':run_id -- ID of the failed run marked explicitly eligible by the Full-mode orphan sweep:_default' \
+&& ret=0
+;;
 (export)
 _arguments "${_arguments_options[@]}" : \
 '--format=[]:FORMAT:(csv json)' \
@@ -936,6 +956,10 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(restore-loop)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (export)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1037,6 +1061,7 @@ _bhtune_commands() {
 'simulate:Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator' \
 'template:Inspect and manage DCS/PLC templates' \
 'history:Inspect past tune runs' \
+'restore-loop:Restore the recorded pre-tune loop values after an explicitly recoverable orphan' \
 'export:Export one run'\''s recorded samples as CSV or JSON' \
 'opc:Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -1061,6 +1086,7 @@ _bhtune__subcmd__help_commands() {
 'simulate:Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator' \
 'template:Inspect and manage DCS/PLC templates' \
 'history:Inspect past tune runs' \
+'restore-loop:Restore the recorded pre-tune loop values after an explicitly recoverable orphan' \
 'export:Export one run'\''s recorded samples as CSV or JSON' \
 'opc:Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -1190,6 +1216,11 @@ _bhtune__subcmd__help__subcmd__opc__subcmd__servers_commands() {
 _bhtune__subcmd__help__subcmd__opc__subcmd__write_commands() {
     local commands; commands=()
     _describe -t commands 'bhtune help opc write commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__help__subcmd__restore-loop_commands] )) ||
+_bhtune__subcmd__help__subcmd__restore-loop_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune help restore-loop commands' commands "$@"
 }
 (( $+functions[_bhtune__subcmd__help__subcmd__simulate_commands] )) ||
 _bhtune__subcmd__help__subcmd__simulate_commands() {
@@ -1505,6 +1536,11 @@ _bhtune__subcmd__opc__subcmd__servers_commands() {
 _bhtune__subcmd__opc__subcmd__write_commands() {
     local commands; commands=()
     _describe -t commands 'bhtune opc write commands' commands "$@"
+}
+(( $+functions[_bhtune__subcmd__restore-loop_commands] )) ||
+_bhtune__subcmd__restore-loop_commands() {
+    local commands; commands=()
+    _describe -t commands 'bhtune restore-loop commands' commands "$@"
 }
 (( $+functions[_bhtune__subcmd__simulate_commands] )) ||
 _bhtune__subcmd__simulate_commands() {

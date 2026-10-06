@@ -311,6 +311,36 @@ and other provenance metadata. If one of those follow-up writes fails, BHTune im
 marks the row **failed** instead of leaving it permanently **running**. If the terminal update
 itself cannot be persisted, the row is removed as a fallback and the failure is logged.
 
+### Recovering an interrupted live tune
+
+Full-mode startup checks for abandoned live-operation owners but never connects to a controller
+or attempts a restore. Each live operation holds an OS-level database lock and a conditional
+database claim. A heartbeat older than 30 seconds only makes an owner a candidate: if the
+process is paused and still holds the lock, startup cannot take ownership and does not recover
+the loop. Before changing orphan state, startup exports the run, owner, and mutation evidence
+next to the database in `<database-file>.recovery/`.
+
+Only an owned, still-`running` OPC tune with complete and consistent recorded connection,
+resource identity, initial readings, template policy, timing, restore intent, and mutation
+audit becomes explicitly eligible. An Auto-start run with a configured setpoint restore target
+must have its initial setpoint recorded. Legacy rows and incomplete or mismatched evidence fail
+closed. Review the exported evidence and run detail before an intentional live recovery:
+
+```sh
+bhtune restore-loop <run-id> --yes --output table
+```
+
+Use `--output json` for a machine-readable report. Optional `--bridge-host` and `--server`
+arguments only verify the recorded connection; they cannot redirect recovery. BHTune reuses
+the original run's connection and restore policy, confirms the MV under the normal quality and
+four-second accepted-write deadline, and reports the outcome of every permitted restore step.
+Exit `0` means the recovery and its audit were confirmed. Exit `6` means recovery was
+incomplete or its required final audit was not persisted; inspect the per-step report and the
+actual loop before taking further action. When MV confirmation fails, BHTune can intentionally
+keep the loop in Manual. If a row is not eligible, do not bypass the guard: use the exported
+evidence and the site's manual recovery procedure. Demo mode does not run this live recovery
+sweep.
+
 ## PID write-back
 
 Requesting `--write-pid <level>` (or the Automatic PID settings section of the New tune form) is the only

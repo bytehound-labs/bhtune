@@ -200,6 +200,47 @@ impl MvActuationTracker {
         self.accept_pending(pending);
     }
 
+    pub(super) async fn record_restore_accepted_required(
+        &mut self,
+        pool: &SqlitePool,
+        run_id: i64,
+        target: f32,
+        accepted_at: DateTime<Utc>,
+        accepted_instant: Instant,
+        tolerance: f32,
+    ) -> anyhow::Result<()> {
+        let confirmation_due_at =
+            accepted_at + chrono::Duration::seconds(MV_ACTUATION_CONFIRMATION_SECS as i64);
+        let row = TuneMvActuationRow::insert_pending(
+            pool,
+            run_id,
+            NewTuneMvActuation {
+                sequence: self.next_sequence,
+                kind: MvActuationKind::Restore,
+                commanded_at: accepted_at,
+                target_mv: target,
+                previous_commanded_mv: Some(self.previous_commanded_mv),
+                tolerance,
+                confirmation_due_at,
+            },
+        )
+        .await?;
+        let deadline = accepted_instant + Duration::from_secs(MV_ACTUATION_CONFIRMATION_SECS);
+        self.accept_pending(PendingMvActuation {
+            id: Some(row.id),
+            kind: MvActuationKind::Restore,
+            target,
+            tolerance,
+            switch_tick: accepted_at,
+            switch_instant: accepted_instant,
+            accepted_instant,
+            first_check_at: accepted_instant,
+            deadline,
+            last_readback: None,
+        });
+        Ok(())
+    }
+
     pub(super) fn accept_pending(&mut self, pending: PendingMvActuation) {
         self.next_sequence += 1;
         self.previous_commanded_mv = pending.target;

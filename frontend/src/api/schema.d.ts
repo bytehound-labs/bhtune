@@ -2872,7 +2872,7 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
-      /** @description The run has not finished yet. */
+      /** @description The run is active or has unresolved live recovery. */
       409: {
         headers: {
           [name: string]: unknown;

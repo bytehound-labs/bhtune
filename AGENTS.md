@@ -19,7 +19,7 @@ v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only repl
 | `bhtune-core`         | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                                                                                  |
 | `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                    |
 | `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                   |
-| `bhtune-runtime`      | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
+| `bhtune-runtime`      | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, live ownership/recovery, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
 | `bhtune`              | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                   |
 | `bhtune-server`       | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                      |
 | `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                    |
@@ -45,6 +45,9 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - Enum columns reuse serde snake_case. Matching `CHECK` constraints use the same literals.
 - Startup re-upserts `builtin` and `catalog` templates and never overwrites a row with a different `origin`. `user` rows are never auto-edited.
 - Each run snapshots its template, tags, submitted request, and OPC connection before driver mutation. `history revert` trusts that recorded connection. An explicit flag is a cross-check, not an override.
+- Every live mutation and recovery holds the canonical database's OS-level exclusive guard plus a conditional database claim keyed by database and controller/MV resource identity. The owner heartbeats independently every 5 seconds. A stale heartbeat, PID, file presence, or in-memory server registry alone never proves that recovery is safe; a paused live owner holding the OS guard blocks recovery.
+- Full-mode startup exports evidence before marking verified orphaned owned `running` tunes failed and setting explicit recovery eligibility; it never contacts the controller. Eligibility requires complete structured ownership, provenance, restore intent, and mutation evidence; legacy/incomplete rows fail closed. Demo startup bypasses live-owner recovery.
+- `bhtune restore-loop <run-id> --yes` is the explicit live recovery path. It uses the recorded connection and policy; supplied connection flags are cross-checks only. The command reports every restore step, and it never reports success if restoration or required audit persistence is incomplete.
 - If follow-up provenance persistence fails, `prepare()` marks the owned row failed, or deletes it if that update cannot be stored. Do not leave a permanent `Running` row.
 - Production persistence uses `calculate_all_checked`. Invalid results store null numbers and cannot be written. Do not enable `MrftCompat.replicate_lower_clamp_bug`, `TuningMathCompat.replicate_period_truncation_bug`, or `MrftCompat.replicate_extrema_reset_bug` on a production path.
 - Result extrema are separate from hysteresis extrema. Hysteresis still resets the legacy way, so switch timing does not change. Variant B is research-only.
@@ -124,9 +127,9 @@ Global `[tuning]` timeouts are resolved before any driver connection or live mut
 
 ## Automation (`cli-automation`)
 
-`tune` and `simulate` accept `--yes`, `--write-pid <aggressive|moderate|sluggish>`, and `--output table|json`. `--write-pid` requires `--yes` and is rejected before any I/O when `--yes` is absent. `simulate` accepts the write flags but skips write-back: the simulator has no PID constant tags. `check` accepts the tune inputs, `--output table|json`, `--strict`, and `--write-pid` for readiness assessment only; it never writes and does not require `--yes`.
+`tune` and `simulate` accept `--yes`, `--write-pid <aggressive|moderate|sluggish>`, and `--output table|json`. `--write-pid` requires `--yes` and is rejected before any I/O when `--yes` is absent. `simulate` accepts the write flags but skips write-back: the simulator has no PID constant tags. `check` accepts the tune inputs, `--output table|json`, `--strict`, and `--write-pid` for readiness assessment only; it never writes and does not require `--yes`. `restore-loop <run-id>` requires `--yes` and accepts `--output table|json`; connection flags only cross-check the stored provenance.
 
-JSON mode prints nothing but the final object on stdout. Prompts go to stderr. JSON mode without `--write-pid` does not read stdin. `check` exits with `0` when checks pass, `1` when it cannot run, and `8` when a check fails or strict mode rejects a warning.
+JSON mode prints one final JSON value on stdout. Prompts go to stderr. JSON mode without `--write-pid` does not read stdin. `check` exits with `0` when checks pass, `1` when it cannot run, and `8` when a check fails or strict mode rejects a warning.
 
 | Code | Name                      | Meaning                                                                                |
 | ---- | ------------------------- | -------------------------------------------------------------------------------------- |
@@ -136,7 +139,7 @@ JSON mode prints nothing but the final object on stdout. Prompts go to stderr. J
 | 3    | `EXIT_WRITE_BACK_FAILED`  | The test completed and the PID write-back failed.                                      |
 | 4    | `EXIT_TIMED_OUT`          | `[tuning].timeout_secs` elapsed.                                                       |
 | 5    | `EXIT_POOR_QUALITY`       | A tuning-critical read was `Bad`, or `Uncertain` while the quality policy rejected it. |
-| 6    | `EXIT_RESTORE_INCOMPLETE` | Restore was not confirmed, including a second Ctrl+C during restore.                   |
+| 6    | `EXIT_RESTORE_INCOMPLETE` | Restore was not confirmed, including a second Ctrl+C or an incomplete `restore-loop`.    |
 | 7    | `EXIT_ACTUATION_FAILED`   | MV actuation failed and restore was confirmed.                                         |
 | 8    | `EXIT_CHECK_FAILED`       | A preflight check failed, or `--strict` rejected a warning.                            |
 
@@ -175,9 +178,9 @@ Official gateway deployment, when explicitly requested, uses one checksum-verifi
 
 ## History explorer
 
-Retention is off unless a positive day count is configured. `history prune`, startup, and the server's periodic sweep share one cutoff. Startup failure is fatal. The server sweeper logs and continues.
+Retention is off unless a positive day count is configured. `history prune`, startup, and the server's periodic sweep share one cutoff. Runs with recovery state `eligible`, `running`, or `incomplete` are retained until recovery is confirmed. Startup failure is fatal. The server sweeper logs and continues.
 
-Run detail can export CSV or JSON and can delete a terminal run. Delete checks the database outcome, not the in-memory active-run registry. The trend adds presentation-only initial and restored-MV points and reserves 12 poll intervals on a short run. Continuous historization and cross-run overlay are not implemented. At current data volumes, retaining history forever is safer than an unexpected auto-delete.
+Run detail can export CSV or JSON and can delete a terminal run that has no unresolved live recovery. Delete checks the database outcome, not the in-memory active-run registry. The trend adds presentation-only initial and restored-MV points and reserves 12 poll intervals on a short run. Continuous historization and cross-run overlay are not implemented. At current data volumes, retaining history forever is safer than an unexpected auto-delete.
 
 ## Web app architecture
 
