@@ -1500,7 +1500,7 @@ fn write_recovery_export_with_open(
         .unwrap_or(Path::new("."));
     let database_name = db_path
         .file_name()
-        .and_then(|name| name.to_str())
+        .and_then(std::ffi::OsStr::to_str)
         .ok_or_else(|| anyhow::anyhow!("database filename is not valid UTF-8"))?;
     let export_directory = parent.join(format!("{database_name}.recovery"));
     fs::create_dir_all(&export_directory).map_err(|error| {
@@ -1544,6 +1544,7 @@ fn write_recovery_export_with_open(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::path::PathBuf;
     use std::sync::Arc;
 

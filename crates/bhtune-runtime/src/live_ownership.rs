@@ -48,44 +48,56 @@ pub enum LiveOwnershipAcquireError {
 pub struct DatabaseFileGuard {
     _file: File,
     database_key: String,
+    #[cfg(test)]
+    memory_lock_file: Option<Arc<tempfile::NamedTempFile>>,
 }
 
 impl DatabaseFileGuard {
     /// Attempts to acquire the database's nonblocking, process-shared exclusive lock.
     pub async fn try_acquire(pool: &SqlitePool) -> anyhow::Result<Option<Self>> {
-        let (canonical_path, database_key) = match database_path(pool).await {
-            Ok(path) => {
-                let canonical_path = canonicalize_database_path(&path)?;
-                let database_key = database_key_from_canonical_path(&canonical_path)?;
-                (canonical_path, database_key)
-            }
+        let path = database_path(pool).await;
+        #[cfg(test)]
+        let pool_identity = std::ptr::from_ref(pool) as usize;
+        tokio::task::spawn_blocking(move || {
             #[cfg(test)]
-            Err(DbError::DatabasePathUnavailable) => {
-                let pool_identity = std::ptr::from_ref(pool) as usize;
-                let path =
-                    std::env::temp_dir().join(format!("bhtune-memory-owner-{pool_identity:x}"));
-                (path, format!("test-memory:{pool_identity:x}"))
+            let mut memory_lock_file = None;
+            let (lock_path, database_key) = match path {
+                Ok(path) => {
+                    let canonical_path = canonicalize_database_path(&path)?;
+                    let database_key = database_key_from_canonical_path(&canonical_path)?;
+                    let mut lock_path = canonical_path.as_os_str().to_os_string();
+                    lock_path.push(".live-owner.lock");
+                    (PathBuf::from(lock_path), database_key)
+                }
+                #[cfg(test)]
+                Err(DbError::DatabasePathUnavailable) => {
+                    let file = tests::memory_database_lock_file(pool_identity)?;
+                    let path = file.path().to_path_buf();
+                    memory_lock_file = Some(file);
+                    (path, format!("test-memory:{pool_identity:x}"))
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(lock_path)
+                .map_err(|error| {
+                    anyhow::anyhow!("cannot open the live-operation lock file: {error}")
+                })?;
+            match classify_lock_result(FileExt::try_lock_exclusive(&file))? {
+                true => Ok(Some(Self {
+                    _file: file,
+                    database_key,
+                    #[cfg(test)]
+                    memory_lock_file,
+                })),
+                false => Ok(None),
             }
-            Err(error) => return Err(error.into()),
-        };
-        let mut lock_path = canonical_path.as_os_str().to_os_string();
-        lock_path.push(".live-owner.lock");
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(PathBuf::from(lock_path))
-            .map_err(|error| {
-                anyhow::anyhow!("cannot open the live-operation lock file: {error}")
-            })?;
-        match classify_lock_result(FileExt::try_lock_exclusive(&file))? {
-            true => Ok(Some(Self {
-                _file: file,
-                database_key,
-            })),
-            false => Ok(None),
-        }
+        })
+        .await?
     }
 
     pub fn database_key(&self) -> &str {
@@ -470,6 +482,9 @@ pub fn claim_key(database_key: &str, resource_key: &str) -> anyhow::Result<Strin
 
 fn lock_is_contended(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::WouldBlock
+        || error
+            .raw_os_error()
+            .is_some_and(|code| fs2::lock_contended_error().raw_os_error() == Some(code))
 }
 
 fn classify_lock_result(result: io::Result<()>) -> anyhow::Result<bool> {
@@ -500,6 +515,25 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use std::sync::atomic::AtomicUsize;
+
+    pub(super) fn memory_database_lock_file(
+        pool_identity: usize,
+    ) -> io::Result<Arc<tempfile::NamedTempFile>> {
+        type LockFiles = HashMap<usize, std::sync::Weak<tempfile::NamedTempFile>>;
+        static FILES: std::sync::OnceLock<std::sync::Mutex<LockFiles>> = std::sync::OnceLock::new();
+        let mut files = FILES.get_or_init(Default::default).lock().unwrap();
+        files.retain(|_, file| file.strong_count() > 0);
+        if let Some(file) = files.get(&pool_identity).and_then(std::sync::Weak::upgrade) {
+            return Ok(file);
+        }
+        let file = Arc::new(
+            tempfile::Builder::new()
+                .prefix("bhtune-memory-owner-")
+                .tempfile()?,
+        );
+        files.insert(pool_identity, Arc::downgrade(&file));
+        Ok(file)
+    }
 
     #[derive(Clone, Copy)]
     enum WriteBehavior {
@@ -586,13 +620,15 @@ mod tests {
     }
 
     #[test]
-    fn only_would_block_means_an_owned_lock_is_busy() {
+    fn only_native_lock_contention_means_an_owned_lock_is_busy() {
         assert!(lock_is_contended(&io::Error::from(
             io::ErrorKind::WouldBlock
         )));
         assert!(!lock_is_contended(&io::Error::from(
             io::ErrorKind::PermissionDenied
         )));
+        assert!(lock_is_contended(&fs2::lock_contended_error()));
+        assert!(!lock_is_contended(&io::Error::from_raw_os_error(0)));
         assert!(classify_lock_result(Ok(())).unwrap());
         assert!(!classify_lock_result(Err(io::Error::from(io::ErrorKind::WouldBlock))).unwrap());
         assert!(
@@ -634,6 +670,49 @@ mod tests {
                 .contains("cannot open the live-operation lock file")
         );
         blocked_pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn memory_database_guard_preserves_exclusion_and_reacquisition() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let first = DatabaseFileGuard::try_acquire(&pool)
+            .await
+            .unwrap()
+            .unwrap();
+        let database_key = first.database_key().to_owned();
+        assert!(
+            DatabaseFileGuard::try_acquire(&pool)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        drop(first);
+        let second = DatabaseFileGuard::try_acquire(&pool)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.database_key(), database_key);
+        drop(second);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn memory_database_guard_removes_its_private_lock_file() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let guard = DatabaseFileGuard::try_acquire(&pool)
+            .await
+            .unwrap()
+            .unwrap();
+        let path = guard
+            .memory_lock_file
+            .as_ref()
+            .unwrap()
+            .path()
+            .to_path_buf();
+        assert!(path.is_file());
+        drop(guard);
+        assert!(!path.exists());
+        pool.close().await;
     }
 
     #[tokio::test]

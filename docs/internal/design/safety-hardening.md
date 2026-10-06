@@ -323,7 +323,10 @@ CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is 
     Every live mutation and recovery holds an OS-level exclusive lock for the canonical
     database and a conditional SQLite claim keyed by the canonical database and controller/MV
     resource identity. The owner heartbeat is refreshed every five seconds independently of
-    driver calls. A stale heartbeat, PID, lock-file presence, or server registry is not proof
+    driver calls. Database-path canonicalization, lock-file opening, and kernel lock acquisition
+    run on Tokio's blocking pool rather than an asynchronous runtime worker. Native lock
+    contention is recognized through `fs2::lock_contended_error` on each platform; other I/O
+    errors are propagated. A stale heartbeat, PID, lock-file presence, or server registry is not proof
     of process death: a paused owner retains the OS lock and blocks recovery. Full-mode
     startup obtains the lock before examining stale owners, exports the affected rows and
     mutation evidence before any ownership transition, then conditionally updates only
@@ -357,7 +360,9 @@ CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is 
   legacy/provenance rejection. Driver-backed cases cover cancellation, rejected quality,
   failed heartbeat and audit persistence, the accepted-MV confirmation allowance, and
   partial restoration with every permitted step attempted. The fixtures use isolated
-  file-backed databases and mock drivers; they do not contact a controller.
+  file-backed databases and mock drivers; they do not contact a controller. In-memory unit
+  fixtures share a securely created temporary lock file while a guard is alive and remove it
+  after the last guard drops.
 
   **Testing approach.** A direct unit test on `restore()` (bypassing `execute()` entirely,
   via a hand-constructed fully-armed `MutationGuard` and a driver where all four writes

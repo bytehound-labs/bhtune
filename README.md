@@ -62,9 +62,11 @@ readback verification, and an incomplete restore requires an operator to inspect
 When a live tune process ends unexpectedly, Full-mode startup exports its ownership and
 mutation evidence without contacting the controller. Only evidence-backed orphan runs can be
 restored with `bhtune restore-loop <run-id> --yes`; legacy or incomplete records fail closed
-for manual operator recovery. When an Auto-start run has a configured setpoint restore target,
-its initial value must be recorded. Eligible, in-progress, and incomplete recovery records are
-retained by age-based pruning and cannot be deleted from history until recovery is confirmed.
+for manual operator recovery. A stale heartbeat alone never permits restoration: a paused
+owner that still holds its OS lock blocks takeover. When an Auto-start run has a configured
+setpoint restore target, its initial value must be recorded. Eligible, in-progress, and incomplete
+recovery records are retained by age-based pruning and cannot be deleted from history until
+recovery is confirmed.
 `bhtune check` and Full mode's "Check readiness" action are read-only preflights for a proposed
 tune; neither proves controller write permissions or replaces live-plant safety procedures.
 

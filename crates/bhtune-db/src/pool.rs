@@ -65,6 +65,7 @@ pub async fn connect_read_only(path: &Path) -> DbResult<SqlitePool> {
 /// Returns the filesystem path attached to SQLite's `main` database, or
 /// [`DbError::DatabasePathUnavailable`] for private in-memory databases. Live controller
 /// mutations require this stable identity to acquire process-shared ownership.
+/// Callers canonicalize the returned path before comparing filesystem aliases.
 pub async fn database_path(pool: &SqlitePool) -> DbResult<PathBuf> {
     let rows = sqlx::query("PRAGMA database_list")
         .fetch_all(pool)
@@ -197,7 +198,7 @@ mod tests {
         let pool = connect(&path).await.unwrap();
 
         assert_eq!(
-            database_path(&pool).await.unwrap(),
+            std::fs::canonicalize(database_path(&pool).await.unwrap()).unwrap(),
             std::fs::canonicalize(path).unwrap()
         );
     }
