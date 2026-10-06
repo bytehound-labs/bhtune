@@ -61,6 +61,14 @@ TemplateInUse`) and a note that a `Builtin`/`Catalog`-origin template will simpl
   as the original write-back; see the "`bhtune history revert <run-id>` — done" bullet under
   "Live-plant safety hardening" below for the full validation/behavior design
   (`safety-writeback-rollback`).
+- **`bhtune restore-loop <run-id> --yes`** — restores an explicitly eligible orphaned live
+  tune from its recorded initial readings, template policy, connection, and mutation audit.
+  Full-mode startup exports evidence and marks an orphan without contacting the controller;
+  `restore-loop` performs live recovery only after revalidating eligibility and acquiring the
+  database ownership lock and conditional controller/MV claim. Optional `--bridge-host` and
+  `--server` values cross-check the run's recorded connection and cannot redirect it.
+  `--output table|json` reports every restore step; an incomplete or unaudited restore exits
+  with code `6`. Rows without complete ownership evidence require operator-guided recovery.
 - **`bhtune export <run_id>`** — exports one run's recorded samples as CSV or JSON
   (`--format`), to stdout or `--output <path>`.
 - **`bhtune opc gateway-info|servers|read|write|browse|search`** — low-level passthrough
@@ -115,7 +123,8 @@ rather than either skipped silently or chased at disproportionate risk.
 ## Automation (`cli-automation`)
 
 `bhtune check` supports read-only preflight for scheduled/scripted use (`cron`, Windows Task
-Scheduler, CI). `bhtune tune`/`bhtune simulate` support fully non-interactive operation, and
+Scheduler, CI). `bhtune tune`/`bhtune simulate` support fully non-interactive operation,
+`bhtune restore-loop` provides explicit non-interactive recovery for an eligible orphan, and
 `bhtune history list`/`show`/`revert`/`prune` support machine-readable output for the same
 callers:
 
@@ -125,6 +134,10 @@ callers:
   readiness is checked against the template's program value. The command never starts the
   tune or writes to the database or controller.
 - **`--yes`** — required before `--write-pid` is honored by `tune`/`simulate`; see below.
+- **`restore-loop <run-id> --yes`** — `--yes` is required for every live recovery. It is
+  checked before gateway connection or controller I/O; there is no interactive recovery
+  prompt. The recorded host and server are authoritative, and supplied connection flags are
+  cross-checks only.
 - **`--write-pid <aggressive|moderate|sluggish>`** — writes that response level's calculated
   PID constants back to the DCS without the interactive stdin confirmation prompt
   `maybe_write_back` otherwise uses. Requires `--yes`; `run()` rejects the combination with a
@@ -139,7 +152,9 @@ callers:
   status line and the final outcome (a `RevertJson` object); on `history prune`, the
   deleted-or-would-delete count and cutoff (a `PruneJson` object, via the same shared
   `crate::retention` module the automatic startup/periodic sweeps use, so a `--dry-run`
-  preview and a real prune can never disagree about which runs are in scope). `table` is the
+  preview and a real prune can never disagree about which runs are in scope); on
+  `restore-loop`, one structured report with the evidence export and a result for every
+  restore step. `table` is the
   default and preserves the original plain-text shape exactly. `json` prints one
   `serde_json::to_string_pretty` object (or array, for `history list`) to stdout — never a
   mix of the two on one invocation. Local DTOs (`RunSummaryJson`/`RunListJson`/
@@ -155,8 +170,9 @@ callers:
   failed confirmation readback, or the defensive missing-result case above), `EXIT_TIMED_OUT
 = 4` (`[tuning].timeout_secs` elapsed before the test finished), `EXIT_POOR_QUALITY = 5` (a
   non-`Good` OPC sample aborted the run — see the OPC-quality bullet under "Live-plant safety
-  hardening" above), and `EXIT_RESTORE_INCOMPLETE = 6` (the post-run restore could not be
-  confirmed within `[tuning].restore_timeout_secs`, or was cut short by a second Ctrl+C — see
+  hardening" above), and `EXIT_RESTORE_INCOMPLETE = 6` (the post-run restore or an explicit
+  `restore-loop` recovery could not be confirmed within `[tuning].restore_timeout_secs`, was
+  cut short by a second Ctrl+C, or its required final audit could not be persisted — see
   `safety-cancellation` above; kept distinct from `EXIT_ABORTED` since "aborted and restored"
   and "aborted, restore abandoned — go check the loop by hand" are very different outcomes
   for a scheduler to alert on), and `EXIT_CHECK_FAILED = 8` (a preflight check failed or
@@ -193,7 +209,8 @@ own unit tests can't reach through a real `run_polling_loop` execution.
 ## History retention and pruning
 
 Age-based deletion of `tune_runs` (and their cascaded samples/results/write-back audit rows) older
-than a configurable number of days, off by default (retain forever). Runtime
+than a configurable number of days, off by default (retain forever). Runs with recovery state
+`eligible`, `running`, or `incomplete` are retained until recovery is confirmed. Runtime
 `resolve_retention_days` resolves the policy through the usual `CLI --retention-days >
 BHTUNE_RETENTION_DAYS env > retention_days in bhtune.toml > (no default)` precedence, and a new
 shared `bhtune_runtime::retention` module (`cutoff_for`, `sweep_retention`) is the single place that turns "N
@@ -206,7 +223,8 @@ silently proceed against a possibly-broken database); the server's periodic swee
 warning and continues, since a background maintenance hiccup must never crash a long-running server
 out from under an in-flight HTTP connection or tune. `bhtune history prune` (`--older-than-days` to
 override the configured policy for one invocation, required if no policy is configured at all;
-`--dry-run` to report a count and cutoff without deleting anything, via `TuneRunRow::count` against
-the identical filter shape the real sweep uses; `--output json`) completes the four-subcommand
+`--dry-run` to report a count and cutoff without deleting anything, via
+`TuneRunRow::count_deletable_matching` against the identical filter and recovery-state guard
+the real sweep uses; `--output json`) completes the four-subcommand
 `history` surface (`list`/`show`/`revert`/`prune`) started under
 `cli-commands`/`safety-writeback-rollback`.

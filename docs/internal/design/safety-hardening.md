@@ -311,23 +311,58 @@ CtrlC` handle passed down into the tick body's `bounded_driver_call`s, which is 
     (`"MV: ...; mode: ...; setpoint: ...; mode attribute: ..."`) rather than collapsing to
     "something failed", so an operator reading `bhtune history show` knows exactly what to
     check by hand.
-  - **Durable restore intent** (Option D, partially done) — `TuneRunRow::record_initial_readings`
-    now persists `mode_raw`/`mode_attribute_raw`/`setpoint_ini` (the loop's pre-mutation
-    mode/mode-attribute/setpoint, mirroring the existing `pv_ini`/`mv_ini`/range columns)
-    _before_ `transition_to_manual`'s first write, not after — so a process that dies
-    outright (SIGKILL, power loss, a second Ctrl+C during an already-incomplete restore) still
-    leaves a durable, reconstructable record of what needs to be put back, not just an
-    in-memory `MutationGuard` that dies with the process. New `restore_status`
-    (`RestoreStatus::Confirmed`/`Incomplete`) and `restore_detail` columns on `tune_runs`
-    record the outcome of the post-run restore attempt itself (`None` means no restore was
-    ever attempted — either nothing was mutated, or the run is still in progress), surfaced
-    in `bhtune history show`'s table and JSON output. **Not yet done:** the
-    `bhtune restore-loop --run <id>` replay command the design calls for, to actually act on
-    that persisted intent later. Deliberately deferred — finding 6's own "read historical
-    values, write them back under a confirmation gate" command,
-    `bhtune history revert <run-id>`, is now implemented (see below), and shares enough
-    shape with a future `restore-loop` that it is worth revisiting whether the two should
-    share code once `restore-loop` is actually built, rather than assuming up front.
+  - **Durable restore intent and explicit orphan recovery** — before the first live write,
+    `TuneRunRow::record_initial_readings` persists the initial mode, mode attribute, and
+    applicable setpoint alongside the PV/MV/range readings. `tune_runs.restore_status` and
+    `restore_detail` describe the ordinary tune restore; `recovery_state` and
+    `recovery_evidence_json` describe eligibility and evidence for a later recovery. Migration
+    `0003_live_recovery.sql` adds these fields and the `live_operation_owners`,
+    `live_operation_claims`, `live_mutation_steps`, and `tune_recovery_attempts` audit
+    tables.
+
+    Every live mutation and recovery holds an OS-level exclusive lock for the canonical
+    database and a conditional SQLite claim keyed by the canonical database and controller/MV
+    resource identity. The owner heartbeat is refreshed every five seconds independently of
+    driver calls. Database-path canonicalization, lock-file opening, and kernel lock acquisition
+    run on Tokio's blocking pool rather than an asynchronous runtime worker. Native lock
+    contention is recognized through `fs2::lock_contended_error` on each platform; other I/O
+    errors are propagated. A stale heartbeat, PID, lock-file presence, or server registry is not proof
+    of process death: a paused owner retains the OS lock and blocks recovery. Full-mode
+    startup obtains the lock before examining stale owners, exports the affected rows and
+    mutation evidence before any ownership transition, then conditionally updates only
+    verified orphan records. Startup does not connect to a controller. A tune becomes
+    explicitly recoverable only when its owned `running` row, recorded OPC connection and
+    resource, initial readings, template policy, timing and quality settings, durable restore
+    intent, and mutation audit are complete and consistent. An Auto-start run with a configured
+    setpoint restore target must have its initial setpoint recorded. Other stale owners are
+    retired as unrecoverable with operator guidance. Rows predating ownership evidence fail
+    closed; eligibility is never inferred from error text.
+
+    `bhtune restore-loop <run-id> --yes` revalidates the recorded provenance and explicit
+    eligibility before connecting, takes the same OS lock, and conditionally transfers the
+    database/resource claim to the recovery attempt. Supplied connection flags only
+    cross-check the recorded host and server. Recovery uses the existing restore ordering,
+    quality policy, cancellation and restore budgets, accepted-MV confirmation allowance,
+    and per-step mutation audit. It attempts every permitted step independently. The CLI
+    reports each step and its evidence export; confirmed recovery exits `0`, while incomplete
+    restore or required audit-persistence failure exits `6` and never reports success.
+    Failed final persistence retains ownership for fail-closed restart handling. If MV
+    confirmation fails, the existing policy can intentionally keep the controller in
+    Manual rather than release it to Auto.
+
+    Full-mode startup applies this sweep for both CLI and server database initialization.
+    Demo startup uses its separate database path and does not run live-owner recovery or
+    change Demo capabilities.
+
+  **Recovery testing approach.** Runtime characterization tests exercise stale heartbeats
+  while the OS lock remains held, same-resource conflicts across run IDs, conditional-claim
+  races between recovery contenders, orphan and interrupted-recovery restart sweeps, and
+  legacy/provenance rejection. Driver-backed cases cover cancellation, rejected quality,
+  failed heartbeat and audit persistence, the accepted-MV confirmation allowance, and
+  partial restoration with every permitted step attempted. The fixtures use isolated
+  file-backed databases and mock drivers; they do not contact a controller. In-memory unit
+  fixtures share a securely created temporary lock file while a guard is alive and remove it
+  after the last guard drops.
 
   **Testing approach.** A direct unit test on `restore()` (bypassing `execute()` entirely,
   via a hand-constructed fully-armed `MutationGuard` and a driver where all four writes

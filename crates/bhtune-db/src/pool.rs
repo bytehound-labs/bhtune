@@ -3,10 +3,13 @@
 //! foreign-key enforcement (off by default in SQLite, and required here since every child
 //! table relies on `ON DELETE CASCADE`/`ON DELETE SET NULL`).
 
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use sqlx::{
-    SqlitePool,
+    Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
 
@@ -57,6 +60,41 @@ pub async fn connect_read_only(path: &Path) -> DbResult<SqlitePool> {
         .connect_with(options)
         .await
         .map_err(DbError::Connect)
+}
+
+/// Returns the filesystem path attached to SQLite's `main` database, or
+/// [`DbError::DatabasePathUnavailable`] for private in-memory databases. Live controller
+/// mutations require this stable identity to acquire process-shared ownership.
+/// Callers canonicalize the returned path before comparing filesystem aliases.
+pub async fn database_path(pool: &SqlitePool) -> DbResult<PathBuf> {
+    let rows = sqlx::query("PRAGMA database_list")
+        .fetch_all(pool)
+        .await
+        .map_err(DbError::Query)?;
+    let entries = rows
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get("name").map_err(DbError::Query)?,
+                row.try_get("file").map_err(DbError::Query)?,
+            ))
+        })
+        .collect::<DbResult<Vec<_>>>()?;
+    database_path_from_entries(entries)
+}
+
+fn database_path_from_entries(
+    entries: impl IntoIterator<Item = (String, String)>,
+) -> DbResult<PathBuf> {
+    for (name, path) in entries {
+        if name == "main" {
+            if path.is_empty() {
+                return Err(DbError::DatabasePathUnavailable);
+            }
+            return Ok(PathBuf::from(path));
+        }
+    }
+    Err(DbError::DatabasePathUnavailable)
 }
 
 /// Opens a private, in-process database for tests: same pragmas and migrations as
@@ -141,7 +179,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
     }
 
     #[tokio::test]
@@ -151,6 +189,36 @@ mod tests {
 
         assert!(connect_read_only(&path).await.is_err());
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn database_path_returns_the_main_database_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.db");
+        let pool = connect(&path).await.unwrap();
+
+        assert_eq!(
+            std::fs::canonicalize(database_path(&pool).await.unwrap()).unwrap(),
+            std::fs::canonicalize(path).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn database_path_rejects_in_memory_databases() {
+        let pool = connect_in_memory().await.unwrap();
+
+        assert!(matches!(
+            database_path(&pool).await,
+            Err(DbError::DatabasePathUnavailable)
+        ));
+    }
+
+    #[test]
+    fn database_path_rejects_a_listing_without_the_main_database() {
+        assert!(matches!(
+            database_path_from_entries([("temp".to_string(), String::new())]),
+            Err(DbError::DatabasePathUnavailable)
+        ));
     }
 
     #[tokio::test]
@@ -166,7 +234,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
 
         assert!(
             sqlx::query("DELETE FROM tune_runs")
@@ -185,7 +253,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
 
         let (migration_version,): (i64,) = sqlx::query_as(
             "SELECT version FROM _sqlx_migrations WHERE success = 1 ORDER BY version DESC LIMIT 1",
@@ -193,7 +261,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(migration_version, 2);
+        assert_eq!(migration_version, 3);
     }
 
     #[tokio::test]
@@ -203,10 +271,19 @@ mod tests {
         for (object_type, object_name) in [
             ("table", "demo_sessions"),
             ("table", "tune_mv_actuations"),
+            ("table", "live_operation_owners"),
+            ("table", "live_operation_claims"),
+            ("table", "live_mutation_steps"),
+            ("table", "tune_recovery_attempts"),
             ("index", "idx_tune_samples_run_time"),
             ("index", "idx_tune_writes_run_written"),
             ("index", "idx_tune_runs_demo_session"),
             ("index", "idx_tune_runs_demo_session_outcome"),
+            ("index", "idx_live_operation_owners_run"),
+            ("index", "idx_live_operation_owners_heartbeat"),
+            ("index", "idx_live_mutation_steps_owner"),
+            ("index", "idx_live_mutation_steps_run"),
+            ("index", "idx_tune_recovery_attempts_run"),
             ("trigger", "tune_runs_demo_session_insert"),
             ("trigger", "tune_runs_demo_session_valid_insert"),
             ("trigger", "tune_runs_demo_global_limit_insert"),

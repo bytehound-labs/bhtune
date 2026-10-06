@@ -127,7 +127,11 @@ pub async fn build_server(config_path: Option<&Path>) -> anyhow::Result<BoundSer
             .and_then(|s| s.parse().ok()),
         &config,
     );
-    let pool = db::open(&db_path, user_templates, retention_days).await?;
+    let pool = if mode == config::ServerMode::Demo {
+        db::open_demo(&db_path, user_templates, retention_days).await?
+    } else {
+        db::open(&db_path, user_templates, retention_days).await?
+    };
     if mode == config::ServerMode::Demo {
         let now = chrono::Utc::now();
         bhtune_db::models::DemoSessionRow::recover_running_demo_runs(&pool, now).await?;

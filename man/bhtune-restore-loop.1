@@ -1,0 +1,38 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH bhtune-restore-loop 1  "bhtune-restore-loop "
+.SH NAME
+bhtune\-restore\-loop \- Restore the recorded pre\-tune loop values after an explicitly recoverable orphan
+.SH SYNOPSIS
+\fBbhtune\-restore\-loop\fR [\fB\-\-bridge\-host\fR] [\fB\-\-server\fR] [\fB\-\-yes\fR] [\fB\-\-output\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRUN_ID\fR>
+.SH DESCRIPTION
+Restore the recorded pre\-tune loop values after an explicitly recoverable orphan
+.SH OPTIONS
+.TP
+\fB\-\-bridge\-host\fR \fI<BRIDGE_HOST>\fR
+Cross\-check the run\*(Aqs recorded OPC bridge host; never selects a different gateway
+.TP
+\fB\-\-server\fR \fI<SERVER>\fR
+Cross\-check the run\*(Aqs recorded OPC server; never selects a different controller
+.TP
+\fB\-\-yes\fR
+Confirm the live restore. Required; no interactive prompt is offered
+.TP
+\fB\-\-output\fR \fI<OUTPUT>\fR [default: table]
+How to print the per\-step restore report
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+table: Human\-readable text (default)
+.IP \(bu 2
+json: Pretty\-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIRUN_ID\fR>
+ID of the failed run marked explicitly eligible by the Full\-mode orphan sweep

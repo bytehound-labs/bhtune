@@ -37,9 +37,49 @@ pub async fn open(
     user_templates: Option<Vec<DcsTemplate>>,
     retention_days: Option<u32>,
 ) -> anyhow::Result<SqlitePool> {
+    open_with_orphan_recovery(path, user_templates, retention_days, true).await
+}
+
+/// Opens the Demo database without running the Full-mode live-orphan recovery sweep.
+///
+/// Demo uses visitor-owned simulator runs only; its recovery and capability policy is
+/// intentionally separate from live OPC DA recovery.
+pub async fn open_demo(
+    path: &Path,
+    user_templates: Option<Vec<DcsTemplate>>,
+    retention_days: Option<u32>,
+) -> anyhow::Result<SqlitePool> {
+    open_with_orphan_recovery(path, user_templates, retention_days, false).await
+}
+
+async fn open_with_orphan_recovery(
+    path: &Path,
+    user_templates: Option<Vec<DcsTemplate>>,
+    retention_days: Option<u32>,
+    recover_live_orphans: bool,
+) -> anyhow::Result<SqlitePool> {
     tracing::info!(db_path = %path.display(), "opening database");
     ensure_parent_dir(path)?;
     let pool = bhtune_db::connect(path).await?;
+    if recover_live_orphans {
+        let report = crate::tune::recover_startup_orphans(&pool).await?;
+        if report.marked_orphaned > 0
+            || report.interrupted_recoveries > 0
+            || report.retired_unrecoverable > 0
+            || report.skipped_for_live_owner
+        {
+            tracing::warn!(
+                examined = report.examined,
+                marked_orphaned = report.marked_orphaned,
+                recoverable = report.recoverable,
+                interrupted_recoveries = report.interrupted_recoveries,
+                retired_unrecoverable = report.retired_unrecoverable,
+                skipped_for_live_owner = report.skipped_for_live_owner,
+                exports = ?report.exports,
+                "completed live-orphan startup sweep"
+            );
+        }
+    }
     let now = chrono::Utc::now();
     let seeded = bhtune_db::seed_builtin_templates(&pool, now).await?;
     tracing::debug!(templates = seeded.len(), "seeded built-in DCS templates");
@@ -130,6 +170,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(templates.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn open_keeps_running_when_a_live_owner_blocks_the_startup_sweep() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bhtune.db");
+        let pool = bhtune_db::connect(&path).await.unwrap();
+        let owner = crate::live_ownership::LiveOperationGuard::acquire(
+            &pool,
+            None,
+            bhtune_db::models::LiveOperationKind::OpcWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            "Simulation.Examples.MV",
+            Some(r#"{"kind":"opc_write","state":"pending"}"#.to_string()),
+        )
+        .await
+        .unwrap();
+
+        let reopened = open(&path, None, None).await.unwrap();
+        owner.release().await.unwrap();
+        reopened.close().await;
+        pool.close().await;
     }
 
     #[tokio::test]

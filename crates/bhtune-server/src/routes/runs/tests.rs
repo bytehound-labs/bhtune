@@ -1205,7 +1205,7 @@ async fn write_run_succeeds_and_records_a_write_kind_row() {
     })
     .await;
 
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
 
     let response = post_json(
@@ -1248,7 +1248,7 @@ async fn write_run_keeps_an_existing_gateway_compatibility_snapshot() {
     })
     .await;
 
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
     let existing = r#"{"status":"full","source":"prior"}"#;
     TuneRunRow::record_gateway_compatibility(&state.pool, run_id, existing)
@@ -1379,7 +1379,7 @@ async fn write_run_reports_a_failed_write_as_200_not_an_http_error() {
     })
     .await;
 
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
 
     let response = post_json(
@@ -1422,7 +1422,7 @@ async fn write_run_reports_a_failed_pre_read_as_200_not_an_http_error() {
     })
     .await;
 
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
 
     let response = post_json(
@@ -1679,7 +1679,7 @@ async fn write_run_rejects_an_invalid_result_before_connecting_to_the_driver() {
 
 #[tokio::test]
 async fn write_run_returns_400_when_the_driver_connection_fails() {
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     // Nothing is listening on this port, so `OpcDaDriver::connect` fails at the
     // transport level -- mirrors `bhtune-driver`'s own
     // `connect_failure_maps_to_driver_error_connect` test.
@@ -1722,7 +1722,7 @@ async fn write_run_returns_400_when_the_gateway_core_is_incompatible() {
     })
     .await;
 
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
 
     let response = post_json(
@@ -1791,7 +1791,7 @@ async fn revert_run_succeeds_and_records_a_revert_kind_row() {
     })
     .await;
 
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
 
     let mut previous_write =
@@ -1847,7 +1847,7 @@ async fn revert_run_can_restore_recorded_values_when_calculated_result_is_invali
     })
     .await;
 
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = start_opcda_run(&state).await;
     TuneRunRow::record_connection(&state.pool, run_id, Some("Sim.Server"), Some(&host), "{}")
         .await
@@ -1946,7 +1946,7 @@ async fn revert_run_returns_400_when_the_last_write_has_no_previous_values() {
 
 #[tokio::test]
 async fn revert_run_returns_400_when_the_driver_connection_fails() {
-    let state = crate::test_support::in_memory_state().await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
     let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
     let mut previous_write =
         bhtune_db::models::NewTuneWrite::new(ResponseLevel::Moderate, Utc::now());

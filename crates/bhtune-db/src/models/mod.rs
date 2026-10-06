@@ -26,6 +26,7 @@
 
 mod dcs_templates;
 mod demo_sessions;
+mod live_ownership;
 mod loops;
 mod settings;
 mod tune_mv_actuations;
@@ -36,6 +37,7 @@ mod tune_writes;
 
 pub use dcs_templates::*;
 pub use demo_sessions::*;
+pub use live_ownership::*;
 pub use loops::*;
 pub use settings::*;
 pub use tune_mv_actuations::*;

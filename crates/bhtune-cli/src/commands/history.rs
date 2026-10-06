@@ -341,12 +341,13 @@ fn is_table_output(output: OutputFormat) -> bool {
 /// runs `bhtune history prune` clearly wants *something* deleted.
 ///
 /// `--dry-run` reports a count and the exact cutoff timestamp that would be used, without
-/// deleting anything, via [`TuneRunRow::count`] against the same [`TuneRunFilter`] shape
-/// [`crate::retention::sweep_retention`] would delete against -- so a preview and the real
-/// run can never disagree about which runs match. It deliberately doesn't itemize every
-/// matching run (unlike `history list`, which paginates): the history table is allowed to be
-/// large, and a prune preview only needs to answer "how many, and as of when", matching the
-/// automatic sweep's own INFO log shape.
+/// deleting anything, via [`TuneRunRow::count_deletable_matching`] against the same
+/// [`TuneRunFilter`] shape [`crate::retention::sweep_retention`] would delete against. Runs
+/// with an eligible, active, or incomplete live recovery are excluded from both the preview
+/// and the actual delete. It deliberately doesn't itemize every matching run (unlike
+/// `history list`, which paginates): the history table is allowed to be large, and a prune
+/// preview only needs to answer "how many, and as of when", matching the automatic sweep's
+/// own INFO log shape.
 async fn prune(
     pool: &SqlitePool,
     config: &crate::config::BhtuneConfig,
@@ -364,8 +365,11 @@ async fn prune(
     let cutoff = crate::retention::cutoff_for(days, now);
 
     if dry_run {
-        let count =
-            TuneRunRow::count(pool, &TuneRunFilter::default().with_started_before(cutoff)).await?;
+        let count = TuneRunRow::count_deletable_matching(
+            pool,
+            &TuneRunFilter::default().with_started_before(cutoff),
+        )
+        .await?;
         match output {
             OutputFormat::Table => {
                 println!(
@@ -1447,13 +1451,32 @@ mod tests {
         assert!(!err.to_string().is_empty());
     }
 
+    struct FileBackedTestPool {
+        pool: SqlitePool,
+        _directory: tempfile::TempDir,
+    }
+
+    impl std::ops::Deref for FileBackedTestPool {
+        type Target = SqlitePool;
+
+        fn deref(&self) -> &Self::Target {
+            &self.pool
+        }
+    }
+
     /// Starts an `Opcda`-driver run (using the sample template/tags, which have PID
     /// constant tags configured) with `record_connection` already called for it, so
     /// `revert`'s own connection-resolution logic has a stored value to resolve against.
     /// Returns it without recording any write-back yet -- each
     /// `revert_*` test below inserts whatever `TuneWriteRow` fixture its scenario needs.
-    async fn opcda_run_with_no_writes(bridge_host: &str, server: &str) -> (SqlitePool, i64) {
-        let pool = bhtune_db::connect_in_memory().await.unwrap();
+    async fn opcda_run_with_no_writes(
+        bridge_host: &str,
+        server: &str,
+    ) -> (FileBackedTestPool, i64) {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = bhtune_db::connect(&directory.path().join("revert-test.db"))
+            .await
+            .unwrap();
         let now = chrono::Utc::now();
         let run = TuneRunRow::start(
             &pool,
@@ -1471,7 +1494,13 @@ mod tests {
         TuneRunRow::record_connection(&pool, run.id, Some(server), Some(bridge_host), "{}")
             .await
             .unwrap();
-        (pool, run.id)
+        (
+            FileBackedTestPool {
+                pool,
+                _directory: directory,
+            },
+            run.id,
+        )
     }
 
     #[tokio::test]

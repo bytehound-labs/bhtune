@@ -28,6 +28,19 @@ pub enum DbError {
     #[error("pending is not a terminal MV actuation status")]
     InvalidMvActuationFinalStatus,
 
+    /// A live controller resource is already conditionally claimed by another operation.
+    #[error("the live controller resource is already claimed by another operation")]
+    LiveResourceClaimed,
+
+    /// A process attempted to heartbeat or release a lease it no longer owns.
+    #[error("live controller ownership was lost before the operation completed")]
+    LiveOwnershipLost,
+
+    /// The SQLite connection is in-memory or does not expose a single stable filesystem
+    /// path, so process-shared live-mutation ownership cannot be established.
+    #[error("database has no stable filesystem path for live-operation ownership")]
+    DatabasePathUnavailable,
+
     /// A JSON column (`tune_runs.template_snapshot_json`/`tags_json`/
     /// `timing_metrics_json`, `dcs_templates.versions_json`) held syntactically valid JSON
     /// -- the schema's `CHECK (json_valid(...))` already guarantees that much -- but it

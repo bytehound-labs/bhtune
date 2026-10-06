@@ -24,8 +24,8 @@ use bhtune_core::{
 };
 use bhtune_db::models::{
     MvActuationKind, MvActuationStatus, Pagination, RestoreStatus, RollbackState, SampleQuality,
-    TemplateOrigin, TimingMetrics, TuneDriver, TuneMvActuationRow, TuneOutcome, TuneResultRow,
-    TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
+    TemplateOrigin, TimingMetrics, TuneDriver, TuneMvActuationRow, TuneOutcome, TuneRecoveryState,
+    TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow, WriteKind,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -681,7 +681,7 @@ pub(crate) async fn export_run(
     responses(
         (status = 204, description = "Run deleted."),
         (status = 404, description = "No run with that id.", body = ErrorBody),
-        (status = 409, description = "The run has not finished yet.", body = ErrorBody),
+        (status = 409, description = "The run is active or has unresolved live recovery.", body = ErrorBody),
     ),
 )]
 pub(crate) async fn delete_run(
@@ -708,15 +708,41 @@ where
             "run {run_id} has not finished yet; cancel it before deleting"
         )));
     }
+    if recovery_blocks_deletion(run.recovery_state) {
+        return Err(recovery_delete_conflict(run_id));
+    }
     after_lookup(&state).await;
     if TuneRunRow::delete(&state.pool, run_id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
+        if TuneRunRow::get(&state.pool, run_id)
+            .await?
+            .is_some_and(|run| recovery_blocks_deletion(run.recovery_state))
+        {
+            return Err(recovery_delete_conflict(run_id));
+        }
         // Only reachable if the row was deleted by a concurrent request between the
         // `get` above and this call -- still a well-defined 404 ("no run with that id"
         // is simply true again by the time this responds), not a real error.
         Err(ApiError::NotFound(format!("no run with id {run_id}")))
     }
+}
+
+fn recovery_blocks_deletion(recovery_state: Option<TuneRecoveryState>) -> bool {
+    matches!(
+        recovery_state,
+        Some(
+            TuneRecoveryState::Eligible
+                | TuneRecoveryState::Running
+                | TuneRecoveryState::Incomplete
+        )
+    )
+}
+
+fn recovery_delete_conflict(run_id: i64) -> ApiError {
+    ApiError::Conflict(format!(
+        "run {run_id} has an unresolved live-loop recovery; use `bhtune restore-loop {run_id} --yes` or follow the manual recovery procedure before deleting it"
+    ))
 }
 
 pub fn router() -> Router<AppState> {
@@ -1791,6 +1817,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_run_409s_while_live_recovery_is_pending() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        TuneRunRow::fail(&state.pool, run_id, Utc::now(), "orphaned live tune")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE tune_runs SET recovery_state = 'eligible' WHERE id = ?")
+            .bind(run_id)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let pool = state.pool.clone();
+        let app = router().with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::delete(format!("/api/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let retained = TuneRunRow::get(&pool, run_id).await.unwrap().unwrap();
+        assert_eq!(retained.recovery_state, Some(TuneRecoveryState::Eligible));
+    }
+
+    #[tokio::test]
     async fn delete_run_succeeds_for_a_completed_run_even_if_active_run_has_not_released_it_yet() {
         // Regression test for the race this guard was rewritten to close: `drive()` persists
         // a run's terminal outcome to the DB *before* returning, and `ActiveRun::release` only
@@ -1842,6 +1896,37 @@ mod tests {
 
         assert!(
             matches!(result, Err(ApiError::NotFound(message)) if message.contains(&run_id.to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_run_conflicts_if_recovery_becomes_pending_after_lookup() {
+        let state = crate::test_support::in_memory_state().await;
+        let run_id = seed_one_run(&state).await;
+        TuneRunRow::complete(&state.pool, run_id, Utc::now())
+            .await
+            .unwrap();
+
+        let result = delete_run_with_hook(state.clone(), run_id, |state| {
+            let pool = state.pool.clone();
+            async move {
+                sqlx::query("UPDATE tune_runs SET recovery_state = 'eligible' WHERE id = ?")
+                    .bind(run_id)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
+
+        assert!(
+            matches!(result, Err(ApiError::Conflict(message)) if message.contains("unresolved live-loop recovery"))
+        );
+        assert!(
+            TuneRunRow::get(&state.pool, run_id)
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 }

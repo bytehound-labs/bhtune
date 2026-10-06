@@ -31,6 +31,9 @@ _bhtune() {
             bhtune,opc)
                 cmd="bhtune__subcmd__opc"
                 ;;
+            bhtune,restore-loop)
+                cmd="bhtune__subcmd__restore__subcmd__loop"
+                ;;
             bhtune,simulate)
                 cmd="bhtune__subcmd__simulate"
                 ;;
@@ -54,6 +57,9 @@ _bhtune() {
                 ;;
             bhtune__subcmd__help,opc)
                 cmd="bhtune__subcmd__help__subcmd__opc"
+                ;;
+            bhtune__subcmd__help,restore-loop)
+                cmd="bhtune__subcmd__help__subcmd__restore__subcmd__loop"
                 ;;
             bhtune__subcmd__help,simulate)
                 cmd="bhtune__subcmd__help__subcmd__simulate"
@@ -296,7 +302,7 @@ _bhtune() {
 
     case "${cmd}" in
         bhtune)
-            opts="-h -V --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help --version check tune simulate template history export opc help"
+            opts="-h -V --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help --version check tune simulate template history restore-loop export opc help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -550,7 +556,7 @@ _bhtune() {
             return 0
             ;;
         bhtune__subcmd__help)
-            opts="check tune simulate template history export opc help"
+            opts="check tune simulate template history restore-loop export opc help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -846,6 +852,20 @@ _bhtune() {
         bhtune__subcmd__help__subcmd__opc__subcmd__write)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bhtune__subcmd__help__subcmd__restore__subcmd__loop)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -2314,6 +2334,64 @@ _bhtune() {
         bhtune__subcmd__opc__subcmd__write)
             opts="-h --bridge-host --server --output --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --bridge-host)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --server)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --output)
+                    COMPREPLY=($(compgen -W "table json" -- "${cur}"))
+                    return 0
+                    ;;
+                --config)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --db)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --templates)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --retention-days)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-format)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-rotation)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        bhtune__subcmd__restore__subcmd__loop)
+            opts="-h --bridge-host --server --yes --output --config --db --templates --retention-days --log-level --log-dir --log-format --log-rotation --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

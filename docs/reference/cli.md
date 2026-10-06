@@ -19,6 +19,7 @@ This document contains the help content for the `bhtune` command-line program.
 * [`bhtune history show`↴](#bhtune-history-show)
 * [`bhtune history revert`↴](#bhtune-history-revert)
 * [`bhtune history prune`↴](#bhtune-history-prune)
+* [`bhtune restore-loop`↴](#bhtune-restore-loop)
 * [`bhtune export`↴](#bhtune-export)
 * [`bhtune opc`↴](#bhtune-opc)
 * [`bhtune opc gateway-info`↴](#bhtune-opc-gateway-info)
@@ -47,6 +48,7 @@ Headless MRFT auto-tuner
 * `simulate` — Run a zero-configuration demo MRFT tune against the built-in FOPDT simulator
 * `template` — Inspect and manage DCS/PLC templates
 * `history` — Inspect past tune runs
+* `restore-loop` — Restore the recorded pre-tune loop values after an explicitly recoverable orphan
 * `export` — Export one run's recorded samples as CSV or JSON
 * `opc` — Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing the tuning engine entirely
 
@@ -488,6 +490,34 @@ Delete runs older than the configured retention policy (`history-retention`), wi
 * `--older-than-days <OLDER_THAN_DAYS>` — Delete runs older than this many days, overriding the configured `retention_days` policy for this invocation only. Required if no retention policy is configured at all (`--retention-days` / `BHTUNE_RETENTION_DAYS` / the config file's `retention_days` key) -- there is no default "prune everything older than X" to fall back to
 * `--dry-run` — Report how many runs would be deleted, and as of what cutoff, without deleting anything
 * `--output <OUTPUT>` — How to print the prune outcome
+
+  Default value: `table`
+
+  Possible values:
+  - `table`:
+    Human-readable text (default)
+  - `json`:
+    Pretty-printed JSON. This is the external contract for scripted/scheduled consumers, so its shape must not change silently once shipped
+
+
+
+
+## `bhtune restore-loop`
+
+Restore the recorded pre-tune loop values after an explicitly recoverable orphan
+
+**Usage:** `bhtune restore-loop [OPTIONS] <RUN_ID>`
+
+###### **Arguments:**
+
+* `<RUN_ID>` — ID of the failed run marked explicitly eligible by the Full-mode orphan sweep
+
+###### **Options:**
+
+* `--bridge-host <BRIDGE_HOST>` — Cross-check the run's recorded OPC bridge host; never selects a different gateway
+* `--server <SERVER>` — Cross-check the run's recorded OPC server; never selects a different controller
+* `--yes` — Confirm the live restore. Required; no interactive prompt is offered
+* `--output <OUTPUT>` — How to print the per-step restore report
 
   Default value: `table`
 

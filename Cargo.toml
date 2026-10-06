@@ -42,6 +42,7 @@ bhtune-core = { path = "crates/bhtune-core", version = "0.1.0" }
 bhtune-driver = { path = "crates/bhtune-driver", version = "0.1.0" }
 bhtune-db = { path = "crates/bhtune-db", version = "0.1.0" }
 bhtune-runtime = { path = "crates/bhtune-runtime", version = "0.1.0" }
+async-trait = "0.1"
 # Deliberately does NOT enable the "clock"/"now" features: bhtune-core must never be able
 # to call `Utc::now()`, since the MRFT engine's determinism guarantee (see AGENTS.md) is
 # that all timestamps come in as `Tick` data, never read from the wall clock internally.

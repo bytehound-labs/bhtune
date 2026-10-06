@@ -117,6 +117,8 @@ pub enum Command {
         #[command(subcommand)]
         command: HistoryCommand,
     },
+    /// Restore the recorded pre-tune loop values after an explicitly recoverable orphan.
+    RestoreLoop(RestoreLoopArgs),
     /// Export one run's recorded samples as CSV or JSON.
     Export(ExportArgs),
     /// Low-level OPC DA passthrough (diagnostics) via the opcda-bridge gateway, bypassing
@@ -143,10 +145,29 @@ impl Command {
             Command::Tune(args) => args.output,
             Command::Simulate(args) => args.output,
             Command::History { command } => command.output_format(),
+            Command::RestoreLoop(args) => args.output,
             Command::Template { .. } | Command::Export(_) => crate::output::OutputFormat::Table,
             Command::Opc { output, .. } => *output,
         }
     }
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct RestoreLoopArgs {
+    /// ID of the failed run marked explicitly eligible by the Full-mode orphan sweep.
+    pub run_id: i64,
+    /// Cross-check the run's recorded OPC bridge host; never selects a different gateway.
+    #[arg(long)]
+    pub bridge_host: Option<String>,
+    /// Cross-check the run's recorded OPC server; never selects a different controller.
+    #[arg(long)]
+    pub server: Option<String>,
+    /// Confirm the live restore. Required; no interactive prompt is offered.
+    #[arg(long)]
+    pub yes: bool,
+    /// How to print the per-step restore report.
+    #[arg(long, value_enum, default_value = "table")]
+    pub output: crate::output::OutputFormat,
 }
 
 /// A [`bhtune_core::ProcessType`] value, as a CLI flag.
@@ -1104,6 +1125,10 @@ mod tests {
 
         let history = Cli::parse_from(["bhtune", "history", "list", "--output", "json"]).command;
         assert_eq!(history.output_format(), crate::output::OutputFormat::Json);
+
+        let restore =
+            Cli::parse_from(["bhtune", "restore-loop", "12", "--yes", "--output", "json"]).command;
+        assert_eq!(restore.output_format(), crate::output::OutputFormat::Json);
     }
 
     #[test]

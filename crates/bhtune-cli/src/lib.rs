@@ -63,6 +63,7 @@ enum DatabaseCommand {
     Simulate(args::SimulateArgs),
     Template(args::TemplateCommand),
     History(args::HistoryCommand),
+    RestoreLoop(args::RestoreLoopArgs),
     Export(args::ExportArgs),
     Opc {
         output: OutputFormat,
@@ -254,6 +255,7 @@ async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCod
         Command::Simulate(args) => DatabaseCommand::Simulate(args),
         Command::Template { command } => DatabaseCommand::Template(command),
         Command::History { command } => DatabaseCommand::History(command),
+        Command::RestoreLoop(args) => DatabaseCommand::RestoreLoop(args),
         Command::Export(args) => DatabaseCommand::Export(args),
         Command::Opc { output, command } => DatabaseCommand::Opc { output, command },
     };
@@ -283,11 +285,14 @@ async fn run_with_cli_and_ctrl_c(cli: Cli, mut ctrl_c: cancel::CtrlC) -> ExitCod
                         .await
                         .map(|()| ExitCode::SUCCESS)
                 }
+                DatabaseCommand::RestoreLoop(args) => {
+                    commands::recovery::run(&pool, args, &mut ctrl_c).await
+                }
                 DatabaseCommand::Export(args) => commands::export::run(&pool, args)
                     .await
                     .map(|()| ExitCode::SUCCESS),
                 DatabaseCommand::Opc { output, command } => {
-                    commands::opc::run_with_output(command, &config, output)
+                    commands::opc::run_with_output(&pool, command, &config, output)
                         .await
                         .map(|()| ExitCode::SUCCESS)
                 }
@@ -771,7 +776,7 @@ mod tests {
         // an unreachable gateway host fails promptly and still counts as "dispatched".
         assert_eq!(
             run_with_cli(Cli {
-                db: Some(db),
+                db: Some(db.clone()),
                 config: None,
                 templates: None,
                 retention_days: None,
@@ -787,6 +792,28 @@ mod tests {
                         tags: vec!["Unit1.LIC101.PV".to_string()],
                     },
                 },
+            })
+            .await,
+            ExitCode::FAILURE
+        );
+
+        assert_eq!(
+            run_with_cli(Cli {
+                db: Some(db),
+                config: None,
+                templates: None,
+                retention_days: None,
+                log_level: None,
+                log_dir: None,
+                log_format: None,
+                log_rotation: None,
+                command: Command::RestoreLoop(crate::args::RestoreLoopArgs {
+                    run_id: 999_999,
+                    bridge_host: None,
+                    server: None,
+                    yes: true,
+                    output: OutputFormat::Table,
+                }),
             })
             .await,
             ExitCode::FAILURE
