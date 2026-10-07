@@ -87,6 +87,9 @@ stopped/running upgrades, injected two-service rollback, ProgramData-preserving 
 unowned service/listener refusal, and an unchanged firewall fingerprint. Its one-hour overall
 budget covers the full matrix while each installer or uninstaller process remains capped at two
 minutes.
+The external-database fixture waits for the database-owning process to exit before copying the
+database and any remaining WAL. Copied artifacts are hash-checked; SQLite rebuilds the SHM
+index rather than reusing volatile lock state from the original path.
 
 ## Acceptance and release status
 

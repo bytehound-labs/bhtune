@@ -36,7 +36,8 @@ source-build instructions, supported distribution details, Windows installer dia
 recovery.
 
 The Windows distribution uses an NSIS installer for the CLI and web server, with an optional
-verified OPC DA gateway component.
+verified OPC DA gateway component. Installer validation covers external SQLite databases and
+WAL-preserving rollback fixtures under the service account.
 
 The pre-release Docker image includes an HTTP liveness check; a healthy status does not establish
 database readiness or live-plant safety.
