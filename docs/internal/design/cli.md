@@ -127,6 +127,9 @@ summaries expose them in `controller_pid`; history detail retains raw result fie
 separately includes `controller_values`, `controller_target_error`, and the run's explicit
 `pid_rounding`. Table review and new writes use identical targets. PID audit and revert progress
 show recorded values without applying template rounding or the generic four-decimal formatter.
+The runtime delivers previews after result persistence and restoration attempts. The CLI
+retains them for final reporting without post-execution database reads, preserving abort,
+write-back, and incomplete-restore exit codes.
 
 `bhtune check` supports read-only preflight for scheduled/scripted use (`cron`, Windows Task
 Scheduler, CI). `bhtune tune`/`bhtune simulate` support fully non-interactive operation,

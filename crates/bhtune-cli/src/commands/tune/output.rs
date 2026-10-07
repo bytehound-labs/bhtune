@@ -207,6 +207,7 @@ where
 }
 
 pub(super) struct CliWriteBackHandler {
+    pub(super) previews: Vec<PidWritePreview>,
     output: OutputFormat,
     requested_level: Option<ResponseLevel>,
     selection_failure_reported: bool,
@@ -215,6 +216,7 @@ pub(super) struct CliWriteBackHandler {
 impl CliWriteBackHandler {
     pub(super) fn new(output: OutputFormat, requested_level: Option<ResponseLevel>) -> Self {
         Self {
+            previews: Vec::new(),
             output,
             requested_level,
             selection_failure_reported: false,
@@ -223,6 +225,10 @@ impl CliWriteBackHandler {
 }
 
 impl WriteBackHandler for CliWriteBackHandler {
+    fn pid_results_ready(&mut self, previews: &[PidWritePreview]) {
+        self.previews = previews.to_vec();
+    }
+
     fn select_response_level(&mut self, previews: &[PidWritePreview]) -> WriteBackSelection {
         if self.output == OutputFormat::Json {
             return WriteBackSelection::Skipped(
@@ -671,6 +677,33 @@ mod tests {
     fn cli_write_back_handler_keeps_terminal_and_json_policies_separate() {
         let values = valid_result(ResponseLevel::Moderate).values.unwrap();
         let mut json = CliWriteBackHandler::new(OutputFormat::Json, None);
+        let previews = vec![valid_result(ResponseLevel::Moderate)];
+        json.pid_results_ready(&previews);
+        assert_eq!(json.previews, previews);
+        for (outcome, expected) in [
+            (
+                RunOutcome::Aborted(AbortReason::UserInterrupt),
+                TuneOutcome::Aborted,
+            ),
+            (
+                RunOutcome::RestoreIncomplete {
+                    reason: "restore timed out".to_string(),
+                },
+                TuneOutcome::RestoreIncomplete,
+            ),
+            (
+                RunOutcome::Completed {
+                    write_back: WriteBackOutcome::Failed,
+                    write_back_detail: Some("readback failed".to_string()),
+                },
+                TuneOutcome::WriteBackFailed,
+            ),
+        ] {
+            assert_eq!(
+                print_summary(9999, &outcome, OutputFormat::Json, &json.previews),
+                expected,
+            );
+        }
         assert!(matches!(
             json.select_response_level(&[]),
             WriteBackSelection::Skipped(detail) if detail.contains("--output json")

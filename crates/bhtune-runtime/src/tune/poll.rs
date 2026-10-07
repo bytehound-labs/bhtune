@@ -33,6 +33,7 @@ use super::quality::{
     check_quality, read_numeric_from_batch, read_poll_batch, sample_quality_from_driver,
     write_value,
 };
+use super::writeback::{PidWritePreview, pid_write_preview};
 
 /// The outcome of racing one driver call (a poll batch or [`write_value`], during a poll tick)
 /// against Ctrl+C and `[tuning].op_timeout_secs` -- see [`bounded_driver_call`]. Distinct from a
@@ -615,7 +616,7 @@ pub(super) async fn persist_results(
     config: LoopConfig,
     pv_range: PvRange,
     template: &DcsTemplate,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<PidWritePreview>> {
     let Action::Complete {
         peaks,
         troughs,
@@ -638,10 +639,12 @@ pub(super) async fn persist_results(
         TuningMathCompat::default(),
     );
 
+    let mut previews = Vec::with_capacity(results.len());
     for result in results {
         let row = TuneResultRow::from_checked(run_id, result);
         TuneResultRow::insert(pool, &row).await?;
+        previews.push(pid_write_preview(&row, config.controller_type, template));
     }
 
-    Ok(())
+    Ok(previews)
 }

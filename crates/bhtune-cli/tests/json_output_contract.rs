@@ -21,7 +21,7 @@ use std::time::Duration;
 /// Spawns `bhtune tune` with the given extra arguments (appended after the fast-completing
 /// simulator baseline) and returns `(exit_code, stdout, stderr)`. Shared by every test in
 /// this file so each one only states what it adds/overrides.
-fn run_fast_simulator_tune(extra_args: &[&str]) -> (Option<i32>, String, String) {
+fn run_fast_simulator_tune(template: &str, extra_args: &[&str]) -> (Option<i32>, String, String) {
     let db_dir = tempfile::tempdir().unwrap();
     let db_path = db_dir.path().join("bhtune.db");
     let config_path = db_dir.path().join("bhtune.toml");
@@ -48,7 +48,7 @@ fn run_fast_simulator_tune(extra_args: &[&str]) -> (Option<i32>, String, String)
             "--tagname",
             "ignored-for-simulator",
             "--template",
-            "Yokogawa CentumVP",
+            template,
             "--process-type",
             "flow",
             "--controller-type",
@@ -105,7 +105,9 @@ fn run_fast_simulator_tune(extra_args: &[&str]) -> (Option<i32>, String, String)
 async fn tune_output_json_emits_exactly_one_parseable_json_value_on_stdout() {
     let (exit_code, stdout, stderr) = tokio::time::timeout(
         Duration::from_secs(30),
-        tokio::task::spawn_blocking(|| run_fast_simulator_tune(&["--output", "json"])),
+        tokio::task::spawn_blocking(|| {
+            run_fast_simulator_tune("Yokogawa CentumVP", &["--output", "json"])
+        }),
     )
     .await
     .expect("bhtune did not exit within 30s")
@@ -129,6 +131,18 @@ async fn tune_output_json_emits_exactly_one_parseable_json_value_on_stdout() {
 
     assert_eq!(json["outcome"], "completed");
     assert_eq!(json["write_back"], "skipped");
+    let previews = json["controller_pid"].as_array().unwrap();
+    assert_eq!(previews.len(), 3);
+    for preview in previews {
+        assert!(preview["values"].is_null());
+        assert!(
+            preview["unavailable_reason"]
+                .as_str()
+                .unwrap()
+                .contains("rounding would erase an active term to zero"),
+            "expected the fast simulator's sub-decimal integral term to be unwritable: {json}",
+        );
+    }
     let detail = json["write_back_detail"]
         .as_str()
         .expect("write_back_detail must be a string, not null, when write-back was skipped");
@@ -150,6 +164,36 @@ async fn tune_output_json_emits_exactly_one_parseable_json_value_on_stdout() {
 }
 
 #[tokio::test]
+async fn significant_digit_targets_are_reported_even_without_pid_tags() {
+    let (exit_code, stdout, stderr) = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(|| {
+            run_fast_simulator_tune("Honeywell Experion", &["--output", "json"])
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        exit_code,
+        Some(i32::from(bhtune_cli::EXIT_SUCCESS)),
+        "{stderr}"
+    );
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let previews = json["controller_pid"].as_array().unwrap();
+    assert_eq!(previews.len(), 3);
+    for preview in previews {
+        assert!(preview["unavailable_reason"].is_null(), "{json}");
+        for term in ["proportional", "integral", "derivative"] {
+            let value: f32 =
+                serde_json::from_value(preview["values"][term]["value"].clone()).unwrap();
+            let display = preview["values"][term]["display"].as_str().unwrap();
+            assert_eq!(display.parse::<f32>().unwrap(), value);
+        }
+    }
+}
+
+#[tokio::test]
 async fn tune_output_table_is_plain_text_not_json() {
     // Sanity check that `--output` actually branches: the default `Table` format for the
     // exact same run must NOT be parseable as a single JSON value, proving the two tests in
@@ -157,7 +201,7 @@ async fn tune_output_table_is_plain_text_not_json() {
     // being ignored.
     let (exit_code, stdout, stderr) = tokio::time::timeout(
         Duration::from_secs(30),
-        tokio::task::spawn_blocking(|| run_fast_simulator_tune(&[])),
+        tokio::task::spawn_blocking(|| run_fast_simulator_tune("Yokogawa CentumVP", &[])),
     )
     .await
     .expect("bhtune did not exit within 30s")

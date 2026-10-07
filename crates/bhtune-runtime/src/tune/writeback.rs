@@ -205,6 +205,9 @@ pub struct PidWritePreview {
 /// audit persistence. An adapter may provide an interactive selector; non-interactive
 /// callers can omit the handler or select a response level on the request.
 pub trait WriteBackHandler: Send {
+    /// Receives persisted result previews after restoration attempts, even without PID tags.
+    fn pid_results_ready(&mut self, _previews: &[PidWritePreview]) {}
+
     fn select_response_level(&mut self, previews: &[PidWritePreview]) -> WriteBackSelection;
 
     fn write_back_selected(&mut self, _values: &ControllerPidValues, _requested: bool) {}
@@ -1170,6 +1173,7 @@ mod tests {
     #[test]
     fn optional_handler_defaults_are_no_ops() {
         let mut handler = DefaultHandler;
+        handler.pid_results_ready(&[]);
         assert!(matches!(
             handler.select_response_level(&[]),
             WriteBackSelection::Skipped(reason) if reason == "no selection"

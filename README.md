@@ -18,7 +18,8 @@ Feedback Tests (MRFT) and calculates PID constants for operator review.
 - **Template-based PID precision.** Yokogawa candidates use one decimal place; the other
   built-in families and new custom templates use three significant digits. The PID results
   and write review show the same controller-ready values that are written. Precision is
-  editable in a custom template; raw calculations and exports retain full precision.
+  editable in a custom template; raw calculations, exports, and recorded restore targets
+  retain full precision.
 - **OPC DA through [opcda-bridge](https://github.com/bytehound-labs/opcda-bridge).** A separate
   Windows-side gateway handles OPC DA access; BHTune runs on any supported platform.
 
