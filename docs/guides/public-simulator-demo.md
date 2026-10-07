@@ -47,32 +47,32 @@ requirements below remain authoritative if images are unavailable.
 
 {/* web-ui-screenshot: demo-tune */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=9ce922cb9355">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=9ce922cb9355" alt="BHTune Demo simulator tune form with the fixed policy notice and bounded fields" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=fae4691752dc">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-tune.png?v=fae4691752dc" alt="BHTune Demo simulator tune form with the fixed policy notice and bounded fields" />
   </a>
   <figcaption>The Demo form exposes bounded simulator controls and makes live-plant features unavailable.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: demo-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=c1a9ac7be6eb">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=c1a9ac7be6eb" alt="BHTune Demo visitor history list showing simulator runs for the current session" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=1419b2b6bea7">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=1419b2b6bea7" alt="BHTune Demo visitor history list showing simulator runs for the current session" />
   </a>
   <figcaption>History belongs to the current anonymous browser session and is owner-scoped by the server.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: demo-run-live */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=bc81949bc8a4">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=bc81949bc8a4" alt="BHTune Demo live simulator run with a streaming PV and MV trend" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=ba15d3668f1f">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=ba15d3668f1f" alt="BHTune Demo live simulator run with a streaming PV and MV trend" />
   </a>
   <figcaption>The Demo trend uses the same live stream and cancel workflow as Full mode, without plant access.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: demo-run-complete */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=358dd74f6185">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=358dd74f6185" alt="BHTune Demo completed simulator run detail with calculated results and diagnostics" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=5da2ec175d5f">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=5da2ec175d5f" alt="BHTune Demo completed simulator run detail with calculated results and diagnostics" />
   </a>
   <figcaption>Completed Demo runs retain results, samples, and diagnostics for the current visitor.</figcaption>
 </figure>

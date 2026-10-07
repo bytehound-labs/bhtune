@@ -20,8 +20,8 @@ success only after the clipboard accepts the value and explains when copying is 
 
 {/* web-ui-screenshot: full-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=abedf4bbbb28">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=abedf4bbbb28" alt="BHTune Full mode History page with filterable tune-run rows" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=607cc449bff3">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history.png?v=607cc449bff3" alt="BHTune Full mode History page with filterable tune-run rows" />
   </a>
   <figcaption>History provides filterable, paginated access to stored runs; open a row for its complete detail and audit trail.</figcaption>
 </figure>
@@ -31,8 +31,8 @@ profile receives the same `404` for another session's run ID.
 
 {/* web-ui-screenshot: demo-history */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=c1a9ac7be6eb">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=c1a9ac7be6eb" alt="BHTune Demo mode visitor-private History page" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=1419b2b6bea7">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-history.png?v=1419b2b6bea7" alt="BHTune Demo mode visitor-private History page" />
   </a>
   <figcaption>Demo history uses the same list shape while the server scopes every row to the current anonymous session.</figcaption>
 </figure>
@@ -46,16 +46,16 @@ poll step; live OPC DA timestamps use monotonic elapsed time projected onto the 
 
 {/* web-ui-screenshot: full-run-live */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-live.png?v=e41fabaaaac2">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-live.png?v=e41fabaaaac2" alt="BHTune Full mode active run detail with live PV and MV trend and cancellation control" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-live.png?v=d93743e16f14">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-live.png?v=d93743e16f14" alt="BHTune Full mode active run detail with live PV and MV trend and cancellation control" />
   </a>
   <figcaption>Live run detail combines progress, current measurements, the streaming trend, and the safety action to cancel.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: demo-run-live */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=bc81949bc8a4">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=bc81949bc8a4" alt="BHTune Demo mode active simulator run detail with live trend" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=ba15d3668f1f">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=ba15d3668f1f" alt="BHTune Demo mode active simulator run detail with live trend" />
   </a>
   <figcaption>Demo runs use the same live trend and cancellation workflow, but cannot access live-plant actions.</figcaption>
 </figure>
@@ -78,16 +78,16 @@ span, and observed PV/MV ranges; the summary does not add measurements.
 
 {/* web-ui-screenshot: full-run-complete */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=d6dffc3affe5">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=d6dffc3affe5" alt="BHTune Full mode completed run detail with calculated results, trend, summary, notes, and audit sections" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=bec99233da12">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=bec99233da12" alt="BHTune Full mode completed run detail with calculated results, trend, summary, notes, and audit sections" />
   </a>
   <figcaption>Completed detail promotes calculated results above the trend and keeps the full run evidence below in collapsible sections.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: demo-run-complete */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=358dd74f6185">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=358dd74f6185" alt="BHTune Demo mode completed simulator run detail with results and diagnostics" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=5da2ec175d5f">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=5da2ec175d5f" alt="BHTune Demo mode completed simulator run detail with results and diagnostics" />
   </a>
   <figcaption>Demo completion shows the same simulator results and diagnostics without any write-back controls.</figcaption>
 </figure>
@@ -116,8 +116,8 @@ status is unchanged.
 
 {/* web-ui-screenshot: full-pid-review */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=a613cb70d4cb">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=a613cb70d4cb" alt="BHTune PID review modal showing the exact response level, destination tags, and values before a write" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=0aadc374a9fc">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=0aadc374a9fc" alt="BHTune PID review modal showing the exact response level, destination tags, and values before a write" />
   </a>
   <figcaption>The safety review is the last visual confirmation before calculated PID values are sent to a live controller.</figcaption>
 </figure>
@@ -136,8 +136,8 @@ to `/runs`.
 
 {/* web-ui-screenshot: full-history-delete-confirmation */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=796ae7d6df0c">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=796ae7d6df0c" alt="BHTune failed completed-run deletion confirmation with an inline retry error" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=bc820dd7435e">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=bc820dd7435e" alt="BHTune failed completed-run deletion confirmation with an inline retry error" />
   </a>
   <figcaption>Run deletion is a retryable, styled confirmation: the failed attempt does not change history, while the successful retry removes the run and navigates back to History.</figcaption>
 </figure>
