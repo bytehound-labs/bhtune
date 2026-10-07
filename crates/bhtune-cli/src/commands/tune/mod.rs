@@ -7,12 +7,9 @@ pub use output::TuneOutcome;
 use bhtune_db::SqlitePool;
 use bhtune_runtime::cancel::CtrlC;
 use bhtune_runtime::config::BhtuneConfig;
-use bhtune_runtime::tune::{
-    TuneRunReport, ValidatedTuneRequest, drive_report, prepare, tune_outcome_for_run,
-};
+use bhtune_runtime::tune::{ValidatedTuneRequest, drive_report, prepare};
 
 use crate::args::TuneArgs;
-use crate::output::OutputFormat;
 
 pub use bhtune_runtime::tune::{PidWriteOutcome, write_pid_values};
 
@@ -43,14 +40,12 @@ pub(crate) async fn run_with_ctrl_c(
     let prepared = prepare(pool, request, &config).await?;
     let mut handler = output::CliWriteBackHandler::new(output_format, requested_write_pid);
     let report = drive_report(pool, prepared, ctrl_c, Some(&mut handler)).await?;
-    Ok(report_summary(report, output_format))
-}
-
-fn report_summary(report: TuneRunReport, output_format: OutputFormat) -> TuneOutcome {
-    let outcome = tune_outcome_for_run(&report.outcome);
-    let label = outcome.label();
-    tracing::info!(run_id = report.run_id, outcome = label, "tune run finished");
-    output::print_summary(report.run_id, &report.outcome, output_format)
+    Ok(output::print_summary(
+        report.run_id,
+        &report.outcome,
+        output_format,
+        &handler.previews,
+    ))
 }
 
 #[cfg(test)]
@@ -59,6 +54,7 @@ mod tests {
     use crate::args::{
         ControllerTypeArg, DirectionArg, DriverKindArg, ProcessTypeArg, ResponseLevelArg,
     };
+    use crate::output::OutputFormat;
     use bhtune_core::{ControllerType, ProcessType, ResponseLevel};
     use bhtune_runtime::tune::DriverKind;
 

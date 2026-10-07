@@ -12,6 +12,7 @@ import {
   PageHeading,
   Section,
 } from "../../components/ui";
+import { PID_ROUNDING_LABELS } from "./templateFormState";
 
 const originTone = {
   builtin: "success",
@@ -159,6 +160,10 @@ export function TemplateDetailPage() {
             <Field
               label="Derivative type"
               value={`${template.data.derivative_type} (${template.data.derivative_unit})`}
+            />
+            <Field
+              label="PID precision"
+              value={`${PID_ROUNDING_LABELS[template.data.pid_rounding.kind]}: ${template.data.pid_rounding.digits}`}
             />
           </Section>
 

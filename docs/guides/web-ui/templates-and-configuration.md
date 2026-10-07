@@ -24,14 +24,21 @@ place.
 
 {/* web-ui-screenshot: full-template-detail */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-detail.png?v=ba9a80e7b7c8">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-detail.png?v=ba9a80e7b7c8" alt="BHTune template detail page showing identity, behavior, tag suffixes, and mode values" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-detail.png?v=5323b4340e6a">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-detail.png?v=5323b4340e6a" alt="BHTune template detail page showing identity, behavior, tag suffixes, and mode values" />
   </a>
   <figcaption>Template detail groups the mapping into identity, behavior, suffixes, and raw mode values.</figcaption>
 </figure>
 
 The create and edit forms use the same grouped fields as the read-only detail view. A user's
 template name is immutable during editing; rename by deleting and recreating it instead.
+
+**PID rounding** and **PID precision** select one policy for active P/I/D terms after unit
+conversion: 0-7 decimal places or 1-7 significant digits. New custom templates start at three
+significant digits; Yokogawa's built-in policy is one decimal place. Built-in and catalog
+policies are managed in their source definitions. Each run retains its selected policy, so
+editing a template affects future runs, not historical results. The policy applies to results,
+write review, and new writes, never to recorded originals, readbacks, or restoration.
 
 Deleting a user-owned template uses a styled confirmation dialog. A failed request leaves the
 template in the list and keeps the dialog open with an inline retryable error; the retry is
@@ -41,16 +48,16 @@ definitions cause them to return on the next startup if a source-backed row is r
 
 {/* web-ui-screenshot: full-template-create */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=6b00aa6e4e48">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=6b00aa6e4e48" alt="BHTune New template form with identity, behavior, suffix, and mode-value sections" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=079fceba215a">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-create.png?v=079fceba215a" alt="BHTune New template form with identity, behavior, suffix, and mode-value sections" />
   </a>
   <figcaption>Create a user-owned template by filling the same fields documented in the template catalog reference.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: full-template-edit */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=7c2e30147ee4">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=7c2e30147ee4" alt="BHTune edit-template form with the existing template name locked" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=a59f1f8213ad">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-template-edit.png?v=a59f1f8213ad" alt="BHTune edit-template form with the existing template name locked" />
   </a>
   <figcaption>Edit preserves the template identity; the locked Name field prevents an unsupported rename.</figcaption>
 </figure>

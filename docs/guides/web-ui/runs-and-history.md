@@ -78,16 +78,16 @@ span, and observed PV/MV ranges; the summary does not add measurements.
 
 {/* web-ui-screenshot: full-run-complete */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=213e0c3c7785">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=213e0c3c7785" alt="BHTune Full mode completed run detail with calculated results, trend, summary, notes, and audit sections" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=bec99233da12">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=bec99233da12" alt="BHTune Full mode completed run detail with calculated results, trend, summary, notes, and audit sections" />
   </a>
   <figcaption>Completed detail promotes calculated results above the trend and keeps the full run evidence below in collapsible sections.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: demo-run-complete */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=cd3d3fb1c529">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=cd3d3fb1c529" alt="BHTune Demo mode completed simulator run detail with results and diagnostics" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=5da2ec175d5f">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=5da2ec175d5f" alt="BHTune Demo mode completed simulator run detail with results and diagnostics" />
   </a>
   <figcaption>Demo completion shows the same simulator results and diagnostics without any write-back controls.</figcaption>
 </figure>
@@ -107,16 +107,24 @@ review popup names the loop tag, response level, snapshotted parameter labels, e
 tags, and values. Apply closes the popup while the request continues in the background; physical
 write and readback failures appear in the page alert and audit table.
 
+The table and write popup use the same backend-generated controller targets: Yokogawa displays
+one decimal place, while the other built-ins use three significant digits. The run retains its
+template's precision policy even after catalog edits. JSON keeps raw calculated values in their
+original fields and exposes controller-ready values separately. A result whose active term would
+round to zero is **Unwritable**, with a reason and disabled write action; its raw calculation
+status is unchanged.
+
 {/* web-ui-screenshot: full-pid-review */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=2441117286b9">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=2441117286b9" alt="BHTune PID review modal showing the exact response level, destination tags, and values before a write" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=0aadc374a9fc">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=0aadc374a9fc" alt="BHTune PID review modal showing the exact response level, destination tags, and values before a write" />
   </a>
   <figcaption>The safety review is the last visual confirmation before calculated PID values are sent to a live controller.</figcaption>
 </figure>
 
-The newest successful write offers **Restore previous values** through the same popup. Both
-actions are disabled with a reason unless the run is finished, used OPC DA, has all PID tags,
+The newest successful write offers **Restore previous values** through the same popup. The
+restore review and the audit show the recorded values without applying template rounding.
+Both actions are disabled with a reason unless the run is finished, used OPC DA, has all PID tags,
 and recorded its original server and bridge connection. Export CSV/JSON, **Delete tune**, and
 **Duplicate this run** are available from the completed detail page. Delete tune opens a styled
 confirmation dialog before it removes the run's persisted samples, calculated results, and PID
@@ -128,8 +136,8 @@ to `/runs`.
 
 {/* web-ui-screenshot: full-history-delete-confirmation */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=ae680393f00a">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=ae680393f00a" alt="BHTune failed completed-run deletion confirmation with an inline retry error" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=bc820dd7435e">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=bc820dd7435e" alt="BHTune failed completed-run deletion confirmation with an inline retry error" />
   </a>
   <figcaption>Run deletion is a retryable, styled confirmation: the failed attempt does not change history, while the successful retry removes the run and navigates back to History.</figcaption>
 </figure>

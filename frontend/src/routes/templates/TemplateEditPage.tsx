@@ -11,6 +11,7 @@ import {
 import { TemplateFormFields } from "./TemplateFormFields";
 import {
   blankTemplateForm,
+  pidRoundingFormError,
   templateFormStateToTemplate,
   templateToFormState,
   type TemplateFormState,
@@ -34,6 +35,7 @@ export function TemplateEditPage() {
     });
   }
   const form = editorState.form;
+  const precisionError = pidRoundingFormError(form.pid_rounding);
 
   function set<K extends keyof TemplateFormState>(
     key: K,
@@ -47,6 +49,7 @@ export function TemplateEditPage() {
 
   function handleSubmit(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (precisionError) return;
     const updated = templateFormStateToTemplate(form);
     updateTemplate.mutate(
       { name, template: updated },
@@ -104,7 +107,11 @@ export function TemplateEditPage() {
             <Button
               type="submit"
               variant="primary"
-              disabled={updateTemplate.isPending || isNotUserOwned}
+              disabled={
+                updateTemplate.isPending ||
+                isNotUserOwned ||
+                Boolean(precisionError)
+              }
             >
               {updateTemplate.isPending ? "Saving…" : "Save changes"}
             </Button>

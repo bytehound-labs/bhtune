@@ -1,4 +1,4 @@
-use bhtune_core::DcsTemplate;
+use bhtune_core::{DcsTemplate, PidRounding};
 use chrono::{DateTime, Utc};
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
@@ -70,6 +70,7 @@ impl DcsTemplateRow {
             INSERT INTO dcs_templates (
                 name, origin, revert_mode, proportional_type, integral_type,
                 integral_unit, derivative_type, derivative_unit,
+                pid_rounding_kind, pid_rounding_digits,
                 process_variable_suffix, manipulated_variable_suffix, setpoint_variable_suffix,
                 controller_direction_suffix, controller_mode_suffix, mode_attribute_suffix,
                 upper_pv_range_suffix, lower_pv_range_suffix, upper_mv_range_suffix,
@@ -79,7 +80,7 @@ impl DcsTemplateRow {
                 versions_json, description, source,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
             ",
         )
@@ -141,6 +142,7 @@ impl DcsTemplateRow {
             UPDATE dcs_templates SET
                 revert_mode = ?, proportional_type = ?, integral_type = ?,
                 integral_unit = ?, derivative_type = ?, derivative_unit = ?,
+                pid_rounding_kind = ?, pid_rounding_digits = ?,
                 process_variable_suffix = ?, manipulated_variable_suffix = ?,
                 setpoint_variable_suffix = ?, controller_direction_suffix = ?,
                 controller_mode_suffix = ?, mode_attribute_suffix = ?,
@@ -206,6 +208,10 @@ fn bind_shared_template_fields<'q>(
     query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>,
     template: &DcsTemplate,
 ) -> DbResult<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>> {
+    template
+        .pid_rounding
+        .validate()
+        .map_err(DbError::InvalidPidRounding)?;
     let versions_json = json_text("template versions", &template.versions)?;
     Ok(query
         .bind(template.revert_mode)
@@ -214,6 +220,8 @@ fn bind_shared_template_fields<'q>(
         .bind(enum_to_text(&template.integral_unit)?)
         .bind(enum_to_text(&template.derivative_type)?)
         .bind(enum_to_text(&template.derivative_unit)?)
+        .bind(enum_to_text(&template.pid_rounding.kind)?)
+        .bind(template.pid_rounding.digits)
         .bind(&template.process_variable_suffix)
         .bind(&template.manipulated_variable_suffix)
         .bind(&template.setpoint_variable_suffix)
@@ -249,6 +257,10 @@ fn row_to_dcs_template(row: SqliteRow) -> DbResult<DcsTemplateRow> {
         integral_unit: text_to_enum("integral_unit", &get_enum("integral_unit")?)?,
         derivative_type: text_to_enum("derivative_type", &get_enum("derivative_type")?)?,
         derivative_unit: text_to_enum("derivative_unit", &get_enum("derivative_unit")?)?,
+        pid_rounding: PidRounding {
+            kind: text_to_enum("pid_rounding_kind", &get_enum("pid_rounding_kind")?)?,
+            digits: row.try_get("pid_rounding_digits").map_err(DbError::Query)?,
+        },
         process_variable_suffix: row
             .try_get("process_variable_suffix")
             .map_err(DbError::Query)?,
@@ -306,6 +318,10 @@ fn row_to_dcs_template(row: SqliteRow) -> DbResult<DcsTemplateRow> {
         description: row.try_get("description").map_err(DbError::Query)?,
         source: row.try_get("source").map_err(DbError::Query)?,
     };
+    template
+        .pid_rounding
+        .validate()
+        .map_err(DbError::InvalidPidRounding)?;
 
     Ok(DcsTemplateRow {
         id: row.try_get("id").map_err(DbError::Query)?,

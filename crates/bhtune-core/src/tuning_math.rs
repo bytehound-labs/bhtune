@@ -16,7 +16,10 @@ use crate::{
     controller_type::ControllerType,
     direction::ControllerDirection,
     loop_config::LoopConfig,
-    pid_config::{DerivativeType, IntegralType, ProportionalType, TimeUnit},
+    pid_config::{
+        DerivativeType, IntegralType, PidRounding, PidRoundingError, ProportionalType,
+        RoundedPidValue, TimeUnit,
+    },
     range::PvRange,
     template::DcsTemplate,
 };
@@ -378,6 +381,79 @@ pub fn opc_write_values(
         integral,
         derivative,
     }
+}
+
+/// Controller-ready targets, separate from the full-precision calculated PID parameters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct ControllerPidValues {
+    pub response_level: ResponseLevel,
+    pub proportional: RoundedPidValue,
+    pub integral: RoundedPidValue,
+    pub derivative: RoundedPidValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControllerPidError {
+    pub term: &'static str,
+    pub reason: PidRoundingError,
+}
+
+impl std::fmt::Display for ControllerPidError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.term, self.reason)
+    }
+}
+
+impl std::error::Error for ControllerPidError {}
+
+fn rounded_active_term(
+    value: f32,
+    term: &'static str,
+    policy: PidRounding,
+) -> Result<RoundedPidValue, ControllerPidError> {
+    let rounded = policy
+        .round_value(value)
+        .map_err(|reason| ControllerPidError { term, reason })?;
+    let reason = if value <= 0.0 {
+        Some(PidRoundingError::NonPositive)
+    } else if rounded.value == 0.0 {
+        Some(PidRoundingError::RoundedToZero)
+    } else {
+        None
+    };
+    match reason {
+        Some(reason) => Err(ControllerPidError { term, reason }),
+        None => Ok(rounded),
+    }
+}
+
+/// Applies template precision only to active, already-converted PID terms. Disabled
+/// integral/derivative targets retain the exact values chosen by [`opc_write_values`].
+pub fn controller_pid_values(
+    pid: PidParameters,
+    controller_type: ControllerType,
+    template: &DcsTemplate,
+) -> Result<ControllerPidValues, ControllerPidError> {
+    let raw = opc_write_values(pid, controller_type, template.integral_type);
+    let policy = template.pid_rounding;
+    let proportional = rounded_active_term(raw.proportional, "proportional", policy)?;
+    let integral = match controller_type {
+        ControllerType::P => policy.disabled_value(raw.integral),
+        ControllerType::Pi | ControllerType::Pid => {
+            rounded_active_term(raw.integral, "integral", policy)?
+        }
+    };
+    let derivative = match controller_type {
+        ControllerType::Pid => rounded_active_term(raw.derivative, "derivative", policy)?,
+        ControllerType::P | ControllerType::Pi => policy.disabled_value(raw.derivative),
+    };
+    Ok(ControllerPidValues {
+        response_level: raw.response_level,
+        proportional,
+        integral,
+        derivative,
+    })
 }
 
 /// The top-level entry point: computes the PID parameters for all three response levels from
@@ -999,6 +1075,127 @@ mod tests {
         let values = opc_write_values(sample_pid(), ControllerType::P, IntegralType::ResetTime);
         assert_approx(values.proportional, 2.0, 1e-6);
         assert_eq!(values.response_level, ResponseLevel::Moderate);
+    }
+
+    #[test]
+    fn controller_pid_rounds_only_active_final_unit_values() {
+        for mut template in template::built_in_templates() {
+            let raw = calculate_pid_parameters(sample_result(), &template);
+            let target = controller_pid_values(raw, ControllerType::Pid, &template).unwrap();
+            assert_eq!(target.response_level, raw.response_level);
+            for (value, rounded) in [
+                (raw.proportional, &target.proportional),
+                (raw.integral, &target.integral),
+                (raw.derivative, &target.derivative),
+            ] {
+                assert_eq!(template.pid_rounding.round_value(value).unwrap(), *rounded);
+            }
+
+            template.integral_type = IntegralType::ResetGain;
+            template.derivative_type = DerivativeType::DerivativeGain;
+            template.pid_rounding = PidRounding::default();
+            let raw = calculate_pid_parameters(sample_result(), &template);
+            let target = controller_pid_values(raw, ControllerType::Pid, &template).unwrap();
+            assert_eq!(
+                target.integral,
+                template.pid_rounding.round_value(raw.integral).unwrap()
+            );
+            assert_eq!(
+                target.derivative,
+                template.pid_rounding.round_value(raw.derivative).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn controller_pid_preserves_disabled_9999_and_zero_sentinels() {
+        for mut template in template::built_in_templates() {
+            for integral_type in [
+                IntegralType::ResetTime,
+                IntegralType::ResetRate,
+                IntegralType::ResetGain,
+            ] {
+                template.integral_type = integral_type;
+                let target =
+                    controller_pid_values(sample_pid(), ControllerType::P, &template).unwrap();
+                let sentinel = if integral_type == IntegralType::ResetTime {
+                    9999.0
+                } else {
+                    0.0
+                };
+                assert_eq!(target.integral.value, sentinel);
+                assert_eq!(target.integral.display.parse::<f32>().unwrap(), sentinel);
+                assert!(!target.integral.display.contains("10000"));
+                assert_eq!(target.derivative.value, 0.0);
+
+                let target =
+                    controller_pid_values(sample_pid(), ControllerType::Pi, &template).unwrap();
+                assert_eq!(target.derivative.value, 0.0);
+                assert_eq!(target.derivative.display.parse::<f32>().unwrap(), 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn controller_pid_rejects_active_terms_erased_by_rounding() {
+        let template = template::built_in_templates().remove(0);
+        for (pid, label) in [
+            (
+                PidParameters {
+                    proportional: 0.04,
+                    ..sample_pid()
+                },
+                "proportional",
+            ),
+            (
+                PidParameters {
+                    integral: 0.04,
+                    ..sample_pid()
+                },
+                "integral",
+            ),
+            (
+                PidParameters {
+                    derivative: 0.04,
+                    ..sample_pid()
+                },
+                "derivative",
+            ),
+        ] {
+            let error = controller_pid_values(pid, ControllerType::Pid, &template).unwrap_err();
+            assert!(error.to_string().contains(label));
+            assert!(error.to_string().contains("zero"));
+            assert!(std::error::Error::source(&error).is_none());
+        }
+        for value in [0.0, -1.0] {
+            let error = controller_pid_values(
+                PidParameters {
+                    proportional: value,
+                    ..sample_pid()
+                },
+                ControllerType::Pid,
+                &template,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("positive"));
+        }
+    }
+
+    #[test]
+    fn controller_pid_rejects_invalid_precision_and_non_finite_targets() {
+        let mut template = template::built_in_templates().remove(0);
+        let error = controller_pid_values(
+            PidParameters {
+                proportional: f32::INFINITY,
+                ..sample_pid()
+            },
+            ControllerType::Pid,
+            &template,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("finite"));
+        template.pid_rounding.digits = 8;
+        assert!(controller_pid_values(sample_pid(), ControllerType::P, &template).is_err());
     }
 
     // --- calculate_all + integration with a real MrftEngine run -----------------------------

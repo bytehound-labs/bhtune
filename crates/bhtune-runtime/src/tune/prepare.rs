@@ -44,7 +44,7 @@ use super::timing::{
     completed_oscillation_period_ms, record_timing_metrics_if_present,
     warn_on_missed_poll_opportunities,
 };
-use super::writeback::{WriteBackHandler, maybe_write_back_with_owner};
+use super::writeback::{PidWritePreview, WriteBackHandler, maybe_write_back_with_owner};
 
 /// Everything [`prepare`] resolves before a tune's long-running polling phase can start:
 /// the already-validated [`ValidatedTuneRequest`], the resolved template and derived tags, a
@@ -581,7 +581,7 @@ pub(super) async fn persist_completed_results(
     config: LoopConfig,
     pv_range: PvRange,
     template: &DcsTemplate,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<PidWritePreview>> {
     persist_results(
         pool, run_id, completion, direction, config, pv_range, template,
     )
@@ -933,7 +933,7 @@ pub(super) async fn finish_completed_run(
     write_pid: Option<ResponseLevel>,
     allow_uncertain_quality: bool,
     ctrl_c: &mut CtrlC,
-    handler: Option<&mut dyn WriteBackHandler>,
+    mut handler: Option<&mut dyn WriteBackHandler>,
     ownership: Option<&LiveOperationGuard>,
     mv_actuations: &mut Option<MvActuationTracker>,
     mut completion: CompletedPoll,
@@ -944,7 +944,7 @@ pub(super) async fn finish_completed_run(
         high: initial.pv_range_high,
         low: initial.pv_range_low,
     };
-    if let Err(error) = persist_completed_results(
+    let previews = match persist_completed_results(
         pool,
         run_id,
         completion.action.clone(),
@@ -955,39 +955,41 @@ pub(super) async fn finish_completed_run(
     )
     .await
     {
-        let restore_attempt = attempt_and_record_restore_with_settling(
-            pool,
-            run_id,
-            args,
-            effective_timing,
-            driver,
-            tags,
-            template,
-            initial,
-            guard,
-            allow_uncertain_quality,
-            ctrl_c,
-            mv_actuations,
-            Some(&mut completion),
-            measured_oscillation_period_ms,
-            Some(timing),
-        )
-        .await;
-        let error = match restore_attempt {
-            RestoreAttempt::Confirmed => error,
-            RestoreAttempt::Incomplete { reason } => {
-                tracing::warn!(
-                    run_id,
-                    reason = %reason,
-                    "completed MRFT result persistence failed and restore was incomplete"
-                );
-                error
-            }
-        };
-        record_timing_metrics_if_present(pool, run_id, timing.finish(None)).await;
-        return Err(error);
-    }
-
+        Ok(previews) => previews,
+        Err(error) => {
+            let restore_attempt = attempt_and_record_restore_with_settling(
+                pool,
+                run_id,
+                args,
+                effective_timing,
+                driver,
+                tags,
+                template,
+                initial,
+                guard,
+                allow_uncertain_quality,
+                ctrl_c,
+                mv_actuations,
+                Some(&mut completion),
+                measured_oscillation_period_ms,
+                Some(timing),
+            )
+            .await;
+            let error = match restore_attempt {
+                RestoreAttempt::Confirmed => error,
+                RestoreAttempt::Incomplete { reason } => {
+                    tracing::warn!(
+                        run_id,
+                        reason = %reason,
+                        "completed MRFT result persistence failed and restore was incomplete"
+                    );
+                    error
+                }
+            };
+            record_timing_metrics_if_present(pool, run_id, timing.finish(None)).await;
+            return Err(error);
+        }
+    };
     let restore_attempt = attempt_and_record_restore_with_settling(
         pool,
         run_id,
@@ -1013,6 +1015,9 @@ pub(super) async fn finish_completed_run(
         timing.finish(measured_oscillation_period_ms),
     )
     .await?;
+    if let Some(handler) = handler.as_deref_mut() {
+        handler.pid_results_ready(&previews);
+    }
     match restore_attempt {
         RestoreAttempt::Confirmed => {
             let (write_back, write_back_detail) = maybe_write_back_with_owner(

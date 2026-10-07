@@ -1639,7 +1639,7 @@
             }
           },
           "400": {
-            "description": "The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, or no calculated result for the requested response level), or the driver connection itself failed.",
+            "description": "The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, no result for the requested level, or an unsafe controller target after template rounding), or the driver connection itself failed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2255,6 +2255,30 @@
           "reverse"
         ]
       },
+      "ControllerPidValues": {
+        "type": "object",
+        "description": "Controller-ready targets, separate from the full-precision calculated PID parameters.",
+        "required": [
+          "response_level",
+          "proportional",
+          "integral",
+          "derivative"
+        ],
+        "properties": {
+          "derivative": {
+            "$ref": "#/components/schemas/RoundedPidValue"
+          },
+          "integral": {
+            "$ref": "#/components/schemas/RoundedPidValue"
+          },
+          "proportional": {
+            "$ref": "#/components/schemas/RoundedPidValue"
+          },
+          "response_level": {
+            "$ref": "#/components/schemas/ResponseLevel"
+          }
+        }
+      },
       "ControllerType": {
         "type": "string",
         "description": "A PID controller structure. Discriminants double as the column index into the\ntuning-constant matrices in [`crate::constants`].",
@@ -2308,6 +2332,7 @@
           "integral_unit",
           "derivative_type",
           "derivative_unit",
+          "pid_rounding",
           "process_variable_suffix",
           "manipulated_variable_suffix",
           "setpoint_variable_suffix",
@@ -2389,6 +2414,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "pid_rounding": {
+            "$ref": "#/components/schemas/PidRounding",
+            "description": "Rounding for new PID controller targets and their presentation, after unit/convention\nconversion. Raw calculations and recorded restore values retain their precision."
           },
           "process_variable_suffix": {
             "type": "string",
@@ -4293,6 +4322,33 @@
           }
         }
       },
+      "PidRounding": {
+        "type": "object",
+        "required": [
+          "kind",
+          "digits"
+        ],
+        "properties": {
+          "digits": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 7,
+            "minimum": 0
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PidRoundingKind"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PidRoundingKind": {
+        "type": "string",
+        "description": "Precision shared by the active P/I/D terms in a template's final controller units.",
+        "enum": [
+          "decimal_places",
+          "significant_digits"
+        ]
+      },
       "PollLatencyMetrics": {
         "type": "object",
         "description": "Operation-latency diagnostics captured while a run is polling.\n\nEach category counts only operations that completed successfully. A zero count with\n`None` mean/max means that the operation did not occur during the run. Categories can\noverlap: while a relay command is pending, one batched OPC read supplies both the PV sample\nand MV verification, so its elapsed duration may appear in both summaries and must not be\nadded twice as independent I/O time.",
@@ -4490,6 +4546,24 @@
           "status"
         ],
         "properties": {
+          "controller_target_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why no safe controller target exists, including an active term rounded to zero."
+          },
+          "controller_values": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ControllerPidValues",
+                "description": "Controller-ready final-unit values and canonical text; raw fields remain unchanged."
+              }
+            ]
+          },
           "derivative": {
             "type": [
               "number",
@@ -4558,6 +4632,23 @@
           "failed"
         ]
       },
+      "RoundedPidValue": {
+        "type": "object",
+        "description": "A controller value and its canonical text; parsing `display` as `f32` yields `value`.",
+        "required": [
+          "value",
+          "display"
+        ],
+        "properties": {
+          "display": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
       "RunDetailResponse": {
         "type": "object",
         "required": [
@@ -4570,6 +4661,7 @@
           "template_origin",
           "allow_uncertain_quality",
           "config",
+          "pid_rounding",
           "pid_parameter_labels",
           "samples",
           "results",
@@ -4690,6 +4782,10 @@
           "pid_parameter_labels": {
             "$ref": "#/components/schemas/PidParameterLabelsResponse",
             "description": "Operator-facing calculated-result column labels from the run's historical template\nsnapshot. Empty user-template suffixes use the conventional P/I/D labels."
+          },
+          "pid_rounding": {
+            "$ref": "#/components/schemas/PidRounding",
+            "description": "Precision policy from the run's immutable template snapshot."
           },
           "restore_detail": {
             "type": [

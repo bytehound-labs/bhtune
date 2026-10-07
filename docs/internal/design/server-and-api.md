@@ -189,6 +189,12 @@ runtime without an interactive write-back handler, so a background `drive()` fut
 handler for prompts and progress output; validation, cancellation, writes, verification,
 rollback, and persistence remain in the runtime.
 
+Run detail exposes raw result fields alongside `controller_values` (numeric targets and
+canonical text) and `controller_target_error`. The run's explicit `pid_rounding` comes from
+its template snapshot. Full and visitor-owned Demo detail use the same runtime preview;
+Demo gains no write capability. Post-run writes validate the selected rounded target before
+reserving or connecting. Revert uses recorded previous values without this quantization gate.
+
 ## Read-only preflight endpoint
 
 Full mode exposes `POST /api/runs/preflight` with the same `StartRunRequest` body as

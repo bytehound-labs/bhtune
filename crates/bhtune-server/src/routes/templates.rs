@@ -246,6 +246,7 @@ mod tests {
             "integral_unit": "minutes",
             "derivative_type": "derivative_time",
             "derivative_unit": "minutes",
+            "pid_rounding": { "kind": "significant_digits", "digits": 3 },
             "process_variable_suffix": ".PV",
             "manipulated_variable_suffix": ".MV",
             "setpoint_variable_suffix": ".SV",

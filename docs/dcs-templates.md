@@ -47,6 +47,7 @@ integral_type = "reset_time"
 integral_unit = "seconds"
 derivative_type = "derivative_time"
 derivative_unit = "seconds"
+pid_rounding = { kind = "decimal_places", digits = 1 }
 process_variable_suffix = "PV"
 manipulated_variable_suffix = "MV"
 setpoint_variable_suffix = "SV"
@@ -98,6 +99,37 @@ generating an editor with autocomplete, and guaranteed to never drift from what
 | `derivative_type`   | enum    | `"derivative_time"` (Td) or `"derivative_gain"` (Kd, `Kd = Kp * Td`)                            | How this DCS expresses the derivative term.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `derivative_unit`   | enum    | `"seconds"` or `"minutes"`                                                                      | The time unit `derivative_type` is expressed in.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `revert_mode`       | boolean | —                                                                                               | Whether the controller mode is switched back to its original raw value after a test. If the loop starts in the template-defined Auto value and has a setpoint tag, BHTune reads and persists the original setpoint before any live write; when mode restoration is enabled, it later attempts to write that value back. When enabled for a live OPC DA Auto-start with a valid measured period, BHTune remains in Manual for one-third of the period after restoring the MV, then writes Auto before attempting the setpoint and mode-attribute restores. A non-Auto start does not capture or rewrite a setpoint. See [Safety](guides/safety.md#live-auto-release-settling) for failure handling and restore ordering. |
+
+### PID precision
+
+`pid_rounding` contains `kind` and `digits`, shared by active P/I/D terms in the
+template's final controller units. `decimal_places` accepts 0-7 places;
+`significant_digits` accepts 1-7 digits. Imported JSON/TOML templates specify
+the policy explicitly. The custom-template editor starts with three significant digits.
+
+| Template               | Built-in precision       |
+| ---------------------- | ------------------------ |
+| Yokogawa CentumVP      | One decimal place        |
+| Honeywell Experion     | Three significant digits |
+| Schneider Modicon      | Three significant digits |
+| Allen-Bradley PlantPAx | Three significant digits |
+
+These are BHTune defaults, not vendor hardware-resolution guarantees. Copy a built-in
+template to customize its precision. A run records the policy in its template snapshot,
+so later catalog edits do not change that run's controller targets.
+
+For example, Yokogawa `155.21378 / 2.482169 / 0` becomes `155.2 / 2.5 / 0.0`.
+Three significant digits preserve small terms: `0.004873` becomes `0.00487`.
+Rounding is to nearest, with exact halfway cases of the stored `f32` away from zero.
+The PID results, write review, CLI, and new writes use the same controller-ready
+values. Raw calculations and existing raw CSV/JSON export fields remain full precision.
+
+A P-only controller's integral disable sentinel (`9999` for reset time, otherwise `0`)
+and a P/PI controller's derivative `0` remain exact. Previous values, actual readbacks,
+rollback, PID revert, and loop recovery are never rounded by this policy.
+If rounding would erase an active nonzero term, the calculation remains recorded but
+its controller target is unavailable until a suitable template precision is used for
+a new run; BHTune does not silently disable a term or increase precision.
 
 ### Tag suffixes
 

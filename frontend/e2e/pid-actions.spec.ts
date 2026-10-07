@@ -16,6 +16,7 @@ function completedRun(withResults = true): RunDetailResponse {
     driver: "opcda",
     template_name: "Yokogawa CentumVP",
     template_origin: "builtin",
+    pid_rounding: { kind: "decimal_places", digits: 1 },
     started_at: "2026-01-01T12:00:00Z",
     completed_at: "2026-01-01T12:05:00Z",
     allow_uncertain_quality: true,
@@ -83,6 +84,13 @@ function completedRun(withResults = true): RunDetailResponse {
             derivative: 0,
             status: "valid",
             invalid_reason: null,
+            controller_values: {
+              response_level: "aggressive",
+              proportional: { value: 20.5, display: "20.5" },
+              integral: { value: 1.2, display: "1.2" },
+              derivative: { value: 0, display: "0.0" },
+            },
+            controller_target_error: null,
           },
           {
             response_level: "moderate",
@@ -94,6 +102,13 @@ function completedRun(withResults = true): RunDetailResponse {
             derivative: 0,
             status: "valid",
             invalid_reason: null,
+            controller_values: {
+              response_level: "moderate",
+              proportional: { value: 25, display: "25.0" },
+              integral: { value: 1.5, display: "1.5" },
+              derivative: { value: 0, display: "0.0" },
+            },
+            controller_target_error: null,
           },
           {
             response_level: "sluggish",
@@ -105,6 +120,13 @@ function completedRun(withResults = true): RunDetailResponse {
             derivative: 0,
             status: "valid",
             invalid_reason: null,
+            controller_values: {
+              response_level: "sluggish",
+              proportional: { value: 30, display: "30.0" },
+              integral: { value: 1.8, display: "1.8" },
+              derivative: { value: 0, display: "0.0" },
+            },
+            controller_target_error: null,
           },
         ]
       : [],
@@ -186,6 +208,8 @@ function completedRunWithInvalidAggressiveResult() {
     derivative: null,
     status: "invalid",
     invalid_reason: "non_positive_pv_amplitude",
+    controller_values: null,
+    controller_target_error: "The measured PV amplitude was zero or negative.",
   };
   return run;
 }
@@ -372,6 +396,104 @@ test.describe("post-tune PID actions", () => {
     await expect(
       validRow.getByRole("button", { name: "Review & write" }),
     ).toBeEnabled();
+  });
+
+  for (const kind of ["decimal_places", "significant_digits"] as const) {
+    test(`uses canonical ${kind} values in both results and write review`, async ({
+      page,
+    }) => {
+      const run = completedRun();
+      const moderate = run.results[1];
+      if (!moderate) throw new Error("The moderate fixture result is missing.");
+      const significant = kind === "significant_digits";
+      run.pid_rounding = { kind, digits: significant ? 3 : 1 };
+      run.results = [
+        {
+          ...moderate,
+          proportional: significant ? 0.004873 : 155.21378,
+          integral: significant ? 9.999 : 2.482169,
+          controller_values: {
+            response_level: "moderate",
+            proportional: significant
+              ? { value: 0.00487, display: "0.00487" }
+              : { value: 155.2, display: "155.2" },
+            integral: significant
+              ? { value: 10, display: "10.0" }
+              : { value: 2.5, display: "2.5" },
+            derivative: { value: 0, display: significant ? "0" : "0.0" },
+          },
+        },
+      ];
+      await openRun(page, run);
+      const row = resultsSection(page)
+        .locator("tbody tr")
+        .filter({ hasText: "Moderate" });
+      const expected = significant
+        ? ["0.00487", "10.0", "0"]
+        : ["155.2", "2.5", "0.0"];
+      await Promise.all(
+        expected.map((text, index) =>
+          expect(row.locator("td").nth(index + 1)).toHaveText(text),
+        ),
+      );
+      await row.getByRole("button", { name: "Review & write" }).click();
+      await expect(
+        page.getByRole("dialog").locator("tbody td:last-child"),
+      ).toHaveText(expected);
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Cancel" })
+        .click();
+    });
+  }
+
+  test("keeps an otherwise valid result unwritable when precision erases an active term", async ({
+    page,
+  }) => {
+    const run = completedRun();
+    const moderate = run.results[1];
+    if (!moderate) throw new Error("The moderate fixture result is missing.");
+    run.results[1] = {
+      ...moderate,
+      integral: 0.049,
+      controller_values: null,
+      controller_target_error:
+        "Template PID rounding would erase an active term to zero.",
+    };
+    await openRun(page, run);
+    const row = resultsSection(page)
+      .locator("tbody tr")
+      .filter({ hasText: "Moderate" });
+    await expect(row).toContainText("Unwritable");
+    await expect(row).toContainText("erase an active term to zero");
+    await expect(
+      row.getByRole("button", { name: "Review & write" }),
+    ).toBeDisabled();
+    await expect(
+      resultsSection(page)
+        .locator("tbody tr")
+        .filter({ hasText: "Aggressive" })
+        .getByRole("button", { name: "Review & write" }),
+    ).toBeEnabled();
+  });
+
+  test("restore review and audit preserve recorded precision rather than template rounding", async ({
+    page,
+  }) => {
+    const run = completedRun();
+    const lastWrite = run.writes.at(-1);
+    if (!lastWrite) throw new Error("The last write fixture is missing.");
+    lastWrite.proportional_previous = 11.123456;
+    lastWrite.integral_previous = 22.765432;
+    lastWrite.derivative_previous = 33.000123;
+    await openRun(page, run);
+    await expect(detailSection(page, "PID change history")).toContainText(
+      "11.123456",
+    );
+    await page.getByRole("button", { name: "Restore previous values" }).click();
+    await expect(
+      page.getByRole("dialog").locator("tbody td:last-child"),
+    ).toHaveText(["11.123456", "22.765432", "33.000123"]);
   });
 
   test("closes the write review modal immediately and stays silent after success", async ({

@@ -122,6 +122,15 @@ rather than either skipped silently or chased at disproportionate risk.
 
 ## Automation (`cli-automation`)
 
+Tune summaries and write-back selection use the shared runtime controller previews. JSON
+summaries expose them in `controller_pid`; history detail retains raw result fields and
+separately includes `controller_values`, `controller_target_error`, and the run's explicit
+`pid_rounding`. Table review and new writes use identical targets. PID audit and revert progress
+show recorded values without applying template rounding or the generic four-decimal formatter.
+The runtime delivers previews after result persistence and restoration attempts. The CLI
+retains them for final reporting without post-execution database reads, preserving abort,
+write-back, and incomplete-restore exit codes.
+
 `bhtune check` supports read-only preflight for scheduled/scripted use (`cron`, Windows Task
 Scheduler, CI). `bhtune tune`/`bhtune simulate` support fully non-interactive operation,
 `bhtune restore-loop` provides explicit non-interactive recovery for an eligible orphan, and
@@ -147,7 +156,7 @@ callers:
   normal CLI validation), the write-back is reported as failed rather than attempted, exactly
   as an invalid interactive selection already was.
 - **`--output <table|json>`** — on `check`, the full preflight report; on
-  `tune`/`simulate`, the final summary line; on
+  `tune`/`simulate`, controller-ready PID previews and the final outcome; on
   `history list`/`show`, the whole listing/detail; on `history revert`, the pre-attempt
   status line and the final outcome (a `RevertJson` object); on `history prune`, the
   deleted-or-would-delete count and cutoff (a `PruneJson` object, via the same shared
@@ -155,7 +164,7 @@ callers:
   preview and a real prune can never disagree about which runs are in scope); on
   `restore-loop`, one structured report with the evidence export and a result for every
   restore step. `table` is the
-  default and preserves the original plain-text shape exactly. `json` prints one
+  default. `json` prints one
   `serde_json::to_string_pretty` object (or array, for `history list`) to stdout — never a
   mix of the two on one invocation. Local DTOs (`RunSummaryJson`/`RunListJson`/
   `InitialReadingsJson`/`ResultJson`/`WriteJson`/`RunDetailJson`/`RevertJson`/

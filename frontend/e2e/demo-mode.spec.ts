@@ -158,6 +158,14 @@ function json(route: Route, body: unknown, status = 200) {
 }
 
 function demoRun(id: number, request: StartRunRequest): RunDetailResponse {
+  const policies: Record<string, RunDetailResponse["pid_rounding"]> = {
+    "Yokogawa CentumVP": { kind: "decimal_places", digits: 1 },
+    "Honeywell Experion": { kind: "significant_digits", digits: 3 },
+    "Schneider Modicon": { kind: "significant_digits", digits: 3 },
+    "Allen-Bradley PlantPAx": { kind: "significant_digits", digits: 3 },
+  };
+  const pidRounding = policies[request.template];
+  if (!pidRounding) throw new Error("Unknown Demo fixture template.");
   return {
     id,
     tag_name: request.tagname,
@@ -165,6 +173,7 @@ function demoRun(id: number, request: StartRunRequest): RunDetailResponse {
     driver: "simulator",
     template_name: request.template,
     template_origin: "builtin",
+    pid_rounding: pidRounding,
     started_at: "2026-09-01T12:00:00Z",
     completed_at: "2026-09-01T12:00:01Z",
     allow_uncertain_quality: true,
@@ -607,7 +616,13 @@ test.describe("Demo mode contract", () => {
       write_pid: "aggressive",
       yes: true,
     } as unknown as StartRunRequest;
-    const run = demoRun(4001, invalidRequest);
+    const run = {
+      ...demoRun(4001, {
+        ...invalidRequest,
+        template: "Yokogawa CentumVP",
+      }),
+      request: invalidRequest,
+    };
 
     await page.route("**/api/capabilities", (route) =>
       json(route, capabilities),

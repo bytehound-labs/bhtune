@@ -6,6 +6,7 @@ import { Button, ErrorBanner, PageHeading } from "../../components/ui";
 import { TemplateFormFields } from "./TemplateFormFields";
 import {
   blankTemplateForm,
+  pidRoundingFormError,
   templateFormStateToTemplate,
   type TemplateFormState,
 } from "./templateFormState";
@@ -14,6 +15,7 @@ export function TemplateCreatePage() {
   const navigate = useNavigate();
   const createTemplate = useCreateTemplate();
   const [form, setForm] = useState<TemplateFormState>(blankTemplateForm);
+  const precisionError = pidRoundingFormError(form.pid_rounding);
 
   function set<K extends keyof TemplateFormState>(
     key: K,
@@ -24,6 +26,7 @@ export function TemplateCreatePage() {
 
   function handleSubmit(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (precisionError) return;
     const template = templateFormStateToTemplate(form);
     createTemplate.mutate(template, {
       onSuccess: () =>
@@ -62,7 +65,7 @@ export function TemplateCreatePage() {
           <Button
             type="submit"
             variant="primary"
-            disabled={createTemplate.isPending}
+            disabled={createTemplate.isPending || Boolean(precisionError)}
           >
             {createTemplate.isPending ? "Creating…" : "Create template"}
           </Button>

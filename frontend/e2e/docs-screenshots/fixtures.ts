@@ -30,6 +30,7 @@ const template = {
   derivative_type: "derivative_time",
   integral_unit: "minutes",
   derivative_unit: "minutes",
+  pid_rounding: { kind: "decimal_places", digits: 1 },
   revert_mode: true,
 };
 
@@ -40,6 +41,7 @@ const userTemplate = {
   description: "A user-owned example template for documentation.",
   source: "Documentation fixture",
   origin: "user",
+  pid_rounding: { kind: "significant_digits", digits: 3 },
 };
 
 const templates = [
@@ -47,6 +49,7 @@ const templates = [
   {
     ...template,
     name: "Allen-Bradley PlantPAx",
+    pid_rounding: { kind: "significant_digits", digits: 3 },
     versions: ["3.0", "3.5", "4.0"],
     description: "Allen-Bradley PlantPAx tag conventions.",
     process_variable_suffix: "PV",
@@ -55,6 +58,7 @@ const templates = [
   {
     ...template,
     name: "Honeywell Experion",
+    pid_rounding: { kind: "significant_digits", digits: 3 },
     versions: ["R400", "R410", "R430"],
     description: "Honeywell Experion tag conventions.",
     origin: "builtin",
@@ -312,6 +316,7 @@ const completedRun = {
   initial_readings: initialReadings,
   template_name: "Yokogawa CentumVP",
   template_origin: "builtin",
+  pid_rounding: { kind: "decimal_places", digits: 1 },
   allow_uncertain_quality: true,
   notes: "Review the moderate response before applying it to the loop.",
   opc_server: "Yokogawa.Example",
@@ -348,6 +353,13 @@ const completedRun = {
       integral: 0.42,
       derivative: 0,
       invalid_reason: null,
+      controller_values: {
+        response_level: "aggressive",
+        proportional: { value: 1.5, display: "1.5" },
+        integral: { value: 0.4, display: "0.4" },
+        derivative: { value: 0, display: "0.0" },
+      },
+      controller_target_error: null,
     },
     {
       response_level: "moderate",
@@ -359,6 +371,13 @@ const completedRun = {
       integral: 0.58,
       derivative: 0,
       invalid_reason: null,
+      controller_values: {
+        response_level: "moderate",
+        proportional: { value: 1.1, display: "1.1" },
+        integral: { value: 0.6, display: "0.6" },
+        derivative: { value: 0, display: "0.0" },
+      },
+      controller_target_error: null,
     },
     {
       response_level: "sluggish",
@@ -370,6 +389,13 @@ const completedRun = {
       integral: 0.82,
       derivative: 0,
       invalid_reason: null,
+      controller_values: {
+        response_level: "sluggish",
+        proportional: { value: 0.8, display: "0.8" },
+        integral: { value: 0.8, display: "0.8" },
+        derivative: { value: 0, display: "0.0" },
+      },
+      controller_target_error: null,
     },
   ],
   writes: [
@@ -380,11 +406,11 @@ const completedRun = {
       written_at: "2025-01-01T00:03:00.000Z",
       success: true,
       error_message: null,
-      proportional_written: 1.12,
-      integral_written: 0.58,
+      proportional_written: 1.1,
+      integral_written: 0.6,
       derivative_written: 0,
-      proportional_readback: 1.12,
-      integral_readback: 0.58,
+      proportional_readback: 1.1,
+      integral_readback: 0.6,
       derivative_readback: 0,
       proportional_previous: 0.9,
       integral_previous: 0.7,

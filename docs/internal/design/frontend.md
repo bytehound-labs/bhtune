@@ -240,6 +240,16 @@ native conventions (for example, gain versus proportional band), while the simul
 tag mappings. `buildRequest()`'s tag-name check is skipped whenever the field is disabled, matching
 the rule that a disabled field must be excluded from client-side validation.
 
+## Template PID precision
+
+PID results and write review display the runtime's `controller_values` canonical strings,
+not a local reimplementation of template rounding. `controller_target_error` distinguishes a
+valid raw calculation from an unwritable precision target. Template forms edit explicit
+decimal-place/significant-digit policies, validate whole-number bounds, and default new
+custom templates to three significant digits. Restore review and the write audit use recorded
+numeric values without template or generic four-decimal formatting. Other numeric formatting,
+samples, and trends are unchanged.
+
 ## Friendly enum labels
 
 Every enum that leaked into the UI as its raw snake_case wire value (`process_type`,

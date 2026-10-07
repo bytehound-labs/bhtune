@@ -8,6 +8,7 @@ use bhtune_db::models::{
     TuneMvActuationRow, TuneResultRow, TuneRunFilter, TuneRunRow, TuneSampleRow, TuneWriteRow,
     WriteKind,
 };
+use bhtune_runtime::tune::pid_write_preview;
 
 pub async fn run(
     pool: &SqlitePool,
@@ -108,10 +109,13 @@ struct ResultJson {
     derivative: Option<f32>,
     status: bhtune_core::TuningResultStatus,
     invalid_reason: Option<bhtune_core::TuningResultInvalidReason>,
+    controller_values: Option<bhtune_core::ControllerPidValues>,
+    controller_target_error: Option<String>,
 }
 
-impl From<&TuneResultRow> for ResultJson {
-    fn from(r: &TuneResultRow) -> Self {
+impl ResultJson {
+    fn from_recorded(r: &TuneResultRow, run: &TuneRunRow) -> Self {
+        let preview = pid_write_preview(r, run.config.controller_type, &run.template);
         Self {
             response_level: r.response_level,
             kp: r.kp,
@@ -122,6 +126,8 @@ impl From<&TuneResultRow> for ResultJson {
             derivative: r.derivative,
             status: r.status,
             invalid_reason: r.invalid_reason,
+            controller_values: preview.values,
+            controller_target_error: preview.unavailable_reason,
         }
     }
 }
@@ -237,6 +243,7 @@ struct RunDetailJson {
     template_name: String,
     template_origin: bhtune_db::models::TemplateOrigin,
     config: bhtune_core::LoopConfig,
+    pid_rounding: bhtune_core::PidRounding,
     /// The resolved OPC DA server ProgID this run actually used, or `None` for a
     /// simulator/replay run. This is what `history revert`
     /// trusts over any `--server` flag, rather than re-resolving one.
@@ -580,21 +587,26 @@ fn print_show_table(
         (None, _) => {}
     }
 
-    print_show_results(results);
+    print_show_results(run, results);
     print_show_writes(writes);
     print_show_mv_actuations(mv_actuations);
 }
 
-fn print_show_results(results: &[TuneResultRow]) {
+fn print_show_results(run: &TuneRunRow, results: &[TuneResultRow]) {
     if !has_rows(results) {
         return;
     }
     println!("  Calculated results:");
     println!(
+        "    PROP / INTEGRAL / DERIV are controller-ready targets; KP / TI / TD are raw calculations."
+    );
+    println!(
         "    {:<12} {:<10} {:<10} {:<10} {:<10} {:<12} {:<10} {:<10}  REASON",
         "LEVEL", "STATUS", "KP", "TI(min)", "TD(min)", "PROP", "INTEGRAL", "DERIV"
     );
     for result in results {
+        let preview = pid_write_preview(result, run.config.controller_type, &run.template);
+        let values = preview.values.as_ref();
         println!(
             "    {:<12} {:<10} {:<10} {:<10} {:<10} {:<12} {:<10} {:<10}  {}",
             format!("{:?}", result.response_level),
@@ -602,13 +614,16 @@ fn print_show_results(results: &[TuneResultRow]) {
             fmt_opt_f32(result.kp),
             fmt_opt_f32(result.ti_minutes),
             fmt_opt_f32(result.td_minutes),
-            fmt_opt_f32(result.proportional),
-            fmt_opt_f32(result.integral),
-            fmt_opt_f32(result.derivative),
-            result
-                .invalid_reason
-                .map(|reason| reason.to_string())
-                .unwrap_or_else(|| "-".to_string())
+            values
+                .map(|values| values.proportional.display.as_str())
+                .unwrap_or("-"),
+            values
+                .map(|values| values.integral.display.as_str())
+                .unwrap_or("-"),
+            values
+                .map(|values| values.derivative.display.as_str())
+                .unwrap_or("-"),
+            preview.unavailable_reason.as_deref().unwrap_or("-"),
         );
     }
 }
@@ -626,15 +641,15 @@ fn print_show_writes(writes: &[TuneWriteRow]) {
             write.kind,
             write.response_level,
             write.success,
-            fmt_opt_f32(write.previous.map(|p| p.proportional)),
-            fmt_opt_f32(write.previous.map(|p| p.integral)),
-            fmt_opt_f32(write.previous.map(|p| p.derivative)),
-            fmt_opt_f32(write.proportional_written),
-            fmt_opt_f32(write.integral_written),
-            fmt_opt_f32(write.derivative_written),
-            fmt_opt_f32(write.proportional_readback),
-            fmt_opt_f32(write.integral_readback),
-            fmt_opt_f32(write.derivative_readback),
+            fmt_pid_recorded(write.previous.map(|p| p.proportional)),
+            fmt_pid_recorded(write.previous.map(|p| p.integral)),
+            fmt_pid_recorded(write.previous.map(|p| p.derivative)),
+            fmt_pid_recorded(write.proportional_written),
+            fmt_pid_recorded(write.integral_written),
+            fmt_pid_recorded(write.derivative_written),
+            fmt_pid_recorded(write.proportional_readback),
+            fmt_pid_recorded(write.integral_readback),
+            fmt_pid_recorded(write.derivative_readback),
             write
                 .error_message
                 .as_ref()
@@ -643,6 +658,12 @@ fn print_show_writes(writes: &[TuneWriteRow]) {
         );
         print_show_rollback(write);
     }
+}
+
+fn fmt_pid_recorded(value: Option<f32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn print_show_rollback(write: &TuneWriteRow) {
@@ -715,6 +736,7 @@ fn print_show_json(
         template_name: run.template.name.clone(),
         template_origin: run.template_origin,
         config: run.config,
+        pid_rounding: run.template.pid_rounding,
         opc_server: run.opc_server.clone(),
         bridge_host: run.bridge_host.clone(),
         gateway_compatibility: run
@@ -727,7 +749,10 @@ fn print_show_json(
             .map(|readings| InitialReadingsJson::from(readings.clone())),
         timing_metrics: run.timing_metrics,
         samples_recorded: samples.len(),
-        results: results.iter().map(ResultJson::from).collect(),
+        results: results
+            .iter()
+            .map(|result| ResultJson::from_recorded(result, run))
+            .collect(),
         writes: writes.iter().map(WriteJson::from).collect(),
         mv_actuations: mv_actuations.iter().map(MvActuationJson::from).collect(),
         restore_status: run.restore_status,
@@ -834,7 +859,7 @@ async fn revert(
             if is_table_output(output) {
                 println!(
                     "Reverting run {}'s {:?} PID write-back on tag '{}' to \
-                     P={:.4} I={:.4} D={:.4}...",
+                     P={} I={} D={}...",
                     progress.run_id,
                     progress.response_level,
                     progress.loop_name,
@@ -925,6 +950,13 @@ mod tests {
             Some("Sim.Server"),
             Some("127.0.0.1:7600")
         ));
+    }
+
+    #[test]
+    fn pid_audit_formatting_preserves_original_precision() {
+        assert_eq!(fmt_pid_recorded(Some(1.234567)), "1.234567");
+        assert_eq!(fmt_pid_recorded(Some(9999.0)), "9999");
+        assert_eq!(fmt_pid_recorded(None), "-");
     }
 
     #[test]

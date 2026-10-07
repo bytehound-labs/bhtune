@@ -41,6 +41,14 @@ IN (...))` constraint using the exact same literals, so an invalid value can nev
   tables.** A run can produce three calculated candidate results and zero or more writes;
   conflating "the tool suggested this" with "this went into the controller" would lose the one
   fact the legacy CSV logs never captured — see `history-writeback-audit`.
+- **Template PID precision is explicit and snapshotted.** Migration
+  `0004_pid_rounding.sql` adds constrained `pid_rounding_kind` and
+  `pid_rounding_digits` columns without changing earlier migration checksums.
+  Run template snapshots include their precision policy; missing snapshot
+  precision is not inferred from a template name. Raw result columns remain
+  unrounded. Requested write columns contain rounded active controller terms
+  and exact disabled-term sentinels; previous and readback columns remain
+  independent observations and are not quantized.
 - **Seeding built-in templates is an upsert, keyed on ownership, not a one-time insert.**
   `bhtune_db::seed_builtin_templates` runs on every startup: it inserts any missing built-in
   template, overwrites existing `origin = 'builtin'` rows to match the current shipped

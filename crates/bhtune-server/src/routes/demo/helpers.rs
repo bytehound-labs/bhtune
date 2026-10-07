@@ -256,6 +256,10 @@ pub(super) async fn build_owned_run_detail(
     };
     let original_request = serde_json::from_str(&run.request_json).ok();
     let pid_parameter_labels = PidParameterLabelsResponse::from(&run.template);
+    let results = results
+        .iter()
+        .map(|result| ResultResponse::from_recorded(result, &run))
+        .collect();
     Ok(Some(RunDetailResponse {
         id: run.id,
         tag_name: run.loop_name,
@@ -269,6 +273,7 @@ pub(super) async fn build_owned_run_detail(
         template_origin: run.template_origin,
         allow_uncertain_quality: run.allow_uncertain_quality,
         config: run.config,
+        pid_rounding: run.template.pid_rounding,
         effective_tuning: run.effective_tuning,
         opc_server: run.opc_server,
         bridge_host: run.bridge_host,
@@ -277,7 +282,7 @@ pub(super) async fn build_owned_run_detail(
         initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
         timing_metrics: run.timing_metrics,
         samples: samples.iter().map(SampleResponse::from).collect(),
-        results: results.iter().map(ResultResponse::from).collect(),
+        results,
         writes: writes.iter().map(WriteResponse::from).collect(),
         mv_actuations: mv_actuations
             .iter()

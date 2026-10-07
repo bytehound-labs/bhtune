@@ -15,6 +15,9 @@ export type ValidRunResult = RunResult & {
   readonly integral: number;
   readonly derivative: number;
 };
+export type WritableRunResult = ValidRunResult & {
+  readonly controller_values: NonNullable<RunResult["controller_values"]>;
+};
 
 export interface WriteEligibility {
   readonly eligible: boolean;
@@ -38,6 +41,20 @@ export function isValidRunResult(result: RunResult): result is ValidRunResult {
       result.derivative,
     ].every((value) => typeof value === "number" && Number.isFinite(value))
   );
+}
+
+export function isWritableRunResult(
+  result: RunResult,
+): result is WritableRunResult {
+  return (
+    isValidRunResult(result) &&
+    result.controller_values != null &&
+    result.controller_target_error == null
+  );
+}
+
+export function formatPidRecorded(value: number | null | undefined): string {
+  return value == null ? "—" : String(value);
 }
 
 export function invalidResultReason(result: RunResult): string {

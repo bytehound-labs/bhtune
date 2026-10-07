@@ -10,7 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pid_config::{DerivativeType, IntegralType, ProportionalType, TimeUnit};
+use crate::pid_config::{
+    DerivativeType, IntegralType, PidRounding, PidRoundingError, ProportionalType, TimeUnit,
+};
 
 /// One DCS/PLC vendor's conventions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +37,9 @@ pub struct DcsTemplate {
     pub integral_unit: TimeUnit,
     pub derivative_type: DerivativeType,
     pub derivative_unit: TimeUnit,
+    /// Rounding for new PID controller targets and their presentation, after unit/convention
+    /// conversion. Raw calculations and recorded restore values retain their precision.
+    pub pid_rounding: PidRounding,
 
     /// OPC item-name suffixes, combined with a PV tag's path prefix by
     /// [`crate::tags::derive_tag`] to fill in the rest of the tag set. An empty suffix
@@ -127,6 +132,12 @@ impl DcsTemplate {
                 name: self.name.clone(),
             });
         }
+        self.pid_rounding
+            .validate()
+            .map_err(|reason| TemplateError::InvalidPidRounding {
+                name: self.name.clone(),
+                reason,
+            })?;
         Ok(())
     }
 }
@@ -144,6 +155,10 @@ pub enum TemplateError {
     MissingModeValue { name: String, field: &'static str },
     /// `mode_attribute_suffix` was set but `mode_attribute_program_value` was `None`.
     MissingModeAttributeProgramValue { name: String },
+    InvalidPidRounding {
+        name: String,
+        reason: PidRoundingError,
+    },
 }
 
 impl std::fmt::Display for TemplateError {
@@ -163,6 +178,9 @@ impl std::fmt::Display for TemplateError {
                 "template '{name}': mode_attribute_suffix is set but \
                  mode_attribute_program_value is missing"
             ),
+            TemplateError::InvalidPidRounding { name, reason } => {
+                write!(f, "template '{name}': {reason}")
+            }
         }
     }
 }
@@ -171,6 +189,7 @@ impl std::error::Error for TemplateError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             TemplateError::Toml(e) => Some(e),
+            TemplateError::InvalidPidRounding { reason, .. } => Some(reason),
             _ => None,
         }
     }
@@ -303,6 +322,49 @@ mod tests {
     }
 
     #[test]
+    fn catalog_sets_explicit_pid_precision_for_each_family() {
+        for template in built_in_templates() {
+            let expected = if template.name == "Yokogawa CentumVP" {
+                PidRounding {
+                    kind: crate::PidRoundingKind::DecimalPlaces,
+                    digits: 1,
+                }
+            } else {
+                PidRounding::default()
+            };
+            assert_eq!(template.pid_rounding, expected);
+        }
+    }
+
+    #[test]
+    fn imports_and_snapshots_require_explicit_pid_rounding() {
+        let mut value = serde_json::to_value(built_in_templates().remove(0)).unwrap();
+        value.as_object_mut().unwrap().remove("pid_rounding");
+        assert!(
+            serde_json::from_value::<DcsTemplate>(value)
+                .unwrap_err()
+                .to_string()
+                .contains("pid_rounding")
+        );
+        let toml = minimal_valid_toml().replace(
+            "pid_rounding = { kind = \"significant_digits\", digits = 3 }\n",
+            "",
+        );
+        assert!(parse_catalog(&toml).is_err());
+    }
+
+    #[test]
+    fn template_rejects_invalid_pid_rounding_with_an_explicit_reason() {
+        let mut template = built_in_templates().remove(0);
+        template.pid_rounding.digits = 8;
+        let error = template.validate().unwrap_err();
+        assert!(matches!(error, TemplateError::InvalidPidRounding { .. }));
+        assert!(error.to_string().contains("Yokogawa CentumVP"));
+        assert!(error.to_string().contains("digits"));
+        assert!(std::error::Error::source(&error).is_some());
+    }
+
+    #[test]
     fn serde_round_trip() {
         for template in built_in_templates() {
             let json = serde_json::to_string(&template).unwrap();
@@ -369,6 +431,7 @@ integral_type = "reset_time"
 integral_unit = "seconds"
 derivative_type = "derivative_time"
 derivative_unit = "seconds"
+pid_rounding = { kind = "significant_digits", digits = 3 }
 process_variable_suffix = "PV"
 manipulated_variable_suffix = "MV"
 setpoint_variable_suffix = "SV"

@@ -191,6 +191,12 @@ values. Invalid calculated-result rows cannot be selected for PID write-back in 
 GUI. This backstop remains important even when sampling is adequate, because a degenerate
 measurement can arise from a future algorithm or data-path defect.
 
+Template precision is a separate write-readiness check. An otherwise valid result remains
+unwritable if rounding an active P/I/D term to the template's final units makes it zero or
+non-finite. The CLI and browser report the reason before PID I/O; raw calculations and their
+validity remain unchanged. Increase the template precision and start a new run rather than
+overriding the recorded run's policy.
+
 ## MV actuation verification
 
 Every accepted OPC DA relay write is read back before a later relay command can replace it. While
@@ -367,6 +373,12 @@ approve it interactively. BHTune:
    `bhtune history revert <run-id>`, which writes the persisted previous values back under the
    same pre-read/verify contract, so a write-back that turns out wrong can be undone later
    without anyone having written the old numbers down by hand.
+
+New PID writes use the template policy snapshotted on the run: one decimal place for
+Yokogawa, three significant digits for the other built-ins. Reviews and writes agree.
+Inactive integral/derivative disable values remain exact. Pre-write values, actual
+readbacks, rollback, PID revert, and loop recovery are never quantized by that policy.
+See [PID precision](../dcs-templates.md#pid-precision) for custom-template settings.
 
 ## Network exposure
 

@@ -874,13 +874,29 @@ try {
         -Directory $true
     Write-DiagnosticLog 'ROLLBACK_PREP_EXTERNAL_DATABASE_ACL=LocalService:Modify'
     $externalDatabase = Join-Path $externalRoot 'bhtune-external.db'
-    Stop-InstallerService | Out-Null
+    $sourceService = Get-ServiceControlStatus -Name $paths.ServiceName
+    $sourceProcess = Get-Process -Id $sourceService.ProcessId -ErrorAction Stop
+    try {
+        Stop-InstallerService | Out-Null
+        Assert-Diagnostic -Condition ($sourceProcess.WaitForExit($TimeoutSeconds * 1000)) -Message 'The database-owning BHTune process did not exit before the external fixture copy.'
+    } finally {
+        $sourceProcess.Dispose()
+    }
     Write-DiagnosticLog 'ROLLBACK_PREP_BHTUNE_STOPPED=True'
     Write-DiagnosticLog 'ROLLBACK_PREP_DATABASE_ASSERT_BEGIN=True'
     Assert-Diagnostic -Condition (Test-Path -LiteralPath $paths.DatabasePath -PathType Leaf) -Message 'The managed database was not created before the external-database rollback scenario.'
     Write-DiagnosticLog 'ROLLBACK_PREP_DATABASE_ASSERT_END=True'
     Write-DiagnosticLog 'ROLLBACK_PREP_DATABASE_COPY_BEGIN=True'
-    Copy-Item -LiteralPath $paths.DatabasePath -Destination $externalDatabase -Force
+    foreach ($suffix in @('', '-wal')) {
+        $sourcePath = $paths.DatabasePath + $suffix
+        if (Test-Path -LiteralPath $sourcePath -PathType Leaf) {
+            $destinationPath = $externalDatabase + $suffix
+            $sourceHash = Get-FileSha256 -Path $sourcePath
+            Copy-Item -LiteralPath $sourcePath -Destination $destinationPath
+            Assert-Diagnostic -Condition ((Get-FileSha256 -Path $destinationPath) -eq $sourceHash) -Message "The external SQLite fixture copy differs for '$suffix'."
+            Write-DiagnosticLog ("ROLLBACK_PREP_DATABASE_ARTIFACT suffix={0} bytes={1}" -f $suffix, (Get-Item -LiteralPath $destinationPath).Length)
+        }
+    }
     Write-DiagnosticLog 'ROLLBACK_PREP_DATABASE_COPY_END=True'
     Write-DiagnosticLog 'ROLLBACK_PREP_CONFIG_READ_BEGIN=True'
     $configText = Get-Content -LiteralPath $paths.ConfigPath -Raw

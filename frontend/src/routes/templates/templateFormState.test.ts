@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DcsTemplate } from "../../api/templates";
 import {
   blankTemplateForm,
+  pidRoundingFormError,
   templateFormStateToTemplate,
   templateToFormState,
 } from "./templateFormState";
@@ -14,6 +15,7 @@ const template: DcsTemplate = {
   integral_unit: "seconds",
   derivative_type: "derivative_gain",
   derivative_unit: "minutes",
+  pid_rounding: { kind: "decimal_places", digits: 1 },
   process_variable_suffix: "PV",
   manipulated_variable_suffix: "OUT",
   setpoint_variable_suffix: "SP",
@@ -61,5 +63,41 @@ describe("template form conversions", () => {
     expect(result.description).toBeNull();
     expect(result.source).toBeNull();
     expect(result.mode_attribute_program_value).toBeNull();
+    expect(result.pid_rounding).toEqual({
+      kind: "significant_digits",
+      digits: 3,
+    });
+  });
+
+  it("round-trips each precision kind without changing the configured count", () => {
+    for (const kind of ["decimal_places", "significant_digits"] as const) {
+      const configured = { ...template, pid_rounding: { kind, digits: 7 } };
+      expect(
+        templateFormStateToTemplate(templateToFormState(configured)),
+      ).toEqual(configured);
+    }
+    expect(
+      pidRoundingFormError({ kind: "decimal_places", digits: 0 }),
+    ).toBeUndefined();
+    expect(
+      pidRoundingFormError({ kind: "significant_digits", digits: 1 }),
+    ).toBeUndefined();
+  });
+
+  it("rejects blank, fractional, non-finite, and out-of-range precision before serialization", () => {
+    for (const kind of ["decimal_places", "significant_digits"] as const) {
+      for (const digits of ["", -1, 8, 1.5, Number.NaN, Infinity] as const) {
+        const form = { ...blankTemplateForm, pid_rounding: { kind, digits } };
+        expect(pidRoundingFormError(form.pid_rounding)).toContain(
+          "PID precision",
+        );
+        expect(() => templateFormStateToTemplate(form)).toThrow(
+          "PID precision",
+        );
+      }
+    }
+    expect(
+      pidRoundingFormError({ kind: "significant_digits", digits: 0 }),
+    ).toContain("1 to 7");
   });
 });
