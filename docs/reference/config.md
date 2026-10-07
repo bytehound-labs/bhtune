@@ -490,6 +490,10 @@ JSON Schema for one entry in a DCS/PLC template catalog TOML file (`bhtune_core:
     "name": {
       "type": "string"
     },
+    "pid_rounding": {
+      "description": "Rounding for new PID controller targets and their presentation, after unit/convention\nconversion. Raw calculations and recorded restore values retain their precision.",
+      "$ref": "#/$defs/PidRounding"
+    },
     "process_variable_suffix": {
       "description": "OPC item-name suffixes, combined with a PV tag's path prefix by\n[`crate::tags::derive_tag`] to fill in the rest of the tag set. An empty suffix\nmeans the corresponding tag is not applicable for this DCS (e.g. some DCS families\nhave no mode-attribute concept).",
       "type": "string"
@@ -538,6 +542,7 @@ JSON Schema for one entry in a DCS/PLC template catalog TOML file (`bhtune_core:
     "integral_unit",
     "derivative_type",
     "derivative_unit",
+    "pid_rounding",
     "process_variable_suffix",
     "manipulated_variable_suffix",
     "setpoint_variable_suffix",
@@ -589,6 +594,33 @@ JSON Schema for one entry in a DCS/PLC template catalog TOML file (`bhtune_core:
           "type": "string",
           "const": "reset_gain"
         }
+      ]
+    },
+    "PidRounding": {
+      "type": "object",
+      "properties": {
+        "digits": {
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 7,
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/PidRoundingKind"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "digits"
+      ]
+    },
+    "PidRoundingKind": {
+      "description": "Precision shared by the active P/I/D terms in a template's final controller units.",
+      "type": "string",
+      "enum": [
+        "decimal_places",
+        "significant_digits"
       ]
     },
     "ProportionalType": {

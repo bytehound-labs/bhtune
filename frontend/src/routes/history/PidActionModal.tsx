@@ -10,15 +10,15 @@ import {
   Modal,
 } from "../../components/ui";
 import {
-  formatNumber,
-  type ValidRunResult,
+  formatPidRecorded,
+  type WritableRunResult,
   type RunWrite,
 } from "./runDetailHelpers";
 
 export type PidAction =
   | {
       readonly kind: "write";
-      readonly result: ValidRunResult;
+      readonly result: WritableRunResult;
     }
   | {
       readonly kind: "revert";
@@ -55,14 +55,14 @@ export function PidActionModal({
   };
   const values = isWrite
     ? {
-        proportional: action.result.proportional,
-        integral: action.result.integral,
-        derivative: action.result.derivative,
+        proportional: action.result.controller_values.proportional.display,
+        integral: action.result.controller_values.integral.display,
+        derivative: action.result.controller_values.derivative.display,
       }
     : {
-        proportional: action.write.proportional_previous,
-        integral: action.write.integral_previous,
-        derivative: action.write.derivative_previous,
+        proportional: formatPidRecorded(action.write.proportional_previous),
+        integral: formatPidRecorded(action.write.integral_previous),
+        derivative: formatPidRecorded(action.write.derivative_previous),
       };
   const title = isWrite ? "Review PID settings" : "Review PID restore";
   const responseLevel = isWrite
@@ -198,15 +198,13 @@ function PidValueRow({
 }: {
   readonly label: string;
   readonly tag: string;
-  readonly value: number | null | undefined;
+  readonly value: string;
 }) {
   return (
     <tr>
       <td className="px-4 py-3 font-medium text-slate-300">{label}</td>
       <td className="break-all px-4 py-3 font-mono text-slate-400">{tag}</td>
-      <td className="px-4 py-3 text-right font-mono text-slate-100">
-        {formatNumber(value)}
-      </td>
+      <td className="px-4 py-3 text-right font-mono text-slate-100">{value}</td>
     </tr>
   );
 }

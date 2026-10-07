@@ -6,8 +6,8 @@ use super::validation::require_writable_run;
 use super::{
     ApiError, AppState, CtrlC, ErrorBody, Json, Path, PreflightResponse, RunAlreadyActive,
     RunDetailResponse, StartRunRequest, State, StatusCode, TuneResultRow, TuneRunRow,
-    UpdateNotesRequest, Utc, WriteKind, WriteReadback, WriteRunRequest, build_run_detail, drive,
-    opc_write_values, pid_parameters_for_result, preflight, prepare, require_present,
+    UpdateNotesRequest, Utc, WriteKind, WriteReadback, WriteRunRequest, build_run_detail,
+    controller_pid_for_result, drive, preflight, prepare, require_present,
 };
 
 /// Check whether a proposed tune is ready without preparing or starting a run.
@@ -288,7 +288,7 @@ where
     request_body = WriteRunRequest,
     responses(
         (status = 200, description = "The write was attempted; see `writes[]` in the body for its outcome.", body = RunDetailResponse),
-        (status = 400, description = "The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, or no calculated result for the requested response level), or the driver connection itself failed.", body = ErrorBody),
+        (status = 400, description = "The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, no result for the requested level, or an unsafe controller target after template rounding), or the driver connection itself failed.", body = ErrorBody),
         (status = 404, description = "No run with that id.", body = ErrorBody),
         (status = 409, description = "A tune or another PID write/revert is already active.", body = ErrorBody),
     ),
@@ -315,13 +315,12 @@ pub(crate) async fn write_run(
             ))
         })?;
 
-    let pid = pid_parameters_for_result(selected)
+    let written = controller_pid_for_result(selected, run.config.controller_type, &run.template)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let written = opc_write_values(pid, run.config.controller_type, run.template.integral_type);
     let target = WriteReadback {
-        proportional: written.proportional,
-        integral: written.integral,
-        derivative: written.derivative,
+        proportional: written.proportional.value,
+        integral: written.integral.value,
+        derivative: written.derivative.value,
     };
 
     // `require_writable_run` already confirmed all three tags are `Some`.

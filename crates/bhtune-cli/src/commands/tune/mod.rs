@@ -5,10 +5,12 @@ mod output;
 pub use output::TuneOutcome;
 
 use bhtune_db::SqlitePool;
+use bhtune_db::models::{TuneResultRow, TuneRunRow};
 use bhtune_runtime::cancel::CtrlC;
 use bhtune_runtime::config::BhtuneConfig;
 use bhtune_runtime::tune::{
-    TuneRunReport, ValidatedTuneRequest, drive_report, prepare, tune_outcome_for_run,
+    TuneRunReport, ValidatedTuneRequest, drive_report, pid_write_preview, prepare,
+    tune_outcome_for_run,
 };
 
 use crate::args::TuneArgs;
@@ -43,14 +45,31 @@ pub(crate) async fn run_with_ctrl_c(
     let prepared = prepare(pool, request, &config).await?;
     let mut handler = output::CliWriteBackHandler::new(output_format, requested_write_pid);
     let report = drive_report(pool, prepared, ctrl_c, Some(&mut handler)).await?;
-    Ok(report_summary(report, output_format))
+    report_summary(pool, report, output_format).await
 }
 
-fn report_summary(report: TuneRunReport, output_format: OutputFormat) -> TuneOutcome {
+async fn report_summary(
+    pool: &SqlitePool,
+    report: TuneRunReport,
+    output_format: OutputFormat,
+) -> anyhow::Result<TuneOutcome> {
+    let run = TuneRunRow::get(pool, report.run_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no run with id {}", report.run_id))?;
+    let results = TuneResultRow::list_for_run(pool, report.run_id).await?;
+    let previews = results
+        .iter()
+        .map(|result| pid_write_preview(result, run.config.controller_type, &run.template))
+        .collect::<Vec<_>>();
     let outcome = tune_outcome_for_run(&report.outcome);
     let label = outcome.label();
     tracing::info!(run_id = report.run_id, outcome = label, "tune run finished");
-    output::print_summary(report.run_id, &report.outcome, output_format)
+    Ok(output::print_summary(
+        report.run_id,
+        &report.outcome,
+        output_format,
+        &previews,
+    ))
 }
 
 #[cfg(test)]
@@ -61,6 +80,21 @@ mod tests {
     };
     use bhtune_core::{ControllerType, ProcessType, ResponseLevel};
     use bhtune_runtime::tune::DriverKind;
+
+    #[tokio::test]
+    async fn summary_reports_missing_persisted_context_explicitly() {
+        let pool = bhtune_db::connect_in_memory().await.unwrap();
+        let report = TuneRunReport {
+            run_id: 9999,
+            outcome: bhtune_runtime::tune::RunOutcome::Aborted(
+                bhtune_runtime::tune::AbortReason::UserInterrupt,
+            ),
+        };
+        let error = report_summary(&pool, report, OutputFormat::Json)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "no run with id 9999");
+    }
 
     #[test]
     fn cli_tune_arguments_convert_to_validated_runtime_request() {

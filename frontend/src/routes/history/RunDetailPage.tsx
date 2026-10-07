@@ -16,7 +16,7 @@ import {
 import type { DuplicateRunState } from "../runs/NewRunPage";
 import { composeTrendPoints } from "../../lib/trend";
 import {
-  type ValidRunResult,
+  type WritableRunResult,
   type RunWrite,
   writeEligibility,
   writeFailureMessage,
@@ -267,7 +267,7 @@ export function RunDetailPage({
     void navigate("/runs/new", { state: duplicateState });
   }
 
-  function requestWrite(result: ValidRunResult) {
+  function requestWrite(result: WritableRunResult) {
     writeRun.reset();
     revertRun.reset();
     setPidActionAlert(null);

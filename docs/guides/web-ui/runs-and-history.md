@@ -107,6 +107,13 @@ review popup names the loop tag, response level, snapshotted parameter labels, e
 tags, and values. Apply closes the popup while the request continues in the background; physical
 write and readback failures appear in the page alert and audit table.
 
+The table and write popup use the same backend-generated controller targets: Yokogawa displays
+one decimal place, while the other built-ins use three significant digits. The run retains its
+template's precision policy even after catalog edits. JSON keeps raw calculated values in their
+original fields and exposes controller-ready values separately. A result whose active term would
+round to zero is **Unwritable**, with a reason and disabled write action; its raw calculation
+status is unchanged.
+
 {/* web-ui-screenshot: full-pid-review */}
 <figure>
   <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=2441117286b9">
@@ -115,8 +122,9 @@ write and readback failures appear in the page alert and audit table.
   <figcaption>The safety review is the last visual confirmation before calculated PID values are sent to a live controller.</figcaption>
 </figure>
 
-The newest successful write offers **Restore previous values** through the same popup. Both
-actions are disabled with a reason unless the run is finished, used OPC DA, has all PID tags,
+The newest successful write offers **Restore previous values** through the same popup. The
+restore review and the audit show the recorded values without applying template rounding.
+Both actions are disabled with a reason unless the run is finished, used OPC DA, has all PID tags,
 and recorded its original server and bridge connection. Export CSV/JSON, **Delete tune**, and
 **Duplicate this run** are available from the completed detail page. Delete tune opens a styled
 confirmation dialog before it removes the run's persisted samples, calculated results, and PID

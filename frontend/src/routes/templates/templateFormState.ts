@@ -8,13 +8,29 @@ export const INTEGRAL_TYPES = [
 ] as const;
 export const DERIVATIVE_TYPES = ["derivative_time", "derivative_gain"] as const;
 export const TIME_UNITS = ["seconds", "minutes"] as const;
+export const PID_ROUNDING_KINDS = [
+  "decimal_places",
+  "significant_digits",
+] as const;
+export const PID_ROUNDING_LABELS = {
+  decimal_places: "Decimal places",
+  significant_digits: "Significant digits",
+} as const;
+
+type PidRoundingForm = Omit<DcsTemplate["pid_rounding"], "digits"> & {
+  digits: number | "";
+};
 
 /** Local form state: `DcsTemplate` with `versions` as one comma-separated string, since a
  * plain text input is simpler than a dynamic list editor for what's usually 0-3 short
  * tokens (`"R5, R6"`) — converted back to `string[]` on submit. Shared by the Create and
  * Edit pages so the two forms can never drift apart. */
-export type TemplateFormState = Omit<DcsTemplate, "versions"> & {
+export type TemplateFormState = Omit<
+  DcsTemplate,
+  "versions" | "pid_rounding"
+> & {
   versionsText: string;
+  pid_rounding: PidRoundingForm;
 };
 
 export const blankTemplateForm: TemplateFormState = {
@@ -25,6 +41,7 @@ export const blankTemplateForm: TemplateFormState = {
   integral_unit: "minutes",
   derivative_type: "derivative_time",
   derivative_unit: "minutes",
+  pid_rounding: { kind: "significant_digits", digits: 3 },
   process_variable_suffix: "",
   manipulated_variable_suffix: "",
   setpoint_variable_suffix: "",
@@ -62,9 +79,14 @@ export function templateToFormState(template: DcsTemplate): TemplateFormState {
 export function templateFormStateToTemplate(
   form: TemplateFormState,
 ): DcsTemplate {
-  const { versionsText, ...rest } = form;
+  const { versionsText, pid_rounding, ...rest } = form;
+  const precisionError = pidRoundingFormError(pid_rounding);
+  if (precisionError || typeof pid_rounding.digits !== "number") {
+    throw new Error(precisionError ?? "PID precision must be a whole number.");
+  }
   return {
     ...rest,
+    pid_rounding: { kind: pid_rounding.kind, digits: pid_rounding.digits },
     description: rest.description || null,
     source: rest.source || null,
     mode_attribute_program_value: rest.mode_attribute_program_value || null,
@@ -73,4 +95,19 @@ export function templateFormStateToTemplate(
       .map((v) => v.trim())
       .filter((v) => v.length > 0),
   };
+}
+
+export function pidRoundingFormError(
+  policy: PidRoundingForm,
+): string | undefined {
+  const minimum = policy.kind === "decimal_places" ? 0 : 1;
+  if (
+    typeof policy.digits !== "number" ||
+    !Number.isInteger(policy.digits) ||
+    policy.digits < minimum ||
+    policy.digits > 7
+  ) {
+    return `PID precision must be a whole number from ${minimum} to 7.`;
+  }
+  return undefined;
 }

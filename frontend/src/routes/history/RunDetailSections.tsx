@@ -26,7 +26,8 @@ import {
 import type { TrendPoint } from "../../lib/trend";
 import {
   formatNumber,
-  type ValidRunResult,
+  formatPidRecorded,
+  type WritableRunResult,
   type RunWrite,
   type WriteEligibility,
   writeFailureMessage,
@@ -490,19 +491,19 @@ function WriteRow({
       </td>
       <td className="px-4 py-3 text-slate-400">{dateTime(write.written_at)}</td>
       <td className="px-4 py-3 font-mono text-slate-400">
-        {formatNumber(write.proportional_previous)} /{" "}
-        {formatNumber(write.integral_previous)} /{" "}
-        {formatNumber(write.derivative_previous)}
+        {formatPidRecorded(write.proportional_previous)} /{" "}
+        {formatPidRecorded(write.integral_previous)} /{" "}
+        {formatPidRecorded(write.derivative_previous)}
       </td>
       <td className="px-4 py-3 font-mono">
-        {formatNumber(write.proportional_written)} /{" "}
-        {formatNumber(write.integral_written)} /{" "}
-        {formatNumber(write.derivative_written)}
+        {formatPidRecorded(write.proportional_written)} /{" "}
+        {formatPidRecorded(write.integral_written)} /{" "}
+        {formatPidRecorded(write.derivative_written)}
       </td>
       <td className="px-4 py-3 font-mono text-slate-400">
-        {formatNumber(write.proportional_readback)} /{" "}
-        {formatNumber(write.integral_readback)} /{" "}
-        {formatNumber(write.derivative_readback)}
+        {formatPidRecorded(write.proportional_readback)} /{" "}
+        {formatPidRecorded(write.integral_readback)} /{" "}
+        {formatPidRecorded(write.derivative_readback)}
       </td>
       <td className="px-4 py-3">
         <Badge tone={write.success ? "success" : "error"}>
@@ -612,7 +613,7 @@ export function RunDetailContent({
   readonly onNotesChange: (value: string) => void;
   readonly onSaveNotes: () => void;
   readonly onClearNotes: () => void;
-  readonly onWrite: (result: ValidRunResult) => void;
+  readonly onWrite: (result: WritableRunResult) => void;
   readonly onRevert: (write: RunWrite) => void;
 }) {
   return (

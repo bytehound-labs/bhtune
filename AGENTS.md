@@ -14,18 +14,18 @@ v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only repl
 
 ## Crate map
 
-| Path                  | Responsibility                                                                                                                                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bhtune-core`         | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                                                                                  |
-| `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                    |
-| `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                   |
+| Path                  | Responsibility                                                                                                                                                                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bhtune-core`         | Model, MRFT state machine, tuning math, and the embedded template catalog. No I/O, async, or clock reads.                                                                                                                                                           |
+| `bhtune-driver`       | `Driver` trait plus OPC DA, FOPDT simulator, and replay. The only crate that depends on `opcda-bridge`.                                                                                                                                                             |
+| `bhtune-db`           | SQLite schema, migrations, template seeding, run history, backup/restore, and retention.                                                                                                                                                                            |
 | `bhtune-runtime`      | Shared configuration, database bootstrap, logging, retention, driver setup, tune orchestration and safety, live ownership/recovery, history writes/reverts, and export serialization. Its source and direct dependencies contain no CLI, HTTP, or OpenAPI concerns. |
-| `bhtune`              | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                   |
-| `bhtune-server`       | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                      |
-| `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                    |
-| `frontend/`           | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                                                                               |
-| `website/`            | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`.                                                                                                                                                  |
-| `fuzz/`               | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member.                                                                                                                                                          |
+| `bhtune`              | CLI adapter package (`bhtune_cli` Rust library and `bhtune` binary); terminal prompts and output, command dispatch, and generated CLI references; shared application work goes through `bhtune-runtime`.                                                            |
+| `bhtune-server`       | Axum HTTP/OpenAPI adapter and embedded React SPA; shared application work goes through `bhtune-runtime`, not the CLI.                                                                                                                                               |
+| `bhtune-test-support` | Unpublished shared mock gRPC bridge for tests. Not a product or release artifact. The empty `mock-driver` feature is a cycle guard. CLI and server enable it; `bhtune-driver` must not.                                                                             |
+| `frontend/`           | React, TypeScript, Vite, and Tailwind SPA. One generated `openapi-fetch` client. The trend chart is `uPlot`.                                                                                                                                                        |
+| `website/`            | Docusaurus site. Its docs plugin reads repo-root `docs/` and excludes `docs/internal/**`.                                                                                                                                                                           |
+| `fuzz/`               | Separate Cargo workspace for parser fuzz targets. Not a product-workspace member.                                                                                                                                                                                   |
 
 The server package and `[[bin]]` are both named `bhtune-server`, so tests must use `env!("CARGO_BIN_EXE_bhtune-server")`. The CLI binary is `bhtune` (`CARGO_BIN_EXE_bhtune`).
 
@@ -50,6 +50,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - `bhtune restore-loop <run-id> --yes` is the explicit live recovery path. It uses the recorded connection and policy; supplied connection flags are cross-checks only. The command reports every restore step, and it never reports success if restoration or required audit persistence is incomplete.
 - If follow-up provenance persistence fails, `prepare()` marks the owned row failed, or deletes it if that update cannot be stored. Do not leave a permanent `Running` row.
 - Production persistence uses `calculate_all_checked`. Invalid results store null numbers and cannot be written. Do not enable `MrftCompat.replicate_lower_clamp_bug`, `TuningMathCompat.replicate_period_truncation_bug`, or `MrftCompat.replicate_extrema_reset_bug` on a production path.
+- Each template explicitly defines `pid_rounding`: 0-7 decimal places or 1-7 significant digits, shared by P/I/D. Yokogawa defaults to one decimal; the other built-ins and new custom templates use three significant digits. The runtime's controller-target gate applies it after unit conversion and supplies canonical text to CLI/HTTP/UI and numeric values to new writes. Preserve exact disable sentinels and reject active terms rounded to zero before PID I/O. Raw calculations, exports, previous/readback values, rollback, revert, and recovery are unrounded. Run snapshots require explicit precision; never infer it from a vendor name.
 - Result extrema are separate from hysteresis extrema. Hysteresis still resets the legacy way, so switch timing does not change. Variant B is research-only.
 - Full mode is the default, binds `127.0.0.1` by default, and has no authentication in v1. Off-loopback bind is an explicit opt-in. Browser mutations use same-host Origin/Host checks unless an explicit origin is pinned. That check is not authentication.
 - Demo mode is a server-enforced capability boundary, not an account system. It mounts health, capabilities, built-in template reads, and visitor-owned simulator history only. OPC, PID write/revert, config and template mutation, notes, drafts, preflight, OpenAPI, and Scalar are not mounted. Quotas and simulator bounds are application constants; deployment config cannot widen them. One replica and a separate database are required. Only the SHA-256 of the anonymous session token is stored.
@@ -104,7 +105,7 @@ SonarCloud project key: `bytehound-labs_bhtune`. Before merge, query `pullReques
 
 Required status names stay `Required validation status`, `Required coverage status`, `Required E2E status`, and `Required Sonar quality status`.
 
-`pnpm --filter bhtune-frontend exec playwright test --list` reports 109 tests in 15 files. The OPC DA browser suite is 31 of those: `opc-browser-discovery.spec.ts` (6), `opc-browser-index.spec.ts` (9), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
+`pnpm --filter bhtune-frontend exec playwright test --list` reports 126 tests in 19 files. The OPC DA browser suite is 31 of those: `opc-browser-discovery.spec.ts` (6), `opc-browser-index.spec.ts` (9), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
 
 ## Config precedence (`cli-config`)
 
@@ -139,7 +140,7 @@ JSON mode prints one final JSON value on stdout. Prompts go to stderr. JSON mode
 | 3    | `EXIT_WRITE_BACK_FAILED`  | The test completed and the PID write-back failed.                                      |
 | 4    | `EXIT_TIMED_OUT`          | `[tuning].timeout_secs` elapsed.                                                       |
 | 5    | `EXIT_POOR_QUALITY`       | A tuning-critical read was `Bad`, or `Uncertain` while the quality policy rejected it. |
-| 6    | `EXIT_RESTORE_INCOMPLETE` | Restore was not confirmed, including a second Ctrl+C or an incomplete `restore-loop`.    |
+| 6    | `EXIT_RESTORE_INCOMPLETE` | Restore was not confirmed, including a second Ctrl+C or an incomplete `restore-loop`.  |
 | 7    | `EXIT_ACTUATION_FAILED`   | MV actuation failed and restore was confirmed.                                         |
 | 8    | `EXIT_CHECK_FAILED`       | A preflight check failed, or `--strict` rejected a warning.                            |
 
@@ -222,7 +223,7 @@ Condensed register. Item numbers and decision tags match [`docs/internal/design/
 12. **`[preserved rule]`** PID is offered only for the two temperature process types. Every other process type offers P and PI. See `ProcessType::allows_pid()`.
 13. **`[preserved rule]`** Skip, count, and noise-protection defaults come from the process-type tables when the process type changes. CLI and HTTP callers may still omit them for server-side defaulting.
 14. **`[preserved rule]`** On the final MRFT step, MV snaps back to the initial value instead of taking a full relay step.
-15. **`[fixed by design in this project, not a compat concern]`** Significant-digit formatting is a frontend rendering choice. The engine does not persist a legacy formatted string.
+15. **`[fixed by design in this project, not a compat concern]`** Template-snapshotted PID precision determines controller-ready display and new-write targets through one backend path. Raw math and restoration values retain their precision; the frontend does not independently round PID targets.
 16. **`[new feature, not a legacy bug]`** The live and historical PV/MV trend uses `uPlot`. Short trends reserve 12 configured poll intervals. The blank future area is intentional.
 17. **`[not applicable — feature dropped]`** There is no license or loop-locking ledger, so the legacy null-connection open bug has no equivalent path.
 18. **`[not applicable — feature dropped]`** There is no log encryption and no login gate.

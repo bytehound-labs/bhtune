@@ -97,6 +97,11 @@ continues in the background; successful restores stay silent, while transport fa
 physical restores/readbacks appear as a page-level alert. The panel stays in its lower position
 when no results exist, and the
 existing eligibility explanation remains visible for simulator or otherwise ineligible runs.
+PID result cells and write reviews use the backend's canonical controller targets, including
+the template's decimal-place or significant-digit policy. An active term erased by rounding
+is visibly unwritable without changing the raw calculation status. User-template forms expose
+one precision policy for P/I/D and start with three significant digits. Restore reviews and
+the PID audit show recorded values without applying the template policy.
 Run-detail sections are independently collapsible. Calculated results, Trend, Summary, Notes,
 Test configuration, Initial readings, and PID change history start expanded; MV actuation
 verification appears after PID change history as the final diagnostic section and starts

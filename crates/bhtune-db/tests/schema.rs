@@ -11,7 +11,10 @@
     reason = "integration tests and examples may use unwrap, expect, and panic"
 )]
 
-use bhtune_core::{ControllerType, LoopConfig, LoopTags, ProcessType, built_in_templates};
+use bhtune_core::{
+    ControllerType, LoopConfig, LoopTags, PidRounding, PidRoundingKind, ProcessType,
+    built_in_templates,
+};
 use bhtune_db::{
     DbError, connect_in_memory,
     models::{DcsTemplateRow, TemplateOrigin, TuneDriver, TuneRunRow},
@@ -38,6 +41,142 @@ async fn dcs_template_round_trips_every_built_in_template() {
             .unwrap();
         assert_eq!(fetched, inserted);
     }
+}
+
+#[tokio::test]
+async fn custom_template_precision_updates_and_is_snapshotted_per_run() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let mut template = built_in_templates().remove(0);
+    template.name = "Custom precision".to_string();
+    template.pid_rounding = PidRounding::default();
+    let row = DcsTemplateRow::insert(&pool, &template, TemplateOrigin::User, now)
+        .await
+        .unwrap();
+    let tags = LoopTags::derive_from_pv_tag("Loop.PV", &template);
+    let run = TuneRunRow::start(
+        &pool,
+        None,
+        "Loop",
+        TuneDriver::Simulator,
+        LoopConfig {
+            process_type: ProcessType::Flow,
+            controller_type: ControllerType::Pi,
+            relay_amp_percent: 5.0,
+            num_cycles_skip: 1,
+            num_cycles_count: 2,
+            noise_protection_secs: 0,
+            mrft_delay_secs: 0,
+        },
+        row.origin,
+        &template,
+        &tags,
+        now,
+    )
+    .await
+    .unwrap();
+    template.pid_rounding = PidRounding {
+        kind: PidRoundingKind::DecimalPlaces,
+        digits: 2,
+    };
+    let updated = DcsTemplateRow::update(&pool, row.id, &template, now)
+        .await
+        .unwrap();
+    assert_eq!(updated.template.pid_rounding, template.pid_rounding);
+    let recorded = TuneRunRow::get(&pool, run.id).await.unwrap().unwrap();
+    assert_eq!(recorded.template.pid_rounding, PidRounding::default());
+    let snapshot: String = sqlx::query("SELECT template_snapshot_json FROM tune_runs WHERE id = ?")
+        .bind(run.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .try_get("template_snapshot_json")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&snapshot).unwrap()["pid_rounding"]["digits"],
+        3
+    );
+}
+
+#[tokio::test]
+async fn precision_check_constraints_reject_invalid_kind_count_and_combinations() {
+    let pool = connect_in_memory().await.unwrap();
+    let row = DcsTemplateRow::insert(
+        &pool,
+        &built_in_templates().remove(0),
+        TemplateOrigin::Builtin,
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    for (kind, digits) in [
+        ("unknown", 1),
+        ("decimal_places", -1),
+        ("decimal_places", 8),
+        ("significant_digits", 0),
+        ("significant_digits", 8),
+    ] {
+        assert!(
+            sqlx::query(
+                "UPDATE dcs_templates SET pid_rounding_kind = ?, pid_rounding_digits = ? WHERE id = ?",
+            )
+            .bind(kind)
+            .bind(digits)
+            .bind(row.id)
+            .execute(&pool)
+            .await
+            .is_err()
+        );
+    }
+    sqlx::query(
+        "UPDATE dcs_templates SET pid_rounding_kind = 'decimal_places', pid_rounding_digits = 0 WHERE id = ?",
+    )
+    .bind(row.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        sqlx::query(
+            "UPDATE dcs_templates SET pid_rounding_kind = 'significant_digits' WHERE id = ?"
+        )
+        .bind(row.id)
+        .execute(&pool)
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn template_persistence_validates_precision_before_writing_or_decoding() {
+    let pool = connect_in_memory().await.unwrap();
+    let now = Utc::now();
+    let mut template = built_in_templates().remove(0);
+    let row = DcsTemplateRow::insert(&pool, &template, TemplateOrigin::Builtin, now)
+        .await
+        .unwrap();
+    template.pid_rounding.digits = 8;
+    for error in [
+        DcsTemplateRow::insert(&pool, &template, TemplateOrigin::User, now)
+            .await
+            .unwrap_err(),
+        DcsTemplateRow::update(&pool, row.id, &template, now)
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(error.to_string().contains("digits"));
+        assert!(std::error::Error::source(&error).is_some());
+    }
+    sqlx::query("PRAGMA ignore_check_constraints = ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE dcs_templates SET pid_rounding_digits = 8 WHERE id = ?")
+        .bind(row.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = DcsTemplateRow::get(&pool, row.id).await.unwrap_err();
+    assert!(error.to_string().contains("digits"));
 }
 
 #[tokio::test]

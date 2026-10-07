@@ -492,6 +492,7 @@ test.describe("New Tune draft persistence", () => {
           tag_name: "FIC101.PV",
           template_name: "Yokogawa CentumVP",
           template_origin: "builtin",
+          pid_rounding: { kind: "decimal_places", digits: 1 },
           started_at: "2025-01-01T12:00:00Z",
           completed_at: "2025-01-01T12:01:00Z",
           allow_uncertain_quality: true,

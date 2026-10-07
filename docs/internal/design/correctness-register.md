@@ -158,18 +158,16 @@ Gain"`, `"Td - Derivative Time"`, `"Kd - Derivative Gain"`, `"Seconds"`), and a 
 14. **`[preserved rule]` On the final MRFT step, MV snaps back to the initial value** rather than
     taking a full relay
     step. Preserved in `core-mrft`'s `MrftEngine::step`.
-15. **`[fixed by design in this project, not a compat concern]` Significant-digit display
-    formatting needs care.** Naive numeric rounding to N digits is not
-    the same as significant-digit formatting (e.g. `0.00123` vs. `123000` both have 3 significant
-    digits but very different rounding behavior). Decide up front whether exact significant-digit
-    formatting matters for a given field or whether straightforward rounding is an acceptable,
-    documented simplification for display-only purposes — don't assume the two are
-    interchangeable. Legacy: `FormatSigDigs` implemented significant-digit rounding via string
-    formatting for on-screen values. Not applicable in the same form: display formatting is now
-    entirely the web frontend's concern (plain `toFixed`-style rounding in React/TypeScript, e.g.
-    `RunDetailPage.tsx`), not something `bhtune-core` computes or stores — there is no
-    calculated/persisted value this affects, only how a number is rendered, so exact legacy
-    parity was judged not worth replicating here.
+15. **`[fixed by design in this project, not a compat concern]` PID precision belongs to the
+    snapshotted template, not independent frontend formatting.** Decimal places and significant
+    digits have distinct semantics, especially for small gains. Pure core rounding produces
+    a numeric controller target and canonical text after unit conversion; runtime previews,
+    CLI review, HTTP detail, browser review, and new writes share those targets. Yokogawa uses
+    one decimal place, while other built-ins and new custom templates use three significant
+    digits. Active terms erased to zero are explicitly unwritable without changing raw-result
+    validity. Exact disable sentinels, raw calculations/exports, previous/readback values,
+    rollback, revert, and recovery retain their original precision. Run snapshots require
+    explicit metadata; there is no vendor-name or historical precision fallback.
 16. **`[new feature, not a legacy bug]` A live PV/MV trend chart is a core UX expectation for the
     web GUI** — plan for high-rate streaming updates (multiple times per second) from the start;
     see "Chart library" below. The legacy app never had a trend chart at all

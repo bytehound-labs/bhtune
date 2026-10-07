@@ -1,12 +1,11 @@
 #![allow(rustdoc::broken_intra_doc_links)]
 
 use crate::output::OutputFormat;
-use bhtune_core::ResponseLevel;
-use bhtune_db::models::TuneResultRow;
+use bhtune_core::{ControllerPidValues, ResponseLevel};
 pub use bhtune_runtime::tune::TuneOutcome;
 use bhtune_runtime::tune::{
-    AbortReason, PidWriteOutcome, RunOutcome, WriteBackHandler, WriteBackOutcome,
-    WriteBackSelection, WriteBackSkipReason, pid_parameters_for_result, tune_outcome_for_run,
+    AbortReason, PidWriteOutcome, PidWritePreview, RunOutcome, WriteBackHandler, WriteBackOutcome,
+    WriteBackSelection, WriteBackSkipReason, tune_outcome_for_run,
 };
 use std::io::BufRead;
 
@@ -17,11 +16,20 @@ pub(super) fn print_summary(
     run_id: i64,
     outcome: &RunOutcome,
     output: OutputFormat,
+    previews: &[PidWritePreview],
 ) -> TuneOutcome {
     let tune_outcome = tune_outcome_for_run(outcome);
     match output {
-        OutputFormat::Table => print_table_summary(run_id, outcome),
-        OutputFormat::Json => print_json_summary(run_id, outcome, tune_outcome),
+        OutputFormat::Table => {
+            if !previews.is_empty() {
+                println!("Controller-ready PID parameters:");
+                for preview in previews {
+                    println!("  {}", render_pid_preview(preview));
+                }
+            }
+            print_table_summary(run_id, outcome);
+        }
+        OutputFormat::Json => print_json_summary(run_id, outcome, tune_outcome, previews),
     }
     tune_outcome
 }
@@ -91,8 +99,13 @@ fn render_table_summary(run_id: i64, outcome: &RunOutcome) -> String {
         }
     }
 }
-pub(super) fn print_json_summary(run_id: i64, outcome: &RunOutcome, tune_outcome: TuneOutcome) {
-    let json = build_json_summary(run_id, outcome, tune_outcome);
+pub(super) fn print_json_summary(
+    run_id: i64,
+    outcome: &RunOutcome,
+    tune_outcome: TuneOutcome,
+    previews: &[PidWritePreview],
+) {
+    let json = build_json_summary(run_id, outcome, tune_outcome, previews);
     println!(
         "{}",
         render_json_summary(&json, serde_json::to_string_pretty)
@@ -103,6 +116,7 @@ fn build_json_summary(
     run_id: i64,
     outcome: &RunOutcome,
     tune_outcome: TuneOutcome,
+    previews: &[PidWritePreview],
 ) -> serde_json::Value {
     let (write_back, response_level) = match outcome {
         RunOutcome::Completed {
@@ -172,6 +186,7 @@ fn build_json_summary(
         "write_back": write_back,
         "write_back_response_level": response_level,
         "write_back_detail": write_back_detail,
+        "controller_pid": previews,
         "timeout_secs": timeout_secs,
         "poor_quality_tag": poor_quality_tag,
         "poor_quality": poor_quality,
@@ -208,7 +223,7 @@ impl CliWriteBackHandler {
 }
 
 impl WriteBackHandler for CliWriteBackHandler {
-    fn select_response_level(&mut self, results: &[TuneResultRow]) -> WriteBackSelection {
+    fn select_response_level(&mut self, previews: &[PidWritePreview]) -> WriteBackSelection {
         if self.output == OutputFormat::Json {
             return WriteBackSelection::Skipped(
                 "--output json was set without --write-pid; skipped the interactive \
@@ -220,15 +235,19 @@ impl WriteBackHandler for CliWriteBackHandler {
         let stdin = std::io::stdin();
         let mut reader = stdin.lock();
         let (selection, reported_failure) =
-            select_interactive_write_back_result(results, &mut reader);
+            select_interactive_write_back_result(previews, &mut reader);
         self.selection_failure_reported = reported_failure;
         selection
     }
 
-    fn write_back_selected(&mut self, response_level: ResponseLevel, requested: bool) {
+    fn write_back_selected(&mut self, values: &ControllerPidValues, requested: bool) {
         if self.output == OutputFormat::Table && requested {
             println!(
-                "Non-interactively writing {response_level:?} PID parameters back to the DCS (--write-pid)."
+                "Non-interactively writing {:?} PID parameters back to the DCS (--write-pid): P={} I={} D={}.",
+                values.response_level,
+                values.proportional.display,
+                values.integral.display,
+                values.derivative.display,
             );
         }
     }
@@ -281,31 +300,37 @@ impl WriteBackHandler for CliWriteBackHandler {
     }
 }
 
+fn render_pid_preview(preview: &PidWritePreview) -> String {
+    match &preview.values {
+        Some(values) => format!(
+            "{:?}: P={} I={} D={}",
+            preview.response_level,
+            values.proportional.display,
+            values.integral.display,
+            values.derivative.display,
+        ),
+        None => format!(
+            "{:?}: UNWRITABLE ({})",
+            preview.response_level,
+            preview
+                .unavailable_reason
+                .as_deref()
+                .unwrap_or("controller target unavailable"),
+        ),
+    }
+}
+
 fn select_interactive_write_back_result(
-    results: &[TuneResultRow],
+    previews: &[PidWritePreview],
     reader: &mut impl BufRead,
 ) -> (WriteBackSelection, bool) {
-    eprintln!("\nCalculated PID parameters:");
-    for (i, result) in results.iter().enumerate() {
-        match pid_parameters_for_result(result) {
-            Ok(pid) => eprintln!(
-                "  {}. {:?}: P={:.4} I={:.4} D={:.4}",
-                i + 1,
-                result.response_level,
-                pid.proportional,
-                pid.integral,
-                pid.derivative
-            ),
-            Err(error) => eprintln!(
-                "  {}. {:?}: INVALID ({error})",
-                i + 1,
-                result.response_level
-            ),
-        }
+    eprintln!("\nController-ready PID parameters:");
+    for (i, preview) in previews.iter().enumerate() {
+        eprintln!("  {}. {}", i + 1, render_pid_preview(preview));
     }
     eprintln!(
         "Write which response level's PID parameters back to the DCS? [1-{}, or Enter/n to skip]:",
-        results.len()
+        previews.len()
     );
 
     let mut input = String::new();
@@ -320,14 +345,21 @@ fn select_interactive_write_back_result(
     }
 
     match input.parse::<usize>() {
-        Ok(n) if n >= 1 && n <= results.len() => match pid_parameters_for_result(&results[n - 1]) {
-            Ok(pid) => (WriteBackSelection::Selected(pid.response_level), false),
-            Err(error) => {
-                let detail = error.to_string();
-                eprintln!("Selected result is invalid; skipping PID write-back: {detail}");
+        Ok(n) if n >= 1 && n <= previews.len() => {
+            let preview = &previews[n - 1];
+            if preview.values.is_some() {
+                (WriteBackSelection::Selected(preview.response_level), false)
+            } else {
+                let detail = preview
+                    .unavailable_reason
+                    .clone()
+                    .unwrap_or_else(|| "controller target unavailable".to_string());
+                eprintln!(
+                    "Selected controller target is unavailable; skipping PID write-back: {detail}"
+                );
                 (WriteBackSelection::Failed(detail), true)
             }
-        },
+        }
         _ => {
             eprintln!("Invalid selection; skipping PID write-back.");
             (
@@ -341,34 +373,36 @@ fn select_interactive_write_back_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bhtune_core::{TuningResultInvalidReason, TuningResultStatus};
+    use bhtune_core::{ControllerType, TuningResultStatus};
+    use bhtune_db::models::TuneResultRow;
     use bhtune_driver::Quality;
     use std::io::Cursor;
 
-    fn valid_result(response_level: ResponseLevel) -> TuneResultRow {
-        TuneResultRow {
-            id: 0,
-            run_id: 1,
-            response_level,
-            kp: Some(2.0),
-            ti_minutes: Some(4.0),
-            td_minutes: Some(0.5),
-            proportional: Some(2.0),
-            integral: Some(4.0),
-            derivative: Some(0.5),
-            status: TuningResultStatus::Valid,
-            invalid_reason: None,
-        }
+    fn valid_result(response_level: ResponseLevel) -> PidWritePreview {
+        bhtune_runtime::tune::pid_write_preview(
+            &TuneResultRow {
+                id: 0,
+                run_id: 1,
+                response_level,
+                kp: Some(2.0),
+                ti_minutes: Some(4.0),
+                td_minutes: Some(0.5),
+                proportional: Some(2.0),
+                integral: Some(4.0),
+                derivative: Some(0.5),
+                status: TuningResultStatus::Valid,
+                invalid_reason: None,
+            },
+            ControllerType::Pi,
+            &bhtune_core::built_in_templates().remove(0),
+        )
     }
 
-    fn invalid_result(response_level: ResponseLevel) -> TuneResultRow {
-        TuneResultRow {
-            status: TuningResultStatus::Invalid,
-            invalid_reason: Some(TuningResultInvalidReason::NonPositivePvAmplitude),
-            proportional: None,
-            integral: None,
-            derivative: None,
-            ..valid_result(response_level)
+    fn invalid_result(response_level: ResponseLevel) -> PidWritePreview {
+        PidWritePreview {
+            response_level,
+            values: None,
+            unavailable_reason: Some("PV amplitude is not positive".to_string()),
         }
     }
 
@@ -464,11 +498,11 @@ mod tests {
             let expected_status = tune_outcome_for_run(&outcome);
             assert_eq!(render_table_summary(42, &outcome), expected_table);
             assert_eq!(
-                print_summary(42, &outcome, OutputFormat::Table),
+                print_summary(42, &outcome, OutputFormat::Table, &[]),
                 expected_status
             );
             assert_eq!(
-                print_summary(42, &outcome, OutputFormat::Json),
+                print_summary(42, &outcome, OutputFormat::Json, &[]),
                 expected_status
             );
         }
@@ -479,7 +513,7 @@ mod tests {
         let cases = summary_cases();
         for (outcome, _) in &cases {
             let tune_outcome = tune_outcome_for_run(outcome);
-            let json = build_json_summary(42, outcome, tune_outcome);
+            let json = build_json_summary(42, outcome, tune_outcome, &[]);
             assert_eq!(json["run_id"], 42);
             assert_eq!(json["outcome"], tune_outcome.label());
         }
@@ -488,6 +522,7 @@ mod tests {
             42,
             &RunOutcome::Aborted(AbortReason::Timeout { timeout_secs: 10 }),
             TuneOutcome::TimedOut,
+            &[],
         );
         assert_eq!(timeout["timeout_secs"], 10);
 
@@ -498,6 +533,7 @@ mod tests {
                 quality: Quality::Bad,
             }),
             TuneOutcome::PoorQuality,
+            &[],
         );
         assert_eq!(quality["poor_quality_tag"], "Unit1.LIC101.PV");
         assert_eq!(quality["poor_quality"], "bad");
@@ -509,6 +545,7 @@ mod tests {
                 op_timeout_secs: 2,
             }),
             TuneOutcome::TimedOut,
+            &[],
         );
         assert_eq!(operation_timeout["op_timeout_tag"], "Unit1.LIC101.PV");
         assert_eq!(operation_timeout["op_timeout_secs"], 2);
@@ -524,6 +561,7 @@ mod tests {
                 deadline_secs: 4,
             }),
             TuneOutcome::ActuationFailed,
+            &[],
         );
         assert_eq!(
             actuation["mv_actuation"],
@@ -543,10 +581,45 @@ mod tests {
                 reason: "MV restore not confirmed".to_string(),
             },
             TuneOutcome::RestoreIncomplete,
+            &[],
         );
         assert_eq!(
             restore["restore_incomplete_reason"],
             "MV restore not confirmed"
+        );
+    }
+
+    #[test]
+    fn cli_review_and_json_summary_share_canonical_controller_targets() {
+        let preview = valid_result(ResponseLevel::Moderate);
+        assert_eq!(render_pid_preview(&preview), "Moderate: P=2.0 I=4.0 D=0.0");
+        let summary = build_json_summary(
+            42,
+            &RunOutcome::Completed {
+                write_back: WriteBackOutcome::Skipped,
+                write_back_detail: None,
+            },
+            TuneOutcome::Completed,
+            &[preview],
+        );
+        assert_eq!(
+            summary["controller_pid"][0]["values"]["proportional"]["display"],
+            "2.0"
+        );
+        assert_eq!(
+            summary["controller_pid"][0]["values"]["derivative"]["value"],
+            0.0
+        );
+        assert!(
+            render_pid_preview(&invalid_result(ResponseLevel::Moderate)).contains("UNWRITABLE")
+        );
+        assert!(
+            render_pid_preview(&PidWritePreview {
+                response_level: ResponseLevel::Moderate,
+                values: None,
+                unavailable_reason: None,
+            })
+            .contains("controller target unavailable")
         );
     }
 
@@ -596,12 +669,13 @@ mod tests {
 
     #[test]
     fn cli_write_back_handler_keeps_terminal_and_json_policies_separate() {
+        let values = valid_result(ResponseLevel::Moderate).values.unwrap();
         let mut json = CliWriteBackHandler::new(OutputFormat::Json, None);
         assert!(matches!(
             json.select_response_level(&[]),
             WriteBackSelection::Skipped(detail) if detail.contains("--output json")
         ));
-        json.write_back_selected(ResponseLevel::Moderate, true);
+        json.write_back_selected(&values, true);
         json.write_back_skipped(WriteBackSkipReason::NoPidTags);
         json.write_back_skipped(WriteBackSkipReason::NoResults);
         json.write_back_failed("write failed");
@@ -613,8 +687,8 @@ mod tests {
             table.select_response_level(&[]),
             WriteBackSelection::Skipped(_)
         ));
-        table.write_back_selected(ResponseLevel::Moderate, true);
-        table.write_back_selected(ResponseLevel::Moderate, false);
+        table.write_back_selected(&values, true);
+        table.write_back_selected(&values, false);
         table.write_back_skipped(WriteBackSkipReason::NoPidTags);
         table.write_back_skipped(WriteBackSkipReason::NoResults);
         table.write_back_failed("Moderate calculated result is invalid");

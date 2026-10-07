@@ -16,7 +16,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{post, put};
 use axum::{Json, Router};
-use bhtune_core::{ResponseLevel, opc_write_values};
+use bhtune_core::ResponseLevel;
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
     TuneDriver, TuneOutcome, TuneResultRow, TuneRunRow, WriteKind, WriteReadback,
@@ -24,7 +24,7 @@ use bhtune_db::models::{
 use bhtune_driver::OpcDaDriver;
 use bhtune_runtime::cancel::CtrlC;
 use bhtune_runtime::tune::{
-    DriverKind, PidWriteOutcome, drive, pid_parameters_for_result, preflight, prepare,
+    DriverKind, PidWriteOutcome, controller_pid_for_result, drive, preflight, prepare,
 };
 use chrono::Utc;
 

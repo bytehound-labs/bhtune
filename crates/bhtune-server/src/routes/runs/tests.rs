@@ -1678,6 +1678,118 @@ async fn write_run_rejects_an_invalid_result_before_connecting_to_the_driver() {
 }
 
 #[tokio::test]
+async fn write_run_rejects_an_active_term_rounded_to_zero_before_connection() {
+    let state = crate::test_support::in_memory_state().await;
+    let run_id = seed_writable_opcda_run(&state, "127.0.0.1:1", "Sim.Server").await;
+    sqlx::query("UPDATE tune_results SET integral = 0.049 WHERE run_id = ?")
+        .bind(run_id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    let detail = build_run_detail(&state.pool, run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        detail.results[0].status,
+        bhtune_core::TuningResultStatus::Valid
+    );
+    assert!(detail.results[0].controller_values.is_none());
+    assert!(
+        detail.results[0]
+            .controller_target_error
+            .as_ref()
+            .unwrap()
+            .contains("erase an active term to zero")
+    );
+    let response = post_json(
+        crate::build_router(state.clone()),
+        &format!("/api/runs/{run_id}/write"),
+        serde_json::json!({ "response_level": "moderate" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let error = body_json(response).await;
+    assert!(error["error"].as_str().unwrap().contains("integral"));
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("erase an active term to zero")
+    );
+    assert!(
+        TuneWriteRow::list_for_run(&state.pool, run_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn post_run_write_uses_the_same_rounded_targets_as_run_detail() {
+    use crate::test_support::mock_bridge::{MockBridgeService, good_reading, start_mock_server};
+    let (host, _host_server) = start_mock_server(MockBridgeService {
+        read_response: good_reading("155.2"),
+        write_response: opcda_bridge_proto::bridge::WriteResponse {
+            tag_id: "ignored".to_string(),
+            success: true,
+            error: None,
+        },
+        ..Default::default()
+    })
+    .await;
+    let (state, _directory) = crate::test_support::file_backed_state().await;
+    let run_id = seed_writable_opcda_run(&state, &host, "Sim.Server").await;
+    let raw = 155.21378_f32;
+    sqlx::query(
+        "UPDATE tune_results SET proportional = ?, integral = ?, derivative = ? WHERE run_id = ?",
+    )
+    .bind(raw)
+    .bind(raw)
+    .bind(raw)
+    .bind(run_id)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let preview = build_run_detail(&state.pool, run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preview.results[0].proportional, Some(raw));
+    assert_eq!(
+        preview.results[0]
+            .controller_values
+            .as_ref()
+            .unwrap()
+            .proportional
+            .display,
+        "155.2"
+    );
+    let response = post_json(
+        crate::build_router(state.clone()),
+        &format!("/api/runs/{run_id}/write"),
+        serde_json::json!({ "response_level": "moderate" }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let detail = body_json(response).await;
+    assert_eq!(
+        serde_json::from_value::<f32>(detail["results"][0]["proportional"].clone()).unwrap(),
+        raw
+    );
+    assert_eq!(
+        detail["results"][0]["controller_values"]["integral"]["display"],
+        "155.2"
+    );
+    assert_eq!(detail["writes"][0]["success"], true);
+    for term in ["proportional", "integral", "derivative"] {
+        assert_eq!(detail["writes"][0][format!("{term}_written")], 155.2);
+        assert_eq!(detail["writes"][0][format!("{term}_readback")], 155.2);
+    }
+}
+
+#[tokio::test]
 async fn write_run_returns_400_when_the_driver_connection_fails() {
     let (state, _directory) = crate::test_support::file_backed_state().await;
     // Nothing is listening on this port, so `OpcDaDriver::connect` fails at the

@@ -19,8 +19,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use bhtune_core::{
-    ControllerDirection, ControllerType, DcsTemplate, LoopConfig, ProcessType, ResponseLevel, Tick,
-    TuningResultInvalidReason, TuningResultStatus,
+    ControllerDirection, ControllerPidValues, ControllerType, DcsTemplate, LoopConfig, PidRounding,
+    ProcessType, ResponseLevel, Tick, TuningResultInvalidReason, TuningResultStatus,
 };
 use bhtune_db::models::{
     MvActuationKind, MvActuationStatus, Pagination, RestoreStatus, RollbackState, SampleQuality,
@@ -287,10 +287,16 @@ pub struct ResultResponse {
     pub derivative: Option<f32>,
     pub status: TuningResultStatus,
     pub invalid_reason: Option<TuningResultInvalidReason>,
+    /// Controller-ready final-unit values and canonical text; raw fields remain unchanged.
+    pub controller_values: Option<ControllerPidValues>,
+    /// Why no safe controller target exists, including an active term rounded to zero.
+    pub controller_target_error: Option<String>,
 }
 
-impl From<&TuneResultRow> for ResultResponse {
-    fn from(r: &TuneResultRow) -> Self {
+impl ResultResponse {
+    pub(super) fn from_recorded(r: &TuneResultRow, run: &TuneRunRow) -> Self {
+        let preview =
+            bhtune_runtime::tune::pid_write_preview(r, run.config.controller_type, &run.template);
         ResultResponse {
             response_level: r.response_level,
             kp: r.kp,
@@ -301,6 +307,8 @@ impl From<&TuneResultRow> for ResultResponse {
             derivative: r.derivative,
             status: r.status,
             invalid_reason: r.invalid_reason,
+            controller_values: preview.values,
+            controller_target_error: preview.unavailable_reason,
         }
     }
 }
@@ -448,6 +456,8 @@ pub struct RunDetailResponse {
     /// Whether this run accepted `Uncertain` OPC quality, captured when the run started.
     pub allow_uncertain_quality: bool,
     pub config: LoopConfig,
+    /// Precision policy from the run's immutable template snapshot.
+    pub pid_rounding: PidRounding,
     /// Concrete global timing and safety values frozen when this run was prepared. `None`
     /// identifies a run created before effective-tuning snapshots were stored.
     pub effective_tuning: Option<bhtune_db::models::EffectiveTuning>,
@@ -516,6 +526,10 @@ pub(crate) async fn build_run_detail(
         _ => None,
     };
     let pid_parameter_labels = PidParameterLabelsResponse::from(&run.template);
+    let results = results
+        .iter()
+        .map(|result| ResultResponse::from_recorded(result, &run))
+        .collect();
 
     Ok(Some(RunDetailResponse {
         id: run.id,
@@ -530,6 +544,7 @@ pub(crate) async fn build_run_detail(
         template_origin: run.template_origin,
         allow_uncertain_quality: run.allow_uncertain_quality,
         config: run.config,
+        pid_rounding: run.template.pid_rounding,
         effective_tuning: run.effective_tuning,
         opc_server: run.opc_server,
         bridge_host: run.bridge_host,
@@ -538,7 +553,7 @@ pub(crate) async fn build_run_detail(
         initial_readings: run.initial_readings.map(InitialReadingsResponse::from),
         timing_metrics: run.timing_metrics,
         samples: samples.iter().map(SampleResponse::from).collect(),
-        results: results.iter().map(ResultResponse::from).collect(),
+        results,
         writes: writes.iter().map(WriteResponse::from).collect(),
         mv_actuations: mv_actuations
             .iter()

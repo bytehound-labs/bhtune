@@ -1,6 +1,7 @@
 import {
   CheckboxField,
   FormSection,
+  NumberField,
   SelectField,
   TextField,
 } from "../../components/ui";
@@ -9,6 +10,9 @@ import {
   INTEGRAL_TYPES,
   PROPORTIONAL_TYPES,
   TIME_UNITS,
+  PID_ROUNDING_KINDS,
+  PID_ROUNDING_LABELS,
+  pidRoundingFormError,
   type TemplateFormState,
 } from "./templateFormState";
 
@@ -107,6 +111,29 @@ export function TemplateFormFields({
           value={form.derivative_unit}
           onChange={(v) => set("derivative_unit", v)}
           options={TIME_UNITS}
+        />
+        <SelectField
+          label="PID rounding"
+          value={form.pid_rounding.kind}
+          onChange={(kind) =>
+            set("pid_rounding", { ...form.pid_rounding, kind })
+          }
+          options={PID_ROUNDING_KINDS}
+          displayLabel={(kind) => PID_ROUNDING_LABELS[kind]}
+          hint="Applies to active P/I/D terms after unit conversion, for review and new writes."
+        />
+        <NumberField
+          label="PID precision"
+          value={form.pid_rounding.digits}
+          onChange={(digits) =>
+            set("pid_rounding", { ...form.pid_rounding, digits })
+          }
+          required
+          min={form.pid_rounding.kind === "decimal_places" ? 0 : 1}
+          max={7}
+          step={1}
+          error={pidRoundingFormError(form.pid_rounding)}
+          hint="Previous values, readbacks, and restores retain their original precision."
         />
       </FormSection>
 

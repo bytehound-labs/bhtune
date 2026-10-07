@@ -179,7 +179,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, 4);
     }
 
     #[tokio::test]
@@ -234,7 +234,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, 4);
 
         assert!(
             sqlx::query("DELETE FROM tune_runs")
@@ -253,7 +253,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, 4);
 
         let (migration_version,): (i64,) = sqlx::query_as(
             "SELECT version FROM _sqlx_migrations WHERE success = 1 ORDER BY version DESC LIMIT 1",
@@ -261,7 +261,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(migration_version, 3);
+        assert_eq!(migration_version, 4);
     }
 
     #[tokio::test]

@@ -721,6 +721,13 @@ export interface components {
      * @enum {string}
      */
     ControllerDirection: "direct" | "reverse";
+    /** @description Controller-ready targets, separate from the full-precision calculated PID parameters. */
+    ControllerPidValues: {
+      derivative: components["schemas"]["RoundedPidValue"];
+      integral: components["schemas"]["RoundedPidValue"];
+      proportional: components["schemas"]["RoundedPidValue"];
+      response_level: components["schemas"]["ResponseLevel"];
+    };
     /**
      * @description A PID controller structure. Discriminants double as the column index into the
      *     tuning-constant matrices in [`crate::constants`].
@@ -766,6 +773,11 @@ export interface components {
       /** @description The DCS-specific raw values a Mode tag holds for Manual/Auto. */
       mode_manual_value: string;
       name: string;
+      /**
+       * @description Rounding for new PID controller targets and their presentation, after unit/convention
+       *     conversion. Raw calculations and recorded restore values retain their precision.
+       */
+      pid_rounding: components["schemas"]["PidRounding"];
       /**
        * @description OPC item-name suffixes, combined with a PV tag's path prefix by
        *     [`crate::tags::derive_tag`] to fill in the rest of the tag set. An empty suffix
@@ -1465,6 +1477,16 @@ export interface components {
       integral: string;
       proportional: string;
     };
+    PidRounding: {
+      /** Format: int32 */
+      digits: number;
+      kind: components["schemas"]["PidRoundingKind"];
+    };
+    /**
+     * @description Precision shared by the active P/I/D terms in a template's final controller units.
+     * @enum {string}
+     */
+    PidRoundingKind: "decimal_places" | "significant_digits";
     /**
      * @description Operation-latency diagnostics captured while a run is polling.
      *
@@ -1559,6 +1581,9 @@ export interface components {
     RestoreStatus: "confirmed" | "incomplete";
     /** @description Local projection of [`TuneResultRow`]. */
     ResultResponse: {
+      /** @description Why no safe controller target exists, including an active term rounded to zero. */
+      controller_target_error?: string | null;
+      controller_values?: null | components["schemas"]["ControllerPidValues"];
       /** Format: float */
       derivative?: number | null;
       /** Format: float */
@@ -1582,6 +1607,12 @@ export interface components {
      * @enum {string}
      */
     RollbackState: "succeeded" | "failed";
+    /** @description A controller value and its canonical text; parsing `display` as `f32` yields `value`. */
+    RoundedPidValue: {
+      display: string;
+      /** Format: float */
+      value: number;
+    };
     RunDetailResponse: {
       /** @description Whether this run accepted `Uncertain` OPC quality, captured when the run started. */
       allow_uncertain_quality: boolean;
@@ -1616,6 +1647,8 @@ export interface components {
        *     snapshot. Empty user-template suffixes use the conventional P/I/D labels.
        */
       pid_parameter_labels: components["schemas"]["PidParameterLabelsResponse"];
+      /** @description Precision policy from the run's immutable template snapshot. */
+      pid_rounding: components["schemas"]["PidRounding"];
       restore_detail?: string | null;
       restore_status?: null | components["schemas"]["RestoreStatus"];
       results: components["schemas"]["ResultResponse"][];
@@ -3123,7 +3156,7 @@ export interface operations {
           "application/json": components["schemas"]["RunDetailResponse"];
         };
       };
-      /** @description The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, or no calculated result for the requested response level), or the driver connection itself failed. */
+      /** @description The run isn't eligible for a post-hoc write (still running, wrong driver, no PID tags/connection recorded, no result for the requested level, or an unsafe controller target after template rounding), or the driver connection itself failed. */
       400: {
         headers: {
           [name: string]: unknown;

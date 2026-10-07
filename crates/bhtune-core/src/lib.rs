@@ -47,14 +47,17 @@ pub use controller_type::ControllerType;
 pub use direction::ControllerDirection;
 pub use loop_config::{LoopConfig, LoopConfigError};
 pub use mrft::{Action, InitialReadings, MrftCompat, MrftEngine, MrftState, Tick};
-pub use pid_config::{DerivativeType, IntegralType, ProportionalType, TimeUnit};
+pub use pid_config::{
+    DerivativeType, IntegralType, PidRounding, PidRoundingError, PidRoundingKind, ProportionalType,
+    RoundedPidValue, TimeUnit,
+};
 pub use process_type::ProcessType;
 pub use range::{MvRange, PvRange, RangeError};
 pub use tags::{LoopTags, TagOrValue, TagOverrides, TagOverridesError, derive_tag};
 pub use template::{DcsTemplate, built_in_templates};
 pub use tuning_math::{
-    CheckedTuningResult, OpcWriteValues, Oscillation, PidParameters, TuningMathCompat,
-    TuningResult, TuningResultInvalidReason, TuningResultStatus, calculate_all,
-    calculate_all_checked, calculate_pid_parameters, calculate_tuning_result, measure_oscillation,
-    opc_write_values,
+    CheckedTuningResult, ControllerPidError, ControllerPidValues, OpcWriteValues, Oscillation,
+    PidParameters, TuningMathCompat, TuningResult, TuningResultInvalidReason, TuningResultStatus,
+    calculate_all, calculate_all_checked, calculate_pid_parameters, calculate_tuning_result,
+    controller_pid_values, measure_oscillation, opc_write_values,
 };

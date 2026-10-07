@@ -7,6 +7,10 @@ preparation and execution, write-back, history revert, restore, and shared sampl
 It also provides read-only tune preflight, which reuses request, template, tag, and initial
 state validation without creating a run or persisting history.
 
+New PID writes and adapter previews share one controller-target gate: final-unit template
+precision applies to active terms, while disable sentinels stay exact. Raw calculations,
+pre-write values, readbacks, rollback, history revert, and loop recovery are unrounded.
+
 The runtime source and its direct dependencies are transport-neutral: it does not directly use
 `clap`, an HTTP framework, or OpenAPI. The OPC DA gRPC client may bring transport crates
 transitively; they are not part of the runtime API. The CLI owns command parsing, terminal

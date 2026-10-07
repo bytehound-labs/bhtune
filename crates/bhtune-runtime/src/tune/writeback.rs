@@ -1,8 +1,8 @@
 #![allow(rustdoc::broken_intra_doc_links)]
 
 use bhtune_core::{
-    DcsTemplate, LoopConfig, LoopTags, PidParameters, ResponseLevel, TuningResultStatus,
-    opc_write_values,
+    ControllerPidValues, ControllerType, DcsTemplate, LoopConfig, LoopTags, PidParameters,
+    ResponseLevel, TuningResultStatus, controller_pid_values,
 };
 use bhtune_db::SqlitePool;
 use bhtune_db::models::{
@@ -190,15 +190,24 @@ pub enum WriteBackSkipReason {
     NoResults,
 }
 
+/// Presentation of one raw result's controller target, including precision failures that
+/// do not change the recorded calculation status.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct PidWritePreview {
+    pub response_level: ResponseLevel,
+    pub values: Option<ControllerPidValues>,
+    pub unavailable_reason: Option<String>,
+}
+
 /// Optional adapter hook for response-level selection and progress reporting.
 ///
 /// The runtime performs all result validation, writes, readback confirmation, rollback, and
 /// audit persistence. An adapter may provide an interactive selector; non-interactive
 /// callers can omit the handler or select a response level on the request.
 pub trait WriteBackHandler: Send {
-    fn select_response_level(&mut self, results: &[TuneResultRow]) -> WriteBackSelection;
+    fn select_response_level(&mut self, previews: &[PidWritePreview]) -> WriteBackSelection;
 
-    fn write_back_selected(&mut self, _response_level: ResponseLevel, _requested: bool) {}
+    fn write_back_selected(&mut self, _values: &ControllerPidValues, _requested: bool) {}
 
     fn write_back_skipped(&mut self, _reason: WriteBackSkipReason) {}
 
@@ -485,7 +494,7 @@ async fn write_pid_values_inner(
         }
     }
 }
-/// Converts a persisted result into the exact PID values that may be written to a controller.
+/// Validates a persisted result's raw, full-precision PID parameters.
 ///
 /// This is the single validity gate shared by the CLI and HTTP write paths. A result must be
 /// explicitly valid and contain finite values for all three constants; malformed historical
@@ -539,6 +548,39 @@ pub fn pid_parameters_for_result(result: &TuneResultRow) -> anyhow::Result<PidPa
         integral,
         derivative,
     })
+}
+
+/// The shared new-write validity/precision gate. Restore and revert paths deliberately
+/// do not call this: their recorded targets must retain their original precision.
+pub fn controller_pid_for_result(
+    result: &TuneResultRow,
+    controller_type: ControllerType,
+    template: &DcsTemplate,
+) -> anyhow::Result<ControllerPidValues> {
+    let pid = pid_parameters_for_result(result)?;
+    controller_pid_values(pid, controller_type, template).map_err(|error| {
+        anyhow::anyhow!(
+            "{:?} controller PID target is unavailable: {error}",
+            result.response_level
+        )
+    })
+}
+
+pub fn pid_write_preview(
+    result: &TuneResultRow,
+    controller_type: ControllerType,
+    template: &DcsTemplate,
+) -> PidWritePreview {
+    let (values, unavailable_reason) =
+        match controller_pid_for_result(result, controller_type, template) {
+            Ok(values) => (Some(values), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+    PidWritePreview {
+        response_level: result.response_level,
+        values,
+        unavailable_reason,
+    }
 }
 /// Writes the requested PID result, or asks an optional adapter handler to select one.
 /// Without a handler, an unrequested write is skipped; the runtime never reads stdin or
@@ -612,7 +654,12 @@ pub(super) async fn maybe_write_back_with_owner(
     let selection = match write_pid {
         Some(level) => WriteBackSelection::Selected(level),
         None => match handler.as_deref_mut() {
-            Some(handler) => handler.select_response_level(&results),
+            Some(handler) => handler.select_response_level(
+                &results
+                    .iter()
+                    .map(|result| pid_write_preview(result, config.controller_type, template))
+                    .collect::<Vec<_>>(),
+            ),
             None => WriteBackSelection::Skipped(
                 "no response level was selected by the caller".to_string(),
             ),
@@ -641,8 +688,8 @@ pub(super) async fn maybe_write_back_with_owner(
         }
         return Ok((WriteBackOutcome::Failed, Some(detail)));
     };
-    let pid = match pid_parameters_for_result(selected) {
-        Ok(pid) => pid,
+    let written = match controller_pid_for_result(selected, config.controller_type, template) {
+        Ok(written) => written,
         Err(error) => {
             let detail = error.to_string();
             if let Some(handler) = handler.as_deref_mut() {
@@ -651,15 +698,14 @@ pub(super) async fn maybe_write_back_with_owner(
             return Ok((WriteBackOutcome::Failed, Some(detail)));
         }
     };
-    let response_level = pid.response_level;
+    let response_level = written.response_level;
     if let Some(handler) = handler.as_deref_mut() {
-        handler.write_back_selected(response_level, write_pid.is_some());
+        handler.write_back_selected(&written, write_pid.is_some());
     }
-    let written = opc_write_values(pid, config.controller_type, template.integral_type);
     let target = WriteReadback {
-        proportional: written.proportional,
-        integral: written.integral,
-        derivative: written.derivative,
+        proportional: written.proportional.value,
+        integral: written.integral.value,
+        derivative: written.derivative.value,
     };
 
     let outcome = match ownership {
@@ -764,6 +810,7 @@ mod tests {
         values: std::sync::Mutex<HashMap<String, String>>,
         write_counts: std::sync::Mutex<HashMap<String, usize>>,
         failure_calls: HashMap<String, Vec<usize>>,
+        read_calls: AtomicUsize,
         write_calls: AtomicUsize,
     }
 
@@ -783,6 +830,7 @@ mod tests {
                 values: std::sync::Mutex::new(values),
                 write_counts: std::sync::Mutex::new(HashMap::new()),
                 failure_calls,
+                read_calls: AtomicUsize::new(0),
                 write_calls: AtomicUsize::new(0),
             }
         }
@@ -791,6 +839,7 @@ mod tests {
     #[async_trait]
     impl Driver for PidDriver {
         async fn read(&self, tags: &[TagId]) -> DriverResult<Vec<TagValue>> {
+            self.read_calls.fetch_add(1, Ordering::Relaxed);
             let values = self.values.lock().unwrap();
             tags.iter()
                 .map(|tag| {
@@ -852,12 +901,13 @@ mod tests {
     }
 
     impl WriteBackHandler for RecordingHandler {
-        fn select_response_level(&mut self, _results: &[TuneResultRow]) -> WriteBackSelection {
+        fn select_response_level(&mut self, _previews: &[PidWritePreview]) -> WriteBackSelection {
             self.events.push("select".to_string());
             self.selection.clone()
         }
 
-        fn write_back_selected(&mut self, level: ResponseLevel, requested: bool) {
+        fn write_back_selected(&mut self, values: &ControllerPidValues, requested: bool) {
+            let level = values.response_level;
             self.events.push(format!("selected:{level:?}:{requested}"));
         }
 
@@ -877,7 +927,7 @@ mod tests {
     struct DefaultHandler;
 
     impl WriteBackHandler for DefaultHandler {
-        fn select_response_level(&mut self, _results: &[TuneResultRow]) -> WriteBackSelection {
+        fn select_response_level(&mut self, _previews: &[PidWritePreview]) -> WriteBackSelection {
             WriteBackSelection::Skipped("no selection".to_string())
         }
     }
@@ -945,13 +995,192 @@ mod tests {
     }
 
     #[test]
+    fn controller_preview_preserves_raw_values_and_reports_precision_failures() {
+        let mut template = bhtune_core::built_in_templates().remove(0);
+        let mut result = result_row(1, ResponseLevel::Moderate);
+        result.proportional = Some(155.21378);
+        result.integral = Some(2.482169);
+        let preview = pid_write_preview(&result, ControllerType::Pi, &template);
+        let values = preview.values.unwrap();
+        assert_eq!(values.proportional.value, 155.2);
+        assert_eq!(values.proportional.display, "155.2");
+        assert_eq!(values.integral.value, 2.5);
+        assert_eq!(values.integral.display, "2.5");
+        assert_eq!(values.derivative.value, 0.0);
+        assert_eq!(values.derivative.display, "0.0");
+        assert!(preview.unavailable_reason.is_none());
+        assert_eq!(result.proportional, Some(155.21378));
+        assert_eq!(result.integral, Some(2.482169));
+        assert_eq!(result.status, TuningResultStatus::Valid);
+
+        result.integral = Some(0.049);
+        let preview = pid_write_preview(&result, ControllerType::Pi, &template);
+        assert!(preview.values.is_none());
+        assert!(preview.unavailable_reason.unwrap().contains("integral"));
+        assert_eq!(result.status, TuningResultStatus::Valid);
+
+        template.pid_rounding = bhtune_core::PidRounding::default();
+        let values = controller_pid_for_result(&result, ControllerType::P, &template).unwrap();
+        assert_eq!(values.integral.value, 9999.0);
+        assert_eq!(values.integral.display, "9999");
+        assert_eq!(values.derivative.value, 0.0);
+    }
+
+    #[tokio::test]
+    async fn rounding_to_zero_rejects_automated_and_interactive_writes_before_pid_io() {
+        let (pool, run_id, template, tags, config) = fixture().await;
+        let mut result = result_row(run_id, ResponseLevel::Moderate);
+        result.integral = Some(0.049);
+        TuneResultRow::insert(&pool, &result).await.unwrap();
+        let driver = PidDriver::new(&tags, HashMap::new());
+
+        for requested in [Some(ResponseLevel::Moderate), None] {
+            let mut handler =
+                RecordingHandler::new(WriteBackSelection::Selected(ResponseLevel::Moderate));
+            let (outcome, detail) = maybe_write_back(
+                &pool,
+                run_id,
+                &tags,
+                &template,
+                &driver,
+                config,
+                requested,
+                true,
+                Some(&mut handler),
+            )
+            .await
+            .unwrap();
+            assert_eq!(outcome, WriteBackOutcome::Failed);
+            assert!(detail.unwrap().contains("erase an active term to zero"));
+            assert!(handler.events.last().unwrap().starts_with("failed:"));
+        }
+        assert_eq!(driver.read_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(driver.write_calls.load(Ordering::Relaxed), 0);
+        assert!(
+            TuneWriteRow::list_for_run(&pool, run_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn rounded_write_matches_preview_and_audit_but_revert_preserves_original_precision() {
+        let (pool, run_id, template, tags, config) = recorded_fixture().await;
+        let mut result = result_row(run_id, ResponseLevel::Moderate);
+        result.proportional = Some(155.21378);
+        result.integral = Some(2.482169);
+        TuneResultRow::insert(&pool, &result).await.unwrap();
+        let expected =
+            controller_pid_for_result(&result, config.controller_type, &template).unwrap();
+        let driver = PidDriver::new(&tags, HashMap::new());
+        let original = WriteReadback {
+            proportional: 7.123456,
+            integral: 8.765432,
+            derivative: 0.123456,
+        };
+        for (tag, value) in [
+            (
+                tags.proportional_constant.as_ref().unwrap(),
+                original.proportional,
+            ),
+            (tags.integral_constant.as_ref().unwrap(), original.integral),
+            (
+                tags.derivative_constant.as_ref().unwrap(),
+                original.derivative,
+            ),
+        ] {
+            driver
+                .values
+                .lock()
+                .unwrap()
+                .insert(tag.clone(), value.to_string());
+        }
+        let owner = LiveOperationGuard::acquire(
+            &pool,
+            Some(run_id),
+            LiveOperationKind::PidWrite,
+            "127.0.0.1:7602",
+            "Mock.Kepware.Sim",
+            &tags.manipulated_variable,
+            Some("{}".to_string()),
+        )
+        .await
+        .unwrap();
+        let audited = AuditedDriver::new(&driver, &pool, &owner, Some(run_id));
+        let (outcome, detail) = maybe_write_back_with_owner(
+            &pool,
+            run_id,
+            &tags,
+            &template,
+            &audited,
+            config,
+            Some(ResponseLevel::Moderate),
+            false,
+            None,
+            Some(&owner),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, WriteBackOutcome::Written { .. }));
+        assert!(detail.is_none());
+        let written = TuneWriteRow::list_for_run(&pool, run_id)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(written.previous, Some(original));
+        assert_eq!(
+            written.proportional_written,
+            Some(expected.proportional.value)
+        );
+        assert_eq!(written.integral_written, Some(expected.integral.value));
+        assert_eq!(written.derivative_written, Some(expected.derivative.value));
+        assert_eq!(written.proportional_readback, written.proportional_written);
+        assert_eq!(written.integral_readback, written.integral_written);
+        assert_eq!(written.derivative_readback, written.derivative_written);
+        owner.release().await.unwrap();
+
+        let outcome = write_pid_values(
+            &pool,
+            run_id,
+            &driver,
+            tags.proportional_constant.as_deref().unwrap(),
+            tags.integral_constant.as_deref().unwrap(),
+            tags.derivative_constant.as_deref().unwrap(),
+            ResponseLevel::Moderate,
+            original,
+            WriteKind::Revert,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, PidWriteOutcome::Written);
+        let reverted = TuneWriteRow::list_for_run(&pool, run_id)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(reverted.kind, WriteKind::Revert);
+        assert_eq!(reverted.proportional_written, Some(original.proportional));
+        assert_eq!(reverted.integral_written, Some(original.integral));
+        assert_eq!(reverted.derivative_written, Some(original.derivative));
+    }
+
+    #[test]
     fn optional_handler_defaults_are_no_ops() {
         let mut handler = DefaultHandler;
         assert!(matches!(
             handler.select_response_level(&[]),
             WriteBackSelection::Skipped(reason) if reason == "no selection"
         ));
-        handler.write_back_selected(ResponseLevel::Moderate, true);
+        let values = controller_pid_for_result(
+            &result_row(1, ResponseLevel::Moderate),
+            ControllerType::Pi,
+            &bhtune_core::built_in_templates().remove(0),
+        )
+        .unwrap();
+        handler.write_back_selected(&values, true);
         handler.write_back_skipped(WriteBackSkipReason::NoPidTags);
         handler.write_back_failed("ignored");
         handler.write_back_finished(ResponseLevel::Moderate, &PidWriteOutcome::Written);
@@ -1184,6 +1413,11 @@ mod tests {
         .await
         .unwrap();
         let driver = PidDriver::new(&tags, HashMap::from([(integral, vec![1])]));
+        let original_proportional = 1.234567_f32;
+        driver.values.lock().unwrap().insert(
+            tags.proportional_constant.as_ref().unwrap().clone(),
+            original_proportional.to_string(),
+        );
         let audited = AuditedDriver::new(&driver, &pool, &owner, Some(run_id));
         let target = WriteReadback {
             proportional: 5.0,
@@ -1218,7 +1452,7 @@ mod tests {
                 .unwrap()
                 .get(tags.proportional_constant.as_deref().unwrap())
                 .map(String::as_str),
-            Some("1")
+            Some(original_proportional.to_string().as_str())
         );
         let persisted = TuneWriteRow::list_for_run(&pool, run_id)
             .await

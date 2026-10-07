@@ -75,6 +75,7 @@ integral_type = "reset_time"
 integral_unit = "seconds"
 derivative_type = "derivative_time"
 derivative_unit = "seconds"
+pid_rounding = {{ kind = "significant_digits", digits = 3 }}
 process_variable_suffix = "PV"
 manipulated_variable_suffix = "MV"
 setpoint_variable_suffix = "SV"

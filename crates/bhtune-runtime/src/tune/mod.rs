@@ -51,8 +51,9 @@ pub use request::{
     UnsupportedDriverKind, ValidatedTuneRequest, validate_finite_f32, validate_positive_u32,
 };
 pub use writeback::{
-    PidWriteOutcome, WriteBackHandler, WriteBackSelection, WriteBackSkipReason,
-    pid_parameters_for_result, write_pid_values, write_pid_values_with_owner,
+    PidWriteOutcome, PidWritePreview, WriteBackHandler, WriteBackSelection, WriteBackSkipReason,
+    controller_pid_for_result, pid_parameters_for_result, pid_write_preview, write_pid_values,
+    write_pid_values_with_owner,
 };
 #[allow(unused_imports)]
 pub(crate) use writeback::{read_previous_pid_values, write_and_verify_pid_value};

@@ -22,6 +22,9 @@ pub enum DbError {
     #[error("column {column:?} held an unrecognized value: {value:?}")]
     InvalidEnumValue { column: &'static str, value: String },
 
+    #[error("invalid template PID precision: {0}")]
+    InvalidPidRounding(#[source] bhtune_core::PidRoundingError),
+
     /// An MV-actuation finalization API was given [`crate::models::MvActuationStatus::Pending`].
     /// Pending is the initial state inserted by
     /// [`crate::models::TuneMvActuationRow::insert_pending`], not a terminal result.

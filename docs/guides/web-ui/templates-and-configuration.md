@@ -33,6 +33,13 @@ place.
 The create and edit forms use the same grouped fields as the read-only detail view. A user's
 template name is immutable during editing; rename by deleting and recreating it instead.
 
+**PID rounding** and **PID precision** select one policy for active P/I/D terms after unit
+conversion: 0-7 decimal places or 1-7 significant digits. New custom templates start at three
+significant digits; Yokogawa's built-in policy is one decimal place. Built-in and catalog
+policies are managed in their source definitions. Each run retains its selected policy, so
+editing a template affects future runs, not historical results. The policy applies to results,
+write review, and new writes, never to recorded originals, readbacks, or restoration.
+
 Deleting a user-owned template uses a styled confirmation dialog. A failed request leaves the
 template in the list and keeps the dialog open with an inline retryable error; the retry is
 performed in that same dialog and only a successful response removes the row. Built-in and

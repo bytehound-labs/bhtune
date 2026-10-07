@@ -9,6 +9,10 @@ without starting an MRFT, writing to the controller, or changing the database. I
 `--write-pid` option assesses read-only readiness only; it does not test controller write
 permissions.
 
+PID reviews, table output, and new controller writes use the run's snapshotted template
+precision. JSON retains raw result fields and names controller-ready values separately;
+previous values, readbacks, rollback, and history revert retain their recorded precision.
+
 The OPC DA path uses the separate `opcda-bridge` gateway. The simulator runs in-process and
 does not require a DCS/PLC connection.
 

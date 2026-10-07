@@ -2,11 +2,11 @@ import type { RunDetailResponse, ResponseLevel } from "../../api/runs";
 import { RESPONSE_LEVEL_LABELS } from "../../lib/enumLabels";
 import { Badge, Button, CollapsibleSection } from "../../components/ui";
 import {
-  formatNumber,
   invalidResultReason,
   isValidRunResult,
+  isWritableRunResult,
   type RunResult,
-  type ValidRunResult,
+  type WritableRunResult,
   type WriteEligibility,
 } from "./runDetailHelpers";
 
@@ -17,7 +17,7 @@ interface PidResultsPanelProps {
   readonly writePending: boolean;
   readonly writingResponseLevel?: ResponseLevel;
   readonly promoted?: boolean;
-  readonly onWrite: (result: ValidRunResult) => void;
+  readonly onWrite: (result: WritableRunResult) => void;
 }
 
 export function PidResultsPanel({
@@ -58,6 +58,16 @@ export function PidResultsPanel({
           {demo
             ? "Compare the synthetic response levels. Demo results cannot be written to a controller."
             : "Choose a response level to review the exact PID values before writing them to the controller."}
+        </p>
+      )}
+      {run.results.length > 0 && (
+        <p className="mb-4 text-xs text-slate-400">
+          Controller targets use {run.pid_rounding.digits}{" "}
+          {run.pid_rounding.kind === "decimal_places"
+            ? "decimal place"
+            : "significant digit"}
+          {run.pid_rounding.digits === 1 ? "" : "s"}. Raw calculations remain
+          full precision in JSON; restore values are not rounded.
         </p>
       )}
 
@@ -120,13 +130,21 @@ function ResultRow({
   readonly eligibility: WriteEligibility;
   readonly writePending: boolean;
   readonly writingResponseLevel?: ResponseLevel;
-  readonly onWrite: (result: ValidRunResult) => void;
+  readonly onWrite: (result: WritableRunResult) => void;
 }) {
   const isWriting =
     writePending && writingResponseLevel === result.response_level;
   const isValid = isValidRunResult(result);
-  const resultReason = isValid ? undefined : invalidResultReason(result);
-  const canWrite = eligibility.eligible && isValid;
+  const isWritable = isWritableRunResult(result);
+  let resultReason: string | undefined;
+  if (!isValid) {
+    resultReason = invalidResultReason(result);
+  } else if (!isWritable) {
+    resultReason =
+      result.controller_target_error ??
+      "Controller-ready values are unavailable.";
+  }
+  const canWrite = eligibility.eligible && isWritable;
 
   return (
     <tr>
@@ -134,20 +152,22 @@ function ResultRow({
         {RESPONSE_LEVEL_LABELS[result.response_level]}
       </td>
       <td className="px-4 py-3 font-mono">
-        {isValid ? formatNumber(result.proportional) : "—"}
+        {result.controller_values?.proportional.display ?? "—"}
       </td>
       <td className="px-4 py-3 font-mono">
-        {isValid ? formatNumber(result.integral) : "—"}
+        {result.controller_values?.integral.display ?? "—"}
       </td>
       <td className="px-4 py-3 font-mono">
-        {isValid ? formatNumber(result.derivative) : "—"}
+        {result.controller_values?.derivative.display ?? "—"}
       </td>
       <td className="px-4 py-3 align-top">
-        {isValid ? (
+        {isWritable ? (
           <Badge tone="success">Valid</Badge>
         ) : (
           <div className="max-w-xs space-y-1">
-            <Badge tone="error">Invalid</Badge>
+            <Badge tone={isValid ? "warning" : "error"}>
+              {isValid ? "Unwritable" : "Invalid"}
+            </Badge>
             <p className="text-xs text-red-300">{resultReason}</p>
           </div>
         )}
@@ -159,9 +179,9 @@ function ResultRow({
             loading={isWriting}
             disabled={!canWrite || writePending}
             title={
-              isValid
-                ? eligibility.reason
-                : `Calculated result unavailable: ${resultReason}`
+              resultReason
+                ? `Controller target unavailable: ${resultReason}`
+                : eligibility.reason
             }
             onClick={() => {
               if (canWrite) onWrite(result);
