@@ -616,7 +616,13 @@ test.describe("Demo mode contract", () => {
       write_pid: "aggressive",
       yes: true,
     } as unknown as StartRunRequest;
-    const run = demoRun(4001, invalidRequest);
+    const run = {
+      ...demoRun(4001, {
+        ...invalidRequest,
+        template: "Yokogawa CentumVP",
+      }),
+      request: invalidRequest,
+    };
 
     await page.route("**/api/capabilities", (route) =>
       json(route, capabilities),

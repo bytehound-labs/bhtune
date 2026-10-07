@@ -105,7 +105,7 @@ SonarCloud project key: `bytehound-labs_bhtune`. Before merge, query `pullReques
 
 Required status names stay `Required validation status`, `Required coverage status`, `Required E2E status`, and `Required Sonar quality status`.
 
-`pnpm --filter bhtune-frontend exec playwright test --list` reports 126 tests in 19 files. The OPC DA browser suite is 31 of those: `opc-browser-discovery.spec.ts` (6), `opc-browser-index.spec.ts` (9), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
+`pnpm --filter bhtune-frontend exec playwright test --list` reports 127 tests in 19 files. The OPC DA browser suite is 31 of those: `opc-browser-discovery.spec.ts` (6), `opc-browser-index.spec.ts` (9), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
 
 ## Config precedence (`cli-config`)
 
