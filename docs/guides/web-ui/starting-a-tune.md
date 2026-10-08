@@ -94,6 +94,14 @@ starts. The endpoint and action are not available in Demo mode.
   <figcaption>The tag browser expands one level at a time and reads the originally selected item before it is mapped into the loop.</figcaption>
 </figure>
 
+Closing **Browse tags** acknowledges index-error messages displayed during that visit.
+Reopening it on the same New Tune page and bridge/server connection does not repeat those
+messages, even when the gateway still reports the saved error. **Index: failed** remains
+accurate; a previous complete generation can still support search. A later failed refresh
+displays its error again, including an identical message. Errors that were not displayed
+before closing are not acknowledged. Reloading or leaving the New Tune page resets this
+page-local acknowledgement; gateway history and API/CLI diagnostics are not cleared.
+
 The search-index controls also expose **Delete index** after a completed index build. Deletion
 is intentionally destructive: the first failed request leaves the index and enrollment intact,
 keeps the styled confirmation open, and shows an inline retryable error. Confirming again sends

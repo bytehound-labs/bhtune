@@ -21,7 +21,9 @@ Feedback Tests (MRFT) and calculates PID constants for operator review.
   editable in a custom template; raw calculations, exports, and recorded restore targets
   retain full precision.
 - **OPC DA through [opcda-bridge](https://github.com/bytehound-labs/opcda-bridge).** A separate
-  Windows-side gateway handles OPC DA access; BHTune runs on any supported platform.
+  Windows-side gateway handles OPC DA access; BHTune runs on any supported platform. Closing
+  the tag browser dismisses seen index-refresh errors without clearing gateway status or
+  hiding a later failed attempt.
 
 ## Screenshots
 

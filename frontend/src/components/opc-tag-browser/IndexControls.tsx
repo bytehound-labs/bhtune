@@ -7,6 +7,8 @@ type IndexControlsProps = Readonly<{
   opcServer: string;
   indexStatus: OpcSearchIndexStatusResponse | undefined;
   indexStateLabel: string | null;
+  indexError: string | null;
+  onIndexErrorShown: (element: HTMLOutputElement | null) => void;
   indexSearchAvailable: boolean;
   indexUnavailableMessage: string;
   refreshPending: boolean;
@@ -23,6 +25,8 @@ export function IndexControls({
   opcServer,
   indexStatus,
   indexStateLabel,
+  indexError,
+  onIndexErrorShown,
   indexSearchAvailable,
   indexUnavailableMessage: unavailableMessage,
   refreshPending,
@@ -135,9 +139,9 @@ export function IndexControls({
           </span>
         )}
       </div>
-      {indexStatus?.state === "failed" && indexStatus.last_error && (
-        <output className="block text-xs text-red-300">
-          Index error: {indexStatus.last_error}
+      {indexError && (
+        <output ref={onIndexErrorShown} className="block text-xs text-red-300">
+          Index error: {indexError}
         </output>
       )}
       {!indexSearchAvailable && (

@@ -27,6 +27,19 @@ If a completed gateway inventory reports a non-fatal diagnostic, the active inde
 The diagnostic remains available through the gateway/API and CLI, while the browser only shows an
 index error when the usable index state is `failed`.
 
+Terminal index-error visibility is separate from the raw gateway status. `NewRunPage` owns
+acknowledged failure identities for each exact bridge-host/OPC-server pair; closing Browse
+records only diagnostics whose output was rendered during that visit. Reopening uses the
+same acknowledgement for cached and freshly fetched status without rewriting `last_error`,
+the failed state, or usable-generation/search availability. Attempt start/completion and
+scheduler attempt timestamps distinguish later failures with identical text; accepted or
+observed builds re-arm the notice when timestamps are absent. Starting a build also clears
+the visit's earlier seen identities, so closing mid-build cannot acknowledge an unseen later
+failure with identical metadata. Covered quality-warning/delete-confirmation panels do not
+acknowledge hidden diagnostics. Nested confirmation dismissal does not close Browse.
+Acknowledgements are page-local and are not stored with drafts or in browser storage.
+Request, browse, search, and selection errors retain their separate handling.
+
 Indexed search is deliberately not a prerequisite for tag selection or tuning. When a server is
 not enrolled, still building its first generation, or has no usable index, the browser disables
 only the global search input and offers **Build index** or **Retry build** while keeping the

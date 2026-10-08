@@ -52,6 +52,18 @@ export function hasUsableIndex(
   );
 }
 
+export function indexErrorIdentity(
+  status: OpcSearchIndexStatusResponse | undefined,
+): string | null {
+  if (status?.state !== "failed" || !status.last_error) return null;
+  return JSON.stringify([
+    status.started_at ?? null,
+    status.completed_at ?? null,
+    status.scheduler.last_attempt_at ?? null,
+    status.last_error,
+  ]);
+}
+
 export function matchPath(match: OpcIndexedSearchMatchResponse): string {
   return [...match.breadcrumbs, match.display_name].join(" / ");
 }
