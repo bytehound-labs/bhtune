@@ -44,8 +44,8 @@ to open-loop step testing.
 ## Where to go next
 
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=2046aaf9cebd">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=2046aaf9cebd" alt="BHTune New Tune screen in Full mode with the Simulator driver selected" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=df25fde5bb15">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=df25fde5bb15" alt="BHTune New Tune screen in Full mode with the Simulator driver selected" />
   </a>
   <figcaption>The browser starts on the New Tune screen; the visual reference covers the complete Full and Demo workflow.</figcaption>
 </figure>
