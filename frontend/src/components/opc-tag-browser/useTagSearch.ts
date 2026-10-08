@@ -39,6 +39,7 @@ export function useTagSearch({
   setSelectedNode,
   setSelectionReadError,
   testConnection,
+  onIndexBuildStarted,
 }: {
   bridgeHost: string;
   opcServer: string;
@@ -52,6 +53,7 @@ export function useTagSearch({
   setSelectedNode: (node: SelectedNode | null) => void;
   setSelectionReadError: Dispatch<SetStateAction<string | null>>;
   testConnection: ReturnType<typeof useTestOpcConnection>;
+  onIndexBuildStarted: () => void;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMatches, setSearchMatches] = useState<
@@ -210,6 +212,7 @@ export function useTagSearch({
         opcServer,
         force: true,
       });
+      onIndexBuildStarted();
       setSearchResponse((previous) =>
         previous ? { ...previous, status } : previous,
       );
@@ -290,6 +293,9 @@ export function useTagSearch({
     ) {
       return;
     }
+    if (indexStatus.state === "partial" || indexStatus.state === "refreshing") {
+      onIndexBuildStarted();
+    }
     const interval = window.setInterval(() => {
       void searchIndexStatus.refetch();
     }, 1_000);
@@ -297,7 +303,7 @@ export function useTagSearch({
     // `refetch` is the same query operation for this modal; depending on its
     // render-time identity would restart the interval on every query update.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [indexStatus?.state]);
+  }, [indexStatus?.state, onIndexBuildStarted]);
 
   return {
     searchQuery,

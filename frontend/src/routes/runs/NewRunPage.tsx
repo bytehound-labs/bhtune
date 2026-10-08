@@ -178,6 +178,16 @@ export function NewRunPage({
   const draftSaveChainRef = useRef(Promise.resolve());
   const saveDraftAsync = saveRunDraft.mutateAsync;
   const [tagBrowserOpen, setTagBrowserOpen] = useState(false);
+  const [acknowledgedIndexErrors, setAcknowledgedIndexErrors] = useState<
+    Record<string, readonly string[]>
+  >({});
+  const indexErrorScope = JSON.stringify([form.bridgeHost, form.server]);
+  const rearmIndexErrors = useCallback(() => {
+    setAcknowledgedIndexErrors((previous) => ({
+      ...previous,
+      [indexErrorScope]: [],
+    }));
+  }, [indexErrorScope]);
   const [preflightOpen, setPreflightOpen] = useState(false);
   const activeTemplate = templates.data?.find(
     (template) => template.name === form.template,
@@ -625,11 +635,27 @@ export function NewRunPage({
 
       {tagBrowserOpen && (
         <OpcTagBrowserModal
+          key={indexErrorScope}
           bridgeHost={form.bridgeHost}
           opcServer={form.server}
           template={activeTemplate}
           initialTag={form.tagname}
-          onClose={() => setTagBrowserOpen(false)}
+          acknowledgedIndexErrors={
+            acknowledgedIndexErrors[indexErrorScope] ?? []
+          }
+          onIndexBuildStarted={rearmIndexErrors}
+          onClose={(shownIndexErrors) => {
+            setAcknowledgedIndexErrors((previous) => ({
+              ...previous,
+              [indexErrorScope]: [
+                ...new Set([
+                  ...(previous[indexErrorScope] ?? []),
+                  ...shownIndexErrors,
+                ]),
+              ],
+            }));
+            setTagBrowserOpen(false);
+          }}
           onSelect={setTagName}
         />
       )}

@@ -37,6 +37,7 @@ The server package and `[[bin]]` are both named `bhtune-server`, so tests must u
 - `OpcDaDriver` uses `tokio::sync::Mutex` because the client guard crosses `.await`. `SimulatorDriver` uses `std::sync::Mutex` because it does not hold the guard across `.await`. Do not unify them.
 - OPC DA quality is an exact `Good` or `Uncertain` match. Every other quality string is `Bad`. OPC DA `TagValue.timestamp` is always `None`.
 - Browse uses gateway-owned sessions, opaque node keys, and page tokens. Never split `.`, `!`, or `/` to infer hierarchy. Indexed search is optional. Simulator and replay browse/search return `Unsupported`.
+- Closing Browse acknowledges only displayed terminal index-error notices for the exact bridge/server on the New Tune page. Preserve raw status, cache, diagnostics, and search availability. Later attempts and accepted/observed builds re-arm notices; errors hidden by another panel or arriving after close remain unacknowledged. No browser-storage persistence.
 - `opcda-bridge` stays a crates.io dependency local to `bhtune-driver`. Published and packaged builds must not use a git dependency or a path override.
 - `bhtune-runtime` owns application services shared by the CLI and server. Keep direct `clap`, HTTP-framework, and OpenAPI dependencies and types in their respective adapters; transport crates may appear transitively through the OPC DA gRPC client.
 - CLI `TuneArgs` and HTTP `StartRunRequest` convert to runtime-owned `ValidatedTuneRequest` before preparation. Keep shared simulator defaults and common finite/positive/tag-override checks in the runtime; Demo-specific restrictions remain an additional server policy.
@@ -105,7 +106,7 @@ SonarCloud project key: `bytehound-labs_bhtune`. Before merge, query `pullReques
 
 Required status names stay `Required validation status`, `Required coverage status`, `Required E2E status`, and `Required Sonar quality status`.
 
-`pnpm --filter bhtune-frontend exec playwright test --list` reports 127 tests in 19 files. The OPC DA browser suite is 31 of those: `opc-browser-discovery.spec.ts` (6), `opc-browser-index.spec.ts` (9), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
+`pnpm --filter bhtune-frontend exec playwright test --list` reports 138 tests in 19 files. The OPC DA browser suite is 43 of those: `opc-browser-discovery.spec.ts` (7), `opc-browser-index.spec.ts` (20), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
 
 ## Config precedence (`cli-config`)
 

@@ -18,6 +18,7 @@ import {
 import {
   highlightedRanges,
   hasUsableIndex,
+  indexErrorIdentity,
   nextSearchIndex,
   searchMatchMode,
 } from "./searchModel";
@@ -126,6 +127,66 @@ describe("OPC tag browser browse helpers", () => {
 });
 
 describe("OPC tag browser search helpers", () => {
+  it("identifies only terminal index errors", () => {
+    const failed = { ...status("failed"), last_error: "inventory failed" };
+    expect(indexErrorIdentity(undefined)).toBeNull();
+    expect(indexErrorIdentity(status("failed"))).toBeNull();
+    expect(indexErrorIdentity({ ...failed, last_error: "" })).toBeNull();
+    expect(indexErrorIdentity({ ...failed, state: "ready" })).toBeNull();
+    expect(indexErrorIdentity({ ...failed, state: "refreshing" })).toBeNull();
+    expect(indexErrorIdentity(failed)).not.toBeNull();
+    expect(
+      indexErrorIdentity({
+        ...failed,
+        started_at: null,
+        completed_at: null,
+        scheduler: { ...failed.scheduler, last_attempt_at: null },
+      }),
+    ).toBe(indexErrorIdentity(failed));
+  });
+
+  it("distinguishes failed attempts without treating polling metadata as errors", () => {
+    const failed: OpcSearchIndexStatusResponse = {
+      ...status("failed"),
+      last_error: "inventory failed",
+      started_at: "2024-01-15T10:00:00Z",
+      completed_at: "2024-01-15T10:23:45Z",
+      scheduler: {
+        ...status("failed").scheduler,
+        last_attempt_at: "2024-01-15T10:00:00Z",
+      },
+    };
+    const identity = indexErrorIdentity(failed);
+    expect(
+      indexErrorIdentity({
+        ...failed,
+        entry_count: 42,
+        database_bytes: 4096,
+        auto_refresh_enabled: true,
+        scheduler: {
+          ...failed.scheduler,
+          next_refresh_at: "2024-01-22T10:23:45Z",
+          consecutive_failures: 3,
+          circuit_open: true,
+        },
+      }),
+    ).toBe(identity);
+    for (const changed of [
+      { ...failed, started_at: "2024-01-16T10:00:00Z" },
+      { ...failed, completed_at: "2024-01-16T10:23:45Z" },
+      {
+        ...failed,
+        scheduler: {
+          ...failed.scheduler,
+          last_attempt_at: "2024-01-16T10:00:00Z",
+        },
+      },
+      { ...failed, last_error: "another failure" },
+    ]) {
+      expect(indexErrorIdentity(changed)).not.toBe(identity);
+    }
+  });
+
   it("enables indexed search only for a usable generation", () => {
     expect(hasUsableIndex(undefined)).toBe(false);
     expect(hasUsableIndex(status("ready", 0))).toBe(false);

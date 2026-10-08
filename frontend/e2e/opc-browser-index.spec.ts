@@ -1,4 +1,5 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+import type { OpcSearchIndexStatusResponse } from "../src/api/opc";
 import {
   OPC_BROWSER_SUITE,
   openOpcDaRunForm,
@@ -7,6 +8,37 @@ import {
   searchIndexStatus,
   indexedSearchResponse,
 } from "./support/opcBrowser";
+
+async function mockBrowserIndex(
+  page: Page,
+  status: OpcSearchIndexStatusResponse,
+) {
+  const requests: URL[] = [];
+  const index = { status, requests };
+  await page.unroute("**/api/opc/search-index/status**");
+  await page.route("**/api/opc/search-index/status**", async (route) => {
+    requests.push(new URL(route.request().url()));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(index.status),
+    });
+  });
+  await page.route("**/api/opc/browse**", async (route) => {
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(browsePage([])),
+    });
+  });
+  await page.getByLabel("Tag name").fill("");
+  await page.getByLabel("OPC DA server ProgID").fill("Test.Server");
+  return index;
+}
 
 /**
  * Persistent search-index coverage: building, disabling, and deleting an index,
@@ -450,6 +482,354 @@ test.describe(OPC_BROWSER_SUITE, () => {
     expect(unavailableBox).not.toBeNull();
     expect(unavailableBox!.y).toBeGreaterThan(errorBox!.y + errorBox!.height);
   });
+
+  test("dismisses a cancelled refresh error immediately when Browse reopens", async ({
+    page,
+  }) => {
+    const diagnostic = "inventory stream ended before completion";
+    await page.clock.install();
+    const index = await mockBrowserIndex(
+      page,
+      searchIndexStatus("ready", true, null, 7),
+    );
+    let cancellations = 0;
+    await page.route("**/api/opc/search-index/refresh**", async (route) => {
+      index.status = searchIndexStatus("refreshing", true, null, 7);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(index.status),
+      });
+    });
+    await page.route("**/api/opc/search-index/control**", async (route) => {
+      expect(new URL(route.request().url()).searchParams.get("action")).toBe(
+        "cancel",
+      );
+      cancellations += 1;
+      index.status = searchIndexStatus("failed", true, diagnostic, 7);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(index.status),
+      });
+    });
+
+    const open = page.getByRole("button", { name: "Browse tags" });
+    await open.click();
+    await page.getByRole("button", { name: "Refresh index" }).click();
+    const cancelledStatus = page.waitForResponse(
+      "**/api/opc/search-index/status**",
+    );
+    await page.getByRole("button", { name: "Cancel build" }).click();
+    await cancelledStatus;
+    await expect(page.getByText(`Index error: ${diagnostic}`)).toBeVisible();
+    await expect(
+      page.getByText("Index: failed", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
+    const requestsBeforeClose = index.requests.length;
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await open.click();
+
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(
+      page.getByText("Index: failed", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(`Index error: ${diagnostic}`)).toHaveCount(0);
+    await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
+    expect(index.requests).toHaveLength(requestsBeforeClose);
+    expect(index.status.last_error).toBe(diagnostic);
+    expect(index.status.active_generation).toBe(7);
+    expect(cancellations).toBe(1);
+
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.clock.fastForward(5_001);
+    await open.click();
+    await expect
+      .poll(() => index.requests.length)
+      .toBeGreaterThan(requestsBeforeClose);
+    await expect(page.getByText(`Index error: ${diagnostic}`)).toHaveCount(0);
+
+    await page.reload();
+    await page.getByLabel("Driver").selectOption("opcda");
+    await page.getByLabel("Tag name").fill("");
+    await page.getByLabel("OPC DA server ProgID").fill("Test.Server");
+    await open.click();
+    await expect(page.getByText(`Index error: ${diagnostic}`)).toBeVisible();
+  });
+
+  test("shows a later same-text failure that finishes while Browse is closed", async ({
+    page,
+  }) => {
+    await page.clock.install();
+    const diagnostic = "the inventory database is unavailable";
+    const index = await mockBrowserIndex(
+      page,
+      searchIndexStatus("failed", true, diagnostic, 7),
+    );
+    const open = page.getByRole("button", { name: "Browse tags" });
+    const error = page.getByText(`Index error: ${diagnostic}`);
+    await open.click();
+    await expect(error).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    index.status = {
+      ...index.status,
+      completed_at: "2024-01-16T10:23:45Z",
+      scheduler: {
+        ...index.status.scheduler,
+        last_attempt_at: "2024-01-16T10:00:00Z",
+      },
+    };
+    await page.clock.fastForward(5_001);
+    await open.click();
+    await expect(error).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await open.click();
+    await expect(error).toHaveCount(0);
+  });
+
+  test("does not acknowledge an unseen failure after closing during a new build", async ({
+    page,
+  }) => {
+    const diagnostic = "inventory stream ended before completion";
+    const initialStatus = searchIndexStatus("failed", true, diagnostic, 7);
+    const index = await mockBrowserIndex(page, {
+      ...initialStatus,
+      completed_at: null,
+      scheduler: { ...initialStatus.scheduler, last_attempt_at: null },
+    });
+    await page.route("**/api/opc/search-index/refresh**", async (route) => {
+      index.status = { ...index.status, state: "refreshing", last_error: null };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(index.status),
+      });
+    });
+    const open = page.getByRole("button", { name: "Browse tags" });
+    await open.click();
+    await expect(page.getByText(`Index error: ${diagnostic}`)).toBeVisible();
+    await page.getByRole("button", { name: "Refresh index" }).click();
+    await expect(page.getByText("Index: refreshing")).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    index.status = {
+      ...index.status,
+      state: "failed",
+      last_error: diagnostic,
+    };
+    await open.click();
+    await expect(
+      page.getByRole("button", { name: "Cancel build" }),
+    ).toBeVisible();
+    await expect(page.getByText(`Index error: ${diagnostic}`)).toBeVisible();
+    await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
+  });
+
+  test("re-arms accepted refreshes even without an observable build or attempt timestamps", async ({
+    page,
+  }) => {
+    const diagnostic = "the inventory database is unavailable";
+    const initialStatus = searchIndexStatus("failed", true, diagnostic, 7);
+    const index = await mockBrowserIndex(page, {
+      ...initialStatus,
+      completed_at: null,
+      scheduler: { ...initialStatus.scheduler, last_attempt_at: null },
+    });
+    await page.route("**/api/opc/search-index/refresh**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(index.status),
+      });
+    });
+    const open = page.getByRole("button", { name: "Browse tags" });
+    const error = page.getByText(`Index error: ${diagnostic}`);
+    await open.click();
+    await expect(error).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await open.click();
+    await expect(error).toHaveCount(0);
+    await page.getByRole("button", { name: "Refresh index" }).click();
+    await expect(error).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await open.click();
+    await expect(error).toHaveCount(0);
+  });
+
+  test("re-arms externally observed builds when attempt timestamps are absent", async ({
+    page,
+  }) => {
+    await page.clock.install();
+    const diagnostic = "the inventory database is unavailable";
+    const initialStatus = searchIndexStatus("failed", true, diagnostic, 7);
+    const index = await mockBrowserIndex(page, {
+      ...initialStatus,
+      completed_at: null,
+      scheduler: { ...initialStatus.scheduler, last_attempt_at: null },
+    });
+    const open = page.getByRole("button", { name: "Browse tags" });
+    const error = page.getByText(`Index error: ${diagnostic}`);
+    await open.click();
+    await expect(error).toBeVisible();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    index.status = { ...index.status, state: "refreshing", last_error: null };
+    await page.clock.fastForward(5_001);
+    await open.click();
+    await expect(page.getByText("Index: refreshing")).toBeVisible();
+    index.status = { ...index.status, state: "failed", last_error: diagnostic };
+    await expect(error).toBeVisible();
+  });
+
+  test("keeps acknowledgements local to each bridge and OPC server", async ({
+    page,
+  }) => {
+    const diagnostic = "the inventory database is unavailable";
+    await mockBrowserIndex(
+      page,
+      searchIndexStatus("failed", true, diagnostic, 7),
+    );
+    const open = page.getByRole("button", { name: "Browse tags" });
+    const error = page.getByText(`Index error: ${diagnostic}`);
+    const acknowledgeOnConnection = async (bridge: string, server: string) => {
+      await page.getByLabel("Bridge host").fill(bridge);
+      await page.getByLabel("OPC DA server ProgID").fill(server);
+      await open.click();
+      await expect(error).toBeVisible();
+      await page.getByRole("button", { name: "Close", exact: true }).click();
+    };
+    await acknowledgeOnConnection("bridge-one:7600", "Test.Server");
+    await acknowledgeOnConnection("bridge-one:7600", "Other.Server");
+    await acknowledgeOnConnection("bridge-two:7600", "Test.Server");
+    await page.getByLabel("Bridge host").fill("bridge-one:7600");
+    await open.click();
+    await expect(error).toHaveCount(0);
+  });
+
+  test("does not acknowledge an index error covered by a quality warning", async ({
+    page,
+  }) => {
+    const diagnostic = "inventory stream ended before completion";
+    const index = await mockBrowserIndex(
+      page,
+      searchIndexStatus("refreshing", true, null, 7),
+    );
+    await page.route("**/api/opc/browse**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          browsePage([browseNode("pv", "PV", "item", "Test.Loop.PV")]),
+        ),
+      });
+    });
+    await page.route("**/api/opc/read**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          tag: "Test.Loop.PV",
+          value: "42",
+          quality: "bad",
+          timestamp: null,
+        }),
+      });
+    });
+    const open = page.getByRole("button", { name: "Browse tags" });
+    await open.click();
+    await page.getByRole("button", { name: "Select tag", exact: true }).click();
+    await expect(
+      page.getByRole("dialog", { name: "OPC quality warning" }),
+    ).toBeVisible();
+    const failedStatus = page.waitForResponse(
+      "**/api/opc/search-index/status**",
+    );
+    index.status = searchIndexStatus("failed", true, diagnostic, 7);
+    await failedStatus;
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await open.click();
+    await expect(page.getByText(`Index error: ${diagnostic}`)).toBeVisible();
+  });
+
+  for (const closePath of ["Escape", "backdrop", "Cancel", "selection"]) {
+    test(`acknowledges a seen index error through ${closePath}`, async ({
+      page,
+    }) => {
+      const diagnostic = "the inventory database is unavailable";
+      await mockBrowserIndex(
+        page,
+        searchIndexStatus("failed", true, diagnostic, 7),
+      );
+      await page
+        .getByRole("combobox", { name: "Template" })
+        .selectOption("Yokogawa CentumVP");
+      await page.route("**/api/opc/browse**", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(
+            browsePage([browseNode("pv", "PV", "item", "Test.Loop.PV")]),
+          ),
+        });
+      });
+      await page.route("**/api/opc/read**", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            tag: "Test.Loop.PV",
+            value: "42",
+            quality: "good",
+            timestamp: null,
+          }),
+        });
+      });
+      const open = page.getByRole("button", { name: "Browse tags" });
+      const browser = page.getByRole("dialog", {
+        name: "Browse tags on Test.Server",
+      });
+      const error = page.getByText(`Index error: ${diagnostic}`);
+      await open.click();
+      await expect(error).toBeVisible();
+      await page
+        .getByRole("button", { name: "Delete index", exact: true })
+        .click();
+      await page
+        .getByRole("dialog", { name: "Delete tag index?" })
+        .getByRole("button", { name: "Cancel", exact: true })
+        .click();
+      await expect(error).toBeVisible();
+      if (closePath === "Escape") {
+        await browser.getByRole("button", { name: "Close" }).press("Escape");
+      } else if (closePath === "backdrop") {
+        await page
+          .getByRole("button", { name: "Dismiss modal backdrop" })
+          .click({ position: { x: 2, y: 2 } });
+      } else {
+        await browser
+          .getByRole("button", {
+            name: closePath === "selection" ? "Select tag" : "Cancel",
+            exact: true,
+          })
+          .click();
+      }
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      if (closePath === "selection") {
+        await expect(page.getByLabel("Tag name")).toHaveValue("Test.Loop.PV");
+        await page.getByLabel("Tag name").fill("");
+      }
+      await open.click();
+      await expect(error).toHaveCount(0);
+      await expect(
+        page.getByText("Index: failed", { exact: true }),
+      ).toBeVisible();
+    });
+  }
 
   test("offers a first build when the server has no index", async ({
     page,

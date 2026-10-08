@@ -10,6 +10,7 @@ import type { SelectedNode } from "./opc-tag-browser/browseModel";
 import { useSavedTagRestore } from "./opc-tag-browser/useSavedTagRestore";
 import { useTagSearch } from "./opc-tag-browser/useTagSearch";
 import { useTagSelection } from "./opc-tag-browser/useTagSelection";
+import { indexErrorIdentity } from "./opc-tag-browser/searchModel";
 import {
   useCloseOpcBrowseSession,
   useControlOpcSearchIndex,
@@ -40,6 +41,8 @@ export function OpcTagBrowserModal({
   opcServer,
   template,
   initialTag,
+  acknowledgedIndexErrors,
+  onIndexBuildStarted,
   onClose,
   onSelect,
 }: Readonly<{
@@ -47,9 +50,17 @@ export function OpcTagBrowserModal({
   opcServer: string;
   template: TemplateResponse | undefined;
   initialTag: string;
-  onClose: () => void;
+  acknowledgedIndexErrors: readonly string[];
+  onIndexBuildStarted: () => void;
+  onClose: (shownIndexErrors: readonly string[]) => void;
   onSelect: (tag: string) => void;
 }>) {
+  const shownIndexErrors = useRef(new Set<string>());
+  const rearmIndexErrors = useCallback(() => {
+    // Closing during a new build must not acknowledge an older identical error.
+    shownIndexErrors.current.clear();
+    onIndexBuildStarted();
+  }, [onIndexBuildStarted]);
   const { fetchPage, clearCache } = useOpcBrowseFetcher(bridgeHost, opcServer);
   const closeBrowseSession = useCloseOpcBrowseSession();
   const indexedSearch = useOpcIndexedSearch();
@@ -114,7 +125,7 @@ export function OpcTagBrowserModal({
     bridgeHost,
     opcServer,
     template,
-    onClose,
+    onClose: () => onClose([...shownIndexErrors.current]),
     onSelect,
     disposeBrowse: browse.disposeBrowse,
     testConnection,
@@ -134,6 +145,7 @@ export function OpcTagBrowserModal({
     setSelectedNode: setSelectedNodeAndActiveTreeNode,
     setSelectionReadError: selection.setSelectionReadError,
     testConnection,
+    onIndexBuildStarted: rearmIndexErrors,
   });
   const { scopeState, toggle, loadMore, retryBrowse } = browse;
   const { initializationPending } = restore;
@@ -174,6 +186,11 @@ export function OpcTagBrowserModal({
     confirmDeleteIndex,
     cancelIndexBuild,
   } = search;
+  const indexErrorId = indexErrorIdentity(indexStatus);
+  const indexError =
+    indexErrorId && !acknowledgedIndexErrors.includes(indexErrorId)
+      ? (indexStatus?.last_error ?? null)
+      : null;
   const selectedTag = selectedNode?.itemId ?? null;
   const busy = testConnection.isPending || selectionCheckPending;
   const initializationMessage = savedTagInitializationMessage(initialTag);
@@ -239,6 +256,12 @@ export function OpcTagBrowserModal({
             opcServer,
             indexStatus,
             indexStateLabel,
+            indexError,
+            onIndexErrorShown: (element) => {
+              if (element && indexErrorId && !deleteConfirmationOpen) {
+                shownIndexErrors.current.add(indexErrorId);
+              }
+            },
             indexSearchAvailable,
             indexUnavailableMessage: unavailableMessage,
             refreshPending: refreshSearchIndex.isPending,
