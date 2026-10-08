@@ -104,8 +104,10 @@ one precision policy for P/I/D and start with three significant digits. Restore 
 the PID audit show recorded values without applying the template policy.
 Run-detail sections are independently collapsible. Calculated results, Trend, Summary, Notes,
 Test configuration, Initial readings, and PID change history start expanded; MV actuation
-verification appears after PID change history as the final diagnostic section and starts
-collapsed.
+evidence, sampling adequacy, and operation-latency summaries remain available through CLI
+history, the run-detail API, and structured logs rather than a diagnostic panel on the normal
+page. The measurement-count footer remains visible. CSV and JSON download links export the
+recorded samples, not the run's metadata.
 
 History filter selections and page offsets are query parameters. Full mode supports process
 type, outcome, driver, and pagination; Demo keeps pagination but removes Full-only filters.

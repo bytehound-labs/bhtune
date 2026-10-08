@@ -202,25 +202,15 @@ test.describe("running a tune", () => {
       await expect(
         page.getByText("Timing warning:", { exact: false }),
       ).toHaveCount(0);
-      const samplingSection = page.locator("details").filter({
-        has: page.getByRole("heading", {
+      await expect(
+        page.getByRole("heading", {
           name: "Sampling diagnostics",
           exact: true,
         }),
-      });
-      await expect(samplingSection).toHaveCount(1);
-      await expect(samplingSection).not.toHaveAttribute("open");
-      await expect(
-        resultsSection.getByText("Sampling adequacy", { exact: true }),
       ).toHaveCount(0);
-      await page
-        .getByRole("heading", { name: "Sampling diagnostics", exact: true })
-        .click();
-      await expect(samplingSection).toHaveAttribute("open", "");
       await expect(
-        page.getByText("Sampling adequacy", { exact: true }),
-      ).toBeVisible();
-      await expect(page.getByText("Adequate", { exact: true })).toBeVisible();
+        page.locator('[aria-label="Sampling adequacy advisory"]'),
+      ).toHaveCount(0);
 
       await expect(
         page.getByText(/\d+ measurements were recorded/),
@@ -257,10 +247,11 @@ test.describe("running a tune", () => {
         mean_sample_gap_ms: 5,
         max_sample_gap_ms: 5,
         missed_poll_opportunity_count: 0,
+        sampling_adequacy: "adequate",
       });
-      expect(run.timing_metrics.approximate_samples_per_period).toBeGreaterThan(
-        1,
-      );
+      expect(
+        run.timing_metrics.approximate_samples_per_period,
+      ).toBeGreaterThanOrEqual(6);
     });
   }
 

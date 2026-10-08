@@ -293,17 +293,19 @@ bhtune export <run-id> --format csv > run-<run-id>-samples.csv
 ### Web GUI
 
 Use `/runs/new`, review the form, and select **Start tune**. The run detail page shows the live
-PV/MV trend, switch progress, restore result, calculated constants, timing diagnostics, and
-write history. **Cancel** uses the same abort-and-restore path as Ctrl+C.
+PV/MV trend, switch progress, restore result, calculated constants, measurement count, and
+write history. Technical timing diagnostics remain available through CLI history and the
+run-detail API. **Cancel** uses the same abort-and-restore path as Ctrl+C.
 
 Do not navigate away as a substitute for cancellation. Use **Cancel** and wait for a terminal
 outcome before deciding whether the loop needs manual attention.
 
 ## 9. Review and apply PID constants
 
-Review the trend, sampling diagnostics, calculated-result validity, and the template-specific
-units before applying a value. `marginal` sampling adequacy is advisory, but it requires
-engineering review rather than automatic rejection or automatic acceptance.
+Review the trend, calculated-result validity, and the template-specific units before applying
+a value. Sampling and timing diagnostics remain available through `bhtune history show` and
+the run-detail API for engineering review. `marginal` sampling adequacy is advisory rather than
+an automatic rejection or acceptance; a completed tune does not prove closed-loop PID performance.
 
 For a CLI write-back:
 

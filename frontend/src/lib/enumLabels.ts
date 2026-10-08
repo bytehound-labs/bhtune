@@ -71,24 +71,6 @@ export const OUTCOME_LABELS: Record<
   aborted: "Aborted",
 };
 
-export const SAMPLING_ADEQUACY_LABELS: Record<
-  components["schemas"]["SamplingAdequacy"],
-  string
-> = {
-  adequate: "Adequate",
-  marginal: "Marginal",
-  not_assessed: "Not assessed",
-};
-
-export const SAMPLING_ADEQUACY_TONE: Record<
-  components["schemas"]["SamplingAdequacy"],
-  "success" | "warning" | "neutral"
-> = {
-  adequate: "success",
-  marginal: "warning",
-  not_assessed: "neutral",
-};
-
 export const SAMPLE_QUALITY_LABELS: Record<
   components["schemas"]["SampleQuality"],
   string

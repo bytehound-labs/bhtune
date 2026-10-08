@@ -71,8 +71,8 @@ requirements below remain authoritative if images are unavailable.
 
 {/* web-ui-screenshot: demo-run-complete */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=edcf42e130f4">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=edcf42e130f4" alt="BHTune Demo completed simulator run detail with calculated results and diagnostics" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=a58832f3aab0">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=a58832f3aab0" alt="BHTune Demo completed simulator run detail with calculated results and diagnostics" />
   </a>
   <figcaption>Completed Demo runs retain results, samples, and diagnostics for the current visitor.</figcaption>
 </figure>

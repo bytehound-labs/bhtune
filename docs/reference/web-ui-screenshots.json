@@ -217,16 +217,15 @@
         "run-detail.notes",
         "run-detail.test-configuration",
         "run-detail.initial-readings",
-        "run-detail.pid-history",
-        "run-detail.sampling-diagnostics"
+        "run-detail.pid-history"
       ],
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "8482d63361c20c2227d5c15c3e7ad67bbac6aae0e519565e4bc936fe4aa9a5e0",
+      "sha256": "f54336b56bb6be7844f938aaed15abd4534ed68abb0f9e0f89595406e6fbb48f",
       "width": 1440,
-      "height": 2466,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=8482d63361c2"
+      "height": 2406,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=f54336b56bb6"
     },
     {
       "id": "full-pid-review",
@@ -243,10 +242,10 @@
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "d9c6b9903ca5c06067fc410bb3106ec677ed76a678bdabb4ba2d2e86dd7be1d4",
+      "sha256": "79442543863c945f8c691d04ad29dd6817de87f3b2a0084eb96422bc1f0e977d",
       "width": 1440,
-      "height": 2466,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=d9c6b9903ca5"
+      "height": 2406,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=79442543863c"
     },
     {
       "id": "full-history-delete-confirmation",
@@ -262,10 +261,10 @@
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "573fe33a8e4e65212e6a3ff9a69dfff84e60a72b82e798f06c68430e962dad1f",
+      "sha256": "b4403096b7f8fe1c2ac8aed889e8e57cc12c063f0b352761ce6d236cb68eb4a5",
       "width": 1440,
-      "height": 2466,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=573fe33a8e4e"
+      "height": 2406,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=b4403096b7f8"
     },
     {
       "id": "full-template-list",
@@ -467,17 +466,16 @@
         "run-detail.page",
         "run-detail.trend",
         "run-detail.summary",
-        "run-detail.test-configuration",
-        "run-detail.sampling-diagnostics"
+        "run-detail.test-configuration"
       ],
       "documentation": [
         "docs/guides/public-simulator-demo.md",
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "edcf42e130f49cb2c19309127e2883cc88a4560dc2ba26698e0e526ed5852e7b",
+      "sha256": "a58832f3aab0b2fe7a5ee225ee382be3f2241218cce9f9725ffbc2f48b282c3a",
       "width": 1440,
-      "height": 1956,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=edcf42e130f4"
+      "height": 1896,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=a58832f3aab0"
     }
   ]
 }
