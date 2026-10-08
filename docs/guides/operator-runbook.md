@@ -293,7 +293,7 @@ bhtune export <run-id> --format csv > run-<run-id>-samples.csv
 ### Web GUI
 
 Use `/runs/new`, review the form, and select **Start tune**. The run detail page shows the live
-PV/MV trend, switch progress, restore result, calculated constants, measurement count, and
+PV/MV trend, switch progress, restore result, calculated constants, and
 write history. Technical timing diagnostics remain available through CLI history and the
 run-detail API. **Cancel** uses the same abort-and-restore path as Ctrl+C.
 

@@ -422,7 +422,6 @@ export function RunDetailPage({
           isRunning={isRunning}
           stream={stream}
           initialReadings={initialReadings}
-          trendSamples={trendSamples}
           trendPoints={trendPoints}
           trendPollIntervalMs={trendPollIntervalMs}
           eligibility={eligibility}

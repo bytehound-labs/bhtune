@@ -214,7 +214,7 @@ test.describe("running a tune", () => {
 
       await expect(
         page.getByText(/\d+ measurements were recorded/),
-      ).toBeVisible();
+      ).toHaveCount(0);
 
       const runId = page.url().match(/\/runs\/(\d+)$/)?.[1];
       expect(runId).toBeTruthy();
