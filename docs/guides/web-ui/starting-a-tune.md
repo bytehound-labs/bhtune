@@ -21,8 +21,8 @@ the generic FOPDT transfer function and exact discrete update; see the
 
 {/* web-ui-screenshot: full-tune-simulator */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=df25fde5bb15">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=df25fde5bb15" alt="Full mode Simulator New Tune form with live-plant fields disabled" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=2046aaf9cebd">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-simulator.png?v=2046aaf9cebd" alt="Full mode Simulator New Tune form with live-plant fields disabled" />
   </a>
   <figcaption>Simulator mode disables only controls that require live equipment; process ranges, direction, MRFT parameters, and the template remain active.</figcaption>
 </figure>
@@ -50,8 +50,8 @@ It only uses unscoped live search when no root scope is available.
 
 {/* web-ui-screenshot: full-tune-opc */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=5cdc6b0c17d2">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=5cdc6b0c17d2" alt="Full mode OPC DA New Tune form showing connection, test parameters, and Loop mapping" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=4c662c1e95b8">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-tune-opc.png?v=4c662c1e95b8" alt="Full mode OPC DA New Tune form showing connection, test parameters, and Loop mapping" />
   </a>
   <figcaption>OPC DA mode exposes the live connection and mapping controls that the simulator disables.</figcaption>
 </figure>
@@ -72,24 +72,24 @@ starts. The endpoint and action are not available in Demo mode.
 
 {/* web-ui-screenshot: full-preflight-report */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-preflight-report.png?v=5a8a09849b7e">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-preflight-report.png?v=5a8a09849b7e" alt="Full mode read-only tune readiness report showing individual checks and OPC tag reads" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-preflight-report.png?v=8c18ce4667ef">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-preflight-report.png?v=8c18ce4667ef" alt="Full mode read-only tune readiness report showing individual checks and OPC tag reads" />
   </a>
   <figcaption>The report presents runtime checks and read-only OPC values without starting a tune or changing the controller.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: full-opc-server-picker */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-server-picker.png?v=28938a2065f9">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-server-picker.png?v=28938a2065f9" alt="BHTune OPC DA server discovery modal listing available server ProgIDs" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-server-picker.png?v=f12ec56bda33">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-server-picker.png?v=f12ec56bda33" alt="BHTune OPC DA server discovery modal listing available server ProgIDs" />
   </a>
   <figcaption>Server discovery is on demand and fills the ProgID field when an engineer selects a listed OPC DA server.</figcaption>
 </figure>
 
 {/* web-ui-screenshot: full-opc-tag-browser */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=31a936ca2e44">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=31a936ca2e44" alt="BHTune hierarchical OPC tag browser with a selected tag and a successful quality read" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=ece031f850cf">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-browser.png?v=ece031f850cf" alt="BHTune hierarchical OPC tag browser with a selected tag and a successful quality read" />
   </a>
   <figcaption>The tag browser expands one level at a time and reads the originally selected item before it is mapped into the loop.</figcaption>
 </figure>
@@ -111,8 +111,8 @@ available after the index is removed.
 
 {/* web-ui-screenshot: full-opc-search-index-delete-confirmation */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=fe86dcffa519">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=fe86dcffa519" alt="BHTune failed OPC search-index deletion confirmation with an inline retry error" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=016072a79883">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=016072a79883" alt="BHTune failed OPC search-index deletion confirmation with an inline retry error" />
   </a>
   <figcaption>A failed index deletion keeps the exact confirmation copy open and retryable; the underlying index state is unchanged until the retry succeeds.</figcaption>
 </figure>
@@ -137,8 +137,8 @@ not a second source of truth.
 
 {/* web-ui-screenshot: full-opc-tag-applied */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=e8e6b822f62b">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=e8e6b822f62b" alt="BHTune New Tune form showing Area01.FIC101.PV after selecting Area01.FIC101.OUT in the OPC browser" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=d38ddaddf798">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-tag-applied.png?v=d38ddaddf798" alt="BHTune New Tune form showing Area01.FIC101.PV after selecting Area01.FIC101.OUT in the OPC browser" />
   </a>
   <figcaption>After selection, the Tag name and Loop mapping preview show the template's PV suffix applied to the browsed path.</figcaption>
 </figure>

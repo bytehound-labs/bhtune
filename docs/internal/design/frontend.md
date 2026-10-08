@@ -218,6 +218,13 @@ mechanism, not a once-a-second full-`samples`-refetch. Short trends reserve 12 c
 intervals on the x-axis, leaving unused future space blank; once the elapsed data span that horizon,
 the same range function fits the complete run without fabricating samples.
 
+Live measurements, tick, and cycle progress stay in one panel above the trend. The shared
+Full/Demo chart uses concise `PV` and `Commanded MV` legend labels without unit placeholders.
+The Full-mode Summary provides the visible recorded-tag context. The chart has no point
+selector, separate selected-point readout, or tag caption. Its figure retains a hidden,
+non-interactive description for screen readers; native uPlot pointer behavior and sample
+composition remain independent of that description.
+
 ## Simulator field greyout
 
 `ui-simulator-greyout`: `components/ui.tsx`'s `NumberField`/`SelectField`/`CheckboxField` gained a

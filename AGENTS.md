@@ -106,7 +106,7 @@ SonarCloud project key: `bytehound-labs_bhtune`. Before merge, query `pullReques
 
 Required status names stay `Required validation status`, `Required coverage status`, `Required E2E status`, and `Required Sonar quality status`.
 
-`pnpm --filter bhtune-frontend exec playwright test --list` reports 138 tests in 19 files. The OPC DA browser suite is 43 of those: `opc-browser-discovery.spec.ts` (7), `opc-browser-index.spec.ts` (20), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
+`pnpm --filter bhtune-frontend exec playwright test --list` reports 141 tests in 19 files. The OPC DA browser suite is 43 of those: `opc-browser-discovery.spec.ts` (7), `opc-browser-index.spec.ts` (20), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
 
 ## Config precedence (`cli-config`)
 
@@ -190,7 +190,7 @@ One HTTP API, described by OpenAPI, consumed by one generated client. There is n
 
 `bhtune-server healthcheck` is a read-only liveness probe dispatched before server startup, SCM dispatch, logging, and database bootstrap. It sends one raw HTTP/1.1 request to loopback `/api/health`, using the port from `BHTUNE_BIND > config file > default`, with a three-second overall deadline. The Docker image uses this command for its built-in health status. The probe does not check database readiness or live-plant safety.
 
-Write and revert use one styled review modal and name the loop, tags, and exact values. Calculated results move above the trend once they exist. Sampling diagnostics start collapsed. The normal page does not render the raw actuation table.
+Write and revert use one styled review modal and name the loop, tags, and exact values. Calculated results move above the trend once they exist. Live status remains above the trend; the chart has concise PV/Commanded MV labels and a hidden screen-reader description, with no point selector or recorded-tag caption. Sampling diagnostics start collapsed. The normal page does not render the raw actuation table.
 
 Rationale: [`docs/internal/design/architecture-decisions.md`](docs/internal/design/architecture-decisions.md) and [`docs/internal/design/frontend.md`](docs/internal/design/frontend.md).
 
