@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
+  completedDemoRun,
+  completedFullRun,
   installDemoRoutes,
   installFullRoutes,
   runningDemoRun,
@@ -188,6 +190,12 @@ for (const mode of ["full", "demo"] as const) {
 
       const chart = page.getByRole("figure");
       await expect(chart).toBeVisible();
+      await expect(
+        page.getByRole("heading", {
+          name: "Sampling diagnostics",
+          exact: true,
+        }),
+      ).toHaveCount(0);
       await expect(chart.locator('input[type="range"]')).toHaveCount(0);
       await expect(page.getByText("Inspect trend points")).toHaveCount(0);
       await expect(chart.getByText(/^Point \d+ of \d+/)).toHaveCount(0);
@@ -241,6 +249,115 @@ for (const mode of ["full", "demo"] as const) {
     });
   }
 }
+
+for (const mode of ["full", "demo"] as const) {
+  for (const sampling of [
+    "adequate",
+    "marginal",
+    "not_assessed",
+    "legacy",
+  ] as const) {
+    test(`${mode} ${sampling} sampling diagnostics are absent from run detail`, async ({
+      page,
+      baseURL,
+    }) => {
+      if (mode === "demo") {
+        if (!baseURL) {
+          throw new Error("The Demo fixture must use the configured origin.");
+        }
+        await installDemoRoutes(page, new URL(baseURL).origin);
+      }
+      const run = mode === "demo" ? completedDemoRun : completedFullRun;
+      const samplesPerPeriod =
+        sampling === "not_assessed"
+          ? null
+          : sampling === "marginal"
+            ? 5.28
+            : 12;
+      const timing =
+        sampling === "legacy"
+          ? null
+          : {
+              ...run.timing_metrics,
+              sampling_adequacy: sampling,
+              approximate_samples_per_period: samplesPerPeriod,
+              measured_oscillation_period_ms:
+                samplesPerPeriod === null
+                  ? null
+                  : samplesPerPeriod * run.timing_metrics.mean_sample_gap_ms,
+            };
+      await page.route("**/api/runs/4242", (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...run, timing_metrics: timing }),
+        }),
+      );
+      await page.goto("/runs/4242");
+      await expect(
+        page.getByRole("heading", { name: "Calculated results", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          `${run.samples.length} measurements were recorded for this tune.`,
+          { exact: true },
+        ),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("heading", {
+          name: "Sampling diagnostics",
+          exact: true,
+        }),
+      ).toHaveCount(0);
+      await expect(
+        page.locator('[aria-label="Sampling adequacy advisory"]'),
+      ).toHaveCount(0);
+      await expect(page.getByText("Marginal", { exact: true })).toHaveCount(0);
+      await expect(
+        page.getByText(/calculated values may be less reliable/),
+      ).toHaveCount(0);
+    });
+  }
+}
+
+test("failure and incomplete restore evidence remains without sampling diagnostics", async ({
+  page,
+}) => {
+  await page.route("**/api/runs/4242", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...completedFullRun,
+        outcome: "failed",
+        results: [],
+        failure_reason: "The PV quality was Bad.",
+        restore_status: "incomplete",
+        restore_detail: "The original MV could not be confirmed.",
+        timing_metrics: {
+          ...completedFullRun.timing_metrics,
+          sampling_adequacy: "marginal",
+          measured_oscillation_period_ms: 4224,
+          approximate_samples_per_period: 5.28,
+        },
+      }),
+    }),
+  );
+  await page.goto("/runs/4242");
+  await expect(
+    page.getByText("The PV quality was Bad.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("incomplete", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("The original MV could not be confirmed.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Sampling diagnostics",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+});
 
 test("history and tune configuration do not overflow at 1024px or mobile width", async ({
   page,

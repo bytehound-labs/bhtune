@@ -126,10 +126,11 @@ before.
 Every response-level result is checked before it is stored as usable tuning data. A non-positive
 or non-finite amplitude or period, or a non-finite intermediate or converted PID value, is
 stored as `Invalid` with a diagnostic reason and no numeric values. The CLI and web GUI do not
-offer that invalid row as a calculated-result write target. A run also reports whether its
-measured sampling was `adequate`, `marginal`, or `not assessed` in the collapsed **Sampling
-diagnostics** section on the web run-detail page; a marginal advisory is a reason to inspect the
-trend and timing diagnostics, not an automatic rejection.
+offer that invalid row as a calculated-result write target. Run history also retains whether
+measured sampling was `adequate`, `marginal`, or `not assessed`, available through
+`bhtune history show` and the run-detail API rather than a web-page quality badge. These
+sampling advisories are separate from mathematical validity: a marginal value is a reason to
+inspect the trend and timing evidence, not an automatic rejection or a PID-performance score.
 
 The web run-detail **Calculated results** table uses the constant names from the run's
 snapshotted template, so a Yokogawa run shows `P`, `I`, and `D` rather than generic engine

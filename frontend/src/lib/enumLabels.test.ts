@@ -8,8 +8,6 @@ import {
   RESPONSE_LEVEL_LABELS,
   SAMPLE_QUALITY_LABELS,
   SAMPLE_QUALITY_TONE,
-  SAMPLING_ADEQUACY_LABELS,
-  SAMPLING_ADEQUACY_TONE,
   TUNING_RESULT_INVALID_REASON_LABELS,
 } from "./enumLabels";
 
@@ -62,19 +60,6 @@ describe("enum label maps", () => {
       completed: "Completed",
       failed: "Failed",
       aborted: "Aborted",
-    });
-  });
-
-  it("labels every sampling adequacy state and its badge tone", () => {
-    expect(SAMPLING_ADEQUACY_LABELS).toEqual({
-      adequate: "Adequate",
-      marginal: "Marginal",
-      not_assessed: "Not assessed",
-    });
-    expect(SAMPLING_ADEQUACY_TONE).toEqual({
-      adequate: "success",
-      marginal: "warning",
-      not_assessed: "neutral",
     });
   });
 

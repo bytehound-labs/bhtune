@@ -96,12 +96,13 @@ twice the requested interval, because that objectively means at least one comple
 opportunity was missed. This is a warning, not a validity verdict: it does not abort the run,
 change its calculated constants, or prevent an engineer from applying them.
 
-Each run also reports sampling adequacy in the collapsed **Sampling diagnostics** section on the
-web run-detail page. `adequate` means at least six observed samples per measured oscillation
+The recorded timing data also retains sampling adequacy for CLI history and the run-detail API.
+`adequate` means at least six observed samples per measured oscillation
 period; `marginal` means fewer than six; and `not_assessed` means no usable finite period was
 available. This is an advisory signal, not an automatic rejection: a valid result with marginal
 sampling remains writable, but should be reviewed against the trend and the recorded timing data
-before it is applied.
+before it is applied. The normal web page does not display this advisory as a tuning-quality
+badge; invalid results and actual quality, actuation, and restoration failures remain visible.
 
 ### Live Auto-release settling
 

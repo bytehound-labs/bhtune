@@ -34,7 +34,6 @@ import {
   writeKey,
 } from "./runDetailHelpers";
 import { PidResultsPanel } from "./PidResultsPanel";
-import { SamplingDiagnosticsSection } from "./SamplingDiagnosticsSection";
 
 function dateTime(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : "—";
@@ -668,7 +667,6 @@ export function RunDetailContent({
           onRevert={onRevert}
         />
       )}
-      <SamplingDiagnosticsSection timing={run.timing_metrics} />
       <p className="text-sm text-slate-500">
         {trendSamples.length} measurements{" "}
         {isRunning ? "recorded so far" : "were recorded"} for this tune.

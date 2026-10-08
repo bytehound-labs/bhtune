@@ -272,20 +272,15 @@ browser-visible origin.
      A result whose amplitude, period, or converted PID values are zero, non-finite, or otherwise
      unusable is shown as **Invalid** with a reason and no numeric values; its calculated-result
      write action is disabled.
-   - The collapsed **Sampling diagnostics** section reports sampling adequacy: **adequate** means
-     at least six observed samples per measured period, **marginal** means fewer than six, and
-     **not assessed** means no usable finite period was available. This is an advisory signal, not
-     an automatic block on a valid result. Detailed sample-gap and successful operation-latency
-     diagnostics remain available through the CLI, API, and structured logs.
    - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
      Notes, Test configuration, Initial readings, and PID change history start expanded so the
-     main result and PID audit information is immediately visible. Sampling diagnostics starts
-     collapsed because it is advisory. Detailed MV command/readback evidence is available through
-     `bhtune history show`, the run-detail API, and structured logs when deeper support or safety
-     analysis is needed.
+     main result and PID audit information is immediately visible. The measurement count remains
+     visible beneath the sections. Invalid results, run failures, and incomplete restoration
+     remain visible; there is no sampling-quality badge on this page.
 
-   Detailed polling timing diagnostics remain available through `bhtune history show`, the
-   run-detail API, and structured logs, but are not part of the normal web run-detail view.
+   Detailed polling timing, sampling adequacy, and MV command/readback evidence remain available
+   through `bhtune history show`, the run-detail API, and structured logs, but are not part of
+   the normal web run-detail view. CSV/JSON downloads contain the recorded samples only.
 
 3. **History** (`/runs`) — every past tune, shown by **Tag name** and filterable by outcome and
    process type, with the same detail view available for any completed run — not just the one

@@ -322,9 +322,11 @@ single newest `writes[]` row, and only when that row is a successful write (`kin
 success`) — once superseded by a later write or revert, the button disappears, matching the server's
 own "revert always targets the most recent write" rule. When calculated results exist, the single
 results panel is promoted directly below the run heading and before the trend; without results it
-remains in its lower diagnostic position. Sampling adequacy is rendered in a separate collapsed
-Sampling diagnostics section near the bottom of the run detail, rather than alongside the primary
-results.
+remains in its lower diagnostic position. The normal run page omits sampling-adequacy and
+latency diagnostics: the advisory threshold is not a calibrated tuning-quality score.
+The underlying timing snapshot, classification, API/CLI output, and structured logging remain
+available for engineering review. The measurement count and genuine safety or invalid/unwritable
+result evidence remain visible.
 
 ## New Run prefill and duplicate
 
@@ -386,7 +388,7 @@ once they exist and routes Write/Revert through one styled, pending-safe review 
 popup that is rendered through one shared body-level `Modal` component for PID review, OPC server
 discovery, and OPC tag browsing, and shows exact tags and values. Run-detail sections are
 independently collapsible: Calculated results, Trend, Summary, Notes, Test configuration, Initial
-readings, and PID change history start open, while Sampling diagnostics starts closed. Detailed MV
+readings, and PID change history start open. Detailed sampling, latency, and MV
 actuation command/readback evidence remains available through CLI/API/database/log surfaces rather
 than the normal browser page. `ui-prefill-last-run` seeds the New Run form from the newest run's
 stored request server-side as a compatibility fallback, plus a "Reset to defaults" action and a

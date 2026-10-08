@@ -846,3 +846,5 @@ export async function installDemoRoutes(page: Page, allowedOrigin?: string) {
 
 export const runningFullRun = liveRun;
 export const runningDemoRun = demoLiveRun;
+export const completedFullRun = completedRun;
+export const completedDemoRun = demoCompletedRun;
