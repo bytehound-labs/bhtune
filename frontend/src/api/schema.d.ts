@@ -1366,7 +1366,11 @@ export interface components {
     OpcCloseBrowseSessionResponse: {
       closed: boolean;
     };
+    /** @enum {string} */
+    OpcIndexAutoRefreshPolicy: "allowed" | "disabled" | "paused";
     OpcIndexSchedulerResponse: {
+      auto_refresh_policy?:
+        null | components["schemas"]["OpcIndexAutoRefreshPolicy"];
       circuit_open: boolean;
       /** Format: int32 */
       consecutive_failures: number;

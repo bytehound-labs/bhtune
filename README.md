@@ -66,8 +66,12 @@ history table adapt to viewports at and below 1024 pixels. See the
 [Web UI guide](docs/guides/web-ui/overview.md).
 
 The OPC tag browser distinguishes a usable index from its automatic refresh schedule.
-An opted-in server without a gateway-reported refresh time shows `Auto-refresh: not scheduled`.
-Per-server refresh controls do not override the gateway's global scheduling policy.
+The GUI controls the selected server's preference, not the gateway's administrative override.
+When gateway configuration blocks scheduling, the browser explains the blocker and disables
+**Enable auto-refresh**; a saved enabled preference is labelled separately and can be disabled
+without removing searchable data. A countdown appears only when the gateway permits scheduling
+and reports a next-refresh time. Older gateways that do not report policy are labelled unverified,
+and their controls explicitly save a server preference rather than promise a running schedule.
 
 ## Safety
 

@@ -151,6 +151,7 @@ export function searchIndexStatus(
     source: "da2",
     progress: null,
     scheduler: {
+      auto_refresh_policy: "allowed" as const,
       next_refresh_at: autoRefreshEnabled
         ? String(Date.now() + 7 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000)
         : null,

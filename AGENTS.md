@@ -6,7 +6,7 @@ Agent contract for this repository. It states the current architecture, invarian
 
 BHTune is an open-source Rust PID auto-tuner for industrial DCS/PLC systems. It runs a Modified Relay Feedback Test (MRFT) against one loop and can calculate and write back PID constants. v1 adapters are the `bhtune` CLI and the browser GUI served by `bhtune-server`. There is no desktop app.
 
-OPC DA I/O uses the published `opcda-bridge` 0.5 crate and a separate Windows gateway. This repository has no Windows/COM dependency. The MRFT engine is a pure, clock-free state machine. Dependencies are open source and enforced in CI. The license is AGPL-3.0-or-later with the CLA in [`CLA.md`](CLA.md).
+OPC DA I/O uses the `opcda-bridge` 0.6 crates.io dependency and a separate Windows gateway. This repository has no Windows/COM dependency. The MRFT engine is a pure, clock-free state machine. Dependencies are open source and enforced in CI. The license is AGPL-3.0-or-later with the CLA in [`CLA.md`](CLA.md).
 
 v1 is MRFT over OPC DA, plus the in-process simulator and a validation-only replay driver. OPC UA, Modbus, Step Test, multi-loop batch tuning, and a built-in scheduler are roadmap items in [`docs/roadmap.md`](docs/roadmap.md), not v1 work. Step Test stays blocked on a live subscription RPC in `opcda-bridge`. Scheduled tuning is an external scheduler invoking the CLI.
 
@@ -106,7 +106,7 @@ SonarCloud project key: `bytehound-labs_bhtune`. Before merge, query `pullReques
 
 Required status names stay `Required validation status`, `Required coverage status`, `Required E2E status`, and `Required Sonar quality status`.
 
-`pnpm --filter bhtune-frontend exec playwright test --list` reports 152 tests in 19 files. The OPC DA browser suite is 45 of those: `opc-browser-discovery.spec.ts` (7), `opc-browser-index.spec.ts` (22), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
+`pnpm --filter bhtune-frontend exec playwright test --list` reports 158 tests in 19 files. The OPC DA browser suite is 51 of those: `opc-browser-discovery.spec.ts` (7), `opc-browser-index.spec.ts` (28), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
 
 ## Config precedence (`cli-config`)
 
@@ -151,7 +151,7 @@ JSON mode prints one final JSON value on stdout. Prompts go to stderr. JSON mode
 
 `OpcDaDriver::connect(host, server)` passes `host:port` to `Client::connect`. The default port is 7600. The ProgID is stored on the driver and sent with every later call. Gateway info and server listing are pre-connection free functions, not `Driver` methods. Server listing returns servers registered on the gateway machine.
 
-The supported contract is `opcda-bridge` 0.5 or newer: capabilities, bounded browse pages, session close, live search, persistent indexed search, and unary read/write. CLI commands are `bhtune opc gateway-info`, `servers`, `read`, `write`, `browse`, `search`, `search-index`, and `close`. A CLI browse session stays open until `bhtune opc close <session-id>`. The browser closes its session when the modal closes. Per-server auto-refresh opt-in does not override gateway-wide scheduling policy; without a gateway-reported next date, the browser shows `Auto-refresh: not scheduled` instead of inventing a countdown or claiming a schedule is enabled.
+The supported Rust dependency is `opcda-bridge` 0.6: capabilities, bounded browse pages, session close, live search, persistent indexed search, and unary read/write. CLI commands are `bhtune opc gateway-info`, `servers`, `read`, `write`, `browse`, `search`, `search-index`, and `close`. A CLI browse session stays open until `bhtune opc close <session-id>`. The browser closes its session when the modal closes. `auto_refresh_enabled` is the saved server preference, not effective gateway scheduling. The optional scheduler policy distinguishes `allowed`, `disabled`, and `paused`; missing policy is unknown. A countdown and enabled schedule label require an allowed policy and a reported next date. Blocked policy explains the configuration setting and disables ineffective Enable actions; saved preferences remain separately removable without deleting data, changing global policy, or cancelling a build.
 
 An accepted OPC write is not proof the controller moved. The confirmation rule is in the live-plant section below.
 

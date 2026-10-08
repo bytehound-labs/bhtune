@@ -102,6 +102,14 @@ displays its error again, including an identical message. Errors that were not d
 before closing are not acknowledged. Reloading or leaving the New Tune page resets this
 page-local acknowledgement; gateway history and API/CLI diagnostics are not cleared.
 
+Automatic refresh has a saved per-server preference and a separate gateway configuration policy.
+The browser explains an administrative disable or startup pause and disables **Enable
+auto-refresh** while that blocker applies. A saved enabled preference can be removed with
+**Disable server preference** without deleting indexed data or cancelling an active build.
+An allowed policy with a reported next date shows the days-and-hours countdown; an allowed
+policy without a date shows `not scheduled`. Missing policy from an older gateway stays unknown
+and exposes preference-only controls, not a promised schedule.
+
 The search-index controls also expose **Delete index** after a completed index build. Deletion
 is intentionally destructive: the first failed request leaves the index and enrollment intact,
 keeps the styled confirmation open, and shows an inline retryable error. Confirming again sends

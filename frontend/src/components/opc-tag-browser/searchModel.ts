@@ -123,8 +123,33 @@ export function indexBuildButtonLabel(
   return "Build index";
 }
 
-export function autoRefreshButtonLabel(enabled: boolean): string {
-  return enabled ? "Disable auto-refresh" : "Enable auto-refresh";
+export function autoRefreshButtonLabel(
+  status: OpcSearchIndexStatusResponse,
+): string {
+  if (status.auto_refresh_enabled) {
+    return status.scheduler.auto_refresh_policy === "allowed" &&
+      status.scheduler.next_refresh_at
+      ? "Disable auto-refresh"
+      : "Disable server preference";
+  }
+  return status.scheduler.auto_refresh_policy
+    ? "Enable auto-refresh"
+    : "Enable server preference";
+}
+
+export function autoRefreshPolicyMessage(
+  policy: OpcSearchIndexStatusResponse["scheduler"]["auto_refresh_policy"],
+): string | null {
+  switch (policy) {
+    case "allowed":
+      return null;
+    case "disabled":
+      return "Automatic refresh is blocked by gateway configuration (index.enabled = false). Cached search and manual refresh remain available.";
+    case "paused":
+      return "Automatic refresh is paused by gateway configuration (index.paused = true). Cached search and manual refresh remain available.";
+    default:
+      return "The gateway does not report its scheduling policy. These controls only save this server's preference; upgrade the gateway to verify automatic scheduling.";
+  }
 }
 
 export function autoRefreshErrorMessage(enabled: boolean): string {

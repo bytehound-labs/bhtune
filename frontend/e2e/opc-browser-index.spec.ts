@@ -241,7 +241,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       await expect(unscheduled).toBeVisible();
       await expect(unscheduled).toHaveAttribute(
         "title",
-        "This server is opted in, but the gateway has not reported a scheduled refresh. Gateway policy controls automatic scheduling.",
+        "This server is enabled, but the gateway has not reported a scheduled refresh.",
       );
       await expect(page.getByText("Auto-refresh: enabled")).toHaveCount(0);
       await expect(page.getByText("Next refresh:")).toHaveCount(0);
@@ -251,7 +251,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       ).toBeEnabled();
 
       await page
-        .getByRole("button", { name: "Disable auto-refresh", exact: true })
+        .getByRole("button", { name: "Disable server preference", exact: true })
         .click();
       await expect(page.getByText("Auto-refresh: disabled")).toBeVisible();
       await expect(page.getByText("Next refresh:")).toHaveCount(0);
@@ -264,6 +264,132 @@ test.describe(OPC_BROWSER_SUITE, () => {
       expect(index.status.active_generation).toBe(ready.active_generation);
       expect(toggles).toEqual([false, true]);
       expect(refreshRequests).toEqual([]);
+    });
+  }
+
+  for (const policy of ["disabled", "paused"] as const) {
+    for (const enabled of [true, false]) {
+      test(`reports ${policy} gateway policy with server preference ${enabled}`, async ({
+        page,
+      }) => {
+        const ready = searchIndexStatus("ready", enabled);
+        const index = await mockBrowserIndex(page, {
+          ...ready,
+          scheduler: { ...ready.scheduler, auto_refresh_policy: policy },
+        });
+        const toggles: boolean[] = [];
+        const refreshes: string[] = [];
+        page.on("request", (request) => {
+          if (
+            new URL(request.url()).pathname === "/api/opc/search-index/refresh"
+          ) {
+            refreshes.push(request.method());
+          }
+        });
+        await page.route(
+          "**/api/opc/search-index/auto-refresh**",
+          async (route) => {
+            const requestedEnabled =
+              new URL(route.request().url()).searchParams.get("enabled") ===
+              "true";
+            toggles.push(requestedEnabled);
+            index.status = {
+              ...index.status,
+              auto_refresh_enabled: requestedEnabled,
+            };
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify(index.status),
+            });
+          },
+        );
+
+        await page.getByRole("button", { name: "Browse tags" }).click();
+        await expect(
+          page.getByText("Index: ready", { exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByText(
+            policy === "disabled"
+              ? "Automatic refresh is blocked by gateway configuration (index.enabled = false). Cached search and manual refresh remain available."
+              : "Automatic refresh is paused by gateway configuration (index.paused = true). Cached search and manual refresh remain available.",
+          ),
+        ).toBeVisible();
+        await expect(page.getByText("Next refresh:")).toHaveCount(0);
+        await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
+        await expect(
+          page.getByRole("button", { name: "Refresh index", exact: true }),
+        ).toBeEnabled();
+        await expect(
+          page.getByRole("button", {
+            name: "Disable auto-refresh",
+            exact: true,
+          }),
+        ).toHaveCount(0);
+
+        if (enabled) {
+          await expect(
+            page.getByText("Auto-refresh: blocked by gateway", { exact: true }),
+          ).toBeVisible();
+          await expect(
+            page.getByText("Server preference: enabled", { exact: true }),
+          ).toBeVisible();
+          await page
+            .getByRole("button", {
+              name: "Disable server preference",
+              exact: true,
+            })
+            .click();
+        }
+        await expect(
+          page.getByText("Auto-refresh: disabled", { exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByText("Server preference: disabled", { exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", {
+            name: "Enable auto-refresh",
+            exact: true,
+          }),
+        ).toBeDisabled();
+        expect(index.status.active_generation).toBe(ready.active_generation);
+        expect(toggles).toEqual(enabled ? [false] : []);
+        expect(refreshes).toEqual([]);
+      });
+    }
+  }
+
+  for (const policy of [null, undefined]) {
+    test(`keeps an unreported ${policy === null ? "null" : "omitted"} gateway policy unknown`, async ({
+      page,
+    }) => {
+      const ready = searchIndexStatus("ready");
+      await mockBrowserIndex(page, {
+        ...ready,
+        scheduler: { ...ready.scheduler, auto_refresh_policy: policy },
+      });
+      await page.getByRole("button", { name: "Browse tags" }).click();
+      await expect(
+        page.getByText("Auto-refresh: policy unavailable", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText("Server preference: enabled", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "The gateway does not report its scheduling policy. These controls only save this server's preference; upgrade the gateway to verify automatic scheduling.",
+        ),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("button", {
+          name: "Disable server preference",
+          exact: true,
+        }),
+      ).toBeEnabled();
+      await expect(page.getByText("Next refresh:")).toHaveCount(0);
+      await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
     });
   }
 

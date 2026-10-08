@@ -761,7 +761,17 @@ fn print_search_index_status(
     }
     println!("Server: {}", status.server);
     println!("State: {}", status.state);
-    println!("Auto-refresh enabled: {}", status.auto_refresh_enabled);
+    println!(
+        "Server auto-refresh preference: {}",
+        status.auto_refresh_enabled
+    );
+    println!(
+        "Gateway auto-refresh policy: {}",
+        status
+            .scheduler
+            .auto_refresh_policy
+            .map_or_else(|| "unknown".into(), |policy| policy.to_string())
+    );
     println!("Active generation: {}", status.active_generation);
     println!("Entries: {}", status.entry_count);
     println!("Unique items: {}", status.unique_item_count);
@@ -834,6 +844,7 @@ fn json_search_index_status(status: &SearchIndexStatus) -> serde_json::Value {
         "organization": format!("{:?}", status.organization).to_lowercase(),
         "source": format!("{:?}", status.source).to_lowercase(),
         "scheduler": {
+            "auto_refresh_policy": status.scheduler.auto_refresh_policy.map(|policy| policy.to_string()),
             "next_refresh_at": status.scheduler.next_refresh_at,
             "last_attempt_at": status.scheduler.last_attempt_at,
             "last_success_at": status.scheduler.last_success_at,
@@ -1582,7 +1593,7 @@ mod tests {
 
     #[tokio::test]
     async fn diagnostic_commands_cover_json_and_validation_branches() {
-        let status = bhtune_driver::SearchIndexStatus {
+        let mut status = bhtune_driver::SearchIndexStatus {
             server: "Sim.Server".into(),
             state: bhtune_driver::SearchIndexState::Failed,
             auto_refresh_enabled: true,
@@ -1606,6 +1617,13 @@ mod tests {
             }),
             scheduler: bhtune_driver::IndexSchedulerDiagnostics::default(),
         };
+        assert!(json_search_index_status(&status)["scheduler"]["auto_refresh_policy"].is_null());
+        status.scheduler.auto_refresh_policy =
+            Some(bhtune_driver::IndexAutoRefreshPolicy::Disabled);
+        assert_eq!(
+            json_search_index_status(&status)["scheduler"]["auto_refresh_policy"],
+            "disabled"
+        );
         let indexed = bhtune_driver::SearchIndexResponse {
             matches: vec![bhtune_driver::IndexedSearchMatch {
                 item_id: "Area.PV".into(),

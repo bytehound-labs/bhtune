@@ -83,7 +83,7 @@ crate `opcda-bridge-client`:
 ```toml
 # crates/bhtune-driver/Cargo.toml
 [dependencies]
-opcda-bridge = "0.5"
+opcda-bridge = "0.6"
 ```
 
 The facade intentionally hides generated gRPC details and exposes typed capabilities,
@@ -159,7 +159,7 @@ Integration rules, as implemented in `OpcDaDriver`:
 - `close_browse_session` explicitly releases gateway-side browse state. The HTTP browser calls
   it during modal cleanup; the CLI leaves sessions open so printed continuation tokens remain
   usable and exposes `bhtune opc close <session-id>` for explicit cleanup.
-- `opcda-bridge-proto = "0.5"`, `tonic = "0.14"`, and `tokio-stream = "0.1"` are
+- `opcda-bridge-proto = "0.6"`, `tonic = "0.14"`, and `tokio-stream = "0.1"` are
   dev-dependencies only, pinned to the exact versions `opcda-bridge` itself uses internally,
   so this crate's mock-gateway smoke tests produce wire-compatible types. Production code
   never depends on `opcda-bridge-proto` directly — only the facade.

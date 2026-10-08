@@ -543,6 +543,7 @@ const searchIndexStatus: SearchIndexStatus = {
   organization: "hierarchical",
   source: "da2",
   scheduler: {
+    auto_refresh_policy: "allowed",
     circuit_open: false,
     consecutive_failures: 0,
     last_attempt_at: null,

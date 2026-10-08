@@ -1,7 +1,11 @@
 import type { OpcSearchIndexStatusResponse } from "../../api/opc";
 import { formatExactTime, formatTimeUntil } from "../../lib/time";
 import { Button, LoadingStatus } from "../ui";
-import { autoRefreshButtonLabel, indexBuildButtonLabel } from "./searchModel";
+import {
+  autoRefreshButtonLabel,
+  autoRefreshPolicyMessage,
+  indexBuildButtonLabel,
+} from "./searchModel";
 
 type IndexControlsProps = Readonly<{
   opcServer: string;
@@ -48,12 +52,18 @@ export function IndexControls({
     refreshPending ||
     indexStatus?.state === "partial" ||
     indexStatus?.state === "refreshing";
-  const nextRefreshAt = indexStatus?.auto_refresh_enabled
-    ? indexStatus.scheduler.next_refresh_at
-    : null;
+  const policy = indexStatus?.scheduler.auto_refresh_policy;
+  const policyBlocked = policy === "disabled" || policy === "paused";
+  const policyMessage = autoRefreshPolicyMessage(policy);
+  const nextRefreshAt =
+    indexStatus?.auto_refresh_enabled && policy === "allowed"
+      ? indexStatus.scheduler.next_refresh_at
+      : null;
   let autoRefreshLabel = "disabled";
   if (indexStatus?.auto_refresh_enabled) {
-    autoRefreshLabel = nextRefreshAt ? "enabled" : "not scheduled";
+    if (policyBlocked) autoRefreshLabel = "blocked by gateway";
+    else if (!policy) autoRefreshLabel = "policy unavailable";
+    else autoRefreshLabel = nextRefreshAt ? "enabled" : "not scheduled";
   }
 
   return (
@@ -96,12 +106,19 @@ export function IndexControls({
               <Button
                 type="button"
                 loading={autoRefreshPending}
-                disabled={autoRefreshPending || deletePending}
+                disabled={
+                  autoRefreshPending ||
+                  deletePending ||
+                  (policyBlocked && !indexStatus.auto_refresh_enabled)
+                }
+                aria-describedby={
+                  policyMessage ? "opc-auto-refresh-policy" : undefined
+                }
                 onClick={() =>
                   onSetAutoRefresh(!indexStatus.auto_refresh_enabled)
                 }
               >
-                {autoRefreshButtonLabel(indexStatus.auto_refresh_enabled)}
+                {autoRefreshButtonLabel(indexStatus)}
               </Button>
             )}
             <Button
@@ -136,15 +153,30 @@ export function IndexControls({
         {indexStatus && indexStatus.active_generation > 0 && (
           <span
             title={
-              indexStatus.auto_refresh_enabled && !nextRefreshAt
-                ? "This server is opted in, but the gateway has not reported a scheduled refresh. Gateway policy controls automatic scheduling."
+              indexStatus.auto_refresh_enabled &&
+              policy === "allowed" &&
+              !nextRefreshAt
+                ? "This server is enabled, but the gateway has not reported a scheduled refresh."
                 : undefined
             }
           >
             Auto-refresh: {autoRefreshLabel}
           </span>
         )}
+        {indexStatus &&
+          indexStatus.active_generation > 0 &&
+          policy !== "allowed" && (
+            <span>
+              Server preference:{" "}
+              {indexStatus.auto_refresh_enabled ? "enabled" : "disabled"}
+            </span>
+          )}
       </div>
+      {indexStatus && indexStatus.active_generation > 0 && policyMessage && (
+        <p id="opc-auto-refresh-policy" className="text-xs text-slate-400">
+          {policyMessage}
+        </p>
+      )}
       {indexError && (
         <output ref={onIndexErrorShown} className="block text-xs text-red-300">
           Index error: {indexError}

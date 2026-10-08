@@ -903,6 +903,20 @@ pub fn search_index_status_from_bridge(
         source: browse_source_from_bridge(status.source),
         progress: status.progress.map(indexed_search_progress_from_bridge),
         scheduler: IndexSchedulerDiagnostics {
+            auto_refresh_policy: status
+                .scheduler
+                .auto_refresh_policy
+                .map(|policy| match policy {
+                    opcda_bridge::IndexAutoRefreshPolicy::Allowed => {
+                        crate::IndexAutoRefreshPolicy::Allowed
+                    }
+                    opcda_bridge::IndexAutoRefreshPolicy::Disabled => {
+                        crate::IndexAutoRefreshPolicy::Disabled
+                    }
+                    opcda_bridge::IndexAutoRefreshPolicy::Paused => {
+                        crate::IndexAutoRefreshPolicy::Paused
+                    }
+                }),
             next_refresh_at: status.scheduler.next_refresh_at,
             last_attempt_at: status.scheduler.last_attempt_at,
             last_success_at: status.scheduler.last_success_at,
@@ -1346,6 +1360,17 @@ mod tests {
                 <opcda_bridge::SearchIndexControlAction as From<_>>::from(wire),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn auto_refresh_policy_labels_preserve_gateway_configuration_meaning() {
+        for (policy, label) in [
+            (crate::IndexAutoRefreshPolicy::Allowed, "allowed"),
+            (crate::IndexAutoRefreshPolicy::Disabled, "disabled"),
+            (crate::IndexAutoRefreshPolicy::Paused, "paused"),
+        ] {
+            assert_eq!(policy.to_string(), label);
         }
     }
 

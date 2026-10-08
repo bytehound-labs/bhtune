@@ -179,7 +179,7 @@ browser-visible origin.
      edit or restart is required. After the first successful build, the server is opted in
      to automatic refresh according to the gateway's configurable seven-day policy, provided
      its global scheduler permits automatic indexing. The browser also
-     provides **Refresh now**, **Retry build**, **Disable auto-refresh**, **Enable auto-refresh**,
+     provides **Refresh index**, **Retry build**, **Disable auto-refresh**, **Enable auto-refresh**,
      and **Delete index** actions. Disabling automatic refresh keeps the existing index and
      searchable data; deleting it shows a temporary `deleting` state while the gateway removes
      the index and enrollment, then leaves ordinary browse,
@@ -188,12 +188,14 @@ browser-visible origin.
      operations remain available. Completed non-fatal inventory diagnostics remain available
      through the gateway/API and diagnostic CLI; the browser shows the gateway's failure
      diagnostic on its own line for a failed index state. `Index: ready` means the existing
-     index is usable, not that automatic refresh is running. When the opted-in server has a
-     gateway-reported next date, `Auto-refresh: enabled` appears with a relative days-and-hours
-     countdown and the exact scheduled time on hover. An opted-in server without a reported
-     date shows `Auto-refresh: not scheduled`; a server that is not opted in shows
-     `Auto-refresh: disabled`. The per-server toggle cannot override gateway-wide scheduling
-     policy.
+     index is usable, not that automatic refresh is running. When the opted-in server has an
+     allowed gateway policy and a reported next date, `Auto-refresh: enabled` appears with a
+     relative days-and-hours countdown and the exact scheduled time on hover. An opted-in
+     server without a reported date under an allowed policy shows `Auto-refresh: not scheduled`; a server that is not
+     opted in shows `Auto-refresh: disabled`. A gateway configuration blocker is explained
+     inline and disables **Enable auto-refresh**. **Disable server preference** can remove a
+     saved preference without deleting the cached index or overriding gateway policy.
+     Older gateways without policy diagnostics show preference-only controls and no countdown.
 
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail

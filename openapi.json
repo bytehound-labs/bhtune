@@ -3987,6 +3987,14 @@
           }
         }
       },
+      "OpcIndexAutoRefreshPolicy": {
+        "type": "string",
+        "enum": [
+          "allowed",
+          "disabled",
+          "paused"
+        ]
+      },
       "OpcIndexSchedulerResponse": {
         "type": "object",
         "required": [
@@ -3994,6 +4002,16 @@
           "circuit_open"
         ],
         "properties": {
+          "auto_refresh_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OpcIndexAutoRefreshPolicy"
+              }
+            ]
+          },
           "circuit_open": {
             "type": "boolean"
           },

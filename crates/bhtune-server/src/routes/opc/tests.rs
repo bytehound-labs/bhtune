@@ -70,6 +70,9 @@ fn proto_index_status(state: ProtoSearchIndexState) -> ProtoSearchIndexStatus {
         host: Default::default(),
         storage: Default::default(),
         scheduler: Some(ProtoIndexSchedulerDiagnostics {
+            auto_refresh_policy: Some(
+                opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Allowed as i32,
+            ),
             next_refresh_at: Some("2026-08-23T10:05:00Z".to_string()),
             last_attempt_at: Some("2026-08-16T10:05:00Z".to_string()),
             last_success_at: Some("2026-08-16T10:05:00Z".to_string()),
@@ -90,6 +93,47 @@ fn proto_index_status(state: ProtoSearchIndexState) -> ProtoSearchIndexStatus {
             items_per_second: 250.5,
             estimated_remaining_ms: Some(30_000),
         }),
+    }
+}
+
+#[tokio::test]
+async fn search_index_policy_preserves_legacy_unknown_and_gateway_blockers() {
+    for (policy, label) in [
+        (None, None),
+        (
+            Some(opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Unspecified),
+            None,
+        ),
+        (
+            Some(opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Allowed),
+            Some("allowed"),
+        ),
+        (
+            Some(opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Disabled),
+            Some("disabled"),
+        ),
+        (
+            Some(opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Paused),
+            Some("paused"),
+        ),
+    ] {
+        let mut status = proto_index_status(ProtoSearchIndexState::Ready);
+        status.scheduler.as_mut().unwrap().auto_refresh_policy = policy.map(|policy| policy as i32);
+        let (host, _host_server) = start_mock_server(MockBridgeService {
+            search_index_status_response: status,
+            ..Default::default()
+        })
+        .await;
+        let app = crate::build_router(state_with(Some(&host), None).await);
+        let response = get(app, "/api/opc/search-index/status?opc_server=Sim.Server").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["scheduler"]["auto_refresh_policy"],
+            serde_json::json!(label)
+        );
+        assert_eq!(body["auto_refresh_enabled"], true);
+        assert_eq!(body["active_generation"], 7);
     }
 }
 
@@ -318,6 +362,7 @@ async fn search_index_status_maps_every_state_and_progress() {
         assert_eq!(body["scheduler"]["last_success_duration_ms"], 300_000);
         assert_eq!(body["scheduler"]["consecutive_failures"], 0);
         assert_eq!(body["scheduler"]["circuit_open"], false);
+        assert_eq!(body["scheduler"]["auto_refresh_policy"], "allowed");
         assert_eq!(body["progress"]["branches_visited"], 321);
         assert_eq!(body["progress"]["entries_seen"], 12_345);
         assert_eq!(body["progress"]["unique_items"], 9_876);

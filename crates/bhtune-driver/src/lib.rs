@@ -63,8 +63,9 @@ pub use replay::{RecordedWrite, ReplayDriver, ReplaySample, ReplayTraceExhausted
 pub use simulator::{FopdtConfig, FopdtProcess, SimulatorDriver, VirtualPid, VirtualPidConfig};
 pub use types::{
     BrowseBreadcrumb, BrowseNode, BrowseNodeKind, BrowsePage, BrowsePageRequest, BrowseSource,
-    DriverCapabilities, IndexSchedulerDiagnostics, IndexedSearchMatch, IndexedSearchProgress,
-    NamespaceOrganization, Quality, SearchCompleted, SearchEvent, SearchIndexControlAction,
-    SearchIndexRequest, SearchIndexResponse, SearchIndexState, SearchIndexStatus, SearchMatch,
-    SearchMatchMode, SearchProgress, SearchRequest, TagId, TagValue, TagWrite, WriteOutcome,
+    DriverCapabilities, IndexAutoRefreshPolicy, IndexSchedulerDiagnostics, IndexedSearchMatch,
+    IndexedSearchProgress, NamespaceOrganization, Quality, SearchCompleted, SearchEvent,
+    SearchIndexControlAction, SearchIndexRequest, SearchIndexResponse, SearchIndexState,
+    SearchIndexStatus, SearchMatch, SearchMatchMode, SearchProgress, SearchRequest, TagId,
+    TagValue, TagWrite, WriteOutcome,
 };

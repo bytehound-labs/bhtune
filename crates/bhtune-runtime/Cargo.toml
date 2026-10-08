@@ -55,7 +55,7 @@ sqlx = { version = "0.9", default-features = false, features = [
   "runtime-tokio",
   "chrono",
 ] }
-opcda-bridge-proto = "0.5"
+opcda-bridge-proto = "0.6"
 bhtune-test-support = { path = "../bhtune-test-support", features = [
   "mock-driver",
 ] }

@@ -16,6 +16,8 @@ import {
   scopeKey,
 } from "./browseModel";
 import {
+  autoRefreshButtonLabel,
+  autoRefreshPolicyMessage,
   highlightedRanges,
   hasUsableIndex,
   indexErrorIdentity,
@@ -127,6 +129,44 @@ describe("OPC tag browser browse helpers", () => {
 });
 
 describe("OPC tag browser search helpers", () => {
+  it("labels server preferences separately from effective scheduling", () => {
+    const ready = status("ready");
+    expect(autoRefreshButtonLabel(ready)).toBe("Enable server preference");
+    expect(
+      autoRefreshButtonLabel({ ...ready, auto_refresh_enabled: true }),
+    ).toBe("Disable server preference");
+    expect(
+      autoRefreshButtonLabel({
+        ...ready,
+        scheduler: { ...ready.scheduler, auto_refresh_policy: "allowed" },
+      }),
+    ).toBe("Enable auto-refresh");
+    const scheduled: OpcSearchIndexStatusResponse = {
+      ...ready,
+      auto_refresh_enabled: true,
+      scheduler: {
+        ...ready.scheduler,
+        auto_refresh_policy: "allowed",
+        next_refresh_at: "2026-10-15T00:00:00Z",
+      },
+    };
+    expect(autoRefreshButtonLabel(scheduled)).toBe("Disable auto-refresh");
+    for (const policy of ["disabled", "paused"] as const) {
+      expect(
+        autoRefreshButtonLabel({
+          ...scheduled,
+          scheduler: { ...scheduled.scheduler, auto_refresh_policy: policy },
+        }),
+      ).toBe("Disable server preference");
+      expect(autoRefreshPolicyMessage(policy)).toContain(
+        "gateway configuration",
+      );
+    }
+    expect(autoRefreshPolicyMessage("allowed")).toBeNull();
+    expect(autoRefreshPolicyMessage(undefined)).toContain("does not report");
+    expect(autoRefreshPolicyMessage(null)).toContain("does not report");
+  });
+
   it("identifies only terminal index errors", () => {
     const failed = { ...status("failed"), last_error: "inventory failed" };
     expect(indexErrorIdentity(undefined)).toBeNull();

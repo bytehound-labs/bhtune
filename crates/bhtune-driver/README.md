@@ -9,4 +9,8 @@ and demonstrations, while `ReplayDriver` validates the driver abstraction agains
 traces. `ReadOnlyDriver` forwards reads and capabilities while rejecting writes and browse
 operations.
 
+Index status preserves the saved server auto-refresh preference separately from the optional
+gateway policy (`allowed`, `disabled`, or `paused`). An absent policy is unknown. Changing a
+server preference does not override gateway configuration or cancel an active index build.
+
 API documentation: <https://docs.rs/bhtune-driver>
