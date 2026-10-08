@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef } from "react";
 import uPlot from "uplot";
 // oxlint-disable-next-line import/no-unassigned-import -- uPlot's stylesheet is a required Vite side effect.
 import "uplot/dist/uPlot.min.css";
@@ -19,13 +19,6 @@ function toAlignedData(points: readonly TrendPoint[]): uPlot.AlignedData {
   const pv = points.map((point) => point.pv);
   const mv = points.map((point) => point.mv);
   return [time, pv, mv];
-}
-
-function moveCursorToPoint(plot: uPlot, point: TrendPoint) {
-  const left = plot.valToPos(Date.parse(point.time) / 1000, "x");
-  if (Number.isFinite(left)) {
-    plot.setCursor({ left, top: plot.rect.height / 2 }, false);
-  }
 }
 
 function describeTrend(points: readonly TrendPoint[], tagName: string): string {
@@ -74,35 +67,9 @@ export function TrendChart({
   pollIntervalMs,
 }: TrendChartProps) {
   const descriptionId = useId();
-  const selectionId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
-  const [cursorIndex, setCursorIndex] = useState<number | null>(null);
   const { theme } = useTheme();
-
-  const selectedIndex =
-    points.length === 0
-      ? 0
-      : Math.min(
-          points.length - 1,
-          Math.max(0, cursorIndex ?? points.length - 1),
-        );
-  const selectedPoint = points[selectedIndex];
-  const selectedTime = selectedPoint
-    ? new Date(selectedPoint.time).toLocaleString()
-    : "No point selected";
-  const selectedPointText = selectedPoint
-    ? `Point ${selectedIndex + 1} of ${points.length}, ${selectedTime}. PV ${selectedPoint.pv} raw tag units; commanded MV ${selectedPoint.mv} raw tag units. Engineering units are not recorded.`
-    : "No PV or MV trend point is available.";
-
-  function selectPoint(index: number) {
-    setCursorIndex(index);
-    const point = points[index];
-    const plot = plotRef.current;
-    if (!point || !plot) return;
-
-    moveCursorToPoint(plot, point);
-  }
 
   // Creates (and tears down) the uPlot instance once per size/theme combination -- uPlot
   // owns its own canvas and redraw loop, so React's job is only to supply the container
@@ -134,14 +101,14 @@ export function TrendChart({
       series: [
         {},
         {
-          label: "PV (raw tag units)",
+          label: "PV",
           stroke: pvColor,
           width: 2,
           scale: "y",
           points: { show: false },
         },
         {
-          label: "MV commanded (raw tag units)",
+          label: "Commanded MV",
           stroke: mvColor,
           width: 2,
           scale: "mv",
@@ -155,18 +122,6 @@ export function TrendChart({
       ],
       cursor: { show: true, x: true, y: false },
       legend: { show: false },
-      hooks: {
-        setCursor: [
-          (currentPlot) => {
-            const index = currentPlot.cursor.idx;
-            setCursorIndex(
-              typeof index === "number" && Number.isInteger(index)
-                ? index
-                : null,
-            );
-          },
-        ],
-      },
     };
 
     const plot = new uPlot(options, toAlignedData(points), container);
@@ -206,7 +161,7 @@ export function TrendChart({
             className="h-0.5 w-4"
             style={{ backgroundColor: "var(--bhtune-chart-pv)" }}
           />
-          <span>PV (raw tag units)</span>
+          <span>PV</span>
         </span>
         <span className="inline-flex items-center gap-2">
           <span
@@ -214,40 +169,10 @@ export function TrendChart({
             className="h-0.5 w-4"
             style={{ backgroundColor: "var(--bhtune-chart-mv)" }}
           />
-          <span>Commanded MV (raw tag units)</span>
+          <span>Commanded MV</span>
         </span>
       </fieldset>
-      <p className="mt-1 break-words text-xs text-slate-500">
-        Recorded run tag: <span className="font-mono">{tagName}</span>. PV and
-        commanded MV are shown as raw values; engineering units are not
-        recorded.
-      </p>
-      <label
-        htmlFor={`${selectionId}-slider`}
-        className="mt-3 block text-xs font-medium text-slate-300"
-      >
-        Inspect trend points
-      </label>
-      <input
-        id={`${selectionId}-slider`}
-        type="range"
-        min={0}
-        max={Math.max(points.length - 1, 0)}
-        step={1}
-        value={selectedIndex}
-        disabled={points.length < 2}
-        aria-valuetext={selectedPointText}
-        aria-describedby={`${descriptionId} ${selectionId}-readout`}
-        onChange={(event) => selectPoint(Number(event.target.value))}
-        className="mt-1 w-full accent-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-      />
-      <p
-        id={`${selectionId}-readout`}
-        className="mt-1 break-words text-xs text-slate-300"
-      >
-        {selectedPointText}
-      </p>
-      <figcaption id={descriptionId} className="mt-2 text-xs text-slate-400">
+      <figcaption id={descriptionId} className="sr-only">
         {describeTrend(points, tagName)}
       </figcaption>
     </figure>

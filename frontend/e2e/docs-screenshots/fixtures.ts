@@ -808,8 +808,17 @@ export async function installFullRoutes(
   });
 }
 
-export async function installDemoRoutes(page: Page) {
+export async function installDemoRoutes(page: Page, allowedOrigin?: string) {
   await installCommonRoutes(page, true);
+  if (allowedOrigin !== undefined) {
+    await json(page, "**/api/capabilities", {
+      ...demoCapabilities,
+      security: {
+        ...demoCapabilities.security,
+        allowed_origin: allowedOrigin,
+      },
+    });
+  }
   await page.route("**/api/runs/4242", (route) => {
     if (route.request().method() !== "GET") {
       return route.fallback();

@@ -78,11 +78,11 @@ poll intervals on the x-axis and leave unused future space blank, then fit the f
 run once that horizon is reached. The same `TrendChart` component renders live and historical
 cases identically without fabricating samples.
 
-The trend legend identifies PV and commanded MV as raw tag-unit values. If the run does not
-record engineering units, the chart says so instead of deriving units or displaying a guessed
-percent label. A visible keyboard-operable point selector moves the cursor and exposes the
-selected timestamp and values to screen readers. The recorded run tag is shown for context,
-without inferring a separate PV or MV ItemID.
+The trend legend uses `PV` and `Commanded MV` without unit placeholders or inferred engineering
+units. The live progress panel retains the current tick, measurements, and cycle counts; the
+Full-mode Summary retains the recorded run tag. There is no point selector, separate
+selected-point readout, or tag caption. A hidden, non-interactive figure description gives
+screen readers the plotted point count, time span, axes, and PV/MV ranges.
 
 When calculated results exist, the run detail screen promotes the **Calculated results** panel
 above the trend as the primary post-tune action area. Each response-level row uses **Review &

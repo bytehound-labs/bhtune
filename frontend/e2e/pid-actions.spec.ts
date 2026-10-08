@@ -273,6 +273,8 @@ test.describe("post-tune PID actions", () => {
     await expect(chartCaption).toContainText("plotted points from");
     await expect(chartCaption).toContainText("PV ranged from");
     await expect(chartCaption).toContainText("MV ranged from");
+    await expect(chartCaption).toHaveClass("sr-only");
+    await expect(chart.locator('input[type="range"]')).toHaveCount(0);
     await expectAccessibilityInBothThemes(page);
 
     const headings = await page.locator("h2").allTextContents();

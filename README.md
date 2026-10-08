@@ -55,9 +55,10 @@ The browser UI associates form labels, hints, and validation errors with their c
 Dialogs keep keyboard focus inside until they close, and the OPC tag tree supports keyboard
 navigation. Run status changes are announced politely. History filters and page offsets are
 stored in the URL, so a selected history view can be reloaded or shared. ItemIDs and run IDs
-have copy controls with success and failure feedback. PV and commanded-MV trends provide
-explicit raw-value labels, a keyboard-operable point selector, and a text summary; engineering
-units are not inferred when the run does not record them. The main navigation, forms, and
+have copy controls with success and failure feedback. PV and commanded-MV trends use concise
+legends and a hidden text description for screen readers; live measurements and cycle progress
+remain in the status panel above the chart. Engineering units are not inferred when the run
+does not record them. The main navigation, forms, and
 history table adapt to viewports at and below 1024 pixels. See the
 [Web UI guide](docs/guides/web-ui/overview.md).
 

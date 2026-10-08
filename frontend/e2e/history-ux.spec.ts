@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { installFullRoutes } from "./docs-screenshots/fixtures";
+import {
+  installDemoRoutes,
+  installFullRoutes,
+  runningDemoRun,
+  runningFullRun,
+} from "./docs-screenshots/fixtures";
 import { expectAccessibilityInBothThemes } from "./support/accessibility";
 
 const historyRows = Array.from({ length: 68 }, (_, index) => ({
@@ -141,41 +146,101 @@ test("invalid history query values are reset with an explanation", async ({
   await expect(page.getByLabel("Filter by driver")).toHaveValue("opcda");
 });
 
-test("trend legend, raw values, and cursor are keyboard accessible in both themes", async ({
-  page,
-}) => {
-  await page.goto("/runs/4242");
+for (const mode of ["full", "demo"] as const) {
+  for (const outcome of ["running", "completed"] as const) {
+    test(`${mode} ${outcome} trend keeps concise labels without an inspection panel`, async ({
+      page,
+      baseURL,
+    }) => {
+      if (mode === "demo") {
+        if (!baseURL) {
+          throw new Error("The Demo fixture must use the configured origin.");
+        }
+        await installDemoRoutes(page, new URL(baseURL).origin);
+      }
+      const tagName =
+        outcome === "running"
+          ? "FCS0001!EXAMPLE_FIC101.PV"
+          : "Area01.FIC101.PV";
+      if (outcome === "running") {
+        const run = mode === "demo" ? runningDemoRun : runningFullRun;
+        await page.route("**/api/runs/4242", (route) =>
+          route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ ...run, tag_name: tagName }),
+          }),
+        );
+      }
+      await page.goto("/runs/4242");
 
-  const legend = page.getByRole("group", { name: "Trend series legend" });
-  await expect(legend).toContainText("PV (raw tag units)");
-  await expect(legend).toContainText("Commanded MV (raw tag units)");
-  await expect(
-    page.getByText(/Recorded run tag: Area01\.FIC101\.PV/),
-  ).toBeVisible();
-  await expect(
-    page.getByText(
-      "Recorded run tag: Area01.FIC101.PV. PV and commanded MV are shown as raw values; engineering units are not recorded.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+      if (outcome === "running") {
+        await expect(
+          page.getByText("Tune in progress — collecting live measurements."),
+        ).toBeVisible();
+        await expect(
+          page.getByText(
+            "Tick 1: PV 51, MV 60, cycles 0 completed / 2 remaining",
+            { exact: true },
+          ),
+        ).toBeVisible();
+      }
 
-  const slider = page.getByRole("slider", { name: "Inspect trend points" });
-  const cursor = page.locator(".u-cursor-x");
-  await expect(slider).toHaveAttribute("aria-valuetext", /Point 8 of 8/);
-  const lastPointCursor = await cursor.evaluate(
-    (element) => getComputedStyle(element).transform,
-  );
-  await slider.press("Home");
-  await expect(cursor).toBeVisible();
-  await expect(slider).toHaveAttribute("aria-valuetext", /Point 1 of 8/);
-  await expect
-    .poll(() =>
-      cursor.evaluate((element) => getComputedStyle(element).transform),
-    )
-    .not.toBe(lastPointCursor);
-  await expect(page.getByText(/PV 50 raw tag units/)).toBeVisible();
-  await expectAccessibilityInBothThemes(page);
-});
+      const chart = page.getByRole("figure");
+      await expect(chart).toBeVisible();
+      await expect(chart.locator('input[type="range"]')).toHaveCount(0);
+      await expect(page.getByText("Inspect trend points")).toHaveCount(0);
+      await expect(chart.getByText(/^Point \d+ of \d+/)).toHaveCount(0);
+      await expect(chart.getByText(/Recorded run tag:/)).toHaveCount(0);
+      await expect(chart.getByText(/raw tag units/)).toHaveCount(0);
+
+      const legend = page.getByRole("group", {
+        name: "Trend series legend",
+      });
+      await expect(legend.getByText("PV", { exact: true })).toBeVisible();
+      await expect(
+        legend.getByText("Commanded MV", { exact: true }),
+      ).toBeVisible();
+      if (mode === "full") {
+        await expect(page.getByText(tagName, { exact: true })).toBeVisible();
+      }
+
+      const description = chart.locator("figcaption");
+      const descriptionId = await chart.getAttribute("aria-describedby");
+      if (!descriptionId) {
+        throw new Error("The trend figure must reference its description.");
+      }
+      await expect(description).toHaveAttribute("id", descriptionId);
+      await expect(description).toContainText("plotted points from");
+      await expect(description).toContainText("PV ranged from");
+      await expect(description).toContainText("commanded MV ranged from");
+      expect(
+        await description.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const styles = getComputedStyle(element);
+          return {
+            width: rect.width,
+            height: rect.height,
+            position: styles.position,
+            overflow: styles.overflow,
+            clipPath: styles.clipPath,
+            tabIndex: element.tabIndex,
+          };
+        }),
+      ).toEqual({
+        width: 1,
+        height: 1,
+        position: "absolute",
+        overflow: "hidden",
+        clipPath: "inset(50%)",
+        tabIndex: -1,
+      });
+      await expectAccessibilityInBothThemes(page);
+      await chart.locator(".u-over").hover({ position: { x: 20, y: 20 } });
+      await expect(chart.locator(".u-cursor-x")).toBeVisible();
+    });
+  }
+}
 
 test("history and tune configuration do not overflow at 1024px or mobile width", async ({
   page,

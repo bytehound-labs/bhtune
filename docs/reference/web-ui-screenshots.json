@@ -197,10 +197,10 @@
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "d93743e16f140f09bcb9276dd364a841f8552e386bb2babe78385a159aaeab5d",
+      "sha256": "65490d12af2cd02c8a3261a3b8cc7a643eed39c61126315c29cca5825dc0b431",
       "width": 1440,
-      "height": 2112,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-live.png?v=d93743e16f14"
+      "height": 1976,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-live.png?v=65490d12af2c"
     },
     {
       "id": "full-run-complete",
@@ -223,10 +223,10 @@
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "bec99233da12b516385243fda0080e009b837573c962694b5774b57e26c4f522",
+      "sha256": "8482d63361c20c2227d5c15c3e7ad67bbac6aae0e519565e4bc936fe4aa9a5e0",
       "width": 1440,
-      "height": 2602,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=bec99233da12"
+      "height": 2466,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-run-complete.png?v=8482d63361c2"
     },
     {
       "id": "full-pid-review",
@@ -243,10 +243,10 @@
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "0aadc374a9fca7483620847ca40ef29549bccdbf166cd0b6877511b46505083a",
+      "sha256": "d9c6b9903ca5c06067fc410bb3106ec677ed76a678bdabb4ba2d2e86dd7be1d4",
       "width": 1440,
-      "height": 2602,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=0aadc374a9fc"
+      "height": 2466,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-pid-review.png?v=d9c6b9903ca5"
     },
     {
       "id": "full-history-delete-confirmation",
@@ -262,10 +262,10 @@
       "documentation": [
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "bc820dd7435e713d2deea8f71dbe48f2f6610749afff09b464d76ea9e15dee48",
+      "sha256": "573fe33a8e4e65212e6a3ff9a69dfff84e60a72b82e798f06c68430e962dad1f",
       "width": 1440,
-      "height": 2602,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=bc820dd7435e"
+      "height": 2466,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/full-history-delete-confirmation.png?v=573fe33a8e4e"
     },
     {
       "id": "full-template-list",
@@ -451,10 +451,10 @@
         "docs/guides/public-simulator-demo.md",
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "ba15d3668f1fc5394470cd105f6edc4b92c796de2b5c8dba33dc59d9654d21c9",
+      "sha256": "da8869d73ab1ab4e3014eb7294933aab0673ef0693874aa02fa119651ad8c293",
       "width": 1440,
-      "height": 1853,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=ba15d3668f1f"
+      "height": 1717,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-live.png?v=da8869d73ab1"
     },
     {
       "id": "demo-run-complete",
@@ -474,10 +474,10 @@
         "docs/guides/public-simulator-demo.md",
         "docs/guides/web-ui/runs-and-history.md"
       ],
-      "sha256": "5da2ec175d5f0fd91ad40a18e6619c2b0a22134d230ebf84daa2fd5b8718a099",
+      "sha256": "edcf42e130f49cb2c19309127e2883cc88a4560dc2ba26698e0e526ed5852e7b",
       "width": 1440,
-      "height": 2092,
-      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=5da2ec175d5f"
+      "height": 1956,
+      "publicUrl": "https://bytehound-labs.github.io/bhtune/generated/web-ui/demo-run-complete.png?v=edcf42e130f4"
     }
   ]
 }
