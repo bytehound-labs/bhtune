@@ -3,7 +3,6 @@ import type {
   RunDetailResponse,
   RunStreamState,
   ResponseLevel,
-  SampleResponse,
 } from "../../api/runs";
 import {
   CONTROLLER_TYPE_LABELS,
@@ -574,7 +573,6 @@ export function RunDetailContent({
   isRunning,
   stream,
   initialReadings,
-  trendSamples,
   trendPoints,
   trendPollIntervalMs,
   eligibility,
@@ -597,7 +595,6 @@ export function RunDetailContent({
   readonly isRunning: boolean;
   readonly stream: RunStreamState;
   readonly initialReadings: RunDetailResponse["initial_readings"];
-  readonly trendSamples: readonly SampleResponse[];
   readonly trendPoints: readonly TrendPoint[];
   readonly trendPollIntervalMs: number | null | undefined;
   readonly eligibility: WriteEligibility;
@@ -667,10 +664,6 @@ export function RunDetailContent({
           onRevert={onRevert}
         />
       )}
-      <p className="text-sm text-slate-500">
-        {trendSamples.length} measurements{" "}
-        {isRunning ? "recorded so far" : "were recorded"} for this tune.
-      </p>
     </>
   );
 }

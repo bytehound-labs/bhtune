@@ -191,6 +191,11 @@ for (const mode of ["full", "demo"] as const) {
       const chart = page.getByRole("figure");
       await expect(chart).toBeVisible();
       await expect(
+        page.getByText(
+          /^\d+ measurements (recorded so far|were recorded) for this tune\.$/,
+        ),
+      ).toHaveCount(0);
+      await expect(
         page.getByRole("heading", {
           name: "Sampling diagnostics",
           exact: true,
@@ -302,7 +307,7 @@ for (const mode of ["full", "demo"] as const) {
           `${run.samples.length} measurements were recorded for this tune.`,
           { exact: true },
         ),
-      ).toBeVisible();
+      ).toHaveCount(0);
       await expect(
         page.getByRole("heading", {
           name: "Sampling diagnostics",
@@ -351,6 +356,11 @@ test("failure and incomplete restore evidence remains without sampling diagnosti
   await expect(
     page.getByText("The original MV could not be confirmed.", { exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByText(
+      /^\d+ measurements (recorded so far|were recorded) for this tune\.$/,
+    ),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("heading", {
       name: "Sampling diagnostics",

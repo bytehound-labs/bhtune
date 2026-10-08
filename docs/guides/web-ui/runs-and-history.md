@@ -92,7 +92,8 @@ count, time span, axes, and observed PV/MV ranges; it does not add measurements 
 </figure>
 
 The page's independently collapsible sections include Summary, Notes, Test configuration,
-Initial readings, and PID change history. The measurement count remains visible beneath them.
+Initial readings, and PID change history. Live progress stays above the trend without a
+repeated measurement-count footer beneath the sections.
 When a live OPC DA run stored a
 gateway compatibility snapshot, Summary shows it as a badge: full, partial, unknown, or
 incompatible. Simulator runs and older runs have no badge. See

@@ -325,8 +325,8 @@ results panel is promoted directly below the run heading and before the trend; w
 remains in its lower diagnostic position. The normal run page omits sampling-adequacy and
 latency diagnostics: the advisory threshold is not a calibrated tuning-quality score.
 The underlying timing snapshot, classification, API/CLI output, and structured logging remain
-available for engineering review. The measurement count and genuine safety or invalid/unwritable
-result evidence remain visible.
+available for engineering review. Live status stays above the trend without a repeated
+measurement-count footer. Genuine safety or invalid/unwritable result evidence remains visible.
 
 ## New Run prefill and duplicate
 

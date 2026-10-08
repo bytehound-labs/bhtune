@@ -274,9 +274,8 @@ browser-visible origin.
      write action is disabled.
    - Run-detail sections are independently collapsible. Calculated results, Trend, Summary,
      Notes, Test configuration, Initial readings, and PID change history start expanded so the
-     main result and PID audit information is immediately visible. The measurement count remains
-     visible beneath the sections. Invalid results, run failures, and incomplete restoration
-     remain visible; there is no sampling-quality badge on this page.
+     main result and PID audit information is immediately visible. Invalid results, run failures,
+     and incomplete restoration remain visible; there is no sampling-quality badge on this page.
 
    Detailed polling timing, sampling adequacy, and MV command/readback evidence remain available
    through `bhtune history show`, the run-detail API, and structured logs, but are not part of

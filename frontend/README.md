@@ -106,8 +106,8 @@ Run-detail sections are independently collapsible. Calculated results, Trend, Su
 Test configuration, Initial readings, and PID change history start expanded; MV actuation
 evidence, sampling adequacy, and operation-latency summaries remain available through CLI
 history, the run-detail API, and structured logs rather than a diagnostic panel on the normal
-page. The measurement-count footer remains visible. CSV and JSON download links export the
-recorded samples, not the run's metadata.
+page. Live progress stays above the trend without a repeated measurement-count footer.
+CSV and JSON download links export the recorded samples, not the run's metadata.
 
 History filter selections and page offsets are query parameters. Full mode supports process
 type, outcome, driver, and pagination; Demo keeps pagination but removes Full-only filters.
