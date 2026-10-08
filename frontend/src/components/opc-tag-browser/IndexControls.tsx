@@ -48,6 +48,13 @@ export function IndexControls({
     refreshPending ||
     indexStatus?.state === "partial" ||
     indexStatus?.state === "refreshing";
+  const nextRefreshAt = indexStatus?.auto_refresh_enabled
+    ? indexStatus.scheduler.next_refresh_at
+    : null;
+  let autoRefreshLabel = "disabled";
+  if (indexStatus?.auto_refresh_enabled) {
+    autoRefreshLabel = nextRefreshAt ? "enabled" : "not scheduled";
+  }
 
   return (
     <div className="mb-3 space-y-2">
@@ -121,21 +128,20 @@ export function IndexControls({
             {indexStatus.progress.items_per_second.toFixed(0)} items/s
           </span>
         )}
-        {indexStatus?.scheduler.next_refresh_at && (
-          <span
-            title={
-              formatExactTime(indexStatus.scheduler.next_refresh_at) ??
-              undefined
-            }
-          >
-            Next refresh:{" "}
-            {formatTimeUntil(indexStatus.scheduler.next_refresh_at)}
+        {nextRefreshAt && (
+          <span title={formatExactTime(nextRefreshAt) ?? undefined}>
+            Next refresh: {formatTimeUntil(nextRefreshAt)}
           </span>
         )}
         {indexStatus && indexStatus.active_generation > 0 && (
-          <span>
-            Auto-refresh:{" "}
-            {indexStatus.auto_refresh_enabled ? "enabled" : "disabled"}
+          <span
+            title={
+              indexStatus.auto_refresh_enabled && !nextRefreshAt
+                ? "This server is opted in, but the gateway has not reported a scheduled refresh. Gateway policy controls automatic scheduling."
+                : undefined
+            }
+          >
+            Auto-refresh: {autoRefreshLabel}
           </span>
         )}
       </div>

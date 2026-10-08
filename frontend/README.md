@@ -65,6 +65,12 @@ can never merge.
 For the OPC DA driver, the connection fields are presented in this order: Bridge host, OPC DA
 server ProgID, Tag name, then Notes.
 
+The tag browser's `Index: ready` status describes the usable index, independently of automatic
+refresh. `Auto-refresh: enabled` appears with the gateway-reported next-refresh countdown and
+exact-time tooltip. An opted-in server without a scheduled date shows `Auto-refresh: not scheduled`;
+a server that is not opted in shows `Auto-refresh: disabled`. Per-server toggles do not override
+gateway-wide scheduling policy.
+
 Built-in and catalog templates can't be edited through the UI — they're re-seeded from
 their source file on every server startup, so an edit would just be discarded — but they
 can still be viewed, and deleting one to make room for a customized replacement works the

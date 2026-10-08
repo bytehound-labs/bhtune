@@ -106,7 +106,7 @@ SonarCloud project key: `bytehound-labs_bhtune`. Before merge, query `pullReques
 
 Required status names stay `Required validation status`, `Required coverage status`, `Required E2E status`, and `Required Sonar quality status`.
 
-`pnpm --filter bhtune-frontend exec playwright test --list` reports 150 tests in 19 files. The OPC DA browser suite is 43 of those: `opc-browser-discovery.spec.ts` (7), `opc-browser-index.spec.ts` (20), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
+`pnpm --filter bhtune-frontend exec playwright test --list` reports 152 tests in 19 files. The OPC DA browser suite is 45 of those: `opc-browser-discovery.spec.ts` (7), `opc-browser-index.spec.ts` (22), `opc-browser-mapping.spec.ts` (8), `opc-browser-restore.spec.ts` (5), and `opc-browser-selection.spec.ts` (3). Shared helpers live in `frontend/e2e/support/opcBrowser.ts`. The `full` project ignores `demo-real.spec.ts`; the `demo` project matches only that file.
 
 ## Config precedence (`cli-config`)
 
@@ -151,7 +151,7 @@ JSON mode prints one final JSON value on stdout. Prompts go to stderr. JSON mode
 
 `OpcDaDriver::connect(host, server)` passes `host:port` to `Client::connect`. The default port is 7600. The ProgID is stored on the driver and sent with every later call. Gateway info and server listing are pre-connection free functions, not `Driver` methods. Server listing returns servers registered on the gateway machine.
 
-The supported contract is `opcda-bridge` 0.5 or newer: capabilities, bounded browse pages, session close, live search, persistent indexed search, and unary read/write. CLI commands are `bhtune opc gateway-info`, `servers`, `read`, `write`, `browse`, `search`, `search-index`, and `close`. A CLI browse session stays open until `bhtune opc close <session-id>`. The browser closes its session when the modal closes.
+The supported contract is `opcda-bridge` 0.5 or newer: capabilities, bounded browse pages, session close, live search, persistent indexed search, and unary read/write. CLI commands are `bhtune opc gateway-info`, `servers`, `read`, `write`, `browse`, `search`, `search-index`, and `close`. A CLI browse session stays open until `bhtune opc close <session-id>`. The browser closes its session when the modal closes. Per-server auto-refresh opt-in does not override gateway-wide scheduling policy; without a gateway-reported next date, the browser shows `Auto-refresh: not scheduled` instead of inventing a countdown or claiming a schedule is enabled.
 
 An accepted OPC write is not proof the controller moved. The confirmation rule is in the live-plant section below.
 

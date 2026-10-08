@@ -65,6 +65,10 @@ API rather than a tuning-quality badge. The main navigation, forms, and
 history table adapt to viewports at and below 1024 pixels. See the
 [Web UI guide](docs/guides/web-ui/overview.md).
 
+The OPC tag browser distinguishes a usable index from its automatic refresh schedule.
+An opted-in server without a gateway-reported refresh time shows `Auto-refresh: not scheduled`.
+Per-server refresh controls do not override the gateway's global scheduling policy.
+
 ## Safety
 
 A live MRFT can switch a loop to Manual and stroke its valve. Read the

@@ -46,8 +46,13 @@ only the global search input and offers **Build index** or **Retry build** while
 lazy tree, exact ItemID entry, quality read, and selection controls available. It never falls
 back automatically to the slow live whole-server search. A failed tree page retains already
 loaded nodes and exposes a per-level **Retry** action;
-when automatic refresh is enabled, the browser shows the next scheduled refresh as a relative
-days-and-hours countdown and keeps the exact scheduled time in the hover tooltip.
+when an opted-in server has a gateway-reported next date, the browser shows
+`Auto-refresh: enabled` with a relative days-and-hours countdown and the exact scheduled
+time in the hover tooltip. An opted-in server without a reported date shows
+`Auto-refresh: not scheduled`; a server that is not opted in shows
+`Auto-refresh: disabled`, without a countdown. `Index: ready` remains a separate statement
+about the usable generation. The browser does not infer a next date or treat the per-server
+toggle as an override of gateway-wide scheduling policy.
 unknown `/api/*` paths return JSON 404 responses instead of the SPA shell, making stale
 server/frontend combinations diagnosable.
 
@@ -95,7 +100,8 @@ with persistent-index state, progress, ranked exact matches, breadcrumbs, and `h
 Indexing is an optional search accelerator with per-server enrollment owned by the gateway database.
 A fresh gateway has no enrolled servers; BHTune's tag browser can build an index for any exact
 ProgID returned by the gateway, without a TOML allow-list or restart. After a successful first
-build, automatic refresh is enabled by default under the gateway's configurable seven-day policy.
+build, the server is opted in to automatic refresh under the gateway's configurable seven-day
+policy; scheduling also requires its global indexing policy to permit automatic work.
 The browser can retry, refresh, disable or re-enable automatic refresh, and delete an index while
 lazy browse, direct ItemID entry, live reads, and tuning remain independent of index state.
 Index-status failures are compact diagnostics rather than browse failures.
