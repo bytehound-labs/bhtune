@@ -125,6 +125,15 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await expect(
       page.getByText("Next refresh: in 7 days 2 hours"),
     ).toBeVisible();
+    await expect(
+      page.getByText("Next refresh: in 7 days 2 hours"),
+    ).toHaveAttribute(
+      "title",
+      await page.evaluate(
+        (timestamp) => new Date(Number(timestamp)).toLocaleString(),
+        status.scheduler.next_refresh_at,
+      ),
+    );
 
     await page
       .getByRole("button", { name: "Disable auto-refresh", exact: true })
@@ -172,6 +181,91 @@ test.describe(OPC_BROWSER_SUITE, () => {
       page.getByRole("button", { name: "Delete index", exact: true }),
     ).toHaveCount(0);
   });
+
+  for (const schedule of [
+    { name: "null", nextRefreshAt: null },
+    { name: "omitted", nextRefreshAt: undefined },
+  ]) {
+    test(`reports unscheduled auto-refresh with a ${schedule.name} schedule`, async ({
+      page,
+    }) => {
+      const ready = searchIndexStatus("ready");
+      const index = await mockBrowserIndex(page, {
+        ...ready,
+        scheduler: {
+          ...ready.scheduler,
+          next_refresh_at: schedule.nextRefreshAt,
+        },
+      });
+      const toggles: boolean[] = [];
+      const refreshRequests: string[] = [];
+      page.on("request", (request) => {
+        if (
+          new URL(request.url()).pathname === "/api/opc/search-index/refresh"
+        ) {
+          refreshRequests.push(request.method());
+        }
+      });
+      await page.route(
+        "**/api/opc/search-index/auto-refresh**",
+        async (route) => {
+          const enabled =
+            new URL(route.request().url()).searchParams.get("enabled") ===
+            "true";
+          toggles.push(enabled);
+          index.status = {
+            ...index.status,
+            auto_refresh_enabled: enabled,
+            scheduler: {
+              ...index.status.scheduler,
+              next_refresh_at: enabled
+                ? schedule.nextRefreshAt
+                : ready.scheduler.next_refresh_at,
+            },
+          };
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(index.status),
+          });
+        },
+      );
+
+      await page.getByRole("button", { name: "Browse tags" }).click();
+      const unscheduled = page.getByText("Auto-refresh: not scheduled", {
+        exact: true,
+      });
+      await expect(
+        page.getByText("Index: ready", { exact: true }),
+      ).toBeVisible();
+      await expect(unscheduled).toBeVisible();
+      await expect(unscheduled).toHaveAttribute(
+        "title",
+        "This server is opted in, but the gateway has not reported a scheduled refresh. Gateway policy controls automatic scheduling.",
+      );
+      await expect(page.getByText("Auto-refresh: enabled")).toHaveCount(0);
+      await expect(page.getByText("Next refresh:")).toHaveCount(0);
+      await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
+      await expect(
+        page.getByRole("button", { name: "Refresh index", exact: true }),
+      ).toBeEnabled();
+
+      await page
+        .getByRole("button", { name: "Disable auto-refresh", exact: true })
+        .click();
+      await expect(page.getByText("Auto-refresh: disabled")).toBeVisible();
+      await expect(page.getByText("Next refresh:")).toHaveCount(0);
+      await page
+        .getByRole("button", { name: "Enable auto-refresh", exact: true })
+        .click();
+      await expect(unscheduled).toBeVisible();
+      await expect(page.getByText("Next refresh:")).toHaveCount(0);
+      expect(index.status.state).toBe("ready");
+      expect(index.status.active_generation).toBe(ready.active_generation);
+      expect(toggles).toEqual([false, true]);
+      expect(refreshRequests).toEqual([]);
+    });
+  }
 
   test("provides debounced indexed search with keyboard selection and exact ItemIDs", async ({
     page,

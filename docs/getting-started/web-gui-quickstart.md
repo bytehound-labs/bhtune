@@ -176,8 +176,9 @@ browser-visible origin.
      Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled
      servers and does not index every registered OPC DA server automatically. Use **Build index**
      in the tag browser to enroll the selected ProgID and start its first build; no gateway TOML
-     edit or restart is required. After the first successful build, the gateway automatically
-     refreshes the index according to its configurable seven-day policy. The browser also
+     edit or restart is required. After the first successful build, the server is opted in
+     to automatic refresh according to the gateway's configurable seven-day policy, provided
+     its global scheduler permits automatic indexing. The browser also
      provides **Refresh now**, **Retry build**, **Disable auto-refresh**, **Enable auto-refresh**,
      and **Delete index** actions. Disabling automatic refresh keeps the existing index and
      searchable data; deleting it shows a temporary `deleting` state while the gateway removes
@@ -186,8 +187,13 @@ browser-visible origin.
      still building, the global search field is disabled, but the lazy tag tree and other
      operations remain available. Completed non-fatal inventory diagnostics remain available
      through the gateway/API and diagnostic CLI; the browser shows the gateway's failure
-     diagnostic on its own line for a failed index state. When automatic refresh is enabled, the next scheduled refresh appears as a
-     relative days-and-hours countdown, with the exact scheduled time available on hover.
+     diagnostic on its own line for a failed index state. `Index: ready` means the existing
+     index is usable, not that automatic refresh is running. When the opted-in server has a
+     gateway-reported next date, `Auto-refresh: enabled` appears with a relative days-and-hours
+     countdown and the exact scheduled time on hover. An opted-in server without a reported
+     date shows `Auto-refresh: not scheduled`; a server that is not opted in shows
+     `Auto-refresh: disabled`. The per-server toggle cannot override gateway-wide scheduling
+     policy.
 
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail

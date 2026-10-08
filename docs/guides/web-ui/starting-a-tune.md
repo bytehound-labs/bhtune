@@ -111,8 +111,8 @@ available after the index is removed.
 
 {/* web-ui-screenshot: full-opc-search-index-delete-confirmation */}
 <figure>
-  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=fe86dcffa519">
-    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=fe86dcffa519" alt="BHTune failed OPC search-index deletion confirmation with an inline retry error" />
+  <a href="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=59b0f375dd9c">
+    <img src="https://bytehound-labs.github.io/bhtune/generated/web-ui/full-opc-search-index-delete-confirmation.png?v=59b0f375dd9c" alt="BHTune failed OPC search-index deletion confirmation with an inline retry error" />
   </a>
   <figcaption>A failed index deletion keeps the exact confirmation copy open and retryable; the underlying index state is unchanged until the retry succeeds.</figcaption>
 </figure>
