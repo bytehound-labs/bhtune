@@ -72,7 +72,9 @@ When gateway configuration blocks scheduling, the browser explains the blocker a
 without removing searchable data. The blocker explanation is linked to the control for screen
 readers. A countdown appears only when the gateway permits scheduling
 and reports a next-refresh time. Older gateways that do not report policy are labelled unverified,
-and their controls explicitly save a server preference rather than promise a running schedule.
+with a brief notice that the controls save a server preference rather than promise a running
+schedule. The preference applies to future automatic refreshes; disabling it does not cancel
+an active build or delete cached tags.
 
 ## Safety
 

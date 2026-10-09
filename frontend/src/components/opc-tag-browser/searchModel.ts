@@ -148,7 +148,7 @@ export function autoRefreshPolicyMessage(
     case "paused":
       return "Automatic refresh is paused by gateway configuration (index.paused = true). Cached search and manual refresh remain available.";
     default:
-      return "The gateway does not report its scheduling policy. These controls only save this server's preference; upgrade the gateway to verify automatic scheduling.";
+      return "Controls only save this server's auto-refresh preference.";
   }
 }
 

@@ -73,7 +73,9 @@ separately. The visible blocker explanation is also the control's accessible des
 **Disable server preference** keeps the index and does not change gateway policy.
 `Auto-refresh: enabled` and its countdown require an allowed policy and a reported next date;
 an enabled preference without a date shows `Auto-refresh: not scheduled`. Missing policy from
-an older gateway remains unknown, with preference-only control labels and no countdown.
+an older gateway remains unknown, with preference-only control labels, a brief notice, and no
+countdown. These controls save the selected OPC server's auto-refresh opt-in or opt-out; they
+do not alter gateway policy, cancel an active build, or delete cached tags.
 
 Built-in and catalog templates can't be edited through the UI — they're re-seeded from
 their source file on every server startup, so an edit would just be discarded — but they

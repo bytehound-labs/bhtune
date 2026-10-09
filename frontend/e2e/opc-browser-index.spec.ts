@@ -385,7 +385,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       ).toBeVisible();
       await expect(
         page.getByText(
-          "The gateway does not report its scheduling policy. These controls only save this server's preference; upgrade the gateway to verify automatic scheduling.",
+          "Controls only save this server's auto-refresh preference.",
         ),
       ).toBeVisible();
       await expect(

@@ -163,8 +163,12 @@ describe("OPC tag browser search helpers", () => {
       );
     }
     expect(autoRefreshPolicyMessage("allowed")).toBeNull();
-    expect(autoRefreshPolicyMessage(undefined)).toContain("does not report");
-    expect(autoRefreshPolicyMessage(null)).toContain("does not report");
+    expect(autoRefreshPolicyMessage(undefined)).toBe(
+      "Controls only save this server's auto-refresh preference.",
+    );
+    expect(autoRefreshPolicyMessage(null)).toBe(
+      "Controls only save this server's auto-refresh preference.",
+    );
   });
 
   it("identifies only terminal index errors", () => {
