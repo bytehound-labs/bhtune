@@ -66,15 +66,14 @@ history table adapt to viewports at and below 1024 pixels. See the
 [Web UI guide](docs/guides/web-ui/overview.md).
 
 The OPC tag browser distinguishes a usable index from its automatic refresh schedule.
-The GUI controls the selected server's preference, not the gateway's administrative override.
-When gateway configuration blocks scheduling, the browser explains the blocker and disables
-**Enable auto-refresh**; a saved enabled preference is labelled separately and can be disabled
-without removing searchable data. The blocker explanation is linked to the control for screen
-readers. A countdown appears only when the gateway permits scheduling
-and reports a next-refresh time. Older gateways that do not report policy are labelled unverified,
-with a brief notice that the controls save a server preference rather than promise a running
-schedule. The preference applies to future automatic refreshes; disabling it does not cancel
-an active build or delete cached tags.
+Its index actions are **Refresh Index**, **Cancel Indexing**, and **Delete Index**.
+Every usable enrolled index participates automatically when gateway policy permits; there is
+no per-server opt-in/out setting. Cancel preserves cached tags and defers automatic work until
+the next configured interval; manual refresh can start earlier. Delete removes the cache and
+enrollment until another manual refresh. The browser explains gateway-wide blockers and shows
+a countdown only when policy allows scheduling and the gateway reports a next-refresh time.
+Missing policy remains unknown. The always-participating lifecycle requires indexed-search
+protocol 3; older gateways are not silently reconfigured.
 
 ## Safety
 

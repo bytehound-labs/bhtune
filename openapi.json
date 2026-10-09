@@ -541,62 +541,6 @@
         }
       }
     },
-    "/api/opc/search-index/auto-refresh": {
-      "post": {
-        "tags": [
-          "opc"
-        ],
-        "operationId": "set_search_index_auto_refresh",
-        "parameters": [
-          {
-            "name": "bridge_host",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "opc_server",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "enabled",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OpcSearchIndexStatusResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "The auto-refresh request or gateway connection is invalid.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/opc/search-index/control": {
       "post": {
         "tags": [
@@ -4196,7 +4140,6 @@
         "required": [
           "server",
           "state",
-          "auto_refresh_enabled",
           "active_generation",
           "entry_count",
           "unique_item_count",
@@ -4210,9 +4153,6 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
-          },
-          "auto_refresh_enabled": {
-            "type": "boolean"
           },
           "completed_at": {
             "type": [

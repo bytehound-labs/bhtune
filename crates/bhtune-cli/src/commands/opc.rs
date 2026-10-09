@@ -762,10 +762,6 @@ fn print_search_index_status(
     println!("Server: {}", status.server);
     println!("State: {}", status.state);
     println!(
-        "Server auto-refresh preference: {}",
-        status.auto_refresh_enabled
-    );
-    println!(
         "Gateway auto-refresh policy: {}",
         status
             .scheduler
@@ -833,7 +829,6 @@ fn json_search_index_status(status: &SearchIndexStatus) -> serde_json::Value {
     serde_json::json!({
         "server": status.server,
         "state": status.state.to_string(),
-        "auto_refresh_enabled": status.auto_refresh_enabled,
         "active_generation": status.active_generation,
         "entry_count": status.entry_count,
         "unique_item_count": status.unique_item_count,
@@ -950,8 +945,8 @@ mod tests {
                     },
                     ProtocolFeature {
                         kind: ProtocolFeatureKind::IndexedSearch as i32,
-                        min_version: 2,
-                        max_version: 2,
+                        min_version: 3,
+                        max_version: 3,
                     },
                 ],
             },
@@ -1444,7 +1439,6 @@ mod tests {
         let status = ProtoSearchIndexStatus {
             server: "Sim.Server".into(),
             state: ProtoSearchIndexState::Partial as i32,
-            configured: true,
             active_generation: 2,
             entry_count: 3,
             unique_item_count: 2,
@@ -1596,7 +1590,6 @@ mod tests {
         let mut status = bhtune_driver::SearchIndexStatus {
             server: "Sim.Server".into(),
             state: bhtune_driver::SearchIndexState::Failed,
-            auto_refresh_enabled: true,
             active_generation: 1,
             entry_count: 2,
             unique_item_count: 1,

@@ -293,7 +293,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(searchIndexStatus("not_indexed", false)),
+        body: JSON.stringify(searchIndexStatus("not_indexed")),
       });
     });
     await page.route("**/api/opc/search**", async (route) => {
@@ -375,7 +375,6 @@ test.describe(OPC_BROWSER_SUITE, () => {
         body: JSON.stringify(
           searchIndexStatus(
             "failed",
-            true,
             "inventory stream ended before completion",
             1,
           ),

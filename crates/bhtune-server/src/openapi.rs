@@ -54,7 +54,6 @@ use crate::routes::{capabilities, config, draft, health, history, opc, runs, str
         opc::search_index_status,
         opc::search_index,
         opc::refresh_search_index,
-        opc::set_search_index_auto_refresh,
         opc::control_search_index,
         opc::delete_search_index,
         opc::read,
@@ -160,7 +159,6 @@ mod tests {
             ("/api/opc/search-index/status", "get"),
             ("/api/opc/search-index/search", "get"),
             ("/api/opc/search-index/refresh", "post"),
-            ("/api/opc/search-index/auto-refresh", "post"),
             ("/api/opc/search-index/control", "post"),
             ("/api/opc/search-index", "delete"),
         ] {

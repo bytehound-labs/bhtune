@@ -495,19 +495,6 @@ impl OpcDaDriver {
             .map(search_index_status_from_bridge)
     }
 
-    /// Enables or disables future automatic refreshes for this OPC server's index.
-    pub async fn set_search_index_auto_refresh(
-        &self,
-        enabled: bool,
-    ) -> DriverResult<SearchIndexStatus> {
-        let mut client = self.client.lock().await;
-        client
-            .set_search_index_auto_refresh(self.server.clone(), enabled)
-            .await
-            .map_err(|err| map_bridge_error_for(err, "indexed-search auto-refresh"))
-            .map(search_index_status_from_bridge)
-    }
-
     /// Deletes this OPC server's persistent namespace index and enrollment.
     pub async fn delete_search_index(&self) -> DriverResult<SearchIndexStatus> {
         let mut client = self.client.lock().await;
@@ -766,13 +753,6 @@ impl Driver for OpcDaDriver {
         self.control_search_index(action).await
     }
 
-    async fn set_search_index_auto_refresh(
-        &self,
-        enabled: bool,
-    ) -> DriverResult<SearchIndexStatus> {
-        self.set_search_index_auto_refresh(enabled).await
-    }
-
     async fn delete_search_index(&self) -> DriverResult<SearchIndexStatus> {
         self.delete_search_index().await
     }
@@ -891,7 +871,6 @@ pub fn search_index_status_from_bridge(
     SearchIndexStatus {
         server: status.server,
         state: search_index_state_from_bridge(status.state),
-        auto_refresh_enabled: status.auto_refresh_enabled,
         active_generation: status.active_generation,
         entry_count: status.entry_count,
         unique_item_count: status.unique_item_count,
@@ -1400,7 +1379,6 @@ mod tests {
         let status = search_index_status_from_bridge(opcda_bridge::SearchIndexStatus {
             server: "S".into(),
             state: opcda_bridge::SearchIndexState::Partial,
-            auto_refresh_enabled: true,
             active_generation: 2,
             entry_count: 3,
             unique_item_count: 4,
@@ -2030,7 +2008,6 @@ mod smoke_tests {
             search_index_status_response: ProtoSearchIndexStatus {
                 server: "S1".into(),
                 state: ProtoSearchIndexState::Ready as i32,
-                configured: true,
                 active_generation: 7,
                 entry_count: 2,
                 unique_item_count: 2,
@@ -2049,7 +2026,6 @@ mod smoke_tests {
                 status: Some(ProtoSearchIndexStatus {
                     server: "S1".into(),
                     state: ProtoSearchIndexState::Ready as i32,
-                    configured: true,
                     active_generation: 7,
                     entry_count: 2,
                     unique_item_count: 2,
@@ -2065,8 +2041,6 @@ mod smoke_tests {
         let status = driver.search_index_status().await.unwrap();
         assert_eq!(status.state, SearchIndexState::Ready);
         assert_eq!(status.active_generation, 7);
-        driver.set_search_index_auto_refresh(false).await.unwrap();
-        driver.set_search_index_auto_refresh(true).await.unwrap();
         driver.delete_search_index().await.unwrap();
         let response = driver
             .search_index_query(SearchIndexRequest::new(
@@ -2168,11 +2142,6 @@ mod smoke_tests {
         );
         assert!(
             <OpcDaDriver as Driver>::refresh_search_index(&driver, false)
-                .await
-                .is_ok()
-        );
-        assert!(
-            <OpcDaDriver as Driver>::set_search_index_auto_refresh(&driver, false)
                 .await
                 .is_ok()
         );
@@ -2286,7 +2255,7 @@ mod smoke_tests {
             gateway_info_response: gateway_info_with_features(vec![
                 protocol_feature(ProtocolFeatureKind::Core, 1, 1),
                 protocol_feature(ProtocolFeatureKind::Namespace, 2, 3),
-                protocol_feature(ProtocolFeatureKind::IndexedSearch, 2, 2),
+                protocol_feature(ProtocolFeatureKind::IndexedSearch, 3, 3),
             ]),
             ..Default::default()
         })

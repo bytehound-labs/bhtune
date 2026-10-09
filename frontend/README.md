@@ -68,14 +68,15 @@ server ProgID, Tag name, then Notes.
 The tag browser's `Index: ready` status describes the usable index, independently of automatic
 refresh. The optional `scheduler.auto_refresh_policy` diagnostic distinguishes permitted
 scheduling from a gateway configuration disable or startup pause. A blocked policy explains
-the exact setting, disables ineffective Enable actions, and labels a saved server preference
-separately. The visible blocker explanation is also the control's accessible description.
-**Disable server preference** keeps the index and does not change gateway policy.
+the exact setting without preference controls. Index actions are **Refresh Index**, **Cancel
+Indexing**, and **Delete Index**, with busy/disabled states and styled deletion confirmation.
+Every usable enrolled index participates under gateway policy. Cancel keeps the cache and
+defers automatic work until the next configured interval; manual refresh overrides the delay.
+Delete removes enrollment and requires another manual refresh to recreate the index.
 `Auto-refresh: enabled` and its countdown require an allowed policy and a reported next date;
-an enabled preference without a date shows `Auto-refresh: not scheduled`. Missing policy from
-an older gateway remains unknown, with preference-only control labels, a brief notice, and no
-countdown. These controls save the selected OPC server's auto-refresh opt-in or opt-out; they
-do not alter gateway policy, cancel an active build, or delete cached tags.
+an allowed policy without a date shows `Auto-refresh: not scheduled`. Missing policy from
+an older gateway remains unknown, with a brief notice and no countdown. The always-participating
+lifecycle requires indexed-search protocol 3. Index actions do not alter gateway-wide policy.
 
 Built-in and catalog templates can't be edited through the UI — they're re-seeded from
 their source file on every server startup, so an edit would just be discarded — but they

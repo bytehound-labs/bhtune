@@ -339,45 +339,6 @@ export function useRefreshOpcSearchIndex() {
   });
 }
 
-/** `POST /api/opc/search-index/auto-refresh` -- enables or disables scheduled refreshes. */
-export function useSetOpcSearchIndexAutoRefresh() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (params: {
-      bridgeHost: string;
-      opcServer: string;
-      enabled: boolean;
-    }) => {
-      const { data, error, response } = await apiClient.POST(
-        "/api/opc/search-index/auto-refresh",
-        {
-          params: {
-            query: {
-              bridge_host: params.bridgeHost || undefined,
-              opc_server: params.opcServer || undefined,
-              enabled: params.enabled,
-            },
-          },
-        },
-      );
-      if (error) throw toApiError(error, response);
-      return data as OpcSearchIndexStatusResponse;
-    },
-    onSuccess: (data, variables) => {
-      queryClient.setQueryData(
-        [
-          "opc",
-          "search-index",
-          "status",
-          variables.bridgeHost,
-          variables.opcServer,
-        ],
-        data,
-      );
-    },
-  });
-}
-
 /** `POST /api/opc/search-index/control` -- controls an active build. */
 export function useControlOpcSearchIndex() {
   const queryClient = useQueryClient();

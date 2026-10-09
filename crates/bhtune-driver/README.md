@@ -9,8 +9,9 @@ and demonstrations, while `ReplayDriver` validates the driver abstraction agains
 traces. `ReadOnlyDriver` forwards reads and capabilities while rejecting writes and browse
 operations.
 
-Index status preserves the saved server auto-refresh preference separately from the optional
-gateway policy (`allowed`, `disabled`, or `paused`). An absent policy is unknown. Changing a
-server preference does not override gateway configuration or cancel an active index build.
+Index status preserves optional gateway policy (`allowed`, `disabled`, or `paused`); an absent
+policy is unknown. Indexed-search protocol 3 schedules every usable enrolled index without
+per-server opt-in/out. Cancel defers automatic work while keeping the cached generation; forced
+manual refresh overrides that delay. Delete removes enrollment until another manual refresh.
 
 API documentation: <https://docs.rs/bhtune-driver>

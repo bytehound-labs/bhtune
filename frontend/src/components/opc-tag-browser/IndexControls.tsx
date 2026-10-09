@@ -1,11 +1,7 @@
 import type { OpcSearchIndexStatusResponse } from "../../api/opc";
 import { formatExactTime, formatTimeUntil } from "../../lib/time";
 import { Button, LoadingStatus } from "../ui";
-import {
-  autoRefreshButtonLabel,
-  autoRefreshPolicyMessage,
-  indexBuildButtonLabel,
-} from "./searchModel";
+import { autoRefreshPolicyMessage } from "./searchModel";
 
 type IndexControlsProps = Readonly<{
   opcServer: string;
@@ -17,11 +13,9 @@ type IndexControlsProps = Readonly<{
   indexUnavailableMessage: string;
   refreshPending: boolean;
   controlPending: boolean;
-  autoRefreshPending: boolean;
   deletePending: boolean;
   onRefresh: () => void;
   onCancel: () => void;
-  onSetAutoRefresh: (enabled: boolean) => void;
   onDelete: () => void;
 }>;
 
@@ -35,11 +29,9 @@ export function IndexControls({
   indexUnavailableMessage: unavailableMessage,
   refreshPending,
   controlPending,
-  autoRefreshPending,
   deletePending,
   onRefresh,
   onCancel,
-  onSetAutoRefresh,
   onDelete,
 }: IndexControlsProps) {
   const canCancelBuild =
@@ -56,15 +48,14 @@ export function IndexControls({
   const policyBlocked = policy === "disabled" || policy === "paused";
   const policyMessage = autoRefreshPolicyMessage(policy);
   const nextRefreshAt =
-    indexStatus?.auto_refresh_enabled && policy === "allowed"
-      ? indexStatus.scheduler.next_refresh_at
-      : null;
-  let autoRefreshLabel = "disabled";
-  if (indexStatus?.auto_refresh_enabled) {
-    if (policyBlocked) autoRefreshLabel = "blocked by gateway";
-    else if (!policy) autoRefreshLabel = "policy unavailable";
-    else autoRefreshLabel = nextRefreshAt ? "enabled" : "not scheduled";
-  }
+    policy === "allowed" ? indexStatus?.scheduler.next_refresh_at : null;
+  const autoRefreshLabel = policyBlocked
+    ? "blocked by gateway"
+    : !policy
+      ? "policy unavailable"
+      : nextRefreshAt
+        ? "enabled"
+        : "not scheduled";
 
   return (
     <div className="mb-3 space-y-2">
@@ -81,7 +72,7 @@ export function IndexControls({
           loading={refreshPending}
           onClick={onRefresh}
         >
-          {indexBuildButtonLabel(indexSearchAvailable, indexStatus?.state)}
+          Refresh Index
         </Button>
         {canCancelBuild && (
           <Button
@@ -90,7 +81,7 @@ export function IndexControls({
             disabled={controlPending}
             onClick={onCancel}
           >
-            Cancel build
+            Cancel Indexing
           </Button>
         )}
         {indexStatus?.state === "deleting" && (
@@ -101,36 +92,15 @@ export function IndexControls({
           />
         )}
         {canDelete && (
-          <>
-            {indexStatus.active_generation > 0 && (
-              <Button
-                type="button"
-                loading={autoRefreshPending}
-                disabled={
-                  autoRefreshPending ||
-                  deletePending ||
-                  (policyBlocked && !indexStatus.auto_refresh_enabled)
-                }
-                aria-describedby={
-                  policyMessage ? "opc-auto-refresh-policy" : undefined
-                }
-                onClick={() =>
-                  onSetAutoRefresh(!indexStatus.auto_refresh_enabled)
-                }
-              >
-                {autoRefreshButtonLabel(indexStatus)}
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="danger"
-              loading={deletePending}
-              disabled={deleteDisabled}
-              onClick={onDelete}
-            >
-              Delete index
-            </Button>
-          </>
+          <Button
+            type="button"
+            variant="danger"
+            loading={deletePending}
+            disabled={deleteDisabled}
+            onClick={onDelete}
+          >
+            Delete Index
+          </Button>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
@@ -153,24 +123,14 @@ export function IndexControls({
         {indexStatus && indexStatus.active_generation > 0 && (
           <span
             title={
-              indexStatus.auto_refresh_enabled &&
-              policy === "allowed" &&
-              !nextRefreshAt
-                ? "This server is enabled, but the gateway has not reported a scheduled refresh."
+              policy === "allowed" && !nextRefreshAt
+                ? "The gateway has not reported a scheduled refresh."
                 : undefined
             }
           >
             Auto-refresh: {autoRefreshLabel}
           </span>
         )}
-        {indexStatus &&
-          indexStatus.active_generation > 0 &&
-          policy !== "allowed" && (
-            <span>
-              Server preference:{" "}
-              {indexStatus.auto_refresh_enabled ? "enabled" : "disabled"}
-            </span>
-          )}
       </div>
       {indexStatus && indexStatus.active_generation > 0 && policyMessage && (
         <p id="opc-auto-refresh-policy" className="text-xs text-slate-400">

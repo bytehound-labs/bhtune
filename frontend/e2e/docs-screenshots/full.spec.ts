@@ -246,20 +246,20 @@ test("full-opc-search-index-delete-confirmation", async ({ page }) => {
   await openOpcTune(page);
   await page.getByRole("button", { name: "Browse tags" }).click();
   await expect(
-    page.getByRole("button", { name: "Delete index", exact: true }),
+    page.getByRole("button", { name: "Delete Index", exact: true }),
   ).toBeVisible();
 
   const deleteCount = trackDeleteRequests(page, "/api/opc/search-index");
-  await page.getByRole("button", { name: "Delete index", exact: true }).click();
+  await page.getByRole("button", { name: "Delete Index", exact: true }).click();
   const dialog = await assertConfirmationCopy(
     page,
     "Delete tag index?",
     "Delete the namespace index for Yokogawa.Example?",
     "Indexed search data and this server's index enrollment will be removed. Lazy browsing, direct ItemID entry, live reads, and tuning remain available.",
-    "Delete index",
+    "Delete Index",
   );
   const confirm = dialog.getByRole("button", {
-    name: "Delete index",
+    name: "Delete Index",
     exact: true,
   });
   const firstResponse = page.waitForResponse(
@@ -291,7 +291,7 @@ test("full-opc-search-index-delete-confirmation", async ({ page }) => {
   await expect(
     page
       .locator('[data-doc-section="new-tune.opc-tag-browser"]')
-      .getByRole("button", { name: "Delete index", exact: true }),
+      .getByRole("button", { name: "Delete Index", exact: true }),
   ).toHaveCount(0);
   expect(deleteCount()).toBe(2);
 });

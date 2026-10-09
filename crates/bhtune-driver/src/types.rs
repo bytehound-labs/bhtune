@@ -333,7 +333,6 @@ pub struct IndexedSearchProgress {
 pub struct SearchIndexStatus {
     pub server: String,
     pub state: SearchIndexState,
-    pub auto_refresh_enabled: bool,
     pub active_generation: u64,
     pub entry_count: u64,
     pub unique_item_count: u64,
@@ -347,7 +346,7 @@ pub struct SearchIndexStatus {
     pub scheduler: IndexSchedulerDiagnostics,
 }
 
-/// Gateway configuration policy for automatic refresh, separate from server preference.
+/// Gateway administrative policy for automatic refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexAutoRefreshPolicy {
     Allowed,

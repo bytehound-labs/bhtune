@@ -48,11 +48,22 @@ async fn delete_request(app: axum::Router, path: &str) -> axum::http::Response<B
         .unwrap()
 }
 
+#[tokio::test]
+async fn retired_auto_refresh_route_does_not_contact_the_gateway() {
+    let service = MockBridgeService::default();
+    let controls = service.control_search_index_requests.clone();
+    let (host, _host_server) = start_mock_server(service).await;
+    let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+    let response = post(app, "/api/opc/search-index/auto-refresh?enabled=false").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(body_json(response).await.get("error").is_some());
+    assert!(controls.lock().unwrap().is_empty());
+}
+
 fn proto_index_status(state: ProtoSearchIndexState) -> ProtoSearchIndexStatus {
     ProtoSearchIndexStatus {
         server: "Sim.Server".to_string(),
         state: state as i32,
-        configured: true,
         active_generation: 7,
         entry_count: 12_345,
         unique_item_count: 9_876,
@@ -132,7 +143,7 @@ async fn search_index_policy_preserves_legacy_unknown_and_gateway_blockers() {
             body["scheduler"]["auto_refresh_policy"],
             serde_json::json!(label)
         );
-        assert_eq!(body["auto_refresh_enabled"], true);
+        assert!(body.get("auto_refresh_enabled").is_none());
         assert_eq!(body["active_generation"], 7);
     }
 }
@@ -347,7 +358,7 @@ async fn search_index_status_maps_every_state_and_progress() {
         let body = body_json(response).await;
         assert_eq!(body["server"], "Sim.Server");
         assert_eq!(body["state"], expected_state);
-        assert_eq!(body["auto_refresh_enabled"], true);
+        assert!(body.get("auto_refresh_enabled").is_none());
         assert_eq!(body["active_generation"], 7);
         assert_eq!(body["entry_count"], 12_345);
         assert_eq!(body["unique_item_count"], 9_876);
@@ -461,15 +472,6 @@ async fn search_index_refresh_and_control_forward_actions() {
         }]
     );
 
-    let auto_refresh_app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
-    let response = post(
-        auto_refresh_app,
-        "/api/opc/search-index/auto-refresh?enabled=false",
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(body_json(response).await["state"], "refreshing");
-
     let delete_app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
     let response = delete_request(delete_app, "/api/opc/search-index?opc_server=Sim.Server").await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -481,11 +483,6 @@ async fn search_index_refresh_and_control_forward_actions() {
             opcda_bridge_proto::bridge::ControlSearchIndexRequest {
                 server: "Sim.Server".to_string(),
                 action: opcda_bridge_proto::bridge::SearchIndexControlAction::Resume as i32,
-            },
-            opcda_bridge_proto::bridge::ControlSearchIndexRequest {
-                server: "Sim.Server".to_string(),
-                action: opcda_bridge_proto::bridge::SearchIndexControlAction::DisableAutoRefresh
-                    as i32,
             },
             opcda_bridge_proto::bridge::ControlSearchIndexRequest {
                 server: "Sim.Server".to_string(),
@@ -558,11 +555,6 @@ async fn indexed_search_routes_surface_gateway_errors() {
         (
             "/api/opc/search-index/control?action=pause&opc_server=Sim.Server",
             "control the OPC namespace index",
-            true,
-        ),
-        (
-            "/api/opc/search-index/auto-refresh?enabled=false&opc_server=Sim.Server",
-            "set OPC namespace index auto-refresh",
             true,
         ),
         (

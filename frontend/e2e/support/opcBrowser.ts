@@ -128,19 +128,18 @@ export function searchIndexStatus(
     | "refreshing"
     | "deleting"
     | "failed" = "ready",
-  autoRefreshEnabled = true,
   lastError: string | null = null,
   activeGeneration?: number,
 ) {
+  const generation =
+    activeGeneration ??
+    (state === "not_indexed" || state === "deleting" || state === "failed"
+      ? 0
+      : 1);
   return {
     server: "Test.Server",
     state,
-    auto_refresh_enabled: autoRefreshEnabled,
-    active_generation:
-      activeGeneration ??
-      (state === "not_indexed" || state === "deleting" || state === "failed"
-        ? 0
-        : 1),
+    active_generation: generation,
     entry_count: state === "deleting" ? 0 : 2,
     unique_item_count: state === "deleting" ? 0 : 2,
     started_at: null,
@@ -152,9 +151,10 @@ export function searchIndexStatus(
     progress: null,
     scheduler: {
       auto_refresh_policy: "allowed" as const,
-      next_refresh_at: autoRefreshEnabled
-        ? String(Date.now() + 7 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000)
-        : null,
+      next_refresh_at:
+        generation > 0
+          ? String(Date.now() + 7 * 24 * 60 * 60 * 1000 + 2 * 60 * 60 * 1000)
+          : null,
       last_attempt_at: "2024-01-15T10:23:45Z",
       last_success_at: "2024-01-15T10:23:45Z",
       last_success_duration_ms: 1234,

@@ -16,7 +16,6 @@ import {
   scopeKey,
 } from "./browseModel";
 import {
-  autoRefreshButtonLabel,
   autoRefreshPolicyMessage,
   highlightedRanges,
   hasUsableIndex,
@@ -53,7 +52,6 @@ function status(
 ): OpcSearchIndexStatusResponse {
   return {
     active_generation: activeGeneration,
-    auto_refresh_enabled: false,
     database_bytes: 0,
     entry_count: 0,
     organization: "test",
@@ -129,45 +127,18 @@ describe("OPC tag browser browse helpers", () => {
 });
 
 describe("OPC tag browser search helpers", () => {
-  it("labels server preferences separately from effective scheduling", () => {
-    const ready = status("ready");
-    expect(autoRefreshButtonLabel(ready)).toBe("Enable server preference");
-    expect(
-      autoRefreshButtonLabel({ ...ready, auto_refresh_enabled: true }),
-    ).toBe("Disable server preference");
-    expect(
-      autoRefreshButtonLabel({
-        ...ready,
-        scheduler: { ...ready.scheduler, auto_refresh_policy: "allowed" },
-      }),
-    ).toBe("Enable auto-refresh");
-    const scheduled: OpcSearchIndexStatusResponse = {
-      ...ready,
-      auto_refresh_enabled: true,
-      scheduler: {
-        ...ready.scheduler,
-        auto_refresh_policy: "allowed",
-        next_refresh_at: "2026-10-15T00:00:00Z",
-      },
-    };
-    expect(autoRefreshButtonLabel(scheduled)).toBe("Disable auto-refresh");
+  it("reports gateway policy without a per-server preference", () => {
     for (const policy of ["disabled", "paused"] as const) {
-      expect(
-        autoRefreshButtonLabel({
-          ...scheduled,
-          scheduler: { ...scheduled.scheduler, auto_refresh_policy: policy },
-        }),
-      ).toBe("Disable server preference");
       expect(autoRefreshPolicyMessage(policy)).toContain(
         "gateway configuration",
       );
     }
     expect(autoRefreshPolicyMessage("allowed")).toBeNull();
     expect(autoRefreshPolicyMessage(undefined)).toBe(
-      "Controls only save this server's auto-refresh preference.",
+      "Automatic-refresh policy is unavailable from this gateway. Refresh Index remains available.",
     );
     expect(autoRefreshPolicyMessage(null)).toBe(
-      "Controls only save this server's auto-refresh preference.",
+      "Automatic-refresh policy is unavailable from this gateway. Refresh Index remains available.",
     );
   });
 
@@ -206,7 +177,6 @@ describe("OPC tag browser search helpers", () => {
         ...failed,
         entry_count: 42,
         database_bytes: 4096,
-        auto_refresh_enabled: true,
         scheduler: {
           ...failed.scheduler,
           next_refresh_at: "2024-01-22T10:23:45Z",

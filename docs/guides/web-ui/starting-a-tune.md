@@ -102,20 +102,22 @@ displays its error again, including an identical message. Errors that were not d
 before closing are not acknowledged. Reloading or leaving the New Tune page resets this
 page-local acknowledgement; gateway history and API/CLI diagnostics are not cleared.
 
-Automatic refresh has a saved per-server preference and a separate gateway configuration policy.
-The browser explains an administrative disable or startup pause and disables **Enable
-auto-refresh** while that blocker applies. A saved enabled preference can be removed with
-**Disable server preference** without deleting indexed data or cancelling an active build.
+Every usable enrolled index participates in automatic refresh under gateway configuration policy;
+there is no per-server opt-in/out setting. **Refresh Index** creates, refreshes, or retries the index.
+**Cancel Indexing** preserves cached data and defers automatic work until the next configured
+interval; manual refresh overrides that delay. The browser explains administrative disable or
+startup pause without preference controls.
 An allowed policy with a reported next date shows the days-and-hours countdown; an allowed
 policy without a date shows `not scheduled`. Missing policy from an older gateway stays unknown
-and exposes preference-only controls, not a promised schedule.
+and does not promise a schedule. Always-participating scheduling requires indexed-search protocol 3.
 
-The search-index controls also expose **Delete index** after a completed index build. Deletion
+The search-index controls also expose **Delete Index** after a completed index build. Deletion
 is intentionally destructive: the first failed request leaves the index and enrollment intact,
 keeps the styled confirmation open, and shows an inline retryable error. Confirming again sends
-one new request without reopening the dialog; only a successful response closes it and changes
-the status to `not indexed`. Lazy browsing, direct ItemID entry, live reads, and tuning remain
-available after the index is removed.
+one new request without reopening the dialog; only a successful response closes it. The temporary
+`deleting` state ends at `not indexed` after cleanup. Automatic work cannot recreate the deleted
+index; use **Refresh Index** to build it again. Lazy browsing, direct ItemID entry, live reads,
+and tuning remain available after the index is removed.
 
 {/* web-ui-screenshot: full-opc-search-index-delete-confirmation */}
 <figure>

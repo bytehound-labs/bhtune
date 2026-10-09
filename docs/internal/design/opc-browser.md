@@ -42,20 +42,21 @@ Request, browse, search, and selection errors retain their separate handling.
 
 Indexed search is deliberately not a prerequisite for tag selection or tuning. When a server is
 not enrolled, still building its first generation, or has no usable index, the browser disables
-only the global search input and offers **Build index** or **Retry build** while keeping the
+only the global search input and offers **Refresh Index** while keeping the
 lazy tree, exact ItemID entry, quality read, and selection controls available. It never falls
 back automatically to the slow live whole-server search. A failed tree page retains already
 loaded nodes and exposes a per-level **Retry** action;
-when an enabled server preference has an allowed gateway policy and a reported next date,
+when an allowed gateway policy and a reported next date are available,
 the browser shows `Auto-refresh: enabled` with a days-and-hours countdown and the exact
 scheduled time in the hover tooltip. An allowed policy without a reported date shows
 `Auto-refresh: not scheduled`. Administrative disabled/paused policies show the blocking
-configuration, suppress countdowns, and disable ineffective Enable actions. An enabled
-preference under a blocker is labelled separately and offers **Disable server preference**,
-not a claim that automatic work is running. Missing policy from an older gateway stays
-unknown, with preference-only labels and no countdown. `Index: ready` remains independent.
-The gateway's per-server preference RPC never changes its global policy or cancels a build.
-unknown `/api/*` paths return JSON 404 responses instead of the SPA shell, making stale
+configuration and suppress countdowns. Missing policy from an older gateway stays unknown,
+without preference controls or a countdown. `Index: ready` remains independent. Every usable
+enrolled index participates under gateway policy. **Cancel Indexing** preserves cached data and
+persists a next-interval deferral; manual **Refresh Index** overrides it. **Delete Index** removes
+enrollment and requires manual recreation. None of these actions changes global configuration.
+Unknown `/api/*` paths, including the retired auto-refresh mutation, return JSON 404 responses
+without contacting the gateway instead of the SPA shell, making stale
 server/frontend combinations diagnosable.
 
 Live acceptance against `Yokogawa.CSHIS_OPC.1` confirmed the root page exposes the full controller
@@ -101,14 +102,15 @@ with persistent-index state, progress, ranked exact matches, breadcrumbs, and `h
 The HTTP scheduler policy enum preserves the gateway's allowed/disabled/paused distinction;
 null means an older gateway did not report it. This diagnostic is independent of an active
 build's foreground/health/operator pause. The public bridge structs require the 0.6 Rust
-dependency line, while their additive wire diagnostics remain compatible with protocol 2.
+dependency line and indexed-search protocol 3. Retired preference status/control fields are
+reserved; core protocol 1 and namespace protocol 2 stay unchanged.
 `openapi.json` and `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
 Indexing is an optional search accelerator with per-server enrollment owned by the gateway database.
 A fresh gateway has no enrolled servers; BHTune's tag browser can build an index for any exact
 ProgID returned by the gateway, without a TOML allow-list or restart. After a successful first
-build, the server is opted in to automatic refresh under the gateway's configurable seven-day
+build, the server participates in automatic refresh under the gateway's configurable seven-day
 policy; scheduling also requires its global indexing policy to permit automatic work.
-The browser can retry, refresh, disable or re-enable automatic refresh, and delete an index while
+The browser can refresh/retry, cancel indexing, and delete an index while
 lazy browse, direct ItemID entry, live reads, and tuning remain independent of index state.
 Index-status failures are compact diagnostics rather than browse failures.
 

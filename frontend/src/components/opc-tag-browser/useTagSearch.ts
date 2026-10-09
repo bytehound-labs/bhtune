@@ -7,7 +7,6 @@ import {
   useOpcIndexedSearch,
   useOpcSearchIndexStatus,
   useRefreshOpcSearchIndex,
-  useSetOpcSearchIndexAutoRefresh,
   useTestOpcConnection,
 } from "../../api/opc";
 import type {
@@ -18,7 +17,6 @@ import type { SelectedNode } from "./browseModel";
 import {
   SEARCH_DEBOUNCE_MS,
   SEARCH_MAX_RESULTS,
-  autoRefreshErrorMessage,
   hasUsableIndex,
   indexUnavailableMessage,
   nextSearchIndex,
@@ -33,7 +31,6 @@ export function useTagSearch({
   searchIndexStatus,
   refreshSearchIndex,
   controlSearchIndex,
-  setAutoRefreshMutation,
   deleteSearchIndex,
   searchAbortRef,
   setSelectedNode,
@@ -47,7 +44,6 @@ export function useTagSearch({
   searchIndexStatus: ReturnType<typeof useOpcSearchIndexStatus>;
   refreshSearchIndex: ReturnType<typeof useRefreshOpcSearchIndex>;
   controlSearchIndex: ReturnType<typeof useControlOpcSearchIndex>;
-  setAutoRefreshMutation: ReturnType<typeof useSetOpcSearchIndexAutoRefresh>;
   deleteSearchIndex: ReturnType<typeof useDeleteOpcSearchIndex>;
   searchAbortRef: { current: AbortController | null };
   setSelectedNode: (node: SelectedNode | null) => void;
@@ -224,22 +220,6 @@ export function useTagSearch({
     }
   }
 
-  async function setAutoRefresh(enabled: boolean) {
-    setSearchError(null);
-    try {
-      await setAutoRefreshMutation.mutateAsync({
-        bridgeHost,
-        opcServer,
-        enabled,
-      });
-      await searchIndexStatus.refetch();
-    } catch (err) {
-      setSearchError(
-        userFacingErrorMessage(err, autoRefreshErrorMessage(enabled)),
-      );
-    }
-  }
-
   function requestDeleteIndex() {
     deleteSearchIndex.reset();
     setDeleteError(null);
@@ -324,7 +304,6 @@ export function useTagSearch({
     handleSearchKeyDown,
     chooseSearchMatch,
     refreshIndex,
-    setAutoRefresh,
     requestDeleteIndex,
     cancelDeleteIndex,
     confirmDeleteIndex,
