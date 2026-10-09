@@ -347,8 +347,9 @@ dependency list.
   `SONAR_TOKEN=` while the real token remains in the ignored `.env` file and the `bhtune`
   Bitwarden note configured by `.envsync.yaml`. `ds sync` restores the local file and `ds push`
   updates the note; the existing `.lefthook.yml` runs the latter through `ds-sync` on pre-commit
-  and restores it through `ds-sync-pull` after successful pulls. Keep `rbw` unlocked for those
-  operations, never print or commit secret values, and add new keys to `.env.example` through
+  and restores it through `ds-sync-pull` after successful merge-mode pulls. That hook refreshes
+  RBW with `rbw sync` before running `ds sync`. Keep `rbw` unlocked for those operations, never
+  print or commit secret values, and add new keys to `.env.example` through
   `ds reverse` rather than hand-maintaining a divergent schema.
 - **Release PR merging uses the guarded `auto-merge.yml` workflow.** It requests GitHub's
   built-in squash auto-merge only for a validated same-repository `release-plz-*` PR authored by
