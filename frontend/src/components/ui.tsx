@@ -178,6 +178,7 @@ export function Button({
   loading = false,
   title,
   buttonRef,
+  "aria-describedby": ariaDescribedBy,
 }: {
   readonly children: ReactNode;
   readonly onClick?: () => void;
@@ -187,6 +188,7 @@ export function Button({
   readonly loading?: boolean;
   readonly title?: string;
   readonly buttonRef?: RefObject<HTMLButtonElement | null>;
+  readonly "aria-describedby"?: string;
 }) {
   return (
     <button
@@ -194,6 +196,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
+      aria-describedby={ariaDescribedBy}
       title={title}
       ref={buttonRef}
       className={`rounded-md border px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-100 ${buttonVariants[variant]}`}

@@ -69,7 +69,8 @@ The tag browser's `Index: ready` status describes the usable index, independentl
 refresh. The optional `scheduler.auto_refresh_policy` diagnostic distinguishes permitted
 scheduling from a gateway configuration disable or startup pause. A blocked policy explains
 the exact setting, disables ineffective Enable actions, and labels a saved server preference
-separately. **Disable server preference** keeps the index and does not change gateway policy.
+separately. The visible blocker explanation is also the control's accessible description.
+**Disable server preference** keeps the index and does not change gateway policy.
 `Auto-refresh: enabled` and its countdown require an allowed policy and a reported next date;
 an enabled preference without a date shows `Auto-refresh: not scheduled`. Missing policy from
 an older gateway remains unknown, with preference-only control labels and no countdown.

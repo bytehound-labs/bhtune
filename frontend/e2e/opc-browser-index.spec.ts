@@ -354,6 +354,12 @@ test.describe(OPC_BROWSER_SUITE, () => {
             exact: true,
           }),
         ).toBeDisabled();
+        await expect(
+          page.getByRole("button", {
+            name: "Enable auto-refresh",
+            exact: true,
+          }),
+        ).toHaveAttribute("aria-describedby", "opc-auto-refresh-policy");
         expect(index.status.active_generation).toBe(ready.active_generation);
         expect(toggles).toEqual(enabled ? [false] : []);
         expect(refreshes).toEqual([]);
