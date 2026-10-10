@@ -99,6 +99,16 @@ pub trait Driver: Send + Sync {
         })
     }
 
+    /// Enables or disables future automatic refreshes for this server's index.
+    async fn set_search_index_auto_refresh(
+        &self,
+        _enabled: bool,
+    ) -> DriverResult<SearchIndexStatus> {
+        Err(crate::error::DriverError::Unsupported {
+            operation: "indexed-search auto-refresh",
+        })
+    }
+
     /// Deletes this server's persistent namespace index and enrollment.
     async fn delete_search_index(&self) -> DriverResult<SearchIndexStatus> {
         Err(crate::error::DriverError::Unsupported {
@@ -317,6 +327,12 @@ mod tests {
                 .await,
             Err(DriverError::Unsupported {
                 operation: "indexed-search control"
+            })
+        ));
+        assert!(matches!(
+            driver.set_search_index_auto_refresh(false).await,
+            Err(DriverError::Unsupported {
+                operation: "indexed-search auto-refresh"
             })
         ));
         assert!(matches!(

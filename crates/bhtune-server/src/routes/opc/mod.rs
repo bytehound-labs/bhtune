@@ -93,10 +93,12 @@ pub(crate) use handlers::{
     __path_browse, __path_capabilities, __path_close_browse_session, __path_control_search_index,
     __path_delete_search_index, __path_read, __path_refresh_search_index, __path_search,
     __path_search_index, __path_search_index_status, __path_servers,
+    __path_set_search_index_auto_refresh,
 };
 pub(crate) use handlers::{
     browse, capabilities, close_browse_session, control_search_index, delete_search_index, read,
     refresh_search_index, search, search_index, search_index_status, servers,
+    set_search_index_auto_refresh,
 };
 
 pub fn router() -> Router<AppState> {
@@ -112,6 +114,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/opc/search-index/status", get(search_index_status))
         .route("/api/opc/search-index/search", get(search_index))
         .route("/api/opc/search-index/refresh", post(refresh_search_index))
+        .route(
+            "/api/opc/search-index/auto-refresh",
+            post(set_search_index_auto_refresh),
+        )
         .route("/api/opc/search-index/control", post(control_search_index))
         .route("/api/opc/search-index", delete(delete_search_index))
         .route("/api/opc/read", get(read))

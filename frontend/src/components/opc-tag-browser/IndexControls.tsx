@@ -1,7 +1,6 @@
 import type { OpcSearchIndexStatusResponse } from "../../api/opc";
 import { formatExactTime, formatTimeUntil } from "../../lib/time";
 import { Button, LoadingStatus } from "../ui";
-import { autoRefreshPolicyMessage } from "./searchModel";
 
 type IndexControlsProps = Readonly<{
   opcServer: string;
@@ -13,9 +12,11 @@ type IndexControlsProps = Readonly<{
   indexUnavailableMessage: string;
   refreshPending: boolean;
   controlPending: boolean;
+  autoRefreshPending: boolean;
   deletePending: boolean;
   onRefresh: () => void;
   onCancel: () => void;
+  onSetAutoRefresh: (enabled: boolean) => void;
   onDelete: () => void;
 }>;
 
@@ -29,9 +30,11 @@ export function IndexControls({
   indexUnavailableMessage: unavailableMessage,
   refreshPending,
   controlPending,
+  autoRefreshPending,
   deletePending,
   onRefresh,
   onCancel,
+  onSetAutoRefresh,
   onDelete,
 }: IndexControlsProps) {
   const canCancelBuild =
@@ -44,18 +47,14 @@ export function IndexControls({
     refreshPending ||
     indexStatus?.state === "partial" ||
     indexStatus?.state === "refreshing";
-  const policy = indexStatus?.scheduler.auto_refresh_policy;
-  const policyBlocked = policy === "disabled" || policy === "paused";
-  const policyMessage = autoRefreshPolicyMessage(policy);
-  const nextRefreshAt =
-    policy === "allowed" ? indexStatus?.scheduler.next_refresh_at : null;
-  const autoRefreshLabel = policyBlocked
-    ? "blocked by gateway"
-    : !policy
-      ? "policy unavailable"
-      : nextRefreshAt
-        ? "enabled"
-        : "not scheduled";
+  const nextRefreshAt = indexStatus?.auto_refresh_enabled
+    ? indexStatus.scheduler.next_refresh_at
+    : null;
+  const autoRefreshLabel = indexStatus?.auto_refresh_enabled
+    ? nextRefreshAt
+      ? "enabled"
+      : "not scheduled"
+    : "disabled";
 
   return (
     <div className="mb-3 space-y-2">
@@ -92,15 +91,31 @@ export function IndexControls({
           />
         )}
         {canDelete && (
-          <Button
-            type="button"
-            variant="danger"
-            loading={deletePending}
-            disabled={deleteDisabled}
-            onClick={onDelete}
-          >
-            Delete Index
-          </Button>
+          <>
+            {indexStatus.active_generation > 0 && (
+              <Button
+                type="button"
+                loading={autoRefreshPending}
+                disabled={autoRefreshPending || deletePending}
+                onClick={() =>
+                  onSetAutoRefresh(!indexStatus.auto_refresh_enabled)
+                }
+              >
+                {indexStatus.auto_refresh_enabled
+                  ? "Disable Auto-refresh"
+                  : "Enable Auto-refresh"}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="danger"
+              loading={deletePending}
+              disabled={deleteDisabled}
+              onClick={onDelete}
+            >
+              Delete Index
+            </Button>
+          </>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
@@ -123,8 +138,8 @@ export function IndexControls({
         {indexStatus && indexStatus.active_generation > 0 && (
           <span
             title={
-              policy === "allowed" && !nextRefreshAt
-                ? "The gateway has not reported a scheduled refresh."
+              indexStatus.auto_refresh_enabled && !nextRefreshAt
+                ? "This server is enabled, but the gateway has not reported a scheduled refresh."
                 : undefined
             }
           >
@@ -132,11 +147,6 @@ export function IndexControls({
           </span>
         )}
       </div>
-      {indexStatus && indexStatus.active_generation > 0 && policyMessage && (
-        <p id="opc-auto-refresh-policy" className="text-xs text-slate-400">
-          {policyMessage}
-        </p>
-      )}
       {indexError && (
         <output ref={onIndexErrorShown} className="block text-xs text-red-300">
           Index error: {indexError}

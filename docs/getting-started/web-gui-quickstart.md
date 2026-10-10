@@ -176,26 +176,25 @@ browser-visible origin.
      Indexed search is an optional whole-server accelerator. A fresh gateway has no enrolled
      servers and does not index every registered OPC DA server automatically. Use **Refresh Index**
      in the tag browser to enroll the selected ProgID and start its first build; no gateway TOML
-     edit or restart is required. Every usable enrolled index participates in automatic refresh
-     according to the gateway's configurable seven-day policy, provided its global scheduler
-     permits automatic indexing. There is no per-server opt-in/out setting. **Cancel Indexing**
-     stops the owned build, preserves a previous complete cache, and defers automatic work until
-     the next configured interval. **Refresh Index** can start earlier or retry a failed build.
-     **Delete Index** shows a temporary `deleting` state while the gateway removes
+     edit or restart is required. New and recreated indexes start with automatic refresh off.
+     Manual refresh or retry never changes that saved choice. Click **Enable Auto-refresh**
+     after a usable index exists to opt into the gateway's configurable seven-day schedule;
+     the choice survives browser and gateway restarts. The browser also provides **Cancel Indexing**,
+     **Disable Auto-refresh**, and **Delete Index** actions. Disabling automatic refresh keeps the existing index and
+     searchable data; deleting it shows a temporary `deleting` state while the gateway removes
      the index and enrollment, then leaves ordinary browse,
-     direct ItemID entry, live reads, and tuning available. Another manual **Refresh Index**
-     is required to recreate it. If indexing is not enrolled or is
+     direct ItemID entry, live reads, and tuning available. If indexing is not enrolled or is
      still building, the global search field is disabled, but the lazy tag tree and other
      operations remain available. Completed non-fatal inventory diagnostics remain available
      through the gateway/API and diagnostic CLI; the browser shows the gateway's failure
      diagnostic on its own line for a failed index state. `Index: ready` means the existing
-     index is usable, not that automatic refresh is running. When the server has an
-     allowed gateway policy and a reported next date, `Auto-refresh: enabled` appears with a
-     relative days-and-hours countdown and the exact scheduled time on hover. A server without
-     a reported date under an allowed policy shows `Auto-refresh: not scheduled`. Gateway
-     configuration blockers are explained inline without preference controls. Older gateways
-     without policy diagnostics remain unknown and show no countdown; always-participating
-     scheduling requires indexed-search protocol 3.
+     index is usable, not that automatic refresh is running. When the opted-in server has a
+     reported next date, `Auto-refresh: enabled` appears with a
+     relative days-and-hours countdown and the exact scheduled time on hover. An opted-in
+     server without a reported date shows `Auto-refresh: not scheduled`; a server that is not
+     opted in shows `Auto-refresh: disabled` and no countdown. Disable does not cancel an active
+     build; use **Cancel Indexing** for that operation. Maintenance windows, foreground/health
+     protection, pacing, storage checks, and retry backoff still govern automatic work.
 
    - A **Notes** field records optional operator context, observations, or follow-up actions.
      Notes are included when the run starts and can be edited or cleared from the run detail

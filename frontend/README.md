@@ -65,18 +65,17 @@ can never merge.
 For the OPC DA driver, the connection fields are presented in this order: Bridge host, OPC DA
 server ProgID, Tag name, then Notes.
 
-The tag browser's `Index: ready` status describes the usable index, independently of automatic
-refresh. The optional `scheduler.auto_refresh_policy` diagnostic distinguishes permitted
-scheduling from a gateway configuration disable or startup pause. A blocked policy explains
-the exact setting without preference controls. Index actions are **Refresh Index**, **Cancel
-Indexing**, and **Delete Index**, with busy/disabled states and styled deletion confirmation.
-Every usable enrolled index participates under gateway policy. Cancel keeps the cache and
-defers automatic work until the next configured interval; manual refresh overrides the delay.
-Delete removes enrollment and requires another manual refresh to recreate the index.
-`Auto-refresh: enabled` and its countdown require an allowed policy and a reported next date;
-an allowed policy without a date shows `Auto-refresh: not scheduled`. Missing policy from
-an older gateway remains unknown, with a brief notice and no countdown. The always-participating
-lifecycle requires indexed-search protocol 3. Index actions do not alter gateway-wide policy.
+The tag browser's **Refresh Index** starts a manual first build or refresh without changing
+the saved auto-refresh choice. New/recreated indexes default off. **Enable Auto-refresh** and
+**Disable Auto-refresh** persist the selected server's choice across browser and gateway
+restarts; no gateway-wide opt-in override applies. Disable preserves cached search and an
+active build. **Cancel Indexing** stops a build; **Delete Index** requires confirmation.
+
+`Index: ready` describes the usable cache independently of automatic refresh.
+`Auto-refresh: enabled` and its countdown require a true choice and a reported next date;
+an enabled index without a date shows `Auto-refresh: not scheduled`. An opted-out index shows
+`Auto-refresh: disabled` and no countdown. Pacing, maintenance, health, and retry protections
+remain gateway safeguards.
 
 Built-in and catalog templates can't be edited through the UI — they're re-seeded from
 their source file on every server startup, so an edit would just be discarded — but they

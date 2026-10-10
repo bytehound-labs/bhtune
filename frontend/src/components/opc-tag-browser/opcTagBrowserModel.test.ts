@@ -16,7 +16,6 @@ import {
   scopeKey,
 } from "./browseModel";
 import {
-  autoRefreshPolicyMessage,
   highlightedRanges,
   hasUsableIndex,
   indexErrorIdentity,
@@ -52,6 +51,7 @@ function status(
 ): OpcSearchIndexStatusResponse {
   return {
     active_generation: activeGeneration,
+    auto_refresh_enabled: false,
     database_bytes: 0,
     entry_count: 0,
     organization: "test",
@@ -127,21 +127,6 @@ describe("OPC tag browser browse helpers", () => {
 });
 
 describe("OPC tag browser search helpers", () => {
-  it("reports gateway policy without a per-server preference", () => {
-    for (const policy of ["disabled", "paused"] as const) {
-      expect(autoRefreshPolicyMessage(policy)).toContain(
-        "gateway configuration",
-      );
-    }
-    expect(autoRefreshPolicyMessage("allowed")).toBeNull();
-    expect(autoRefreshPolicyMessage(undefined)).toBe(
-      "Automatic-refresh policy is unavailable from this gateway. Refresh Index remains available.",
-    );
-    expect(autoRefreshPolicyMessage(null)).toBe(
-      "Automatic-refresh policy is unavailable from this gateway. Refresh Index remains available.",
-    );
-  });
-
   it("identifies only terminal index errors", () => {
     const failed = { ...status("failed"), last_error: "inventory failed" };
     expect(indexErrorIdentity(undefined)).toBeNull();
@@ -177,6 +162,7 @@ describe("OPC tag browser search helpers", () => {
         ...failed,
         entry_count: 42,
         database_bytes: 4096,
+        auto_refresh_enabled: true,
         scheduler: {
           ...failed.scheduler,
           next_refresh_at: "2024-01-22T10:23:45Z",

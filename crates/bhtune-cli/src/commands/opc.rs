@@ -761,13 +761,7 @@ fn print_search_index_status(
     }
     println!("Server: {}", status.server);
     println!("State: {}", status.state);
-    println!(
-        "Gateway auto-refresh policy: {}",
-        status
-            .scheduler
-            .auto_refresh_policy
-            .map_or_else(|| "unknown".into(), |policy| policy.to_string())
-    );
+    println!("Auto-refresh enabled: {}", status.auto_refresh_enabled);
     println!("Active generation: {}", status.active_generation);
     println!("Entries: {}", status.entry_count);
     println!("Unique items: {}", status.unique_item_count);
@@ -829,6 +823,7 @@ fn json_search_index_status(status: &SearchIndexStatus) -> serde_json::Value {
     serde_json::json!({
         "server": status.server,
         "state": status.state.to_string(),
+        "auto_refresh_enabled": status.auto_refresh_enabled,
         "active_generation": status.active_generation,
         "entry_count": status.entry_count,
         "unique_item_count": status.unique_item_count,
@@ -839,7 +834,6 @@ fn json_search_index_status(status: &SearchIndexStatus) -> serde_json::Value {
         "organization": format!("{:?}", status.organization).to_lowercase(),
         "source": format!("{:?}", status.source).to_lowercase(),
         "scheduler": {
-            "auto_refresh_policy": status.scheduler.auto_refresh_policy.map(|policy| policy.to_string()),
             "next_refresh_at": status.scheduler.next_refresh_at,
             "last_attempt_at": status.scheduler.last_attempt_at,
             "last_success_at": status.scheduler.last_success_at,
@@ -945,8 +939,8 @@ mod tests {
                     },
                     ProtocolFeature {
                         kind: ProtocolFeatureKind::IndexedSearch as i32,
-                        min_version: 3,
-                        max_version: 3,
+                        min_version: 2,
+                        max_version: 2,
                     },
                 ],
             },
@@ -1439,6 +1433,7 @@ mod tests {
         let status = ProtoSearchIndexStatus {
             server: "Sim.Server".into(),
             state: ProtoSearchIndexState::Partial as i32,
+            configured: true,
             active_generation: 2,
             entry_count: 3,
             unique_item_count: 2,
@@ -1587,9 +1582,10 @@ mod tests {
 
     #[tokio::test]
     async fn diagnostic_commands_cover_json_and_validation_branches() {
-        let mut status = bhtune_driver::SearchIndexStatus {
+        let status = bhtune_driver::SearchIndexStatus {
             server: "Sim.Server".into(),
             state: bhtune_driver::SearchIndexState::Failed,
+            auto_refresh_enabled: true,
             active_generation: 1,
             entry_count: 2,
             unique_item_count: 1,
@@ -1610,13 +1606,6 @@ mod tests {
             }),
             scheduler: bhtune_driver::IndexSchedulerDiagnostics::default(),
         };
-        assert!(json_search_index_status(&status)["scheduler"]["auto_refresh_policy"].is_null());
-        status.scheduler.auto_refresh_policy =
-            Some(bhtune_driver::IndexAutoRefreshPolicy::Disabled);
-        assert_eq!(
-            json_search_index_status(&status)["scheduler"]["auto_refresh_policy"],
-            "disabled"
-        );
         let indexed = bhtune_driver::SearchIndexResponse {
             matches: vec![bhtune_driver::IndexedSearchMatch {
                 item_id: "Area.PV".into(),

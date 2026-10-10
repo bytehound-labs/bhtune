@@ -1133,12 +1133,12 @@ mod tests {
 
     fn full_gateway_info() -> GetGatewayInfoResponse {
         GetGatewayInfoResponse {
-            application_version: "0.6.0".into(),
+            application_version: "0.5.9".into(),
             compatibility_schema_version: 1,
             features: vec![
                 protocol_feature(ProtocolFeatureKind::Core, 1, 1),
                 protocol_feature(ProtocolFeatureKind::Namespace, 2, 3),
-                protocol_feature(ProtocolFeatureKind::IndexedSearch, 3, 3),
+                protocol_feature(ProtocolFeatureKind::IndexedSearch, 2, 2),
             ],
         }
     }

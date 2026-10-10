@@ -162,6 +162,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/opc/search-index/auto-refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["set_search_index_auto_refresh"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/opc/search-index/control": {
     parameters: {
       query?: never;
@@ -1350,11 +1366,7 @@ export interface components {
     OpcCloseBrowseSessionResponse: {
       closed: boolean;
     };
-    /** @enum {string} */
-    OpcIndexAutoRefreshPolicy: "allowed" | "disabled" | "paused";
     OpcIndexSchedulerResponse: {
-      auto_refresh_policy?:
-        null | components["schemas"]["OpcIndexAutoRefreshPolicy"];
       circuit_open: boolean;
       /** Format: int32 */
       consecutive_failures: number;
@@ -1421,6 +1433,7 @@ export interface components {
     OpcSearchIndexStatusResponse: {
       /** Format: int64 */
       active_generation: number;
+      auto_refresh_enabled: boolean;
       completed_at?: string | null;
       /** Format: int64 */
       database_bytes: number;
@@ -2422,6 +2435,38 @@ export interface operations {
         };
       };
       /** @description The delete request or gateway connection is invalid. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+    };
+  };
+  set_search_index_auto_refresh: {
+    parameters: {
+      query: {
+        bridge_host?: string;
+        opc_server?: string;
+        enabled: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpcSearchIndexStatusResponse"];
+        };
+      };
+      /** @description The auto-refresh request or gateway connection is invalid. */
       400: {
         headers: {
           [name: string]: unknown;

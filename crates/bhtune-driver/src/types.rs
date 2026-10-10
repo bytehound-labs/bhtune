@@ -333,6 +333,7 @@ pub struct IndexedSearchProgress {
 pub struct SearchIndexStatus {
     pub server: String,
     pub state: SearchIndexState,
+    pub auto_refresh_enabled: bool,
     pub active_generation: u64,
     pub entry_count: u64,
     pub unique_item_count: u64,
@@ -346,29 +347,9 @@ pub struct SearchIndexStatus {
     pub scheduler: IndexSchedulerDiagnostics,
 }
 
-/// Gateway administrative policy for automatic refresh.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexAutoRefreshPolicy {
-    Allowed,
-    Disabled,
-    Paused,
-}
-
-impl fmt::Display for IndexAutoRefreshPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Allowed => "allowed",
-            Self::Disabled => "disabled",
-            Self::Paused => "paused",
-        })
-    }
-}
-
 /// Scheduler and retry information for a persistent namespace index.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexSchedulerDiagnostics {
-    /// `None` means the gateway has not reported its configuration policy.
-    pub auto_refresh_policy: Option<IndexAutoRefreshPolicy>,
     pub next_refresh_at: Option<String>,
     pub last_attempt_at: Option<String>,
     pub last_success_at: Option<String>,

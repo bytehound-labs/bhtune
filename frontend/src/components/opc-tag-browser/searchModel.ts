@@ -88,7 +88,7 @@ export function indexUnavailableMessage(
     case "failed":
       return `Global search is unavailable because the gateway has no complete index.${suffix}`;
     case "deleting":
-      return `The tag index is being deleted. Use Refresh Index when deletion finishes.${suffix}`;
+      return `The tag index is being deleted. Build a new index when deletion finishes.${suffix}`;
     default:
       return `Global search is unavailable until the gateway has a complete index.${suffix}`;
   }
@@ -104,9 +104,9 @@ export function noSearchMatchesMessage(
     case "partial":
       return "The tag index is still building; no complete no-match result is available yet.";
     case "not_indexed":
-      return "The tag index has not been built. Use Refresh Index to enable global search.";
+      return "The tag index has not been built. Build it to enable global search.";
     case "failed":
-      return "The tag index failed to build. Use Refresh Index after resolving the gateway error.";
+      return "The tag index failed to build. Retry it after resolving the gateway error.";
     case "deleting":
       return "The tag index is being deleted. Wait for deletion to finish before building a new index.";
     default:
@@ -114,19 +114,9 @@ export function noSearchMatchesMessage(
   }
 }
 
-export function autoRefreshPolicyMessage(
-  policy: OpcSearchIndexStatusResponse["scheduler"]["auto_refresh_policy"],
-): string | null {
-  switch (policy) {
-    case "allowed":
-      return null;
-    case "disabled":
-      return "Automatic refresh is blocked by gateway configuration (index.enabled = false). Cached search and manual refresh remain available.";
-    case "paused":
-      return "Automatic refresh is paused by gateway configuration (index.paused = true). Cached search and manual refresh remain available.";
-    default:
-      return "Automatic-refresh policy is unavailable from this gateway. Refresh Index remains available.";
-  }
+export function autoRefreshErrorMessage(enabled: boolean): string {
+  if (enabled) return "Unable to enable automatic index refresh.";
+  return "Unable to disable automatic index refresh.";
 }
 
 export function nextSearchIndex(

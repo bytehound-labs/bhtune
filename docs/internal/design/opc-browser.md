@@ -45,18 +45,16 @@ not enrolled, still building its first generation, or has no usable index, the b
 only the global search input and offers **Refresh Index** while keeping the
 lazy tree, exact ItemID entry, quality read, and selection controls available. It never falls
 back automatically to the slow live whole-server search. A failed tree page retains already
-loaded nodes and exposes a per-level **Retry** action;
-when an allowed gateway policy and a reported next date are available,
+loaded nodes and exposes a per-level **Retry** action.
+New/recreated indexes default off; manual refresh and retry do not change a saved choice.
+**Enable Auto-refresh** and **Disable Auto-refresh** persist the selected server's choice
+without deleting the cache or cancelling an active build. When an opted-in index has a reported next date,
 the browser shows `Auto-refresh: enabled` with a days-and-hours countdown and the exact
-scheduled time in the hover tooltip. An allowed policy without a reported date shows
-`Auto-refresh: not scheduled`. Administrative disabled/paused policies show the blocking
-configuration and suppress countdowns. Missing policy from an older gateway stays unknown,
-without preference controls or a countdown. `Index: ready` remains independent. Every usable
-enrolled index participates under gateway policy. **Cancel Indexing** preserves cached data and
-persists a next-interval deferral; manual **Refresh Index** overrides it. **Delete Index** removes
-enrollment and requires manual recreation. None of these actions changes global configuration.
-Unknown `/api/*` paths, including the retired auto-refresh mutation, return JSON 404 responses
-without contacting the gateway instead of the SPA shell, making stale
+scheduled time in the hover tooltip. An enabled index without a reported date shows
+`Auto-refresh: not scheduled`; opt-out shows `disabled` and no countdown. The gateway has
+no `index.enabled`/`index.paused` override; maintenance, health, pacing, and retry protection
+remain independent safeguards. `Index: ready` describes cached search independently.
+Unknown `/api/*` paths return JSON 404 responses instead of the SPA shell, making stale
 server/frontend combinations diagnosable.
 
 Live acceptance against `Yokogawa.CSHIS_OPC.1` confirmed the root page exposes the full controller
@@ -99,18 +97,18 @@ ItemIDs separately from display labels, expose branch/item/branch-and-item kinds
 metadata, namespace source, and warnings. The gateway's indexed-search extension adds `GET
 /api/opc/search-index/status`, `GET /api/opc/search-index/search`, and refresh/control endpoints
 with persistent-index state, progress, ranked exact matches, breadcrumbs, and `has_more`.
-The HTTP scheduler policy enum preserves the gateway's allowed/disabled/paused distinction;
-null means an older gateway did not report it. This diagnostic is independent of an active
-build's foreground/health/operator pause. The public bridge structs require the 0.6 Rust
-dependency line and indexed-search protocol 3. Retired preference status/control fields are
-reserved; core protocol 1 and namespace protocol 2 stay unchanged.
+`POST /api/opc/search-index/auto-refresh` persists the selected server's explicit choice.
+`auto_refresh_enabled` and the actual scheduler next-refresh date remain separate from an
+active build's foreground/health/operator pause. The public bridge structs use the 0.6 Rust
+dependency line, while the restored preference field and controls retain the published
+indexed-search protocol 2 contract.
 `openapi.json` and `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
 Indexing is an optional search accelerator with per-server enrollment owned by the gateway database.
 A fresh gateway has no enrolled servers; BHTune's tag browser can build an index for any exact
 ProgID returned by the gateway, without a TOML allow-list or restart. After a successful first
-build, the server participates in automatic refresh under the gateway's configurable seven-day
+build, the server is opted in to automatic refresh under the gateway's configurable seven-day
 policy; scheduling also requires its global indexing policy to permit automatic work.
-The browser can refresh/retry, cancel indexing, and delete an index while
+The browser can retry, refresh, disable or re-enable automatic refresh, and delete an index while
 lazy browse, direct ItemID entry, live reads, and tuning remain independent of index state.
 Index-status failures are compact diagnostics rather than browse failures.
 

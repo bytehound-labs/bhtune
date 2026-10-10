@@ -9,11 +9,12 @@ use super::{
     ApiError, AppState, BrowsePageRequest, Driver, Duration, ErrorBody, Event, Infallible, Json,
     KeepAlive, OPC_QUERY_TIMEOUT_SECS, OpcBrowseQuery, OpcBrowseResponse, OpcCapabilitiesResponse,
     OpcCloseBrowseSessionResponse, OpcDaDriver, OpcReadQuery, OpcReadResponse,
-    OpcSearchIndexControlQuery, OpcSearchIndexQuery, OpcSearchIndexRefreshQuery,
-    OpcSearchIndexResponse, OpcSearchIndexServerQuery, OpcSearchIndexStatusResponse,
-    OpcSearchQuery, OpcServerQuery, OpcServersQuery, OpcServersResponse, Path, Query,
-    SearchIndexRequest, SearchRequest, Sse, State, TimedDriverCall, list_opcda_servers,
-    sample_quality_from_driver, timed_driver_call, with_timeout,
+    OpcSearchIndexAutoRefreshQuery, OpcSearchIndexControlQuery, OpcSearchIndexQuery,
+    OpcSearchIndexRefreshQuery, OpcSearchIndexResponse, OpcSearchIndexServerQuery,
+    OpcSearchIndexStatusResponse, OpcSearchQuery, OpcServerQuery, OpcServersQuery,
+    OpcServersResponse, Path, Query, SearchIndexRequest, SearchRequest, Sse, State,
+    TimedDriverCall, list_opcda_servers, sample_quality_from_driver, timed_driver_call,
+    with_timeout,
 };
 
 /// List every OPC DA server registered on the bridge gateway's own host.
@@ -166,6 +167,29 @@ pub(crate) async fn refresh_search_index(
     let status = with_timeout(
         "refresh the OPC namespace index",
         driver.refresh_search_index(query.force.unwrap_or(false)),
+    )
+    .await?;
+    Ok(Json(status.into()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/opc/search-index/auto-refresh",
+    tag = "opc",
+    params(OpcSearchIndexAutoRefreshQuery),
+    responses(
+        (status = 200, body = OpcSearchIndexStatusResponse),
+        (status = 400, description = "The auto-refresh request or gateway connection is invalid.", body = ErrorBody),
+    ),
+)]
+pub(crate) async fn set_search_index_auto_refresh(
+    State(state): State<AppState>,
+    Query(query): Query<OpcSearchIndexAutoRefreshQuery>,
+) -> Result<Json<OpcSearchIndexStatusResponse>, ApiError> {
+    let driver = connect_search_index_driver(&state, query.bridge_host, query.opc_server).await?;
+    let status = with_timeout(
+        "set OPC namespace index auto-refresh",
+        driver.set_search_index_auto_refresh(query.enabled),
     )
     .await?;
     Ok(Json(status.into()))

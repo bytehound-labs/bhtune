@@ -65,15 +65,13 @@ API rather than a tuning-quality badge. The main navigation, forms, and
 history table adapt to viewports at and below 1024 pixels. See the
 [Web UI guide](docs/guides/web-ui/overview.md).
 
-The OPC tag browser distinguishes a usable index from its automatic refresh schedule.
-Its index actions are **Refresh Index**, **Cancel Indexing**, and **Delete Index**.
-Every usable enrolled index participates automatically when gateway policy permits; there is
-no per-server opt-in/out setting. Cancel preserves cached tags and defers automatic work until
-the next configured interval; manual refresh can start earlier. Delete removes the cache and
-enrollment until another manual refresh. The browser explains gateway-wide blockers and shows
-a countdown only when policy allows scheduling and the gateway reports a next-refresh time.
-Missing policy remains unknown. The always-participating lifecycle requires indexed-search
-protocol 3; older gateways are not silently reconfigured.
+The OPC tag browser provides **Refresh Index**, **Cancel Indexing** during a build, and
+**Delete Index**, plus **Enable Auto-refresh** or **Disable Auto-refresh** for a usable index.
+New and recreated indexes start with automatic refresh off. Manual builds and retries do not
+change the saved choice; an explicit opt-in survives gateway restarts. Disabling it stops
+future scheduling without cancelling an active build or deleting cached tags.
+`Index: ready` describes cached search independently of scheduling. A days-and-hours countdown
+appears only for an enabled index with a gateway-reported next-refresh time.
 
 ## Safety
 

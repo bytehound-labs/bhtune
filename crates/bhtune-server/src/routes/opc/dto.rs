@@ -192,6 +192,7 @@ impl From<IndexedSearchProgress> for OpcIndexedSearchProgressResponse {
 pub struct OpcSearchIndexStatusResponse {
     pub server: String,
     pub state: String,
+    pub auto_refresh_enabled: bool,
     pub active_generation: u64,
     pub entry_count: u64,
     pub unique_item_count: u64,
@@ -206,26 +207,7 @@ pub struct OpcSearchIndexStatusResponse {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum OpcIndexAutoRefreshPolicy {
-    Allowed,
-    Disabled,
-    Paused,
-}
-
-impl From<bhtune_driver::IndexAutoRefreshPolicy> for OpcIndexAutoRefreshPolicy {
-    fn from(policy: bhtune_driver::IndexAutoRefreshPolicy) -> Self {
-        match policy {
-            bhtune_driver::IndexAutoRefreshPolicy::Allowed => Self::Allowed,
-            bhtune_driver::IndexAutoRefreshPolicy::Disabled => Self::Disabled,
-            bhtune_driver::IndexAutoRefreshPolicy::Paused => Self::Paused,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, ToSchema)]
 pub struct OpcIndexSchedulerResponse {
-    pub auto_refresh_policy: Option<OpcIndexAutoRefreshPolicy>,
     pub next_refresh_at: Option<String>,
     pub last_attempt_at: Option<String>,
     pub last_success_at: Option<String>,
@@ -240,6 +222,7 @@ impl From<SearchIndexStatus> for OpcSearchIndexStatusResponse {
         Self {
             server: status.server,
             state: status.state.to_string(),
+            auto_refresh_enabled: status.auto_refresh_enabled,
             active_generation: status.active_generation,
             entry_count: status.entry_count,
             unique_item_count: status.unique_item_count,
@@ -251,7 +234,6 @@ impl From<SearchIndexStatus> for OpcSearchIndexStatusResponse {
             source: source_name(status.source).to_string(),
             progress: status.progress.map(Into::into),
             scheduler: OpcIndexSchedulerResponse {
-                auto_refresh_policy: status.scheduler.auto_refresh_policy.map(Into::into),
                 next_refresh_at: status.scheduler.next_refresh_at,
                 last_attempt_at: status.scheduler.last_attempt_at,
                 last_success_at: status.scheduler.last_success_at,
@@ -322,6 +304,15 @@ pub struct OpcSearchIndexRefreshQuery {
     pub bridge_host: Option<String>,
     pub opc_server: Option<String>,
     pub force: Option<bool>,
+}
+
+/// Query parameters for `POST /api/opc/search-index/auto-refresh`.
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct OpcSearchIndexAutoRefreshQuery {
+    pub bridge_host: Option<String>,
+    pub opc_server: Option<String>,
+    pub enabled: bool,
 }
 
 /// Query parameters for `POST /api/opc/search-index/control`.

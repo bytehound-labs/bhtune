@@ -69,7 +69,7 @@ mod tests {
 
     fn gateway_info(features: Vec<ProtocolFeature>) -> GetGatewayInfoResponse {
         GetGatewayInfoResponse {
-            application_version: "0.6.0".into(),
+            application_version: "0.5.9".into(),
             compatibility_schema_version: 1,
             features,
         }
@@ -115,7 +115,7 @@ mod tests {
             gateway_info_response: gateway_info(vec![
                 protocol_feature(ProtocolFeatureKind::Core, 1, 1),
                 protocol_feature(ProtocolFeatureKind::Namespace, 2, 3),
-                protocol_feature(ProtocolFeatureKind::IndexedSearch, 3, 3),
+                protocol_feature(ProtocolFeatureKind::IndexedSearch, 2, 2),
             ]),
             ..Default::default()
         })

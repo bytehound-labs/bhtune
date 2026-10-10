@@ -19,6 +19,7 @@ import {
   useOpcIndexedSearch,
   useOpcSearchIndexStatus,
   useRefreshOpcSearchIndex,
+  useSetOpcSearchIndexAutoRefresh,
   useTestOpcConnection,
 } from "../api/opc";
 
@@ -70,6 +71,7 @@ export function OpcTagBrowserModal({
   );
   const refreshSearchIndex = useRefreshOpcSearchIndex();
   const controlSearchIndex = useControlOpcSearchIndex();
+  const setAutoRefreshMutation = useSetOpcSearchIndexAutoRefresh();
   const deleteSearchIndex = useDeleteOpcSearchIndex();
   const testConnection = useTestOpcConnection();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -137,6 +139,7 @@ export function OpcTagBrowserModal({
     searchIndexStatus,
     refreshSearchIndex,
     controlSearchIndex,
+    setAutoRefreshMutation,
     deleteSearchIndex,
     searchAbortRef,
     setSelectedNode: setSelectedNodeAndActiveTreeNode,
@@ -177,6 +180,7 @@ export function OpcTagBrowserModal({
     handleSearchKeyDown,
     chooseSearchMatch,
     refreshIndex,
+    setAutoRefresh,
     requestDeleteIndex,
     cancelDeleteIndex,
     confirmDeleteIndex,
@@ -262,9 +266,11 @@ export function OpcTagBrowserModal({
             indexUnavailableMessage: unavailableMessage,
             refreshPending: refreshSearchIndex.isPending,
             controlPending: controlSearchIndex.isPending,
+            autoRefreshPending: setAutoRefreshMutation.isPending,
             deletePending: deleteSearchIndex.isPending,
             onRefresh: () => void refreshIndex(),
             onCancel: () => void cancelIndexBuild(),
+            onSetAutoRefresh: (enabled) => void setAutoRefresh(enabled),
             onDelete: requestDeleteIndex,
           }}
           searchResults={{

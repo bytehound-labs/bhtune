@@ -48,22 +48,11 @@ async fn delete_request(app: axum::Router, path: &str) -> axum::http::Response<B
         .unwrap()
 }
 
-#[tokio::test]
-async fn retired_auto_refresh_route_does_not_contact_the_gateway() {
-    let service = MockBridgeService::default();
-    let controls = service.control_search_index_requests.clone();
-    let (host, _host_server) = start_mock_server(service).await;
-    let app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
-    let response = post(app, "/api/opc/search-index/auto-refresh?enabled=false").await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(body_json(response).await.get("error").is_some());
-    assert!(controls.lock().unwrap().is_empty());
-}
-
 fn proto_index_status(state: ProtoSearchIndexState) -> ProtoSearchIndexStatus {
     ProtoSearchIndexStatus {
         server: "Sim.Server".to_string(),
         state: state as i32,
+        configured: true,
         active_generation: 7,
         entry_count: 12_345,
         unique_item_count: 9_876,
@@ -81,9 +70,6 @@ fn proto_index_status(state: ProtoSearchIndexState) -> ProtoSearchIndexStatus {
         host: Default::default(),
         storage: Default::default(),
         scheduler: Some(ProtoIndexSchedulerDiagnostics {
-            auto_refresh_policy: Some(
-                opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Allowed as i32,
-            ),
             next_refresh_at: Some("2026-08-23T10:05:00Z".to_string()),
             last_attempt_at: Some("2026-08-16T10:05:00Z".to_string()),
             last_success_at: Some("2026-08-16T10:05:00Z".to_string()),
@@ -104,47 +90,6 @@ fn proto_index_status(state: ProtoSearchIndexState) -> ProtoSearchIndexStatus {
             items_per_second: 250.5,
             estimated_remaining_ms: Some(30_000),
         }),
-    }
-}
-
-#[tokio::test]
-async fn search_index_policy_preserves_legacy_unknown_and_gateway_blockers() {
-    for (policy, label) in [
-        (None, None),
-        (
-            Some(opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Unspecified),
-            None,
-        ),
-        (
-            Some(opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Allowed),
-            Some("allowed"),
-        ),
-        (
-            Some(opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Disabled),
-            Some("disabled"),
-        ),
-        (
-            Some(opcda_bridge_proto::bridge::IndexAutoRefreshPolicy::Paused),
-            Some("paused"),
-        ),
-    ] {
-        let mut status = proto_index_status(ProtoSearchIndexState::Ready);
-        status.scheduler.as_mut().unwrap().auto_refresh_policy = policy.map(|policy| policy as i32);
-        let (host, _host_server) = start_mock_server(MockBridgeService {
-            search_index_status_response: status,
-            ..Default::default()
-        })
-        .await;
-        let app = crate::build_router(state_with(Some(&host), None).await);
-        let response = get(app, "/api/opc/search-index/status?opc_server=Sim.Server").await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = body_json(response).await;
-        assert_eq!(
-            body["scheduler"]["auto_refresh_policy"],
-            serde_json::json!(label)
-        );
-        assert!(body.get("auto_refresh_enabled").is_none());
-        assert_eq!(body["active_generation"], 7);
     }
 }
 
@@ -358,7 +303,7 @@ async fn search_index_status_maps_every_state_and_progress() {
         let body = body_json(response).await;
         assert_eq!(body["server"], "Sim.Server");
         assert_eq!(body["state"], expected_state);
-        assert!(body.get("auto_refresh_enabled").is_none());
+        assert_eq!(body["auto_refresh_enabled"], true);
         assert_eq!(body["active_generation"], 7);
         assert_eq!(body["entry_count"], 12_345);
         assert_eq!(body["unique_item_count"], 9_876);
@@ -373,7 +318,6 @@ async fn search_index_status_maps_every_state_and_progress() {
         assert_eq!(body["scheduler"]["last_success_duration_ms"], 300_000);
         assert_eq!(body["scheduler"]["consecutive_failures"], 0);
         assert_eq!(body["scheduler"]["circuit_open"], false);
-        assert_eq!(body["scheduler"]["auto_refresh_policy"], "allowed");
         assert_eq!(body["progress"]["branches_visited"], 321);
         assert_eq!(body["progress"]["entries_seen"], 12_345);
         assert_eq!(body["progress"]["unique_items"], 9_876);
@@ -472,6 +416,15 @@ async fn search_index_refresh_and_control_forward_actions() {
         }]
     );
 
+    let auto_refresh_app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
+    let response = post(
+        auto_refresh_app,
+        "/api/opc/search-index/auto-refresh?enabled=false",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["state"], "refreshing");
+
     let delete_app = crate::build_router(state_with(Some(&host), Some("Sim.Server")).await);
     let response = delete_request(delete_app, "/api/opc/search-index?opc_server=Sim.Server").await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -483,6 +436,11 @@ async fn search_index_refresh_and_control_forward_actions() {
             opcda_bridge_proto::bridge::ControlSearchIndexRequest {
                 server: "Sim.Server".to_string(),
                 action: opcda_bridge_proto::bridge::SearchIndexControlAction::Resume as i32,
+            },
+            opcda_bridge_proto::bridge::ControlSearchIndexRequest {
+                server: "Sim.Server".to_string(),
+                action: opcda_bridge_proto::bridge::SearchIndexControlAction::DisableAutoRefresh
+                    as i32,
             },
             opcda_bridge_proto::bridge::ControlSearchIndexRequest {
                 server: "Sim.Server".to_string(),
@@ -555,6 +513,11 @@ async fn indexed_search_routes_surface_gateway_errors() {
         (
             "/api/opc/search-index/control?action=pause&opc_server=Sim.Server",
             "control the OPC namespace index",
+            true,
+        ),
+        (
+            "/api/opc/search-index/auto-refresh?enabled=false&opc_server=Sim.Server",
+            "set OPC namespace index auto-refresh",
             true,
         ),
         (

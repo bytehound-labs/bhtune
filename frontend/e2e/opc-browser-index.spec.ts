@@ -41,7 +41,7 @@ async function mockBrowserIndex(
 }
 
 /**
- * Persistent search-index coverage: building, cancelling, and deleting an index,
+ * Persistent search-index coverage: building, disabling, and deleting an index,
  * debounced indexed search, refresh, index-state diagnostics, and lazy browsing without
  * a usable index.
  */
@@ -50,29 +50,8 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await openOpcDaRunForm(page);
   });
 
-  test("offers three index actions without server preferences", async ({
-    page,
-  }) => {
-    await mockBrowserIndex(page, searchIndexStatus("ready"));
-    await page.getByRole("button", { name: "Browse tags" }).click();
-    await expect(
-      page.getByRole("button", { name: "Refresh Index", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "Delete Index", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("button", {
-        name: /(?:Enable|Disable) (?:auto-refresh|server preference)/,
-      }),
-    ).toHaveCount(0);
-    await expect(page.getByText(/Server preference:/)).toHaveCount(0);
-  });
-
-  test("builds and deletes a server index without automatic recreation", async ({
-    page,
-  }) => {
-    let status = searchIndexStatus("not_indexed");
+  test("builds, disables, and deletes a server index", async ({ page }) => {
+    let status = searchIndexStatus("not_indexed", false);
     let deletionPolls = 0;
     await page.getByLabel("OPC DA server ProgID").fill("Test.Server");
 
@@ -81,7 +60,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       if (status.state === "deleting") {
         deletionPolls += 1;
         if (deletionPolls >= 2) {
-          status = searchIndexStatus("not_indexed");
+          status = searchIndexStatus("not_indexed", false);
         }
       }
       await route.fulfill({
@@ -98,20 +77,33 @@ test.describe(OPC_BROWSER_SUITE, () => {
       });
     });
     await page.route("**/api/opc/search-index/refresh**", async (route) => {
-      status = searchIndexStatus("ready");
+      status = searchIndexStatus("ready", false);
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(status),
       });
     });
+    await page.route(
+      "**/api/opc/search-index/auto-refresh**",
+      async (route) => {
+        const url = new URL(route.request().url());
+        const enabled = url.searchParams.get("enabled") === "true";
+        status = searchIndexStatus("ready", enabled);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(status),
+        });
+      },
+    );
     await page.route("**/api/opc/search-index**", async (route) => {
       if (route.request().method() !== "DELETE") {
         await route.fallback();
         return;
       }
       deletionPolls = 0;
-      status = searchIndexStatus("deleting");
+      status = searchIndexStatus("deleting", false);
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -129,6 +121,11 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await expect(
       page.getByRole("button", { name: "Refresh Index", exact: true }),
     ).toBeVisible();
+    await expect(page.getByText("Auto-refresh: disabled")).toBeVisible();
+    await expect(page.getByText("Next refresh:")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Enable Auto-refresh", exact: true })
+      .click();
     await expect(page.getByText("Auto-refresh: enabled")).toBeVisible();
     await expect(
       page.getByText("Next refresh: in 7 days 2 hours"),
@@ -142,10 +139,23 @@ test.describe(OPC_BROWSER_SUITE, () => {
         status.scheduler.next_refresh_at,
       ),
     );
-
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("button", { name: "Browse tags" }).click();
     await expect(
-      page.getByRole("button", { name: /(?:Enable|Disable) auto-refresh/ }),
-    ).toHaveCount(0);
+      page.getByRole("button", { name: "Disable Auto-refresh", exact: true }),
+    ).toBeVisible();
+
+    await page
+      .getByRole("button", { name: "Disable Auto-refresh", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", {
+        name: "Enable Auto-refresh",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByText("Auto-refresh: disabled")).toBeVisible();
+    await expect(page.getByText("Next refresh:")).toHaveCount(0);
 
     await page
       .getByRole("button", { name: "Delete Index", exact: true })
@@ -180,6 +190,14 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await expect(
       page.getByRole("button", { name: "Delete Index", exact: true }),
     ).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Refresh Index", exact: true })
+      .click();
+    await expect(page.getByText("Auto-refresh: disabled")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Enable Auto-refresh", exact: true }),
+    ).toBeEnabled();
+    await expect(page.getByText("Next refresh:")).toHaveCount(0);
   });
 
   for (const schedule of [
@@ -197,17 +215,39 @@ test.describe(OPC_BROWSER_SUITE, () => {
           next_refresh_at: schedule.nextRefreshAt,
         },
       });
-      const retiredRequests: string[] = [];
+      const toggles: boolean[] = [];
       const refreshRequests: string[] = [];
       page.on("request", (request) => {
-        const path = new URL(request.url()).pathname;
-        if (path === "/api/opc/search-index/refresh") {
+        if (
+          new URL(request.url()).pathname === "/api/opc/search-index/refresh"
+        ) {
           refreshRequests.push(request.method());
         }
-        if (path === "/api/opc/search-index/auto-refresh") {
-          retiredRequests.push(request.method());
-        }
       });
+      await page.route(
+        "**/api/opc/search-index/auto-refresh**",
+        async (route) => {
+          const enabled =
+            new URL(route.request().url()).searchParams.get("enabled") ===
+            "true";
+          toggles.push(enabled);
+          index.status = {
+            ...index.status,
+            auto_refresh_enabled: enabled,
+            scheduler: {
+              ...index.status.scheduler,
+              next_refresh_at: enabled
+                ? schedule.nextRefreshAt
+                : ready.scheduler.next_refresh_at,
+            },
+          };
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify(index.status),
+          });
+        },
+      );
 
       await page.getByRole("button", { name: "Browse tags" }).click();
       const unscheduled = page.getByText("Auto-refresh: not scheduled", {
@@ -219,7 +259,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       await expect(unscheduled).toBeVisible();
       await expect(unscheduled).toHaveAttribute(
         "title",
-        "The gateway has not reported a scheduled refresh.",
+        "This server is enabled, but the gateway has not reported a scheduled refresh.",
       );
       await expect(page.getByText("Auto-refresh: enabled")).toHaveCount(0);
       await expect(page.getByText("Next refresh:")).toHaveCount(0);
@@ -228,98 +268,60 @@ test.describe(OPC_BROWSER_SUITE, () => {
         page.getByRole("button", { name: "Refresh Index", exact: true }),
       ).toBeEnabled();
 
-      await expect(
-        page.getByRole("button", {
-          name: /(?:Enable|Disable) (?:auto-refresh|server preference)/,
-        }),
-      ).toHaveCount(0);
+      await page
+        .getByRole("button", { name: "Disable Auto-refresh", exact: true })
+        .click();
+      await expect(page.getByText("Auto-refresh: disabled")).toBeVisible();
+      await expect(page.getByText("Next refresh:")).toHaveCount(0);
+      await page
+        .getByRole("button", { name: "Enable Auto-refresh", exact: true })
+        .click();
+      await expect(unscheduled).toBeVisible();
+      await expect(page.getByText("Next refresh:")).toHaveCount(0);
       expect(index.status.state).toBe("ready");
       expect(index.status.active_generation).toBe(ready.active_generation);
-      expect(retiredRequests).toEqual([]);
+      expect(toggles).toEqual([false, true]);
       expect(refreshRequests).toEqual([]);
     });
   }
 
-  for (const policy of ["disabled", "paused"] as const) {
-    test(`reports ${policy} gateway policy without preference controls`, async ({
+  for (const enabled of [false, true]) {
+    test(`failed auto-refresh control preserves the saved ${enabled} choice`, async ({
       page,
     }) => {
-      const ready = searchIndexStatus("ready");
-      const index = await mockBrowserIndex(page, {
-        ...ready,
-        scheduler: { ...ready.scheduler, auto_refresh_policy: policy },
-      });
-      const retiredRequests: string[] = [];
-      const refreshes: string[] = [];
-      page.on("request", (request) => {
-        const path = new URL(request.url()).pathname;
-        if (path === "/api/opc/search-index/refresh") {
-          refreshes.push(request.method());
-        }
-        if (path === "/api/opc/search-index/auto-refresh") {
-          retiredRequests.push(request.method());
-        }
-      });
-
+      const ready = searchIndexStatus("ready", enabled);
+      const index = await mockBrowserIndex(page, ready);
+      await page.route(
+        "**/api/opc/search-index/auto-refresh**",
+        async (route) => {
+          await route.fulfill({
+            status: 500,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "Preference update failed" }),
+          });
+        },
+      );
       await page.getByRole("button", { name: "Browse tags" }).click();
-      await expect(
-        page.getByText("Index: ready", { exact: true }),
-      ).toBeVisible();
+      const button = page.getByRole("button", {
+        name: enabled ? "Disable Auto-refresh" : "Enable Auto-refresh",
+        exact: true,
+      });
+      await button.click();
       await expect(
         page.getByText(
-          policy === "disabled"
-            ? "Automatic refresh is blocked by gateway configuration (index.enabled = false). Cached search and manual refresh remain available."
-            : "Automatic refresh is paused by gateway configuration (index.paused = true). Cached search and manual refresh remain available.",
+          "The server could not complete the request. Try again.",
+          { exact: true },
         ),
       ).toBeVisible();
-      await expect(page.getByText("Next refresh:")).toHaveCount(0);
-      await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
+      await expect(button).toBeEnabled();
       await expect(
-        page.getByRole("button", { name: "Refresh Index", exact: true }),
-      ).toBeEnabled();
-      await expect(
-        page.getByRole("button", {
-          name: /(?:Enable|Disable) (?:auto-refresh|server preference)/,
-        }),
-      ).toHaveCount(0);
-
-      await expect(
-        page.getByText("Auto-refresh: blocked by gateway", { exact: true }),
+        page.getByText(
+          enabled ? "Auto-refresh: enabled" : "Auto-refresh: disabled",
+        ),
       ).toBeVisible();
-      await expect(page.getByText(/Server preference:/)).toHaveCount(0);
+      await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
+      expect(index.status.auto_refresh_enabled).toBe(enabled);
       expect(index.status.active_generation).toBe(ready.active_generation);
-      expect(retiredRequests).toEqual([]);
-      expect(refreshes).toEqual([]);
-    });
-  }
-
-  for (const policy of [null, undefined]) {
-    test(`keeps an unreported ${policy === null ? "null" : "omitted"} gateway policy unknown`, async ({
-      page,
-    }) => {
-      const ready = searchIndexStatus("ready");
-      await mockBrowserIndex(page, {
-        ...ready,
-        scheduler: { ...ready.scheduler, auto_refresh_policy: policy },
-      });
-      await page.getByRole("button", { name: "Browse tags" }).click();
-      await expect(
-        page.getByText("Auto-refresh: policy unavailable", { exact: true }),
-      ).toBeVisible();
-      await expect(page.getByText(/Server preference:/)).toHaveCount(0);
-      await expect(
-        page.getByText(
-          "Automatic-refresh policy is unavailable from this gateway. Refresh Index remains available.",
-        ),
-      ).toBeVisible();
-      await expect(
-        page.getByRole("button", {
-          name: "Refresh Index",
-          exact: true,
-        }),
-      ).toBeEnabled();
-      await expect(page.getByText("Next refresh:")).toHaveCount(0);
-      await expect(page.getByLabel("Search OPC tags")).toBeEnabled();
     });
   }
 
@@ -569,7 +571,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(searchIndexStatus("ready", diagnostic)),
+        body: JSON.stringify(searchIndexStatus("ready", true, diagnostic)),
       });
     });
     await page.route("**/api/opc/browse**", async (route) => {
@@ -597,7 +599,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(searchIndexStatus("failed", diagnostic)),
+        body: JSON.stringify(searchIndexStatus("failed", true, diagnostic)),
       });
     });
     await page.route("**/api/opc/browse**", async (route) => {
@@ -640,11 +642,11 @@ test.describe(OPC_BROWSER_SUITE, () => {
     await page.clock.install();
     const index = await mockBrowserIndex(
       page,
-      searchIndexStatus("ready", null, 7),
+      searchIndexStatus("ready", true, null, 7),
     );
     let cancellations = 0;
     await page.route("**/api/opc/search-index/refresh**", async (route) => {
-      index.status = searchIndexStatus("refreshing", null, 7);
+      index.status = searchIndexStatus("refreshing", true, null, 7);
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -656,7 +658,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
         "cancel",
       );
       cancellations += 1;
-      index.status = searchIndexStatus("failed", diagnostic, 7);
+      index.status = searchIndexStatus("failed", true, diagnostic, 7);
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -715,7 +717,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const diagnostic = "the inventory database is unavailable";
     const index = await mockBrowserIndex(
       page,
-      searchIndexStatus("failed", diagnostic, 7),
+      searchIndexStatus("failed", true, diagnostic, 7),
     );
     const open = page.getByRole("button", { name: "Browse tags" });
     const error = page.getByText(`Index error: ${diagnostic}`);
@@ -742,7 +744,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     page,
   }) => {
     const diagnostic = "inventory stream ended before completion";
-    const initialStatus = searchIndexStatus("failed", diagnostic, 7);
+    const initialStatus = searchIndexStatus("failed", true, diagnostic, 7);
     const index = await mockBrowserIndex(page, {
       ...initialStatus,
       completed_at: null,
@@ -779,7 +781,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     page,
   }) => {
     const diagnostic = "the inventory database is unavailable";
-    const initialStatus = searchIndexStatus("failed", diagnostic, 7);
+    const initialStatus = searchIndexStatus("failed", true, diagnostic, 7);
     const index = await mockBrowserIndex(page, {
       ...initialStatus,
       completed_at: null,
@@ -811,7 +813,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
   }) => {
     await page.clock.install();
     const diagnostic = "the inventory database is unavailable";
-    const initialStatus = searchIndexStatus("failed", diagnostic, 7);
+    const initialStatus = searchIndexStatus("failed", true, diagnostic, 7);
     const index = await mockBrowserIndex(page, {
       ...initialStatus,
       completed_at: null,
@@ -834,7 +836,10 @@ test.describe(OPC_BROWSER_SUITE, () => {
     page,
   }) => {
     const diagnostic = "the inventory database is unavailable";
-    await mockBrowserIndex(page, searchIndexStatus("failed", diagnostic, 7));
+    await mockBrowserIndex(
+      page,
+      searchIndexStatus("failed", true, diagnostic, 7),
+    );
     const open = page.getByRole("button", { name: "Browse tags" });
     const error = page.getByText(`Index error: ${diagnostic}`);
     const acknowledgeOnConnection = async (bridge: string, server: string) => {
@@ -858,7 +863,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const diagnostic = "inventory stream ended before completion";
     const index = await mockBrowserIndex(
       page,
-      searchIndexStatus("refreshing", null, 7),
+      searchIndexStatus("refreshing", true, null, 7),
     );
     await page.route("**/api/opc/browse**", async (route) => {
       await route.fulfill({
@@ -890,7 +895,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
     const failedStatus = page.waitForResponse(
       "**/api/opc/search-index/status**",
     );
-    index.status = searchIndexStatus("failed", diagnostic, 7);
+    index.status = searchIndexStatus("failed", true, diagnostic, 7);
     await failedStatus;
     await page.evaluate(
       () =>
@@ -908,7 +913,10 @@ test.describe(OPC_BROWSER_SUITE, () => {
       page,
     }) => {
       const diagnostic = "the inventory database is unavailable";
-      await mockBrowserIndex(page, searchIndexStatus("failed", diagnostic, 7));
+      await mockBrowserIndex(
+        page,
+        searchIndexStatus("failed", true, diagnostic, 7),
+      );
       await page
         .getByRole("combobox", { name: "Template" })
         .selectOption("Yokogawa CentumVP");
@@ -983,7 +991,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(searchIndexStatus("not_indexed")),
+        body: JSON.stringify(searchIndexStatus("not_indexed", false)),
       });
     });
     await page.route("**/api/opc/browse**", async (route) => {
@@ -1021,7 +1029,7 @@ test.describe(OPC_BROWSER_SUITE, () => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(searchIndexStatus("not_indexed")),
+        body: JSON.stringify(searchIndexStatus("not_indexed", false)),
       });
     });
     page.on("request", (request) => {
