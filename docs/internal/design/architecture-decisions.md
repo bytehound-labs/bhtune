@@ -68,8 +68,7 @@ tuning, Step Test, OPC UA/Modbus) until v1 actually ships — those are the road
   network. bhtune itself builds and runs on Linux, macOS, and Windows identically.
 - **The OPC DA client is a crates.io dependency, local to `bhtune-driver` only.** The
   `OpcDaDriver` implementation consumes the published `opcda-bridge` library with
-  `opcda-bridge = "0.5"` pinned directly in `crates/bhtune-driver/Cargo.toml` (the
-  0.5.0 release) — not promoted
+  `opcda-bridge = "0.6"` pinned directly in `crates/bhtune-driver/Cargo.toml` — not promoted
   to `[workspace.dependencies]`, since `bhtune-driver` is the only crate that talks to the
   bridge directly (everything else goes through the `Driver` trait), matching this project's
   single-consumer-stays-local dependency convention. It must not use a Git dependency or a

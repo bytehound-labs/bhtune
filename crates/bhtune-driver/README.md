@@ -9,4 +9,9 @@ and demonstrations, while `ReplayDriver` validates the driver abstraction agains
 traces. `ReadOnlyDriver` forwards reads and capabilities while rejecting writes and browse
 operations.
 
+Index status preserves the saved per-server auto-refresh choice and actual schedule.
+New enrollment defaults off; `set_search_index_auto_refresh` opts in explicitly. Manual
+refresh/retry leaves the choice unchanged. Disable stops future scheduling without deleting
+cached tags or cancelling an active build.
+
 API documentation: <https://docs.rs/bhtune-driver>

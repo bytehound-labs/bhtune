@@ -5,7 +5,7 @@ the [design notes index](README.md) for provenance.
 
 ## Scalable OPC browse/search integration
 
-The BHTune OPC integration now targets `opcda-bridge` 0.5.0 or newer. The old flat, globally
+The BHTune OPC integration targets the `opcda-bridge` 0.6 Rust API. The old flat, globally
 limited namespace model is not supported: `bhtune-driver` uses typed capabilities, bounded browse
 pages, opaque browse sessions/node keys/page tokens, exact ItemIDs, branch/item/branch-and-item
 node kinds, explicit session cleanup, and gateway-owned persistent indexed search. The HTTP API
@@ -42,18 +42,19 @@ Request, browse, search, and selection errors retain their separate handling.
 
 Indexed search is deliberately not a prerequisite for tag selection or tuning. When a server is
 not enrolled, still building its first generation, or has no usable index, the browser disables
-only the global search input and offers **Build index** or **Retry build** while keeping the
+only the global search input and offers **Refresh Index** while keeping the
 lazy tree, exact ItemID entry, quality read, and selection controls available. It never falls
 back automatically to the slow live whole-server search. A failed tree page retains already
-loaded nodes and exposes a per-level **Retry** action;
-when an opted-in server has a gateway-reported next date, the browser shows
-`Auto-refresh: enabled` with a relative days-and-hours countdown and the exact scheduled
-time in the hover tooltip. An opted-in server without a reported date shows
-`Auto-refresh: not scheduled`; a server that is not opted in shows
-`Auto-refresh: disabled`, without a countdown. `Index: ready` remains a separate statement
-about the usable generation. The browser does not infer a next date or treat the per-server
-toggle as an override of gateway-wide scheduling policy.
-unknown `/api/*` paths return JSON 404 responses instead of the SPA shell, making stale
+loaded nodes and exposes a per-level **Retry** action.
+New/recreated indexes default off; manual refresh and retry do not change a saved choice.
+**Enable Auto-refresh** and **Disable Auto-refresh** persist the selected server's choice
+without deleting the cache or cancelling an active build. When an opted-in index has a reported next date,
+the browser shows `Auto-refresh: enabled` with a days-and-hours countdown and the exact
+scheduled time in the hover tooltip. An enabled index without a reported date shows
+`Auto-refresh: not scheduled`; opt-out shows `disabled` and no countdown. The gateway has
+no `index.enabled`/`index.paused` override; maintenance, health, pacing, and retry protection
+remain independent safeguards. `Index: ready` describes cached search independently.
+Unknown `/api/*` paths return JSON 404 responses instead of the SPA shell, making stale
 server/frontend combinations diagnosable.
 
 Live acceptance against `Yokogawa.CSHIS_OPC.1` confirmed the root page exposes the full controller
@@ -96,6 +97,11 @@ ItemIDs separately from display labels, expose branch/item/branch-and-item kinds
 metadata, namespace source, and warnings. The gateway's indexed-search extension adds `GET
 /api/opc/search-index/status`, `GET /api/opc/search-index/search`, and refresh/control endpoints
 with persistent-index state, progress, ranked exact matches, breadcrumbs, and `has_more`.
+`POST /api/opc/search-index/auto-refresh` persists the selected server's explicit choice.
+`auto_refresh_enabled` and the actual scheduler next-refresh date remain separate from an
+active build's foreground/health/operator pause. The public bridge structs use the 0.6 Rust
+dependency line, while the restored preference field and controls retain the published
+indexed-search protocol 2 contract.
 `openapi.json` and `frontend/src/api/schema.d.ts` are regenerated from the route definitions.
 Indexing is an optional search accelerator with per-server enrollment owned by the gateway database.
 A fresh gateway has no enrolled servers; BHTune's tag browser can build an index for any exact

@@ -345,7 +345,7 @@ export function OpcTagBrowserModal({
           onCancel={cancelDeleteIndex}
           onConfirm={() => void confirmDeleteIndex()}
           pending={deleteSearchIndex.isPending}
-          confirmLabel="Delete index"
+          confirmLabel="Delete Index"
           pendingLabel="Deleting index…"
           errorMessage={deleteError}
           documentationId="new-tune.opc-tag-browser.delete-confirmation"

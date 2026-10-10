@@ -28,7 +28,7 @@ async-trait.workspace = true
 # `OpcDaDriver` is the only thing that talks to the bridge directly -- everything else goes
 # through the `Driver` trait instead -- so this stays local rather than promoted to
 # `[workspace.dependencies]`.
-opcda-bridge = "0.5"
+opcda-bridge = "0.6"
 tonic = "0.14"
 # Needed for `tokio::sync::Mutex`: `opcda_bridge::Client`'s methods take `&mut self` (it
 # buffers per-call gRPC codec state), but `Driver`'s methods take `&self` (required so a
@@ -71,5 +71,5 @@ bhtune-core.workspace = true
 # back through this crate. The proto pin stays so those messages match the client stub.
 # Versionless path only: Cargo strips a versionless dev-dependency when packaging, so
 # this unpublished crate is never resolved from crates.io. Do not add a version.
-opcda-bridge-proto = "0.5"
+opcda-bridge-proto = "0.6"
 bhtune-test-support = { path = "../bhtune-test-support" }
